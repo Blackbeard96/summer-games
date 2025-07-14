@@ -1,30 +1,28 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Profile from './pages/Profile';
 import Login from './pages/Login';
+import PasswordReset from './pages/PasswordReset';
 import AdminPanel from './pages/AdminPanel';
 import Marketplace from './pages/Marketplace';
+import Leaderboard from './pages/Leaderboard';
 import NavBar from './components/NavBar';
-import { AuthProvider } from './context/AuthContext';
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import FirebaseStatus from './components/FirebaseStatus';
+import { AuthProvider, useAuth } from './context/AuthContext';
+// Firebase services are imported but not directly used in this component
+// They are used by child components through the firebase.ts file
 
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+// Protected Admin Route Component
+const ProtectedAdminRoute = () => {
+  const { currentUser } = useAuth();
+  
+  if (!currentUser || currentUser.email !== 'edm21179@gmail.com') {
+    return <Navigate to="/" replace />;
+  }
+  
+  return <AdminPanel />;
 };
-
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
 
 function App() {
   return (
@@ -35,9 +33,12 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/admin" element={<AdminPanel />} />
+          <Route path="/reset-password" element={<PasswordReset />} />
+          <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/admin" element={<ProtectedAdminRoute />} />
           <Route path="/marketplace" element={<Marketplace />} />
         </Routes>
+        {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
       </Router>
     </AuthProvider>
   );

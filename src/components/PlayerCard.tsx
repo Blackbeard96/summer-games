@@ -1,0 +1,183 @@
+import React, { useState } from 'react';
+
+interface PlayerCardProps {
+  name: string;
+  photoURL: string;
+  powerPoints: number;
+  manifest: string;
+  level: number;
+  rarity: number; // 1-5
+  style: string; // e.g. 'Fire', 'Water', etc.
+  description: string;
+  cardBgColor?: string;
+  moves?: Array<{ name: string; description: string; icon: string }>;
+}
+
+const styleIcons: Record<string, string> = {
+  Fire: '🔥',
+  Water: '💧',
+  Earth: '🌱',
+  Air: '💨',
+  // Add more as needed
+};
+
+const manifestIcons: Record<string, string> = {
+  Imposition: '🌀',
+  Memory: '🧠',
+  Intelligence: '🤖',
+  Dimensional: '🌌',
+  Truth: '🔍',
+  Creation: '✨',
+  // Add more as needed
+};
+
+const PlayerCard: React.FC<PlayerCardProps> = ({
+  name,
+  photoURL,
+  powerPoints,
+  manifest,
+  level,
+  rarity,
+  style,
+  description,
+  cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
+  moves = [],
+}) => {
+  const [flipped, setFlipped] = useState(false);
+
+  // Use cardBgColor as background if it's a color, else use default gradient
+  const background = cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
+
+  return (
+    <div
+      style={{
+        perspective: 1200,
+        width: 320,
+        height: 480,
+        margin: '0 auto',
+        cursor: 'pointer',
+      }}
+      onClick={() => setFlipped(f => !f)}
+      title="Click to flip"
+    >
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          position: 'relative',
+          transition: 'transform 0.7s cubic-bezier(.4,2,.6,1)',
+          transformStyle: 'preserve-3d',
+          transform: flipped ? 'rotateY(180deg)' : 'none',
+        }}
+      >
+        {/* Front */}
+        <div
+          style={{
+            position: 'absolute',
+            width: '100%',
+            height: '100%',
+            backfaceVisibility: 'hidden',
+            background: background,
+            border: '4px solid #4f46e5',
+            borderRadius: 24,
+            boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 24,
+            zIndex: 2,
+          }}
+        >
+          {/* Top Row: Name (left), Level/PP/Stars (right) */}
+          <div style={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: 8 }}>
+            {/* Name top left */}
+            <div style={{ flex: 1, fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.1 }}>{name}</div>
+            {/* Level, PP, Stars top right */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14 }}>Lv. {level}</span>
+              <span style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14 }}>PP: {powerPoints}</span>
+              <span>{Array.from({ length: rarity }).map((_, i) => (
+                <span key={i} style={{ color: '#fbbf24', fontSize: 18, marginLeft: 1 }}>★</span>
+              ))}</span>
+            </div>
+          </div>
+          {/* Profile Image */}
+          <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+            <img
+              src={photoURL}
+              alt={name}
+              style={{
+                width: 120,
+                height: 120,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                border: '4px solid #a78bfa',
+                marginBottom: 16,
+                background: '#fff',
+              }}
+            />
+          </div>
+          {/* Manifest/Power and Style */}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center' }}>
+            <span style={{ fontSize: 22 }}>{manifestIcons[manifest] || '✨'}</span>
+            <span style={{ fontWeight: 'bold', color: '#4f46e5', fontSize: 16 }}>{manifest}</span>
+            <span style={{ fontSize: 22 }}>{styleIcons[style] || '🔮'}</span>
+            <span style={{ fontWeight: 'bold', color: '#10b981', fontSize: 16 }}>{style}</span>
+          </div>
+          {/* Divider */}
+          <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
+          {/* Moves Section */}
+          {moves && moves.length > 0 && (
+            <div style={{ margin: '12px 0', textAlign: 'center' }}>
+              <div style={{ fontWeight: 'bold', color: '#4f46e5', marginBottom: 4 }}>Moves</div>
+              {moves.map((move, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 18 }}>{move.icon}</span>
+                  <span style={{ fontWeight: 'bold' }}>{move.name}</span>
+                  <span style={{ color: '#6b7280', fontSize: 14 }}>{move.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Flip hint */}
+          <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>Click to view description</div>
+        </div>
+        {/* Back */}
+        <div
+          style={{
+            position: 'absolute',
+            width: '100%',
+            height: '100%',
+            backfaceVisibility: 'hidden',
+            background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 100%)',
+            border: '4px solid #4f46e5',
+            borderRadius: 24,
+            boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: 24,
+            transform: 'rotateY(180deg)',
+            zIndex: 1,
+          }}
+        >
+          <div style={{ fontSize: 22, fontWeight: 'bold', color: '#1f2937', marginBottom: 16 }}>Description</div>
+          <div style={{
+            background: '#fff',
+            color: '#1f2937',
+            borderRadius: 12,
+            padding: 16,
+            fontSize: 16,
+            minHeight: 120,
+            boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+            width: '100%',
+            textAlign: 'center',
+            marginBottom: 24,
+          }}>{description || 'No description provided.'}</div>
+          <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto' }}>Click to return</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PlayerCard; 

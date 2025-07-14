@@ -1,6 +1,64 @@
-# Getting Started with Create React App
+# Summer Games App
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A gamified learning platform built with React, TypeScript, and Firebase.
+
+## Features
+
+- 🎮 Challenge-based learning system
+- 🏆 XP and level progression
+- 🛒 Marketplace with Power Points
+- 🔐 Firebase authentication
+- 📊 Progress tracking
+- 🏅 Achievement badges
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js (v14 or higher)
+- npm or yarn
+- Firebase account
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+### Firebase Setup
+
+1. Follow the detailed setup guide in [FIREBASE_SETUP.md](./FIREBASE_SETUP.md)
+2. Create a `.env.local` file in the root directory with your Firebase configuration:
+   ```env
+   REACT_APP_FIREBASE_API_KEY=your_api_key
+   REACT_APP_FIREBASE_AUTH_DOMAIN=your_project_id.firebaseapp.com
+   REACT_APP_FIREBASE_PROJECT_ID=your_project_id
+   REACT_APP_FIREBASE_STORAGE_BUCKET=your_project_id.appspot.com
+   REACT_APP_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+   REACT_APP_FIREBASE_APP_ID=your_app_id
+   ```
+
+### Running the App
+
+```bash
+npm start
+```
+
+The app will open at [http://localhost:3000](http://localhost:3000).
+
+## Project Structure
+
+```
+src/
+├── components/          # Reusable UI components
+├── pages/              # Page components
+├── context/            # React context providers
+├── config/             # Configuration files
+├── firebase.ts         # Firebase initialization
+└── App.tsx            # Main app component
+```
 
 ## Available Scripts
 
