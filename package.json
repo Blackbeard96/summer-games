@@ -2,8 +2,10 @@
   "name": "summer-games",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://eddymosley.github.io/summer-games",
+  "homepage": "https://summer-games-99fba.web.app",
   "dependencies": {
+    "@react-three/drei": "^10.5.0",
+    "@react-three/fiber": "^9.2.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
@@ -15,9 +17,11 @@
     "firebase": "^11.10.0",
     "gh-pages": "^6.3.0",
     "react": "^19.1.0",
+    "react-color": "^2.19.3",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.3",
     "react-scripts": "5.0.1",
+    "three": "^0.178.0",
     "typescript": "^4.9.5",
     "web-vitals": "^2.1.4"
   },
@@ -27,7 +31,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "deploy": "firebase deploy --only hosting"
   },
   "eslintConfig": {
     "extends": [
@@ -46,5 +50,12 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.11",
+    "@types/react-color": "^3.0.13",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.11"
   }
 }
