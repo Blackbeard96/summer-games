@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
 import { 
   User, 
   onAuthStateChanged, 
@@ -9,27 +9,53 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  updatePassword,
+  updateEmail,
+  deleteUser
 } from 'firebase/auth';
+import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+
+interface UserProfile {
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  createdAt: Date;
+  lastLogin: Date;
+  preferences?: {
+    theme?: 'light' | 'dark';
+    notifications?: boolean;
+  };
+}
 
 interface AuthContextType {
   currentUser: User | null;
+  userProfile: UserProfile | null;
   loading: boolean;
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
+  updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
+  updateUserPassword: (newPassword: string) => Promise<void>;
+  updateUserEmail: (newEmail: string) => Promise<void>;
+  deleteUserAccount: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
   currentUser: null, 
+  userProfile: null,
   loading: true,
   signup: async () => {},
   login: async () => {},
   loginWithGoogle: async () => {},
   resetPassword: async () => {},
-  logout: async () => {}
+  logout: async () => {},
+  updateUserProfile: async () => {},
+  updateUserPassword: async () => {},
+  updateUserEmail: async () => {},
+  deleteUserAccount: async () => {}
 });
 
 export function useAuth() {
@@ -38,11 +64,44 @@ export function useAuth() {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Fetch user profile from Firestore
+  const fetchUserProfile = async (user: User) => {
+    try {
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        setUserProfile(userDoc.data() as UserProfile);
+      } else {
+        // Create new user profile
+        const newProfile: UserProfile = {
+          displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Student'),
+          email: user.email || '',
+          photoURL: user.photoURL || undefined,
+          createdAt: new Date(),
+          lastLogin: new Date(),
+          preferences: {
+            theme: 'light',
+            notifications: true
+          }
+        };
+        await setDoc(doc(db, 'users', user.uid), newProfile);
+        setUserProfile(newProfile);
+      }
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+    }
+  };
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      if (user) {
+        await fetchUserProfile(user);
+      } else {
+        setUserProfile(null);
+      }
       setLoading(false);
     });
 
@@ -57,12 +116,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    // Update last login time - use setDoc with merge to create if doesn't exist
+    if (result.user) {
+      await setDoc(doc(db, 'users', result.user.uid), {
+        lastLogin: new Date()
+      }, { merge: true });
+    }
   };
 
   const loginWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, provider);
+    // Update last login time - use setDoc with merge to create if doesn't exist
+    if (result.user) {
+      await setDoc(doc(db, 'users', result.user.uid), {
+        lastLogin: new Date()
+      }, { merge: true });
+    }
   };
 
   const resetPassword = async (email: string) => {
@@ -73,14 +144,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await signOut(auth);
   };
 
+  const updateUserProfile = async (updates: Partial<UserProfile>) => {
+    if (!currentUser) throw new Error('No user logged in');
+    
+    // Update Firebase Auth profile if displayName or photoURL changed
+    if (updates.displayName || updates.photoURL) {
+      await updateProfile(currentUser, {
+        displayName: updates.displayName,
+        photoURL: updates.photoURL
+      });
+    }
+
+    // Update Firestore profile
+    await updateDoc(doc(db, 'users', currentUser.uid), updates);
+    
+    // Update local state
+    setUserProfile(prev => prev ? { ...prev, ...updates } : null);
+  };
+
+  const updateUserPassword = async (newPassword: string) => {
+    if (!currentUser) throw new Error('No user logged in');
+    await updatePassword(currentUser, newPassword);
+  };
+
+  const updateUserEmail = async (newEmail: string) => {
+    if (!currentUser) throw new Error('No user logged in');
+    await updateEmail(currentUser, newEmail);
+    // Update profile in Firestore
+    await updateUserProfile({ email: newEmail });
+  };
+
+  const deleteUserAccount = async () => {
+    if (!currentUser) throw new Error('No user logged in');
+    // Delete user document from Firestore
+    await setDoc(doc(db, 'users', currentUser.uid), { deleted: true });
+    // Delete Firebase Auth account
+    await deleteUser(currentUser);
+  };
+
   const value = {
     currentUser,
+    userProfile,
     loading,
     signup,
     login,
     loginWithGoogle,
     resetPassword,
-    logout
+    logout,
+    updateUserProfile,
+    updateUserPassword,
+    updateUserEmail,
+    deleteUserAccount
   };
 
   return (
