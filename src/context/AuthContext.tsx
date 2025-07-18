@@ -108,10 +108,70 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe;
   }, []);
 
+  // Helper function to validate allowed domains
+  const isAllowedDomain = (email: string): boolean => {
+    const allowedDomains = [
+      'compscihigh.org',
+      'gmail.com',
+      'yahoo.com',
+      'outlook.com',
+      'hotmail.com'
+    ];
+    const domain = email.split('@')[1]?.toLowerCase();
+    return allowedDomains.includes(domain || '');
+  };
+
   const signup = async (email: string, password: string, displayName?: string) => {
-    const result = await createUserWithEmailAndPassword(auth, email, password);
-    if (displayName && result.user) {
-      await updateProfile(result.user, { displayName });
+    try {
+      console.log('Attempting to sign up user with email:', email);
+      
+      // Check if domain is allowed
+      if (!isAllowedDomain(email)) {
+        throw new Error('This email domain is not currently supported. Please use a different email address or contact support.');
+      }
+      
+      const result = await createUserWithEmailAndPassword(auth, email, password);
+      console.log('User created successfully:', result.user.uid);
+      if (displayName && result.user) {
+        await updateProfile(result.user, { displayName });
+        console.log('Profile updated with display name:', displayName);
+      }
+      
+      // Also create a record in the 'students' collection for admin panel consistency
+      const studentData = {
+        displayName: displayName || (email ? email.split('@')[0] : 'Student'),
+        email: email,
+        xp: 0,
+        powerPoints: 0,
+        challenges: {},
+        createdAt: new Date()
+      };
+      
+      await setDoc(doc(db, 'students', result.user.uid), studentData);
+      console.log('Student record created in students collection');
+      
+    } catch (error: any) {
+      console.error('Signup error details:', {
+        code: error.code,
+        message: error.message,
+        email: email
+      });
+      
+      // Provide more specific error messages
+      let userFriendlyMessage = error.message;
+      if (error.code === 'auth/email-already-in-use') {
+        userFriendlyMessage = 'An account with this email already exists. Please try signing in instead.';
+      } else if (error.code === 'auth/invalid-email') {
+        userFriendlyMessage = 'This email domain is not allowed. Please use a different email address.';
+      } else if (error.code === 'auth/weak-password') {
+        userFriendlyMessage = 'Password should be at least 6 characters long.';
+      } else if (error.code === 'auth/operation-not-allowed') {
+        userFriendlyMessage = 'Email/password sign up is not enabled. Please contact the administrator.';
+      } else if (error.code === 'auth/domain-not-allowed') {
+        userFriendlyMessage = 'This email domain is not allowed. Please use a different email address.';
+      }
+      
+      throw new Error(userFriendlyMessage);
     }
   };
 

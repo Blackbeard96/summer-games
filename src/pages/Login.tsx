@@ -132,6 +132,15 @@ const Login = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
+              {!isLogin && (
+                <div style={{
+                  fontSize: '0.75rem',
+                  color: '#6b7280',
+                  marginTop: '0.25rem'
+                }}>
+                  Supported domains: compscihigh.org, gmail.com, yahoo.com, outlook.com, hotmail.com
+                </div>
+              )}
             </div>
             <div>
               <input

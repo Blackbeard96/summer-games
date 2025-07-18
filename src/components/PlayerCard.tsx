@@ -11,6 +11,7 @@ interface PlayerCardProps {
   description: string;
   cardBgColor?: string;
   moves?: Array<{ name: string; description: string; icon: string }>;
+  badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
 }
 
 const styleIcons: Record<string, string> = {
@@ -42,6 +43,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
   description,
   cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
   moves = [],
+  badges = [],
 }) => {
   const [flipped, setFlipped] = useState(false);
 
@@ -116,12 +118,16 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
               }}
             />
           </div>
-          {/* Manifest/Power and Style */}
+          {/* Manifest and Element */}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center' }}>
-            <span style={{ fontSize: 22 }}>{manifestIcons[manifest] || '✨'}</span>
-            <span style={{ fontWeight: 'bold', color: '#4f46e5', fontSize: 16 }}>{manifest}</span>
-            <span style={{ fontSize: 22 }}>{styleIcons[style] || '🔮'}</span>
-            <span style={{ fontWeight: 'bold', color: '#10b981', fontSize: 16 }}>{style}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 20 }}>{manifestIcons[manifest] || '✨'}</span>
+              <span style={{ fontWeight: 'bold', color: '#4f46e5', fontSize: 14 }}>Manifest: {manifest}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 20 }}>{styleIcons[style] || '🔮'}</span>
+              <span style={{ fontWeight: 'bold', color: '#10b981', fontSize: 14 }}>Element: {style}</span>
+            </div>
           </div>
           {/* Divider */}
           <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
@@ -171,8 +177,41 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
             boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
             width: '100%',
             textAlign: 'center',
-            marginBottom: 24,
+            marginBottom: 16,
           }}>{description || 'No description provided.'}</div>
+          
+          {/* Badges Section */}
+          {badges && badges.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 18, fontWeight: 'bold', color: '#1f2937', marginBottom: 12 }}>Badges Earned</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                {badges.map((badge) => (
+                  <div
+                    key={badge.id}
+                    style={{
+                      position: 'relative',
+                      cursor: 'pointer',
+                    }}
+                    title={`${badge.name}: ${badge.description}`}
+                  >
+                    <img
+                      src={badge.imageUrl}
+                      alt={badge.name}
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: '50%',
+                        border: '3px solid #fbbf24',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                        objectFit: 'cover',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto' }}>Click to return</div>
         </div>
       </div>

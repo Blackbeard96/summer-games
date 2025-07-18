@@ -19,12 +19,13 @@ const Profile = () => {
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   // Add state for manifest, style, and rarity
-  const [manifest, setManifest] = useState(userData?.manifest || 'Imposition');
-  const [style, setStyle] = useState(userData?.style || 'Fire');
+  const [manifest, setManifest] = useState(userData?.manifest || 'None');
+  const [style, setStyle] = useState(userData?.manifestationType || 'Fire');
   const [rarity, setRarity] = useState(userData?.rarity || 3);
   const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#e0e7ff');
   const [moves, setMoves] = useState(userData?.moves || []);
   const [newMove, setNewMove] = useState({ name: '', description: '', icon: '' });
+  const [badges, setBadges] = useState(userData?.badges || []);
 
   useEffect(() => {
     if (!currentUser) {
@@ -41,11 +42,12 @@ const Profile = () => {
           setUserData(docSnap.data());
           setDisplayName(docSnap.data().displayName || currentUser.displayName || '');
           setBio(docSnap.data().bio || '');
-          setManifest(docSnap.data().manifest || 'Imposition');
-          setStyle(docSnap.data().style || 'Fire');
+          setManifest(docSnap.data().manifest || 'None');
+          setStyle(docSnap.data().manifestationType || 'Fire');
           setRarity(docSnap.data().rarity || 3);
           setCardBgColor(docSnap.data().cardBgColor || '#e0e7ff');
           setMoves(docSnap.data().moves || []);
+          setBadges(docSnap.data().badges || []);
         } else {
           // Create user document if it doesn't exist
           setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1 });
@@ -116,7 +118,7 @@ const Profile = () => {
         displayName,
         bio,
         manifest,
-        style,
+        manifestationType: style, // Save style as manifestationType to keep it consistent
         rarity,
         cardBgColor,
         moves,
@@ -124,7 +126,7 @@ const Profile = () => {
       });
       
       setEditing(false);
-      setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, style, rarity, cardBgColor, moves }));
+      setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, manifestationType: style, rarity, cardBgColor, moves }));
     } catch (error) {
       console.error('Error updating profile:', error);
     }
@@ -144,6 +146,10 @@ const Profile = () => {
 
   const level = userData ? Math.floor((userData.xp || 0) / 50) + 1 : 1;
   const avatarUrl = currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
+
+  // Check if student has earned Imposition (Level 5+)
+  const hasEarnedImposition = level >= 5;
+  const currentManifest = hasEarnedImposition ? (userData?.manifest || 'Imposition') : 'None';
 
   // Add the same items array as in Marketplace for reference
   const items = [
@@ -171,13 +177,14 @@ const Profile = () => {
             name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
             photoURL={userData?.photoURL || avatarUrl}
             powerPoints={userData?.powerPoints || 0}
-            manifest={manifest}
+            manifest={currentManifest}
             level={level}
             rarity={rarity}
             style={style}
             description={bio}
             cardBgColor={cardBgColor}
             moves={moves}
+            badges={badges}
           />
         </div>
         {/* Edit controls on the right */}
@@ -203,8 +210,8 @@ const Profile = () => {
                     <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={{ fontSize: '1.5rem', fontWeight: 'bold', border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', marginBottom: '0.5rem', width: '100%' }} placeholder="Display Name" />
                     <textarea value={bio} onChange={e => setBio(e.target.value)} style={{ border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', width: '100%', minHeight: '80px', resize: 'vertical' }} placeholder="Tell us about yourself..." />
                     <div style={{ margin: '0.5rem 0' }}>
-                      <span style={{ marginRight: 16 }}><b>Manifestation:</b> {manifest}</span>
-                      <span style={{ marginRight: 16 }}><b>Style:</b> {style}</span>
+                      <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
                       <span><b>Rarity:</b> {rarity}</span>
                     </div>
                     <div style={{ margin: '1rem 0' }}>
@@ -249,8 +256,8 @@ const Profile = () => {
                     <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
                     <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{bio || 'No bio yet. Click edit to add one!'}</p>
                     <div style={{ margin: '0.5rem 0' }}>
-                      <span style={{ marginRight: 16 }}><b>Manifestation:</b> {manifest}</span>
-                      <span style={{ marginRight: 16 }}><b>Style:</b> {style}</span>
+                      <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
                       <span><b>Rarity:</b> {rarity}</span>
                     </div>
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>

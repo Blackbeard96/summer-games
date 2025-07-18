@@ -1,10 +1,74 @@
  import ModelPreview from './ModelPreview';
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
+
+interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  imageUrl: string;
+  criteria?: string;
+  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  category: 'challenge' | 'achievement' | 'special' | 'admin';
+}
+
+// Badge awarding utility function
+const awardBadgeForChallenge = async (userId: string, challengeName: string) => {
+  try {
+    // Get all badges from the badges collection
+    const badgesSnapshot = await getDocs(collection(db, 'badges'));
+    const badges = badgesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    })) as Badge[];
+
+    // Find badges that match the challenge criteria
+    const matchingBadges = badges.filter(badge => {
+      if (badge.category === 'challenge' && badge.criteria) {
+        return badge.criteria.toLowerCase().includes(challengeName.toLowerCase()) ||
+               challengeName.toLowerCase().includes(badge.criteria.toLowerCase());
+      }
+      return false;
+    });
+
+    if (matchingBadges.length > 0) {
+      // Get current student data
+      const studentRef = doc(db, 'students', userId);
+      const studentSnap = await getDoc(studentRef);
+      
+      if (studentSnap.exists()) {
+        const studentData = studentSnap.data();
+        const currentBadges = studentData.badges || [];
+        
+        // Award each matching badge if not already earned
+        for (const badge of matchingBadges) {
+          const alreadyEarned = currentBadges.some((b: any) => b.id === badge.id);
+          if (!alreadyEarned) {
+            const newBadgeEntry = {
+              id: badge.id,
+              name: badge.name,
+              imageUrl: badge.imageUrl,
+              description: badge.description,
+              earnedAt: new Date()
+            };
+            
+            await updateDoc(studentRef, {
+              badges: [...currentBadges, newBadgeEntry]
+            });
+            
+            console.log(`Awarded badge "${badge.name}" for completing challenge "${challengeName}"`);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error awarding badge:', error);
+  }
+};
 
 interface ChallengeData {
   completed?: boolean;
@@ -221,6 +285,9 @@ const ChallengeTracker = () => {
       setManifestationType(elementName);
       setStoryChapter(1);
       setShowElementSelection(false);
+      
+      // Award Element Master badge for selecting an element
+      await awardBadgeForChallenge(currentUser.uid, 'element selection');
     } catch (error) {
       console.error('Error setting manifestation type:', error);
       alert('Failed to set your elemental type. Please try again.');
@@ -357,6 +424,9 @@ const ChallengeTracker = () => {
           character: storyChallenge.character,
           timestamp: serverTimestamp()
         });
+        
+        // Award badges for challenge completion
+        await awardBadgeForChallenge(currentUser.uid, storyChallenge.name);
       }
 
       setTimeout(async () => {
