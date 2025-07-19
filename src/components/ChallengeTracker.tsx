@@ -1,7 +1,7 @@
  import ModelPreview from './ModelPreview';
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
@@ -97,6 +97,19 @@ interface ElementalType {
   character: string;
 }
 
+interface GoogleClassroomAssignment {
+  id: string;
+  title: string;
+  description?: string;
+  dueDate?: {
+    year: number;
+    month: number;
+    day: number;
+  };
+  courseId: string;
+  courseName?: string;
+}
+
 const ChallengeTracker = () => {
   const { currentUser } = useAuth();
   const [challenges, setChallenges] = useState<{[key: string]: ChallengeData}>({});
@@ -108,6 +121,7 @@ const ChallengeTracker = () => {
   const [storyChapter, setStoryChapter] = useState(1);
   const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
   const [showElementSelection, setShowElementSelection] = useState(false);
+  const [classroomAssignments, setClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
 
   // Elemental manifestation types for new students
   const elementalTypes: ElementalType[] = [
@@ -266,7 +280,43 @@ const ChallengeTracker = () => {
       }
     };
 
-    if (currentUser) fetchChallenges();
+    const fetchClassroomAssignments = async () => {
+      try {
+        const mappingsQuery = query(collection(db, 'classroomChallengeMap'));
+        const mappingsSnapshot = await getDocs(mappingsQuery);
+        const assignments: { [challengeId: string]: GoogleClassroomAssignment } = {};
+        
+        for (const mappingDoc of mappingsSnapshot.docs) {
+          const mappingData = mappingDoc.data();
+          const challengeId = mappingData.challengeId;
+          const assignmentId = mappingDoc.id;
+          
+          console.log('Mapping data for', assignmentId, ':', mappingData);
+          console.log('Title from mapping:', mappingData.title);
+          console.log('Will use title:', mappingData.title || 'Google Classroom Assignment');
+          
+          // Fetch assignment details from Google Classroom API
+          // For now, we'll store basic info in the mapping
+          assignments[challengeId] = {
+            id: assignmentId,
+            title: mappingData.title || 'Google Classroom Assignment',
+            description: mappingData.description || '',
+            dueDate: mappingData.dueDate,
+            courseId: mappingData.courseId,
+            courseName: mappingData.courseName || ''
+          };
+        }
+        
+        setClassroomAssignments(assignments);
+      } catch (error) {
+        console.error('Error fetching classroom assignments:', error);
+      }
+    };
+
+    if (currentUser) {
+      fetchChallenges();
+      fetchClassroomAssignments();
+    }
   }, [currentUser]);
 
   const selectElement = async (elementName: string) => {
@@ -414,18 +464,27 @@ const ChallengeTracker = () => {
         });
       }
 
+      // Only add to challengeSubmissions if not already completed
       if (!challenge.completed) {
-        await addDoc(collection(db, 'challengeCompletions'), {
+        await addDoc(collection(db, 'challengeSubmissions'), {
           userId: currentUser.uid,
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+          email: currentUser.email || '',
           photoURL: currentUser.photoURL || '',
-          challenge: storyChallenge.name,
+          challengeId: storyChallenge.id,
+          challengeName: storyChallenge.name,
+          fileUrl: downloadURL,
+          timestamp: serverTimestamp(),
+          status: 'pending',
+          xpReward: storyChallenge.xpReward,
+          ppReward: storyChallenge.ppReward,
           manifestationType: storyChallenge.manifestationType,
-          character: storyChallenge.character,
-          timestamp: serverTimestamp()
+          character: storyChallenge.character
         });
-        
-        // Award badges for challenge completion
+      }
+
+      // Award badges for challenge completion
+      if (!challenge.completed) {
         await awardBadgeForChallenge(currentUser.uid, storyChallenge.name);
       }
 
@@ -730,6 +789,47 @@ const ChallengeTracker = () => {
                   }}>
                     <strong>{challenge.character}:</strong> {challenge.storyContext}
                   </div>
+                  
+                  {/* Google Classroom Assignment Information */}
+                  {classroomAssignments[challenge.id] && (
+                    <div style={{ 
+                      padding: '0.75rem', 
+                      background: 'rgba(59, 130, 246, 0.2)', 
+                      border: '1px solid rgba(59, 130, 246, 0.5)',
+                      borderRadius: '0.25rem',
+                      fontSize: '0.8rem',
+                      marginBottom: '0.5rem'
+                    }}>
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '0.5rem', 
+                        marginBottom: '0.25rem',
+                        color: '#3b82f6',
+                        fontWeight: 'bold'
+                      }}>
+                        📚 Google Classroom Assignment
+                      </div>
+                      <div style={{ marginBottom: '0.25rem' }}>
+                        <strong>Title:</strong> {classroomAssignments[challenge.id].title}
+                      </div>
+                      {classroomAssignments[challenge.id].description && (
+                        <div style={{ marginBottom: '0.25rem', fontSize: '0.75rem', opacity: 0.9 }}>
+                          {classroomAssignments[challenge.id].description}
+                        </div>
+                      )}
+                      {classroomAssignments[challenge.id].courseName && (
+                        <div style={{ marginBottom: '0.25rem', fontSize: '0.75rem' }}>
+                          <strong>Course:</strong> {classroomAssignments[challenge.id].courseName}
+                        </div>
+                      )}
+                      {classroomAssignments[challenge.id].dueDate && (
+                        <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>
+                          <strong>Due:</strong> {classroomAssignments[challenge.id].dueDate?.month}/{classroomAssignments[challenge.id].dueDate?.day}/{classroomAssignments[challenge.id].dueDate?.year}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ 
                     display: 'flex', 
                     gap: '0.5rem', 

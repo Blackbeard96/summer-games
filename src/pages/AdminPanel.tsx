@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { db, storage } from '../firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import BadgeManager from '../components/BadgeManager';
 import BadgeSetup from '../components/BadgeSetup';
 import PlayerCard from '../components/PlayerCard';
+import { getLevelFromXP } from '../utils/leveling';
 
 interface ChallengeData {
   completed?: boolean;
@@ -37,10 +38,15 @@ const AdminPanel: React.FC = () => {
   const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
+  const [submissions, setSubmissions] = useState<any[]>([]);
+  const [submissionsLoading, setSubmissionsLoading] = useState(false);
+  const [submissionsError, setSubmissionsError] = useState<string | null>(null);
+  const [rowLoading, setRowLoading] = useState<{ [id: string]: boolean }>({});
+  const [rowError, setRowError] = useState<{ [id: string]: string }>({});
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -112,6 +118,29 @@ const AdminPanel: React.FC = () => {
     };
     fetchStudents();
   }, []);
+
+  // Fetch pending challenge submissions for admin review
+  useEffect(() => {
+    if (activeTab !== 'submissions') return;
+    setSubmissionsLoading(true);
+    setSubmissionsError(null);
+    const fetchSubmissions = async () => {
+      try {
+        const q = query(
+          collection(db, 'challengeSubmissions'),
+          where('status', '==', 'pending')
+        );
+        const snapshot = await getDocs(q);
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setSubmissions(list);
+      } catch (err: any) {
+        setSubmissionsError('Failed to load submissions.');
+      } finally {
+        setSubmissionsLoading(false);
+      }
+    };
+    fetchSubmissions();
+  }, [activeTab]);
 
   const toggleChallengeCompletion = async (studentId: string, challenge: string) => {
     const studentRef = doc(db, 'students', studentId);
@@ -445,6 +474,81 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  // Approve submission handler
+  const handleApprove = async (sub: any) => {
+    setRowLoading(prev => ({ ...prev, [sub.id]: true }));
+    setRowError(prev => ({ ...prev, [sub.id]: '' }));
+    try {
+      // 1. Update submission status
+      await updateDoc(doc(db, 'challengeSubmissions', sub.id), { status: 'approved' });
+      // 2. Award XP/PP and mark challenge as completed for the student
+      const studentRef = doc(db, 'students', sub.userId);
+      const studentSnap = await getDoc(studentRef);
+      if (studentSnap.exists()) {
+        const studentData = studentSnap.data();
+        const challenges = { ...studentData.challenges };
+        // Mark challenge as completed and attach file if not already
+        challenges[sub.challengeId] = {
+          ...(challenges[sub.challengeId] || {}),
+          completed: true,
+          file: sub.fileUrl
+        };
+        // Award XP/PP (default fallback if not provided)
+        const xpReward = sub.xpReward || 10;
+        const ppReward = sub.ppReward || 5;
+        const newXP = (studentData.xp || 0) + xpReward;
+        const newPP = (studentData.powerPoints || 0) + ppReward;
+        await updateDoc(studentRef, {
+          challenges,
+          xp: newXP,
+          powerPoints: newPP
+        });
+      }
+      // 3. Add notification to notifications subcollection
+      await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+        type: 'challenge_approved',
+        message: `Your submission for "${sub.challengeName}" was approved! You earned ${sub.xpReward || 10} XP and ${sub.ppReward || 5} PP.`,
+        challengeId: sub.challengeId,
+        challengeName: sub.challengeName,
+        xpReward: sub.xpReward || 10,
+        ppReward: sub.ppReward || 5,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      // 4. Remove from UI
+      setSubmissions(prev => prev.filter(s => s.id !== sub.id));
+    } catch (err: any) {
+      setRowError(prev => ({ ...prev, [sub.id]: 'Failed to approve. Try again.' }));
+    } finally {
+      setRowLoading(prev => ({ ...prev, [sub.id]: false }));
+    }
+  };
+
+  // Deny submission handler
+  const handleDeny = async (sub: any) => {
+    setRowLoading(prev => ({ ...prev, [sub.id]: true }));
+    setRowError(prev => ({ ...prev, [sub.id]: '' }));
+    try {
+      // 1. Update submission status
+      await updateDoc(doc(db, 'challengeSubmissions', sub.id), { status: 'denied' });
+      // 2. Add notification to notifications subcollection
+      await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+        type: 'challenge_denied',
+        message: `Your submission for "${sub.challengeName}" was denied. Please update your work and resubmit for review.`,
+        challengeId: sub.challengeId,
+        challengeName: sub.challengeName,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      // 3. Remove from UI
+      setSubmissions(prev => prev.filter(s => s.id !== sub.id));
+    } catch (err: any) {
+      setRowError(prev => ({ ...prev, [sub.id]: 'Failed to deny. Try again.' }));
+    } finally {
+      setRowLoading(prev => ({ ...prev, [sub.id]: false }));
+    }
+  };
+
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -532,12 +636,108 @@ const AdminPanel: React.FC = () => {
         >
           Badge Setup
         </button>
+        <button
+          onClick={() => setActiveTab('submissions')}
+          style={{
+            backgroundColor: activeTab === 'submissions' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'submissions' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          Submissions
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
         <BadgeManager />
       ) : activeTab === 'setup' ? (
         <BadgeSetup />
+      ) : activeTab === 'submissions' ? (
+        <>
+          <div style={{
+            background: '#f8fafc',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            minHeight: '300px',
+            color: '#374151',
+            border: '1px solid #e5e7eb',
+            marginBottom: '2rem'
+          }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>Challenge Submissions</h2>
+            <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
+              Review pending challenge submissions from students. Approve to award XP/PP, or deny to require resubmission.
+            </p>
+            {submissionsLoading ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>Loading submissions...</div>
+            ) : submissionsError ? (
+              <div style={{ textAlign: 'center', color: '#dc2626', padding: '2rem' }}>{submissionsError}</div>
+            ) : submissions.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#6b7280', padding: '2rem' }}>No pending submissions at this time.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Student</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Challenge</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Submission File</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Submitted At</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'center', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {submissions.map(sub => (
+                      <tr key={sub.id}>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <img src={sub.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(sub.displayName || 'Student')}&background=4f46e5&color=fff&size=48`} alt={sub.displayName || 'Student'} style={{ width: 36, height: 36, borderRadius: '50%' }} />
+                          <div>
+                            <div style={{ fontWeight: 'bold' }}>
+                              {sub.displayName || 'Unnamed Student'} <span style={{ color: '#4f46e5', fontWeight: 'normal', fontSize: '0.95em' }}>(Lv. {typeof sub.xp === 'number' ? getLevelFromXP(sub.xp) : '?'})</span>
+                            </div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{sub.email || ''}</div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>{sub.challengeName || sub.challengeId || 'Unknown'}</td>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>
+                          {sub.fileUrl ? (
+                            <a href={sub.fileUrl} style={{ color: '#2563eb', textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">View File</a>
+                          ) : (
+                            <span style={{ color: '#9ca3af' }}>No file</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>{sub.timestamp && sub.timestamp.toDate ? sub.timestamp.toDate().toLocaleString() : ''}</td>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb', textAlign: 'center' }}>
+                          <button
+                            style={{ background: '#10b981', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.5rem 1rem', fontWeight: 'bold', marginRight: 8, cursor: rowLoading[sub.id] ? 'wait' : 'pointer', opacity: rowLoading[sub.id] ? 0.5 : 1 }}
+                            disabled={rowLoading[sub.id]}
+                            onClick={() => handleApprove(sub)}
+                          >
+                            {rowLoading[sub.id] ? 'Approving...' : 'Approve'}
+                          </button>
+                          <button
+                            style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.5rem 1rem', fontWeight: 'bold', cursor: rowLoading[sub.id] ? 'wait' : 'pointer', opacity: rowLoading[sub.id] ? 0.5 : 1 }}
+                            disabled={rowLoading[sub.id]}
+                            onClick={() => handleDeny(sub)}
+                          >
+                            {rowLoading[sub.id] ? 'Denying...' : 'Deny'}
+                          </button>
+                          {rowError[sub.id] && (
+                            <div style={{ color: '#dc2626', fontSize: '0.875rem', marginTop: 4 }}>{rowError[sub.id]}</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       ) : (
         <>
       
@@ -1052,6 +1252,7 @@ const AdminPanel: React.FC = () => {
                       cardBgColor={student.cardBgColor || '#e0e7ff'}
                       moves={student.moves || []}
                       badges={student.badges || []}
+                      xp={student.xp || 0}
                     />
                   </div>
                   

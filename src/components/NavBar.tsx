@@ -100,6 +100,11 @@ const NavBar = () => {
             <Link to="/leaderboard" style={{ color: 'inherit', textDecoration: 'none' }}>Hall of Fame</Link>
             <span className="tooltip" style={tooltipStyle}>Leaderboard</span>
           </div>
+          {/* Classroom Test Link */}
+          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+            <Link to="/classroom-test" style={{ color: 'inherit', textDecoration: 'none' }}>Classroom Test</Link>
+            <span className="tooltip" style={tooltipStyle}>Google Classroom Integration</span>
+          </div>
           {currentUser && (
             <>
               {/* My Manifestation (Profile) */}

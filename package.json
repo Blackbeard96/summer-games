@@ -4,6 +4,7 @@
   "private": true,
   "homepage": "https://summer-games-99fba.web.app",
   "dependencies": {
+    "@react-oauth/google": "^0.12.2",
     "@react-three/drei": "^10.5.0",
     "@react-three/fiber": "^9.2.0",
     "@testing-library/dom": "^10.4.0",

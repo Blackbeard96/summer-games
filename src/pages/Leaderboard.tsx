@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
 import { collection, getDocs, orderBy, query } from 'firebase/firestore';
+import { getLevelFromXP } from '../utils/leveling';
 
 interface Student {
   id: string;
@@ -39,10 +40,6 @@ const Leaderboard = () => {
       'Creation': '#f59e0b'
     };
     return colors[type] || '#6b7280';
-  };
-
-  const getLevel = (xp: number) => {
-    return Math.floor(xp / 50) + 1;
   };
 
   return (
@@ -136,12 +133,8 @@ const Leaderboard = () => {
                     gap: '0.5rem',
                     marginBottom: '0.25rem'
                   }}>
-                    <span style={{ 
-                      fontWeight: 'bold', 
-                      fontSize: '1.1rem',
-                      color: '#fbbf24'
-                    }}>
-                      {student.displayName || 'Unnamed Student'}
+                    <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#fbbf24' }}>
+                      {student.displayName || 'Unnamed Student'} (Lv. {getLevelFromXP(student.xp || 0)})
                     </span>
                     {student.manifestationType && (
                       <span style={{ 
@@ -162,7 +155,7 @@ const Leaderboard = () => {
                     fontSize: '0.875rem',
                     opacity: 0.8
                   }}>
-                    <span>Level {getLevel(student.xp || 0)}</span>
+                    <span>Level {getLevelFromXP(student.xp || 0)}</span>
                     <span>Chapter {student.storyChapter || 1}</span>
                   </div>
                 </div>

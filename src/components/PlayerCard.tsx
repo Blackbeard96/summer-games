@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getLevelFromXP } from '../utils/leveling';
 
 interface PlayerCardProps {
   name: string;
@@ -12,6 +13,7 @@ interface PlayerCardProps {
   cardBgColor?: string;
   moves?: Array<{ name: string; description: string; icon: string }>;
   badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
+  xp?: number; // <-- Add xp prop
 }
 
 const styleIcons: Record<string, string> = {
@@ -32,6 +34,21 @@ const manifestIcons: Record<string, string> = {
   // Add more as needed
 };
 
+// Helper to get XP needed for next level
+function getXPProgress(xp: number) {
+  let level = 1;
+  let required = 100;
+  let total = 0;
+  while (xp >= total + required) {
+    total += required;
+    required = required * 1.25;
+    level++;
+  }
+  const currentLevelXP = xp - total;
+  const nextLevelXP = required;
+  return { currentLevelXP, nextLevelXP, percent: Math.min(100, (currentLevelXP / nextLevelXP) * 100) };
+}
+
 const PlayerCard: React.FC<PlayerCardProps> = ({
   name,
   photoURL,
@@ -44,6 +61,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
   cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
   moves = [],
   badges = [],
+  xp = 0, // <-- Default to 0
 }) => {
   const [flipped, setFlipped] = useState(false);
 
@@ -102,6 +120,20 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
               ))}</span>
             </div>
           </div>
+          {/* Level Progress Bar */}
+          {typeof xp === 'number' && (
+            (() => {
+              const { currentLevelXP, nextLevelXP, percent } = getXPProgress(xp);
+              return (
+                <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>Level Progress: {currentLevelXP} / {Math.round(nextLevelXP)} XP</div>
+                  <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
+                    <div style={{ width: `${percent}%`, background: '#4f46e5', height: '100%', borderRadius: 8, transition: 'width 0.3s' }} />
+                  </div>
+                </div>
+              );
+            })()
+          )}
           {/* Profile Image */}
           <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
             <img

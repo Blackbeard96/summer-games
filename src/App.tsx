@@ -1,3 +1,5 @@
+import ClassroomTest from './pages/ClassroomTest'; // Adjust path if needed
+import { Link } from 'react-router-dom';
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
@@ -12,6 +14,9 @@ import FirebaseStatus from './components/FirebaseStatus';
 import { AuthProvider, useAuth } from './context/AuthContext';
 // Firebase services are imported but not directly used in this component
 // They are used by child components through the firebase.ts file
+
+// ...
+<Link to="/classroom-test">Classroom Test</Link>
 
 // Protected Admin Route Component
 const ProtectedAdminRoute = () => {
@@ -37,6 +42,7 @@ function App() {
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/admin" element={<ProtectedAdminRoute />} />
           <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/classroom-test" element={<ClassroomTest />} />
         </Routes>
         {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
       </Router>
