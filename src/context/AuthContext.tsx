@@ -15,6 +15,7 @@ import {
   deleteUser
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+import { initializeChapterProgress, migrateExistingUserToChapters } from '../utils/chapterInit';
 
 interface UserProfile {
   displayName: string;
@@ -72,7 +73,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       if (userDoc.exists()) {
-        setUserProfile(userDoc.data() as UserProfile);
+        const userData = userDoc.data() as UserProfile;
+        setUserProfile(userData);
+        
+        // Migrate existing user to chapter system if needed
+        await migrateExistingUserToChapters(user.uid);
       } else {
         // Create new user profile
         const newProfile: UserProfile = {
@@ -88,6 +93,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         await setDoc(doc(db, 'users', user.uid), newProfile);
         setUserProfile(newProfile);
+        
+        // Initialize chapter progress for new user
+        await initializeChapterProgress(user.uid);
       }
     } catch (error) {
       console.error('Error fetching user profile:', error);

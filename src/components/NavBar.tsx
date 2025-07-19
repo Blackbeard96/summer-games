@@ -95,16 +95,17 @@ const NavBar = () => {
             <Link to="/" style={{ color: 'inherit', textDecoration: 'none' }}>Training Grounds</Link>
             <span className="tooltip" style={tooltipStyle}>Dashboard</span>
           </div>
+          {/* Player's Journey (Chapters) */}
+          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+            <Link to="/chapters" style={{ color: 'inherit', textDecoration: 'none' }}>Player's Journey</Link>
+            <span className="tooltip" style={tooltipStyle}>Chapter System</span>
+          </div>
           {/* Hall of Fame (Leaderboard) */}
           <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
             <Link to="/leaderboard" style={{ color: 'inherit', textDecoration: 'none' }}>Hall of Fame</Link>
             <span className="tooltip" style={tooltipStyle}>Leaderboard</span>
           </div>
-          {/* Classroom Test Link */}
-          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-            <Link to="/classroom-test" style={{ color: 'inherit', textDecoration: 'none' }}>Classroom Test</Link>
-            <span className="tooltip" style={tooltipStyle}>Google Classroom Integration</span>
-          </div>
+
           {currentUser && (
             <>
               {/* My Manifestation (Profile) */}

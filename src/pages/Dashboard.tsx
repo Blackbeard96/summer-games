@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import ChallengeTracker from '../components/ChallengeTracker';
+import StoryChallenges from '../components/StoryChallenges';
+import ManifestChallenges from '../components/ManifestChallenges';
 import RecentCompletions from '../components/RecentCompletions';
-import ManifestProgress from '../components/ManifestProgress';
 import ManifestSelection from '../components/ManifestSelection';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
@@ -112,18 +112,8 @@ const Dashboard = () => {
         </p>
       </div>
       
-      {/* Manifest Selection or Progress */}
-      {playerManifest ? (
-        <div style={{ marginBottom: '2rem' }}>
-          <ManifestProgress 
-            playerManifest={playerManifest} 
-            onVeilBreak={(veilId) => {
-              // Handle veil breaking
-              alert('Veil breaking feature coming soon!');
-            }}
-          />
-        </div>
-      ) : (
+      {/* Manifest Selection Prompt */}
+      {!playerManifest && (
         <div style={{ 
           backgroundColor: 'white', 
           borderRadius: '0.75rem', 
@@ -157,8 +147,21 @@ const Dashboard = () => {
         </div>
       )}
 
+      {/* 2-Column Layout: Story Challenges (Left) and Manifest Challenges (Right) */}
       <div style={{ display: 'grid', gap: '2rem', gridTemplateColumns: '1fr 1fr' }}>
-        <ChallengeTracker />
+        {/* Left Column - Story Challenges */}
+        <div>
+          <StoryChallenges />
+        </div>
+        
+        {/* Right Column - Manifest Challenges */}
+        <div>
+          <ManifestChallenges playerManifest={playerManifest} />
+        </div>
+      </div>
+
+      {/* Recent Completions Section */}
+      <div style={{ marginTop: '2rem' }}>
         <RecentCompletions />
       </div>
 

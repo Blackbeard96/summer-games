@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
+import { CHAPTERS } from '../types/chapters';
 
 const classroomScopes = [
   'openid',
@@ -24,17 +25,16 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
   const [selectedChallenge, setSelectedChallenge] = useState('');
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
-  // Replace this with a dynamic fetch from Firestore if needed
-  const challenges = [
-    { id: 'reality-shaping-101', name: 'Reality Shaping 101' },
-    { id: 'memory-forge', name: 'Memory Forge' },
-    { id: 'intelligent-constructs', name: 'Intelligent Constructs' },
-    { id: 'dimensional-portal', name: 'Dimensional Portal' },
-    { id: 'truth-manifestation', name: 'Truth Manifestation' },
-    { id: 'reality-bending', name: 'Reality Bending' },
-    { id: 'neural-networks', name: 'Neural Networks' },
-    { id: 'eternal-creation', name: 'Eternal Creation' },
-  ];
+  
+  // Get all challenges from all chapters
+  const challenges = CHAPTERS.flatMap(chapter => 
+    chapter.challenges.map(challenge => ({
+      id: challenge.id,
+      name: `Chapter ${chapter.id}: ${challenge.title}`,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title
+    }))
+  );
 
   const handleMap = async () => {
     if (!selectedChallenge) return;
@@ -50,6 +50,8 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
       console.log('All assignments:', assignments);
       console.log('Course:', course);
       
+      const selectedChallengeData = challenges.find(c => c.id === selectedChallenge);
+      
       const mappingData = {
         challengeId: selectedChallenge,
         courseId: courseId,
@@ -57,12 +59,14 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
         description: assignment?.description || '',
         dueDate: assignment?.dueDate || null,
         courseName: course?.name || '',
+        chapterId: selectedChallengeData?.chapterId || null,
+        chapterTitle: selectedChallengeData?.chapterTitle || '',
         mappedAt: new Date()
       };
       
       console.log('Saving mapping data:', mappingData);
       
-      await setDoc(doc(db, 'classroomChallengeMap', assignmentId), mappingData);
+      await setDoc(doc(db, 'chapterClassroomMap', assignmentId), mappingData);
       setSuccess(true);
       console.log('Successfully saved mapping for assignment:', assignmentId);
       setTimeout(() => setSuccess(false), 2000);
@@ -78,11 +82,17 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
       <select
         value={selectedChallenge}
         onChange={e => setSelectedChallenge(e.target.value)}
-        style={{ marginRight: 8 }}
+        style={{ marginRight: 8, minWidth: '250px' }}
       >
-        <option value="">Select Challenge</option>
-        {challenges.map(c => (
-          <option key={c.id} value={c.id}>{c.name}</option>
+        <option value="">Select Chapter Challenge</option>
+        {CHAPTERS.map(chapter => (
+          <optgroup key={chapter.id} label={`Chapter ${chapter.id}: ${chapter.title}`}>
+            {chapter.challenges.map(challenge => (
+              <option key={challenge.id} value={challenge.id}>
+                {challenge.title}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
       <button onClick={handleMap} disabled={!selectedChallenge || saving}>
@@ -148,8 +158,8 @@ const GoogleClassroomIntegration: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: '2rem auto', padding: 24, background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.07)' }}>
-      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 16 }}>Google Classroom Integration</h2>
+    <div style={{ maxWidth: 800, margin: '2rem auto', padding: 24, background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.07)' }}>
+      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 16 }}>Chapter Assignment Integration</h2>
       {!accessToken ? (
         <button onClick={() => login()} style={{ background: '#4285F4', color: 'white', border: 'none', borderRadius: 4, padding: '0.75rem 1.5rem', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
           Sign in with Google
@@ -175,6 +185,9 @@ const GoogleClassroomIntegration: React.FC = () => {
           {assignments.length > 0 && (
             <div style={{ marginTop: 24 }}>
               <h4>Assignments for Selected Course</h4>
+              <p style={{ color: '#6b7280', fontSize: '0.875rem', marginBottom: '1rem' }}>
+                Select a Chapter Challenge to attach each Google Classroom assignment to.
+              </p>
               <ul style={{ listStyle: 'none', padding: 0 }}>
                 {assignments.map((a: any) => (
                   <li key={a.id} style={{ background: '#f3f4f6', borderRadius: 4, padding: 8, marginBottom: 8 }}>

@@ -144,7 +144,7 @@ const Profile = () => {
     setUploading(true);
     
     try {
-      const storageRef = ref(storage, `avatars/${currentUser.uid}`);
+      const storageRef = ref(storage, `profile_pictures/${currentUser.uid}/avatar`);
       console.log('Uploading to storage reference:', storageRef.fullPath);
       
       const uploadResult = await uploadBytes(storageRef, file);
@@ -275,7 +275,7 @@ const Profile = () => {
   }
 
   const level = userData ? getLevelFromXP(userData.xp || 0) : 1;
-  const avatarUrl = currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
+  const avatarUrl = userData?.photoURL || currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
 
   // Get the current manifest name from playerManifest state
   const currentManifest = playerManifest ? 
@@ -312,6 +312,7 @@ const Profile = () => {
         {/* PlayerCard on the left */}
         <div style={{ flex: '0 0 340px' }}>
           <PlayerCard
+            key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
             name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
             photoURL={userData?.photoURL || avatarUrl}
             powerPoints={userData?.powerPoints || 0}
@@ -333,6 +334,7 @@ const Profile = () => {
               {/* Avatar Section */}
               <div style={{ position: 'relative' }}>
                 <img
+                  key={avatarUrl} // Force re-render when avatar changes
                   src={avatarUrl}
                   alt="Profile"
                   style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', border: '4px solid #4f46e5' }}

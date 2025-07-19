@@ -5,6 +5,8 @@ import { ref, deleteObject } from 'firebase/storage';
 import BadgeManager from '../components/BadgeManager';
 import BadgeSetup from '../components/BadgeSetup';
 import PlayerCard from '../components/PlayerCard';
+import ChapterAssignmentManager from '../components/ChapterAssignmentManager';
+import GoogleClassroomIntegration from '../components/GoogleClassroomIntegration';
 import { getLevelFromXP } from '../utils/leveling';
 
 interface ChallengeData {
@@ -38,7 +40,7 @@ const AdminPanel: React.FC = () => {
   const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -481,29 +483,95 @@ const AdminPanel: React.FC = () => {
     try {
       // 1. Update submission status
       await updateDoc(doc(db, 'challengeSubmissions', sub.id), { status: 'approved' });
-      // 2. Award XP/PP and mark challenge as completed for the student
-      const studentRef = doc(db, 'students', sub.userId);
-      const studentSnap = await getDoc(studentRef);
-      if (studentSnap.exists()) {
-        const studentData = studentSnap.data();
-        const challenges = { ...studentData.challenges };
-        // Mark challenge as completed and attach file if not already
-        challenges[sub.challengeId] = {
-          ...(challenges[sub.challengeId] || {}),
-          completed: true,
-          file: sub.fileUrl
+      
+      // 2. Handle different submission types
+      if (sub.submissionType === 'chapter_challenge') {
+        // Handle chapter challenge submissions
+        const userRef = doc(db, 'users', sub.userId);
+        const studentRef = doc(db, 'students', sub.userId);
+        
+        // Get current user progress
+        const userDoc = await getDoc(userRef);
+        const studentDoc = await getDoc(studentRef);
+        const userProgress = userDoc.exists() ? userDoc.data() : {};
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        
+        // Mark challenge as completed in user progress
+        const updatedChapters = {
+          ...userProgress.chapters,
+          [sub.chapterId]: {
+            ...userProgress.chapters?.[sub.chapterId],
+            challenges: {
+              ...userProgress.chapters?.[sub.chapterId]?.challenges,
+              [sub.challengeId]: {
+                isCompleted: true,
+                completionDate: new Date()
+              }
+            }
+          }
         };
-        // Award XP/PP (default fallback if not provided)
-        const xpReward = sub.xpReward || 10;
-        const ppReward = sub.ppReward || 5;
-        const newXP = (studentData.xp || 0) + xpReward;
-        const newPP = (studentData.powerPoints || 0) + ppReward;
-        await updateDoc(studentRef, {
-          challenges,
+        
+        // Apply rewards
+        let newXP = (userProgress.xp || 0) + (sub.xpReward || 0);
+        let newPP = (userProgress.powerPoints || 0) + (sub.ppReward || 0);
+        
+        // Update both collections
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
           xp: newXP,
           powerPoints: newPP
         });
+        
+        await updateDoc(studentRef, {
+          xp: (studentData.xp || 0) + (sub.xpReward || 0),
+          powerPoints: (studentData.powerPoints || 0) + (sub.ppReward || 0)
+        });
+        
+        // Check if all challenges in chapter are completed
+        const chapterProgress = updatedChapters[sub.chapterId];
+        const allChallengesCompleted = chapterProgress?.challenges && 
+          Object.values(chapterProgress.challenges).every((ch: any) => ch.isCompleted);
+        
+        if (allChallengesCompleted) {
+          await updateDoc(userRef, {
+            [`chapters.${sub.chapterId}.isCompleted`]: true,
+            [`chapters.${sub.chapterId}.completionDate`]: new Date(),
+            [`chapters.${sub.chapterId}.isActive`]: false
+          });
+          
+          // Activate next chapter if available
+          const nextChapter = sub.chapterId + 1;
+          if (nextChapter <= 9) {
+            await updateDoc(userRef, {
+              [`chapters.${nextChapter}.isActive`]: true,
+              [`chapters.${nextChapter}.unlockDate`]: new Date()
+            });
+          }
+        }
+      } else {
+        // Handle legacy file-based submissions
+        const studentRef = doc(db, 'students', sub.userId);
+        const studentSnap = await getDoc(studentRef);
+        if (studentSnap.exists()) {
+          const studentData = studentSnap.data();
+          const challenges = { ...studentData.challenges };
+          challenges[sub.challengeId] = {
+            ...(challenges[sub.challengeId] || {}),
+            completed: true,
+            file: sub.fileUrl
+          };
+          const xpReward = sub.xpReward || 10;
+          const ppReward = sub.ppReward || 5;
+          const newXP = (studentData.xp || 0) + xpReward;
+          const newPP = (studentData.powerPoints || 0) + ppReward;
+          await updateDoc(studentRef, {
+            challenges,
+            xp: newXP,
+            powerPoints: newPP
+          });
+        }
       }
+      
       // 3. Add notification to notifications subcollection
       await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
         type: 'challenge_approved',
@@ -515,6 +583,7 @@ const AdminPanel: React.FC = () => {
         timestamp: serverTimestamp(),
         read: false
       });
+      
       // 4. Remove from UI
       setSubmissions(prev => prev.filter(s => s.id !== sub.id));
     } catch (err: any) {
@@ -651,12 +720,46 @@ const AdminPanel: React.FC = () => {
         >
           Submissions
         </button>
+        <button
+          onClick={() => setActiveTab('assignments')}
+          style={{
+            backgroundColor: activeTab === 'assignments' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'assignments' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          Chapter Assignments
+        </button>
+        <button
+          onClick={() => setActiveTab('classroom')}
+          style={{
+            backgroundColor: activeTab === 'classroom' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'classroom' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          Google Classroom
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
         <BadgeManager />
       ) : activeTab === 'setup' ? (
         <BadgeSetup />
+      ) : activeTab === 'assignments' ? (
+        <ChapterAssignmentManager />
+      ) : activeTab === 'classroom' ? (
+        <GoogleClassroomIntegration />
       ) : activeTab === 'submissions' ? (
         <>
           <div style={{
@@ -685,7 +788,7 @@ const AdminPanel: React.FC = () => {
                     <tr style={{ background: '#f1f5f9' }}>
                       <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Student</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Challenge</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Submission File</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Type</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Submitted At</th>
                       <th style={{ padding: '0.75rem', textAlign: 'center', fontWeight: 'bold', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
                     </tr>
@@ -702,9 +805,23 @@ const AdminPanel: React.FC = () => {
                             <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{sub.email || ''}</div>
                           </div>
                         </td>
-                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>{sub.challengeName || sub.challengeId || 'Unknown'}</td>
                         <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>
-                          {sub.fileUrl ? (
+                          <div>
+                            <div style={{ fontWeight: 'bold' }}>{sub.challengeName || sub.challengeId || 'Unknown'}</div>
+                            {sub.submissionType === 'chapter_challenge' && (
+                              <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                                Chapter {sub.chapterId} • {sub.challengeDescription || 'No description'}
+                              </div>
+                            )}
+                            <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.25rem' }}>
+                              Reward: {sub.xpReward || 0} XP, {sub.ppReward || 0} PP
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.75rem', borderBottom: '1px solid #e5e7eb' }}>
+                          {sub.submissionType === 'chapter_challenge' ? (
+                            <span style={{ color: '#10b981', fontWeight: 'bold' }}>Chapter Challenge</span>
+                          ) : sub.fileUrl ? (
                             <a href={sub.fileUrl} style={{ color: '#2563eb', textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">View File</a>
                           ) : (
                             <span style={{ color: '#9ca3af' }}>No file</span>

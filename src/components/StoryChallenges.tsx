@@ -1,92 +1,15 @@
- import ModelPreview from './ModelPreview';
 import React, { useEffect, useState } from 'react';
-import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, where, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { db } from '../firebase';
+import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot, query, getDocs } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
-import ManifestSelection from './ManifestSelection';
-import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
-import { getLevelFromXP } from '../utils/leveling';
-
-interface Badge {
-  id: string;
-  name: string;
-  description: string;
-  imageUrl: string;
-  criteria?: string;
-  rarity: 'common' | 'rare' | 'epic' | 'legendary';
-  category: 'challenge' | 'achievement' | 'special' | 'admin';
-}
-
-// Badge awarding utility function
-const awardBadgeForChallenge = async (userId: string, challengeName: string) => {
-  try {
-    // Get all badges from the badges collection
-    const badgesSnapshot = await getDocs(collection(db, 'badges'));
-    const badges = badgesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    })) as Badge[];
-
-    // Find badges that match the challenge criteria
-    const matchingBadges = badges.filter(badge => {
-      if (badge.category === 'challenge' && badge.criteria) {
-        return badge.criteria.toLowerCase().includes(challengeName.toLowerCase()) ||
-               challengeName.toLowerCase().includes(badge.criteria.toLowerCase());
-      }
-      return false;
-    });
-
-    if (matchingBadges.length > 0) {
-      // Get current student data
-      const studentRef = doc(db, 'students', userId);
-      const studentSnap = await getDoc(studentRef);
-      
-      if (studentSnap.exists()) {
-        const studentData = studentSnap.data();
-        const currentBadges = studentData.badges || [];
-        
-        // Award each matching badge if not already earned
-        for (const badge of matchingBadges) {
-          const alreadyEarned = currentBadges.some((b: any) => b.id === badge.id);
-          if (!alreadyEarned) {
-            const newBadgeEntry = {
-              id: badge.id,
-              name: badge.name,
-              imageUrl: badge.imageUrl,
-              description: badge.description,
-              earnedAt: new Date()
-            };
-            
-            await updateDoc(studentRef, {
-              badges: [...currentBadges, newBadgeEntry]
-            });
-            
-            console.log(`Awarded badge "${badge.name}" for completing challenge "${challengeName}"`);
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error awarding badge:', error);
-  }
-};
+import ModelPreview from './ModelPreview';
 
 interface ChallengeData {
   completed?: boolean;
   file?: string;
-}
-
-
-
-interface ElementalType {
-  name: string;
-  description: string;
-  color: string;
-  icon: string;
-  character: string;
 }
 
 interface GoogleClassroomAssignment {
@@ -102,94 +25,26 @@ interface GoogleClassroomAssignment {
   courseName?: string;
 }
 
-const ChallengeTracker = () => {
+const StoryChallenges = () => {
   const { currentUser } = useAuth();
-  const [challenges, setChallenges] = useState<{[key: string]: ChallengeData}>({});
-  const [xp, setXP] = useState(0);
-  const [level, setLevel] = useState(1);
-  const [unlocks, setUnlocks] = useState<string[]>([]);
-  const [powerPoints, setPowerPoints] = useState(0);
-  const [manifestationType, setManifestationType] = useState<string>('');
-  const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
-  const [showElementSelection, setShowElementSelection] = useState(false);
-  const [showManifestSelection, setShowManifestSelection] = useState(false);
-  const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
-  const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [userProgress, setUserProgress] = useState<any>(null);
-
-  // Elemental manifestation types for new students
-  const elementalTypes: ElementalType[] = [
-    {
-      name: 'Fire',
-      description: 'Passionate and intense. You manifest through heat, light, and transformation.',
-      color: '#dc2626',
-      icon: '🔥',
-      character: 'Allen'
-    },
-    {
-      name: 'Water',
-      description: 'Adaptive and flowing. You manifest through fluidity, reflection, and change.',
-      color: '#2563eb',
-      icon: '💧',
-      character: 'Alejandra'
-    },
-    {
-      name: 'Earth',
-      description: 'Stable and grounded. You manifest through solidity, growth, and foundation.',
-      color: '#16a34a',
-      icon: '🌍',
-      character: 'Greg'
-    },
-    {
-      name: 'Air',
-      description: 'Free and boundless. You manifest through movement, clarity, and freedom.',
-      color: '#7c3aed',
-      icon: '💨',
-      character: 'Sage'
-    }
-  ];
-
-
+  const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
+  const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
 
   useEffect(() => {
-    const fetchChallenges = async () => {
-      if (!currentUser) return;
-      
-      const userRef = doc(db, 'students', currentUser.uid);
-      const docSnap = await getDoc(userRef);
+    if (!currentUser) return;
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setChallenges(data.challenges || {});
-        const xpVal = data.xp || 0;
-        const ppVal = data.powerPoints || 0;
-        setXP(xpVal);
-        setPowerPoints(ppVal);
-        const lvl = Math.floor(xpVal / 50) + 1;
-        setLevel(lvl);
-        setManifestationType(data.manifestationType || '');
-        updateUnlocks(lvl);
-        
-        // Load manifest data
-        const manifestData = data.manifest;
-        if (manifestData) {
-          // Convert Firestore timestamp to Date if needed
-          const processedManifest = {
-            ...manifestData,
-            lastAscension: manifestData.lastAscension?.toDate ? 
-              manifestData.lastAscension.toDate() : 
-              new Date(manifestData.lastAscension)
-          };
-          setPlayerManifest(processedManifest);
-        }
-      } else {
-        // Show element selection for new students
-        setShowElementSelection(true);
+    const userRef = doc(db, 'users', currentUser.uid);
+    const unsubscribe = onSnapshot(userRef, (doc) => {
+      if (doc.exists()) {
+        setUserProgress(doc.data());
       }
-    };
+    });
 
+    return () => unsubscribe();
+  }, [currentUser]);
 
-
+  useEffect(() => {
     const fetchChapterClassroomAssignments = async () => {
       try {
         const mappingsQuery = query(collection(db, 'chapterClassroomMap'));
@@ -218,147 +73,51 @@ const ChallengeTracker = () => {
     };
 
     if (currentUser) {
-      fetchChallenges();
       fetchChapterClassroomAssignments();
     }
   }, [currentUser]);
-
-  // Fetch user progress for chapters
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const userRef = doc(db, 'users', currentUser.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
-      if (doc.exists()) {
-        setUserProgress(doc.data());
-      }
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  const selectElement = async (elementName: string) => {
-    if (!currentUser) return;
-    
-    try {
-      const userRef = doc(db, 'students', currentUser.uid);
-      await setDoc(userRef, { 
-        challenges: {}, 
-        xp: 0, 
-        powerPoints: 0, 
-        manifestationType: elementName
-      });
-      
-      setManifestationType(elementName);
-      setShowElementSelection(false);
-      
-      // Award Element Master badge for selecting an element
-      await awardBadgeForChallenge(currentUser.uid, 'element selection');
-    } catch (error) {
-      console.error('Error setting manifestation type:', error);
-      alert('Failed to set your elemental type. Please try again.');
-    }
-  };
-
-  const updateUnlocks = (lvl: number) => {
-    const unlockMap: {[key: number]: string} = {
-      2: "🔓 Enhanced Sight - See through digital illusions",
-      3: "🔓 Tool Mastery - Advanced 3D modeling techniques",
-      4: "🔓 Flow State - Unlock creative potential",
-      5: "🔓 Imposition - Bend reality to your will",
-      6: "🔓 Dimensional Awareness - Navigate complex spaces",
-      7: "🔓 Truth Sight - Recognize patterns in data",
-      8: "🔓 Creation Mastery - Build worlds from nothing"
-    };
-    const newUnlocks = Object.entries(unlockMap)
-      .filter(([key]) => lvl >= parseInt(key))
-      .map(([, val]) => val);
-    setUnlocks(newUnlocks);
-  };
-
-
-
-  const toggleChallenge = async (id: string) => {
-    if (!currentUser) return;
-    const challenge = challenges[id] || {};
-    const alreadyCompleted = challenge.completed;
-    const hasFile = !!challenge.file;
-    
-    if (alreadyCompleted) {
-      const updated = {
-        ...challenges,
-        [id]: {
-          ...challenge,
-          completed: false
-        }
-      };
-      
-      // For now, we'll use default values since we're moving to Chapter system
-      const xpLoss = 10;
-      const ppLoss = 5;
-      const newXP = Math.max(0, xp - xpLoss);
-      const newPP = Math.max(0, powerPoints - ppLoss);
-      
-      setChallenges(updated);
-      setXP(newXP);
-      setPowerPoints(newPP);
-      setLevel(Math.floor(newXP / 50) + 1);
-      updateUnlocks(Math.floor(newXP / 50) + 1);
-      const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { challenges: updated, xp: newXP, powerPoints: newPP });
-      return;
-    }
-  };
 
   const handleFileSelect = (challengeName: string, file: File | null) => {
     setSelectedFiles(prev => ({ ...prev, [challengeName]: file }));
   };
 
   const handleFileUpload = async (challengeName: string) => {
-    if (!currentUser) return;
-    const file = selectedFiles[challengeName];
-    if (!file) {
-      alert('No file selected!');
-      return;
-    }
-
-    // For now, we'll use default values since we're moving to Chapter system
-    const xpReward = 15;
-    const ppReward = 8;
+    if (!currentUser || !selectedFiles[challengeName]) return;
 
     try {
+      const file = selectedFiles[challengeName];
+      if (!file) return; // Additional null check
+      
       const storageRef = ref(storage, `manifestation_submissions/${currentUser.uid}/${challengeName}`);
       await uploadBytes(storageRef, file);
       const downloadURL = await getDownloadURL(storageRef);
-      
-      const challenge = challenges[challengeName] || {};
-      const updated = {
-        ...challenges,
-        [challengeName]: {
-          ...challenge,
-          file: downloadURL,
-          completed: true
-        }
-      };
-      
-      setChallenges(updated);
-      const newXP = challenge.completed ? xp : xp + xpReward;
-      const newPP = challenge.completed ? powerPoints : powerPoints + ppReward;
-      setXP(newXP);
-      setPowerPoints(newPP);
-      const newLevel = Math.floor(newXP / 50) + 1;
-      setLevel(newLevel);
-      updateUnlocks(newLevel);
-      
-      const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { 
-        challenges: updated, 
-        xp: newXP, 
-        powerPoints: newPP
-      });
 
-      // Only add to challengeSubmissions if not already completed
-      if (!challenge.completed) {
+      // Update user progress
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      const currentChapter = getCurrentChapter();
+      
+      if (currentChapter) {
+        const updatedChapters = {
+          ...currentData.chapters,
+          [currentChapter.id]: {
+            ...currentData.chapters?.[currentChapter.id],
+            challenges: {
+              ...currentData.chapters?.[currentChapter.id]?.challenges,
+              [challengeName]: {
+                isCompleted: true,
+                file: downloadURL,
+                completedAt: serverTimestamp()
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Add to challenge submissions
         await addDoc(collection(db, 'challengeSubmissions'), {
           userId: currentUser.uid,
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
@@ -369,26 +128,13 @@ const ChallengeTracker = () => {
           fileUrl: downloadURL,
           timestamp: serverTimestamp(),
           status: 'pending',
-          xpReward: xpReward,
-          ppReward: ppReward,
+          xpReward: 15,
+          ppReward: 8,
           manifestationType: 'Chapter Challenge',
           character: 'Chapter System'
         });
       }
 
-      // Award badges for challenge completion
-      if (!challenge.completed) {
-        await awardBadgeForChallenge(currentUser.uid, challengeName);
-      }
-
-      setTimeout(async () => {
-        const docSnap = await getDoc(userRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setChallenges(data.challenges || {});
-        }
-      }, 500);
-      
       setSelectedFiles(prev => ({ ...prev, [challengeName]: null }));
     } catch (error) {
       console.error('Error uploading file:', error);
@@ -398,89 +144,41 @@ const ChallengeTracker = () => {
 
   const handleRemoveSubmission = async (challengeName: string) => {
     if (!currentUser) return;
-    const challenge = challenges[challengeName];
-    if (!challenge || !challenge.file) return;
 
     try {
       const storageRef = ref(storage, `manifestation_submissions/${currentUser.uid}/${challengeName}`);
       await deleteObject(storageRef);
       
-      // Use default values for XP/PP loss
-      const xpLoss = 10;
-      const ppLoss = 5;
+      // Update user progress
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      const currentChapter = getCurrentChapter();
       
-      const updated = {
-        ...challenges,
-        [challengeName]: {
-          ...challenge,
-          file: undefined,
-          completed: false
-        }
-      };
-      
-      setChallenges(updated);
-      const newXP = Math.max(0, xp - xpLoss);
-      const newPP = Math.max(0, powerPoints - ppLoss);
-      setXP(newXP);
-      setPowerPoints(newPP);
-      setLevel(Math.floor(newXP / 50) + 1);
+      if (currentChapter) {
+        const updatedChapters = {
+          ...currentData.chapters,
+          [currentChapter.id]: {
+            ...currentData.chapters?.[currentChapter.id],
+            challenges: {
+              ...currentData.chapters?.[currentChapter.id]?.challenges,
+              [challengeName]: {
+                isCompleted: false,
+                file: null
+              }
+            }
+          }
+        };
 
-      const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { challenges: updated, xp: newXP, powerPoints: newPP });
-      
-      setTimeout(async () => {
-        const docSnap = await getDoc(userRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setChallenges(data.challenges || {});
-        }
-      }, 500);
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+      }
     } catch (error) {
       console.error('Error removing submission:', error);
       alert('Failed to remove manifestation. Please try again.');
     }
   };
 
-  const getCharacterQuote = (character: string) => {
-    const quotes: {[key: string]: string} = {
-      'Sage': '"The world bends to those who know its true nature."',
-      'Alejandra': '"Every creation tells a story. What\'s yours?"',
-      'Greg': '"Strength comes from understanding. Power comes from practice."',
-      'Allen': '"Burn bright, but don\'t burn out."',
-      'Khalil': '"Truth is what you make it. Make it yours."'
-    };
-    return quotes[character] || '"Manifest your potential."';
-  };
-
-  const handleManifestSelect = async (manifestId: string) => {
-    if (!currentUser) return;
-
-    const manifest = MANIFESTS.find(m => m.id === manifestId);
-    if (!manifest) return;
-
-    const newPlayerManifest: PlayerManifest = {
-      manifestId,
-      currentLevel: 1,
-      xp: 0,
-      catalyst: manifest.catalyst,
-      veil: 'Fear of inadequacy',
-      signatureMove: manifest.signatureMove,
-      unlockedLevels: [1],
-      lastAscension: serverTimestamp()
-    };
-
-    try {
-      const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { manifest: newPlayerManifest });
-      setPlayerManifest(newPlayerManifest);
-      setShowManifestSelection(false);
-    } catch (error) {
-      console.error('Error setting manifest:', error);
-      alert('Failed to set manifest. Please try again.');
-    }
-  };
-
-  // Chapter progress functions
   const getCurrentChapter = () => {
     if (!userProgress?.chapters) return null;
     
@@ -511,121 +209,6 @@ const ChallengeTracker = () => {
     ).length;
   };
 
-  // Element Selection Modal
-  if (showElementSelection) {
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: '2rem'
-      }}>
-        <div style={{
-          background: 'rgba(255,255,255,0.1)',
-          backdropFilter: 'blur(10px)',
-          padding: '2rem',
-          borderRadius: '1rem',
-          maxWidth: '800px',
-          width: '100%',
-          textAlign: 'center',
-          color: 'white',
-          border: '1px solid rgba(255,255,255,0.2)'
-        }}>
-          <h1 style={{ 
-            fontSize: '2rem', 
-            fontWeight: 'bold', 
-            marginBottom: '1rem',
-            background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 50%, #34d399 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text'
-          }}>
-            Choose Your Element
-          </h1>
-          <p style={{ 
-            fontSize: '1.1rem', 
-            marginBottom: '2rem',
-            opacity: 0.9
-          }}>
-            Welcome to Xiotein School. Your elemental affinity will guide your manifestation journey.
-          </p>
-          
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-            gap: '1.5rem',
-            marginBottom: '2rem'
-          }}>
-            {elementalTypes.map((element) => (
-              <div
-                key={element.name}
-                onClick={() => selectElement(element.name)}
-                style={{
-                  padding: '1.5rem',
-                  background: `linear-gradient(135deg, ${element.color}20 0%, ${element.color}10 100%)`,
-                  border: `2px solid ${element.color}`,
-                  borderRadius: '0.75rem',
-                  cursor: 'pointer',
-                  transition: 'all 0.3s ease',
-                  textAlign: 'center'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-5px)';
-                  e.currentTarget.style.boxShadow = `0 10px 25px ${element.color}40`;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-                  {element.icon}
-                </div>
-                <h3 style={{ 
-                  fontSize: '1.5rem', 
-                  fontWeight: 'bold', 
-                  marginBottom: '0.5rem',
-                  color: element.color
-                }}>
-                  {element.name}
-                </h3>
-                <p style={{ 
-                  fontSize: '0.9rem', 
-                  opacity: 0.8,
-                  lineHeight: '1.5'
-                }}>
-                  {element.description}
-                </p>
-                <div style={{ 
-                  marginTop: '1rem',
-                  fontSize: '0.8rem',
-                  opacity: 0.7
-                }}>
-                  Mentor: {element.character}
-                </div>
-              </div>
-            ))}
-          </div>
-          
-          <p style={{ 
-            fontSize: '0.9rem', 
-            opacity: 0.7,
-            fontStyle: 'italic'
-          }}>
-            Your choice will influence your learning path and the challenges you encounter.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ 
       backgroundColor: 'white', 
@@ -641,7 +224,7 @@ const ChallengeTracker = () => {
           marginBottom: '0.5rem', 
           color: '#1f2937'
         }}>
-          🏛️ Xiotein School - The Player's Journey
+          📖 Story Challenges
         </h2>
         
         {/* Chapter Progress Card */}
@@ -792,115 +375,7 @@ const ChallengeTracker = () => {
             </div>
           );
         })()}
-        
-        {/* Player Stats */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(3, 1fr)', 
-          gap: '1rem', 
-          marginBottom: '1rem'
-        }}>
-          <div style={{ 
-            textAlign: 'center',
-            backgroundColor: '#f9fafb',
-            padding: '0.75rem',
-            borderRadius: '0.5rem',
-            border: '1px solid #e5e7eb'
-          }}>
-            <div style={{ fontSize: '1.125rem', fontWeight: 'bold', color: '#f59e0b' }}>{xp}</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Manifestation XP</div>
-          </div>
-          <div style={{ 
-            textAlign: 'center',
-            backgroundColor: '#f9fafb',
-            padding: '0.75rem',
-            borderRadius: '0.5rem',
-            border: '1px solid #e5e7eb'
-          }}>
-            <div style={{ fontSize: '1.125rem', fontWeight: 'bold', color: '#8b5cf6' }}>{level}</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Power Level</div>
-          </div>
-          <div style={{ 
-            textAlign: 'center',
-            backgroundColor: '#f9fafb',
-            padding: '0.75rem',
-            borderRadius: '0.5rem',
-            border: '1px solid #e5e7eb'
-          }}>
-            <div style={{ fontSize: '1.125rem', fontWeight: 'bold', color: '#10b981' }}>{powerPoints}</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Power Points</div>
-          </div>
-        </div>
       </div>
-
-      {unlocks.length > 0 && (
-        <div style={{ 
-          marginBottom: '1.5rem', 
-          padding: '1rem', 
-          backgroundColor: '#fef3c7', 
-          borderRadius: '0.5rem',
-          border: '1px solid #f59e0b'
-        }}>
-          <p style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#92400e' }}>🔓 Manifestation Unlocks:</p>
-          <ul style={{ paddingLeft: '1.2em', margin: 0, color: '#a16207' }}>
-            {unlocks.map((u, i) => <li key={i} style={{ marginBottom: '0.25rem' }}>{u}</li>)}
-          </ul>
-        </div>
-      )}
-
-      {/* Manifest Selection Prompt - Only show if player doesn't have a manifest */}
-      {!playerManifest && (
-        <div style={{ 
-          marginBottom: '1.5rem', 
-          padding: '1.5rem', 
-          backgroundColor: '#f3f4f6', 
-          borderRadius: '0.75rem',
-          border: '2px solid #d1d5db',
-          textAlign: 'center'
-        }}>
-          <h3 style={{ 
-            fontSize: '1.25rem', 
-            fontWeight: 'bold', 
-            marginBottom: '0.75rem',
-            color: '#374151'
-          }}>
-            🌟 Choose Your Manifest
-          </h3>
-          <p style={{ 
-            fontSize: '1rem', 
-            marginBottom: '1rem',
-            color: '#6b7280',
-            lineHeight: '1.5'
-          }}>
-            In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will. 
-            Your manifest will guide your ascension path and unlock unique abilities.
-          </p>
-          <button
-            onClick={() => setShowManifestSelection(true)}
-            style={{
-              backgroundColor: '#8b5cf6',
-              color: 'white',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '0.5rem',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              transition: 'all 0.3s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#7c3aed';
-              e.currentTarget.style.transform = 'translateY(-2px)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#8b5cf6';
-              e.currentTarget.style.transform = 'translateY(0)';
-            }}
-          >
-            Begin Your Manifestation Journey
-          </button>
-        </div>
-      )}
 
       {/* Chapter Challenges Section */}
       {(() => {
@@ -951,17 +426,17 @@ const ChallengeTracker = () => {
                         fontSize: '12px',
                         fontWeight: 'bold'
                       }}>
-                        {isCompleted ? '✓' : '○'}
+                        {isCompleted ? '✓' : ''}
                       </div>
                       <div style={{ flex: 1 }}>
-                        <h4 style={{ 
-                          fontSize: '1rem', 
+                        <h3 style={{ 
+                          fontSize: '1.125rem', 
                           fontWeight: 'bold', 
                           marginBottom: '0.5rem',
                           color: isCompleted ? '#22c55e' : '#1f2937'
                         }}>
                           {challenge.title}
-                        </h4>
+                        </h3>
                         <p style={{ 
                           fontSize: '0.875rem', 
                           color: '#6b7280', 
@@ -1012,27 +487,7 @@ const ChallengeTracker = () => {
                           </div>
                         )}
                         
-                        {/* Challenge Type */}
-                        <div style={{ 
-                          display: 'flex', 
-                          gap: '0.5rem', 
-                          fontSize: '0.75rem',
-                          marginBottom: '0.5rem',
-                          flexWrap: 'wrap'
-                        }}>
-                          <span style={{ 
-                            padding: '0.25rem 0.5rem', 
-                            background: '#34d399', 
-                            color: 'white',
-                            borderRadius: '0.25rem',
-                            fontWeight: 'bold',
-                            textTransform: 'capitalize'
-                          }}>
-                            {challenge.type}
-                          </span>
-                        </div>
-                        
-                        {/* Challenge Rewards */}
+                        {/* Rewards */}
                         {challenge.rewards.length > 0 && (
                           <div style={{ 
                             display: 'flex', 
@@ -1204,8 +659,7 @@ const ChallengeTracker = () => {
         );
       })()}
 
-
-
+      {/* Progress Message */}
       {(() => {
         const currentChapter = getCurrentChapter();
         if (!currentChapter || currentChapter.id >= 9) return null;
@@ -1225,16 +679,8 @@ const ChallengeTracker = () => {
           </div>
         );
       })()}
-
-      {/* Manifest Selection Modal */}
-      {showManifestSelection && (
-        <ManifestSelection
-          onManifestSelect={handleManifestSelect}
-          onClose={() => setShowManifestSelection(false)}
-        />
-      )}
     </div>
   );
 };
 
-export default ChallengeTracker; 
+export default StoryChallenges; 
