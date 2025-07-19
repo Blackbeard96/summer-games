@@ -5,6 +5,8 @@ import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, ge
 import { useAuth } from '../context/AuthContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
+import ManifestSelection from './ManifestSelection';
+import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
 interface Badge {
   id: string;
@@ -121,7 +123,9 @@ const ChallengeTracker = () => {
   const [storyChapter, setStoryChapter] = useState(1);
   const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
   const [showElementSelection, setShowElementSelection] = useState(false);
+  const [showManifestSelection, setShowManifestSelection] = useState(false);
   const [classroomAssignments, setClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
+  const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
 
   // Elemental manifestation types for new students
   const elementalTypes: ElementalType[] = [
@@ -274,6 +278,19 @@ const ChallengeTracker = () => {
         setManifestationType(data.manifestationType || '');
         setStoryChapter(data.storyChapter || 1);
         updateUnlocks(lvl);
+        
+        // Load manifest data
+        const manifestData = data.manifest;
+        if (manifestData) {
+          // Convert Firestore timestamp to Date if needed
+          const processedManifest = {
+            ...manifestData,
+            lastAscension: manifestData.lastAscension?.toDate ? 
+              manifestData.lastAscension.toDate() : 
+              new Date(manifestData.lastAscension)
+          };
+          setPlayerManifest(processedManifest);
+        }
       } else {
         // Show element selection for new students
         setShowElementSelection(true);
@@ -560,6 +577,34 @@ const ChallengeTracker = () => {
     return quotes[character] || '"Manifest your potential."';
   };
 
+  const handleManifestSelect = async (manifestId: string) => {
+    if (!currentUser) return;
+
+    const manifest = MANIFESTS.find(m => m.id === manifestId);
+    if (!manifest) return;
+
+    const newPlayerManifest: PlayerManifest = {
+      manifestId,
+      currentLevel: 1,
+      xp: 0,
+      catalyst: manifest.catalyst,
+      veil: 'Fear of inadequacy',
+      signatureMove: manifest.signatureMove,
+      unlockedLevels: [1],
+      lastAscension: serverTimestamp()
+    };
+
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(userRef, { manifest: newPlayerManifest });
+      setPlayerManifest(newPlayerManifest);
+      setShowManifestSelection(false);
+    } catch (error) {
+      console.error('Error setting manifest:', error);
+      alert('Failed to set manifest. Please try again.');
+    }
+  };
+
   // Element Selection Modal
   if (showElementSelection) {
     return (
@@ -738,6 +783,60 @@ const ChallengeTracker = () => {
           <ul style={{ paddingLeft: '1.2em', margin: 0 }}>
             {unlocks.map((u, i) => <li key={i} style={{ marginBottom: '0.25rem' }}>{u}</li>)}
           </ul>
+        </div>
+      )}
+
+      {/* Manifest Selection Prompt - Only show if player doesn't have a manifest */}
+      {!playerManifest && (
+        <div style={{ 
+          marginBottom: '1.5rem', 
+          padding: '1.5rem', 
+          background: 'rgba(139, 92, 246, 0.2)', 
+          borderRadius: '0.75rem',
+          border: '2px solid rgba(139, 92, 246, 0.5)',
+          textAlign: 'center'
+        }}>
+          <h3 style={{ 
+            fontSize: '1.25rem', 
+            fontWeight: 'bold', 
+            marginBottom: '0.75rem',
+            color: '#8B5CF6'
+          }}>
+            🌟 Choose Your Manifest
+          </h3>
+          <p style={{ 
+            fontSize: '1rem', 
+            marginBottom: '1rem',
+            opacity: 0.9,
+            lineHeight: '1.5'
+          }}>
+            In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will. 
+            Your manifest will guide your ascension path and unlock unique abilities.
+          </p>
+          <button
+            onClick={() => setShowManifestSelection(true)}
+            style={{
+              backgroundColor: '#8B5CF6',
+              color: 'white',
+              padding: '0.75rem 1.5rem',
+              borderRadius: '0.5rem',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              fontWeight: 'bold',
+              transition: 'all 0.3s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#7C3AED';
+              e.currentTarget.style.transform = 'translateY(-2px)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#8B5CF6';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }}
+          >
+            Begin Your Manifestation Journey
+          </button>
         </div>
       )}
 
@@ -963,6 +1062,14 @@ const ChallengeTracker = () => {
             Complete all manifestations in Chapter {storyChapter} to unlock the next chapter of your story!
           </p>
         </div>
+      )}
+
+      {/* Manifest Selection Modal */}
+      {showManifestSelection && (
+        <ManifestSelection
+          onManifestSelect={handleManifestSelect}
+          onClose={() => setShowManifestSelection(false)}
+        />
       )}
     </div>
   );

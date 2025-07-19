@@ -25,13 +25,23 @@ const styleIcons: Record<string, string> = {
 };
 
 const manifestIcons: Record<string, string> = {
+  Reading: '📖',
+  Writing: '✍️',
+  Drawing: '🎨',
+  Athletics: '🏃',
+  Music: '🎵',
+  Math: '🔢',
+  Science: '🔬',
+  History: '📚',
+  Language: '🗣️',
+  Art: '🎭',
+  // Legacy manifests
   Imposition: '🌀',
   Memory: '🧠',
   Intelligence: '🤖',
   Dimensional: '🌌',
   Truth: '🔍',
   Creation: '✨',
-  // Add more as needed
 };
 
 // Helper to get XP needed for next level

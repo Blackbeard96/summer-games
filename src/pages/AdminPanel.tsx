@@ -1246,7 +1246,7 @@ const AdminPanel: React.FC = () => {
                       powerPoints={student.powerPoints || 0}
                       manifest={level >= 5 ? (student.manifest || 'Imposition') : 'None'}
                       level={level}
-                      rarity={student.rarity || 3}
+                      rarity={student.rarity || 1}
                       style={student.manifestationType || 'Fire'}
                       description={student.bio || 'No description provided.'}
                       cardBgColor={student.cardBgColor || '#e0e7ff'}

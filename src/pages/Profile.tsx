@@ -7,8 +7,11 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile } from 'firebase/auth';
 import ChallengeTracker from '../components/ChallengeTracker';
 import PlayerCard from '../components/PlayerCard';
+import ManifestProgress from '../components/ManifestProgress';
+import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
+import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
 interface Notification {
   id: string;
@@ -33,13 +36,15 @@ const Profile = () => {
   // Add state for manifest, style, and rarity
   const [manifest, setManifest] = useState(userData?.manifest || 'None');
   const [style, setStyle] = useState(userData?.manifestationType || 'Fire');
-  const [rarity, setRarity] = useState(userData?.rarity || 3);
+  const [rarity, setRarity] = useState(userData?.rarity || 1);
   const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#e0e7ff');
   const [moves, setMoves] = useState(userData?.moves || []);
   const [newMove, setNewMove] = useState({ name: '', description: '', icon: '' });
   const [badges, setBadges] = useState(userData?.badges || []);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
+  const [showManifestSelection, setShowManifestSelection] = useState(false);
 
   useEffect(() => {
     if (!currentUser) {
@@ -53,18 +58,47 @@ const Profile = () => {
         const docSnap = await getDoc(userRef);
         
         if (docSnap.exists()) {
-          setUserData(docSnap.data());
-          setDisplayName(docSnap.data().displayName || currentUser.displayName || '');
-          setBio(docSnap.data().bio || '');
-          setManifest(docSnap.data().manifest || 'None');
-          setStyle(docSnap.data().manifestationType || 'Fire');
-          setRarity(docSnap.data().rarity || 3);
-          setCardBgColor(docSnap.data().cardBgColor || '#e0e7ff');
-          setMoves(docSnap.data().moves || []);
-          setBadges(docSnap.data().badges || []);
+          const userDataFromDB = docSnap.data();
+          
+          // Migrate rarity from old default (3) to new default (1)
+          let rarityValue = userDataFromDB.rarity;
+          if (rarityValue === 3 || rarityValue === undefined) {
+            rarityValue = 1;
+            // Update the database with the new rarity value
+            const userRef = doc(db, 'students', currentUser.uid);
+            updateDoc(userRef, { rarity: 1 }).catch(error => {
+              console.error('Error updating rarity:', error);
+            });
+          }
+          
+          setUserData(userDataFromDB);
+          setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
+          setBio(userDataFromDB.bio || '');
+          setManifest(userDataFromDB.manifest || 'None');
+          setStyle(userDataFromDB.manifestationType || 'Fire');
+          setRarity(rarityValue);
+          setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
+          setMoves(userDataFromDB.moves || []);
+          setBadges(userDataFromDB.badges || []);
+          
+          // Load manifest data
+          const manifestData = docSnap.data().manifest;
+          if (manifestData) {
+            // Convert Firestore timestamp to Date if needed
+            const processedManifest = {
+              ...manifestData,
+              lastAscension: manifestData.lastAscension?.toDate ? 
+                manifestData.lastAscension.toDate() : 
+                new Date(manifestData.lastAscension)
+            };
+            setPlayerManifest(processedManifest);
+          } else {
+            // No manifest found - automatically show selection
+            setShowManifestSelection(true);
+          }
         } else {
           // Create user document if it doesn't exist
-          setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1 });
+          setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1 });
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -178,6 +212,56 @@ const Profile = () => {
     }
   };
 
+  const handleManifestSelect = async (manifestId: string) => {
+    if (!currentUser) return;
+
+    const manifest = MANIFESTS.find(m => m.id === manifestId);
+    if (!manifest) return;
+
+    const newPlayerManifest: PlayerManifest = {
+      manifestId,
+      currentLevel: 1,
+      xp: 0,
+      catalyst: manifest.catalyst,
+      veil: 'Fear of inadequacy', // Default veil
+      signatureMove: manifest.signatureMove,
+      unlockedLevels: [1],
+      lastAscension: serverTimestamp()
+    };
+
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(userRef, { manifest: newPlayerManifest });
+      setPlayerManifest(newPlayerManifest);
+      setUserData((prev: any) => ({ ...prev, manifest: newPlayerManifest }));
+      setShowManifestSelection(false);
+    } catch (error) {
+      console.error('Error setting manifest:', error);
+      alert('Failed to set manifest. Please try again.');
+    }
+  };
+
+  const handleVeilBreak = async (veilId: string) => {
+    if (!currentUser || !playerManifest) return;
+
+    // Simple veil breaking logic - could be expanded
+    const newVeil = 'Need for validation'; // Next veil
+    const updatedManifest = {
+      ...playerManifest,
+      veil: newVeil
+    };
+
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(userRef, { manifest: updatedManifest });
+      setPlayerManifest(updatedManifest);
+      alert('Veil broken! New challenge awaits.');
+    } catch (error) {
+      console.error('Error breaking veil:', error);
+      alert('Failed to break veil. Please try again.');
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: '1.5rem', textAlign: 'center' }}>
@@ -193,9 +277,17 @@ const Profile = () => {
   const level = userData ? getLevelFromXP(userData.xp || 0) : 1;
   const avatarUrl = currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
 
-  // Check if student has earned Imposition (Level 5+)
-  const hasEarnedImposition = level >= 5;
-  const currentManifest = hasEarnedImposition ? (userData?.manifest || 'Imposition') : 'None';
+  // Get the current manifest name from playerManifest state
+  const currentManifest = playerManifest ? 
+    MANIFESTS.find(m => m.id === playerManifest.manifestId)?.name || 'None' : 
+    'None';
+
+  // Helper function to convert rarity number to stars
+  const getRarityStars = (rarityLevel: number) => {
+    return Array.from({ length: rarityLevel }, (_, i) => (
+      <span key={i} style={{ color: '#fbbf24', fontSize: '16px' }}>★</span>
+    ));
+  };
 
   // Add the same items array as in Marketplace for reference
   const items = [
@@ -259,7 +351,9 @@ const Profile = () => {
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
                       <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
-                      <span><b>Rarity:</b> {rarity}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <b>Rarity:</b> {getRarityStars(rarity)}
+                      </span>
                     </div>
                     <div style={{ margin: '1rem 0' }}>
                       <label><b>Card Background Color:</b></label>
@@ -305,7 +399,9 @@ const Profile = () => {
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
                       <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
-                      <span><b>Rarity:</b> {rarity}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <b>Rarity:</b> {getRarityStars(rarity)}
+                      </span>
                     </div>
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
                   </div>
@@ -395,7 +491,57 @@ const Profile = () => {
           </ul>
         )}
       </div>
+      {/* Manifest Progress Section */}
+      {playerManifest ? (
+        <div style={{ marginBottom: '2rem' }}>
+          <ManifestProgress 
+            playerManifest={playerManifest} 
+            onVeilBreak={handleVeilBreak}
+          />
+        </div>
+      ) : (
+        <div style={{ 
+          backgroundColor: 'white', 
+          borderRadius: '0.75rem', 
+          padding: '2rem', 
+          marginBottom: '2rem', 
+          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
+          border: '1px solid #e5e7eb',
+          textAlign: 'center'
+        }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
+            Choose Your Manifest
+          </h2>
+          <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+            In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
+          </p>
+          <button
+            onClick={() => setShowManifestSelection(true)}
+            style={{
+              backgroundColor: '#4f46e5',
+              color: 'white',
+              padding: '0.75rem 1.5rem',
+              borderRadius: '0.5rem',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              fontWeight: 'bold'
+            }}
+          >
+            Select Your Manifest
+          </button>
+        </div>
+      )}
+
       <ChallengeTracker />
+
+      {/* Manifest Selection Modal */}
+      {showManifestSelection && (
+        <ManifestSelection
+          onManifestSelect={handleManifestSelect}
+          onClose={() => setShowManifestSelection(false)}
+        />
+      )}
     </div>
   );
 };
