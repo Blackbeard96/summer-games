@@ -21,9 +21,9 @@ const artifacts: Artifact[] = [
     id: 'sleep-30',
     name: 'Sleep - In 30 min', 
     description: 'Come to work 30 minutes later (10 am start)', 
-    price: 30, 
+    price: 60, 
     icon: '😴', 
-    image: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    image: '/sleep-in-30.png',
     category: 'time',
     rarity: 'common'
   },
@@ -31,9 +31,9 @@ const artifacts: Artifact[] = [
     id: 'sleep-1hr',
     name: 'Sleep - In 1 hr', 
     description: 'Come to work 1 hour later (10:30 am start)', 
-    price: 54, 
+    price: 100, 
     icon: '😴', 
-    image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    image: '/sleep-in-1hr.png',
     category: 'time',
     rarity: 'rare'
   },
@@ -100,6 +100,18 @@ const artifacts: Artifact[] = [
     image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
     rarity: 'legendary'
+  },
+  { 
+    id: 'lunch-mosley',
+    name: 'Lunch on Mosley', 
+    description: 'Enjoy a special lunch with Mr. Mosley', 
+    price: 720, 
+    icon: '🍽️', 
+    image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'food',
+    rarity: 'legendary',
+    originalPrice: 1000,
+    discount: 28
   }
 ];
 

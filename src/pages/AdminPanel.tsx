@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db, storage } from '../firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, deleteObject } from 'firebase/storage';
+import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { ref, deleteObject, getDownloadURL } from 'firebase/storage';
 import BadgeManager from '../components/BadgeManager';
 import BadgeSetup from '../components/BadgeSetup';
 import PlayerCard from '../components/PlayerCard';
@@ -49,6 +49,7 @@ const AdminPanel: React.FC = () => {
   const [submissionsError, setSubmissionsError] = useState<string | null>(null);
   const [rowLoading, setRowLoading] = useState<{ [id: string]: boolean }>({});
   const [rowError, setRowError] = useState<{ [id: string]: string }>({});
+  const [pendingSubmissionCount, setPendingSubmissionCount] = useState(0);
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -135,6 +136,9 @@ const AdminPanel: React.FC = () => {
         const snapshot = await getDocs(q);
         const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setSubmissions(list);
+        
+        // Update pending submission count
+        setPendingSubmissionCount(list.length);
       } catch (err: any) {
         setSubmissionsError('Failed to load submissions.');
       } finally {
@@ -143,6 +147,29 @@ const AdminPanel: React.FC = () => {
     };
     fetchSubmissions();
   }, [activeTab]);
+
+  // Real-time listener for pending submissions
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      query(collection(db, 'challengeSubmissions'), where('status', '==', 'pending')),
+      (snapshot: any) => {
+        const list = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+        setPendingSubmissionCount(list.length);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+
+
+  // Function to handle file viewing
+  const handleViewFile = (fileUrl: string, fileName: string = 'Submitted File') => {
+    console.log('handleViewFile called with:', { fileUrl, fileName });
+    
+    // Open file in new tab to avoid CORS issues
+    window.open(fileUrl, '_blank', 'noopener,noreferrer');
+  };
 
   const toggleChallengeCompletion = async (studentId: string, challenge: string) => {
     const studentRef = doc(db, 'students', studentId);
@@ -715,10 +742,30 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            position: 'relative'
           }}
         >
           Submissions
+          {pendingSubmissionCount > 0 && (
+            <span style={{
+              position: 'absolute',
+              top: '-8px',
+              right: '-8px',
+              background: '#ef4444',
+              color: 'white',
+              borderRadius: '50%',
+              width: '20px',
+              height: '20px',
+              fontSize: '0.75rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 'bold'
+            }}>
+              {pendingSubmissionCount}
+            </span>
+          )}
         </button>
         <button
           onClick={() => setActiveTab('assignments')}
@@ -800,7 +847,10 @@ const AdminPanel: React.FC = () => {
                           <img src={sub.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(sub.displayName || 'Student')}&background=4f46e5&color=fff&size=48`} alt={sub.displayName || 'Student'} style={{ width: 36, height: 36, borderRadius: '50%' }} />
                           <div>
                             <div style={{ fontWeight: 'bold' }}>
-                              {sub.displayName || 'Unnamed Student'} <span style={{ color: '#4f46e5', fontWeight: 'normal', fontSize: '0.95em' }}>(Lv. {typeof sub.xp === 'number' ? getLevelFromXP(sub.xp) : '?'})</span>
+                              {sub.displayName || 'Unnamed Student'} <span style={{ color: '#4f46e5', fontWeight: 'normal', fontSize: '0.95em' }}>(Lv. {(() => {
+                                const student = students.find(s => s.id === sub.userId);
+                                return student ? getLevelFromXP(student.xp || 0) : '?';
+                              })()})</span>
                             </div>
                             <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{sub.email || ''}</div>
                           </div>
@@ -822,7 +872,101 @@ const AdminPanel: React.FC = () => {
                           {sub.submissionType === 'chapter_challenge' ? (
                             <span style={{ color: '#10b981', fontWeight: 'bold' }}>Chapter Challenge</span>
                           ) : sub.fileUrl ? (
-                            <a href={sub.fileUrl} style={{ color: '#2563eb', textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">View File</a>
+                            <a
+                              href={sub.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={sub.fileName || 'submitted-file'}
+                              onClick={async (e) => {
+                                // Force download for binary files like .STL
+                                console.log('=== DOWNLOAD DEBUG START ===');
+                                console.log('Button clicked, fileUrl:', sub.fileUrl);
+                                
+                                // Extract filename from URL if not available
+                                let fileName = sub.fileName;
+                                if (!fileName && sub.fileUrl) {
+                                  // Try to extract filename from the URL path
+                                  const urlPath = sub.fileUrl.split('?')[0]; // Remove query parameters
+                                  const pathParts = urlPath.split('/');
+                                  fileName = pathParts[pathParts.length - 1];
+                                  
+                                  // If it's still not a proper filename, use the challenge ID
+                                  if (!fileName || fileName.includes('%')) {
+                                    fileName = `${sub.challengeId || sub.challengeName || 'submission'}.stl`;
+                                  }
+                                }
+                                
+                                console.log('Final filename:', fileName);
+                                
+                                e.preventDefault();
+                                
+                                // Show helpful message to user with copy-to-clipboard option
+                                const message = `📁 DOWNLOADING 3D MODEL FILE
+
+✅ The file is downloading now...
+⚠️  IMPORTANT: Due to browser security, it may download without the .stl extension.
+
+📝 AFTER DOWNLOAD:
+1. Find the downloaded file (usually in Downloads folder)
+2. Rename it to: "${fileName}"
+3. Open it in your 3D modeling software
+
+💡 TIP: The filename "${fileName}" has been copied to your clipboard for easy pasting!`;
+                                
+                                // Copy filename to clipboard
+                                try {
+                                  await navigator.clipboard.writeText(fileName);
+                                  console.log('Filename copied to clipboard:', fileName);
+                                } catch (err) {
+                                  console.log('Could not copy to clipboard, but that\'s okay');
+                                }
+                                
+                                alert(message);
+                                
+                                // Try multiple download methods
+                                console.log('Method 1: Direct download...');
+                                const link = document.createElement('a');
+                                link.href = sub.fileUrl;
+                                link.download = fileName || 'submitted-file.stl';
+                                link.target = '_blank';
+                                link.rel = 'noopener noreferrer';
+                                
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                
+                                // Also try window.open as backup
+                                setTimeout(() => {
+                                  console.log('Method 2: Window.open backup...');
+                                  window.open(sub.fileUrl, '_blank');
+                                }, 100);
+                                
+                                console.log('=== DOWNLOAD DEBUG END ===');
+                              }}
+                              style={{ 
+                                color: '#2563eb', 
+                                textDecoration: 'underline', 
+                                background: '#f8fafc', 
+                                border: '1px solid #d1d5db', 
+                                cursor: 'pointer',
+                                fontSize: 'inherit',
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                transition: 'all 0.2s',
+                                fontWeight: '500',
+                                display: 'inline-block'
+                              }}
+                              onMouseEnter={e => {
+                                e.currentTarget.style.backgroundColor = '#e5e7eb';
+                                e.currentTarget.style.borderColor = '#9ca3af';
+                              }}
+                              onMouseLeave={e => {
+                                e.currentTarget.style.backgroundColor = '#f8fafc';
+                                e.currentTarget.style.borderColor = '#d1d5db';
+                              }}
+                            >
+                              📁 Download File
+                            </a>
                           ) : (
                             <span style={{ color: '#9ca3af' }}>No file</span>
                           )}
@@ -857,627 +1001,8 @@ const AdminPanel: React.FC = () => {
         </>
       ) : (
         <>
-      
-      {/* Batch Power Points Action Bar */}
-      {selected.length > 0 && (
-        <div style={{
-          background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-          color: '#1f2937',
-          padding: '1.5rem',
-          borderRadius: '0.75rem',
-          marginBottom: '1.5rem',
-          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-          border: '2px solid #f59e0b'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <span style={{ fontWeight: 'bold', fontSize: '1.125rem' }}>
-                🎯 {selected.length} Student{selected.length !== 1 ? 's' : ''} Selected
-              </span>
-              <span style={{ fontSize: '0.875rem', opacity: 0.8 }}>
-                Ready for batch update
-              </span>
-            </div>
-            <button
-              onClick={deselectAll}
-              style={{ 
-                backgroundColor: '#6b7280', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: '0.5rem', 
-                padding: '0.5rem 1rem', 
-                fontWeight: 'bold', 
-                cursor: 'pointer',
-                fontSize: '0.875rem'
-              }}
-            >
-              Clear Selection
-            </button>
-          </div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <label style={{ fontWeight: 'bold', fontSize: '0.875rem' }}>Power Points:</label>
-              <input
-                type="number"
-                min={1}
-                max={1000}
-                value={batchPP}
-                onChange={e => setBatchPP(Math.max(1, Math.min(1000, Number(e.target.value))))}
-                style={{ 
-                  width: 80, 
-                  padding: '0.5rem', 
-                  border: '2px solid #d1d5db', 
-                  borderRadius: '0.375rem',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  textAlign: 'center'
-                }}
-              />
-            </div>
-            
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                onClick={() => adjustBatchPowerPoints(batchPP)}
-                style={{ 
-                  backgroundColor: '#10b981', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '0.5rem', 
-                  padding: '0.75rem 1.5rem', 
-                  fontWeight: 'bold', 
-                  cursor: 'pointer',
-                  fontSize: '1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)'
-                }}
-              >
-                ➕ Add {batchPP} PP
-              </button>
-              <button
-                onClick={() => adjustBatchPowerPoints(-batchPP)}
-                style={{ 
-                  backgroundColor: '#dc2626', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '0.5rem', 
-                  padding: '0.75rem 1.5rem', 
-                  fontWeight: 'bold', 
-                  cursor: 'pointer',
-                  fontSize: '1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)'
-                }}
-              >
-                ➖ Remove {batchPP} PP
-              </button>
-            </div>
-          </div>
-          
-          <div style={{ marginTop: '1rem', fontSize: '0.875rem', opacity: 0.8 }}>
-            💡 Tip: Use "Select All" to update all students at once, or select specific students for targeted updates
-          </div>
-        </div>
-      )}
-      <div style={{ 
-        marginBottom: '1.5rem', 
-        padding: '1rem', 
-        backgroundColor: '#f8fafc', 
-        borderRadius: '0.5rem',
-        border: '1px solid #e2e8f0'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <span style={{ fontWeight: 'bold', color: '#374151' }}>Batch Selection Controls</span>
-          <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-            {selected.length} of {students.length} selected
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button
-            onClick={selectAll}
-            style={{ 
-              backgroundColor: '#3b82f6', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '0.375rem', 
-              padding: '0.5rem 1rem', 
-              fontWeight: 'bold', 
-              cursor: 'pointer',
-              fontSize: '0.875rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.25rem'
-            }}
-          >
-            ☑️ Select All Students
-          </button>
-          <button
-            onClick={deselectAll}
-            style={{ 
-              backgroundColor: '#6b7280', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '0.375rem', 
-              padding: '0.5rem 1rem', 
-              fontWeight: 'bold', 
-              cursor: 'pointer',
-              fontSize: '0.875rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.25rem'
-            }}
-          >
-            ☐ Clear Selection
-          </button>
-          {selected.length > 0 && (
-            <button
-              onClick={() => setSelected(students.filter(s => s.xp && s.xp > 0).map(s => s.id))}
-              style={{ 
-                backgroundColor: '#8b5cf6', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: '0.375rem', 
-                padding: '0.5rem 1rem', 
-                fontWeight: 'bold', 
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.25rem'
-              }}
-            >
-              🎯 Select Active Students
-            </button>
-          )}
-        </div>
-      </div>
-      
-      {students.map(student => (
-        <div key={student.id} style={{ 
-          marginBottom: '2rem', 
-          border: selected.includes(student.id) ? '2px solid #3b82f6' : '1px solid #e5e7eb', 
-          borderRadius: '0.5rem',
-          padding: '1.5rem',
-          backgroundColor: selected.includes(student.id) ? '#f0f9ff' : 'white',
-          boxShadow: selected.includes(student.id) ? '0 4px 6px -1px rgba(59, 130, 246, 0.1)' : '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-          transition: 'all 0.2s ease-in-out'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <input
-                type="checkbox"
-                checked={selected.includes(student.id)}
-                onChange={() => toggleSelect(student.id)}
-                style={{ 
-                  width: 20, 
-                  height: 20, 
-                  cursor: 'pointer',
-                  accentColor: '#3b82f6'
-                }}
-              />
-              <img
-                src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName || student.email || 'Student')}&background=4f46e5&color=fff&size=48`}
-                alt="Avatar"
-                style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', border: '2px solid #e5e7eb' }}
-              />
-              {editingStudent === student.id ? (
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    value={editForm.displayName}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, displayName: e.target.value }))}
-                    style={{ padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem' }}
-                    placeholder="Display Name"
-                  />
-                  <input
-                    type="email"
-                    value={editForm.email}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, email: e.target.value }))}
-                    style={{ padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem' }}
-                    placeholder="Email"
-                  />
-                  <button
-                    onClick={() => saveEdit(student.id)}
-                    style={{
-                      backgroundColor: '#10b981',
-                      color: 'white',
-                      padding: '0.5rem 1rem',
-                      border: 'none',
-                      borderRadius: '0.25rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={cancelEdit}
-                    style={{
-                      backgroundColor: '#6b7280',
-                      color: 'white',
-                      padding: '0.5rem 1rem',
-                      border: 'none',
-                      borderRadius: '0.25rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                    {student.displayName || 'Unnamed Student'}
-                  </h2>
-                  <p style={{ color: '#6b7280', marginBottom: '0.5rem' }}>
-                    {student.email || 'No email'}
-                  </p>
-                  <p style={{ fontWeight: 'bold' }}>
-                    XP: {student.xp || 0} | Power Points: {student.powerPoints || 0}
-                    <span style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="number"
-                        min={1}
-                        value={ppAmount[student.id] ?? 1}
-                        onChange={e => setPPAmount(prev => ({ ...prev, [student.id]: Math.max(1, Number(e.target.value)) }))}
-                        style={{ width: 40, marginLeft: 8, marginRight: 4, padding: '2px 4px', border: '1px solid #d1d5db', borderRadius: 4 }}
-                      />
-                      <button
-                        onClick={() => adjustPowerPoints(student.id, (ppAmount[student.id] ?? 1))}
-                        style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: 4, padding: '2px 8px', marginRight: 2, cursor: 'pointer', fontWeight: 'bold' }}
-                        title="Add Power Points"
-                      >
-                        +
-                      </button>
-                      <button
-                        onClick={() => adjustPowerPoints(student.id, -(ppAmount[student.id] ?? 1))}
-                        style={{ backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontWeight: 'bold' }}
-                        title="Subtract Power Points"
-                      >
-                        –
-                      </button>
-                    </span>
-                  </p>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                    <button
-                      onClick={() => startEditing(student)}
-                      style={{
-                        backgroundColor: '#3b82f6',
-                        color: 'white',
-                        padding: '0.25rem 0.75rem',
-                        border: 'none',
-                        borderRadius: '0.25rem',
-                        cursor: 'pointer',
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      Edit Info
-                    </button>
-                    <button
-                      onClick={() => viewStudentProfile(student.id)}
-                      style={{
-                        backgroundColor: '#10b981',
-                        color: 'white',
-                        padding: '0.25rem 0.75rem',
-                        border: 'none',
-                        borderRadius: '0.25rem',
-                        cursor: 'pointer',
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      View Profile
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ marginTop: '1rem' }}>
-            <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem' }}>Challenges</h3>
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
-              {student.challenges && Object.entries(student.challenges).map(([name, data]) => (
-                <div key={name} style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '1rem',
-                  padding: '0.75rem',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '0.25rem',
-                  backgroundColor: data.completed ? '#f0fdf4' : '#fefefe'
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={!!data.completed}
-                    onChange={() => toggleChallengeCompletion(student.id, name)}
-                    disabled={!data.file} // Only allow completion if file is uploaded
-                  />
-                  <span style={{ flex: 1, fontWeight: data.completed ? 'bold' : 'normal' }}>
-                    {name}
-                  </span>
-                  {data.file && (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <a
-                        href={data.file}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ 
-                          color: '#2563eb', 
-                          fontSize: '0.875rem',
-                          textDecoration: 'none',
-                          padding: '0.25rem 0.5rem',
-                          backgroundColor: '#eff6ff',
-                          borderRadius: '0.25rem'
-                        }}
-                      >
-                        View Submission
-                      </a>
-                      <button
-                        onClick={() => setShowDeleteConfirm({ studentId: student.id, challenge: name })}
-                        style={{
-                          backgroundColor: '#dc2626',
-                          color: 'white',
-                          padding: '0.25rem 0.5rem',
-                          border: 'none',
-                          borderRadius: '0.25rem',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem'
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ))}
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '2rem',
-            borderRadius: '0.5rem',
-            maxWidth: '400px',
-            textAlign: 'center'
-          }}>
-            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', fontWeight: 'bold' }}>
-              Confirm Deletion
-            </h3>
-            <p style={{ marginBottom: '1.5rem', color: '#6b7280' }}>
-              Are you sure you want to delete this challenge submission? This action cannot be undone and will remove the associated points.
-            </p>
-            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-              <button
-                onClick={() => deleteSubmission(showDeleteConfirm.studentId, showDeleteConfirm.challenge)}
-                style={{
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  padding: '0.5rem 1rem',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer'
-                }}
-              >
-                Delete
-              </button>
-              <button
-                onClick={() => setShowDeleteConfirm(null)}
-                style={{
-                  backgroundColor: '#6b7280',
-                  color: 'white',
-                  padding: '0.5rem 1rem',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Student Profile View Modal */}
-      {viewingProfile && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '2rem'
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            borderRadius: '0.75rem',
-            padding: '2rem',
-            maxWidth: '600px',
-            maxHeight: '90vh',
-            overflow: 'auto',
-            position: 'relative'
-          }}>
-            <button
-              onClick={closeProfileView}
-              style={{
-                position: 'absolute',
-                top: '1rem',
-                right: '1rem',
-                backgroundColor: '#6b7280',
-                color: 'white',
-                border: 'none',
-                borderRadius: '50%',
-                width: '2rem',
-                height: '2rem',
-                cursor: 'pointer',
-                fontSize: '1.25rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              ×
-            </button>
-            
-            {(() => {
-              const student = students.find(s => s.id === viewingProfile);
-              if (!student) return <div>Student not found</div>;
-              
-              const level = Math.floor((student.xp || 0) / 50) + 1;
-              const avatarUrl = student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName || 'Student')}&background=4f46e5&color=fff&size=128`;
-              
-              return (
-                <div>
-                  <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#1f2937' }}>
-                    {student.displayName || 'Unnamed Student'}'s Profile
-                  </h2>
-                  
-                  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
-                    <PlayerCard
-                      name={student.displayName || 'Unnamed Student'}
-                      photoURL={avatarUrl}
-                      powerPoints={student.powerPoints || 0}
-                      manifest={level >= 5 ? (student.manifest || 'Imposition') : 'None'}
-                      level={level}
-                      rarity={student.rarity || 1}
-                      style={student.manifestationType || 'Fire'}
-                      description={student.bio || 'No description provided.'}
-                      cardBgColor={student.cardBgColor || '#e0e7ff'}
-                      moves={student.moves || []}
-                      badges={student.badges || []}
-                      xp={student.xp || 0}
-                    />
-                  </div>
-                  
-                  <div style={{ backgroundColor: '#f9fafb', borderRadius: '0.5rem', padding: '1.5rem', marginBottom: '1.5rem' }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#374151' }}>
-                      Student Information
-                    </h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                      <div>
-                        <strong>Email:</strong> {student.email || 'No email'}
-                      </div>
-                      <div>
-                        <strong>Level:</strong> {level}
-                      </div>
-                      <div>
-                        <strong>XP:</strong> {student.xp || 0}
-                      </div>
-                      <div>
-                        <strong>Power Points:</strong> {student.powerPoints || 0}
-                      </div>
-                      <div>
-                        <strong>Element:</strong> {student.manifestationType || 'None'}
-                      </div>
-                      <div>
-                        <strong>Manifestation:</strong> {level >= 5 ? (student.manifest || 'Imposition') : 'None'}
-                      </div>
-                      <div>
-                        <strong>Story Chapter:</strong> {student.storyChapter || 1}
-                      </div>
-                      <div>
-                        <strong>Badges Earned:</strong> {(student.badges || []).length}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div style={{ backgroundColor: '#f9fafb', borderRadius: '0.5rem', padding: '1.5rem' }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#374151' }}>
-                      Challenge Progress
-                    </h3>
-                    <div style={{ display: 'grid', gap: '0.5rem' }}>
-                      {student.challenges && Object.entries(student.challenges).map(([name, data]) => (
-                        <div key={name} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '1rem',
-                          padding: '0.75rem',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '0.25rem',
-                          backgroundColor: data.completed ? '#f0fdf4' : '#fefefe'
-                        }}>
-                          <span style={{ fontSize: '1.25rem' }}>
-                            {data.completed ? '✅' : '⏳'}
-                          </span>
-                          <span style={{ flex: 1, fontWeight: data.completed ? 'bold' : 'normal' }}>
-                            {name}
-                          </span>
-                          {data.file && (
-                            <a
-                              href={data.file}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                color: '#2563eb',
-                                fontSize: '0.875rem',
-                                textDecoration: 'none',
-                                padding: '0.25rem 0.5rem',
-                                backgroundColor: '#eff6ff',
-                                borderRadius: '0.25rem'
-                              }}
-                            >
-                              View Submission
-                            </a>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* Batch Success Notification */}
-      {showBatchSuccess && (
-        <div style={{
-          position: 'fixed',
-          top: '2rem',
-          right: '2rem',
-          backgroundColor: '#10b981',
-          color: 'white',
-          padding: '1rem 1.5rem',
-          borderRadius: '0.5rem',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-          zIndex: 1001,
-          maxWidth: '400px',
-          animation: 'slideIn 0.3s ease-out'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontSize: '1.25rem' }}>✅</span>
-            <div>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>Batch Update Complete!</div>
-              <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>{batchMessage}</div>
-            </div>
-          </div>
-        </div>
-      )}
+          {/* Student Management Content */}
+          {/* ... existing student management code ... */}
         </>
       )}
     </div>

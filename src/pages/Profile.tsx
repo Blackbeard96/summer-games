@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { db, storage } from '../firebase';
-import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, DocumentReference, DocumentData, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile } from 'firebase/auth';
 import ChallengeTracker from '../components/ChallengeTracker';
@@ -13,16 +13,7 @@ import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
-interface Notification {
-  id: string;
-  _ref: DocumentReference<DocumentData, DocumentData>;
-  type: string;
-  message: string;
-  challengeId?: string;
-  challengeName?: string;
-  timestamp?: any;
-  read?: boolean;
-}
+
 
 const Profile = () => {
   const { currentUser } = useAuth();
@@ -41,8 +32,6 @@ const Profile = () => {
   const [moves, setMoves] = useState(userData?.moves || []);
   const [newMove, setNewMove] = useState({ name: '', description: '', icon: '' });
   const [badges, setBadges] = useState(userData?.badges || []);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
 
@@ -107,30 +96,7 @@ const Profile = () => {
       }
     };
 
-    const fetchNotifications = async () => {
-      setNotificationsLoading(true);
-      try {
-        const notifSnap = await getDocs(collection(db, 'students', currentUser.uid, 'notifications'));
-        const notifList: Notification[] = notifSnap.docs.map(docSnap => {
-          const data = docSnap.data() as Notification;
-          return { ...data, id: docSnap.id, _ref: docSnap.ref };
-        });
-        setNotifications(notifList.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
-        // Mark all unread notifications as read
-        notifList.forEach(async (notif, idx) => {
-          if (notif.read === false) {
-            await updateDoc(notif._ref, { read: true });
-          }
-        });
-      } catch (err) {
-        setNotifications([]);
-      } finally {
-        setNotificationsLoading(false);
-      }
-    };
-
     fetchUserData();
-    fetchNotifications();
   }, [currentUser, navigate]);
 
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -166,7 +132,7 @@ const Profile = () => {
       setUserData((prev: any) => ({ ...prev, photoURL: downloadURL }));
       
       // Show success message
-      alert('Avatar updated successfully!');
+      alert('Avatar updated successfully! If you have a display name set, the "Update Your Profile" challenge will be automatically completed.');
       
     } catch (error: any) {
       console.error('Error uploading avatar:', error);
@@ -198,19 +164,22 @@ const Profile = () => {
       
       setEditing(false);
       setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, manifestationType: style, rarity, cardBgColor, moves }));
+      
+      // Check if profile is now complete for auto-completion
+      const hasDisplayName = displayName && displayName.trim() !== '';
+      const hasAvatar = userData?.photoURL && userData.photoURL.trim() !== '';
+      
+      if (hasDisplayName && hasAvatar) {
+        alert('✅ Profile updated successfully! If you have Chapter 1 active, the "Update Your Profile" challenge will be automatically completed.');
+      } else {
+        alert('✅ Profile updated successfully! Complete your profile with a display name and avatar to auto-complete the profile challenge.');
+      }
     } catch (error) {
       console.error('Error updating profile:', error);
     }
   };
 
-  const handleDeleteNotification = async (notifId: string, notifRef: DocumentReference<DocumentData, DocumentData>) => {
-    try {
-      await deleteDoc(notifRef);
-      setNotifications(prev => prev.filter(n => n.id !== notifId));
-    } catch (err) {
-      alert('Failed to delete notification.');
-    }
-  };
+
 
   const handleManifestSelect = async (manifestId: string) => {
     if (!currentUser) return;
@@ -298,7 +267,7 @@ const Profile = () => {
   ];
 
   return (
-    <div style={{ padding: '1.5rem', maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
       <h1 style={{
         fontSize: '1.875rem',
         fontWeight: 'bold',
@@ -307,29 +276,46 @@ const Profile = () => {
       }}>
         Your Profile
       </h1>
-      {/* Two-column layout */}
-      <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', marginBottom: '2rem' }}>
-        {/* PlayerCard on the left */}
-        <div style={{ flex: '0 0 340px' }}>
-          <PlayerCard
-            key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
-            name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
-            photoURL={userData?.photoURL || avatarUrl}
-            powerPoints={userData?.powerPoints || 0}
-            manifest={currentManifest}
-            level={level}
-            rarity={rarity}
-            style={style}
-            description={bio}
-            cardBgColor={cardBgColor}
-            moves={moves}
-            badges={badges}
-            xp={userData?.xp || 0}
-          />
-        </div>
-        {/* Edit controls on the right */}
-        <div style={{ flex: 1 }}>
+      
+      {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings + Manifests) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
+        {/* Left Column - Player Card + Player's Journey */}
+        <div>
+          {/* Player Card on top */}
+          <div style={{ marginBottom: '2rem' }}>
+            <PlayerCard
+              key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
+              name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
+              photoURL={userData?.photoURL || avatarUrl}
+              powerPoints={userData?.powerPoints || 0}
+              manifest={currentManifest}
+              level={level}
+              rarity={rarity}
+              style={style}
+              description={bio}
+              cardBgColor={cardBgColor}
+              moves={moves}
+              badges={badges}
+              xp={userData?.xp || 0}
+            />
+          </div>
+          
+          {/* Player's Journey below */}
           <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+              🎮 Player's Journey
+            </h2>
+            <ChallengeTracker />
+          </div>
+        </div>
+
+        {/* Right Column - Profile Settings + Manifest Progress */}
+        <div>
+          {/* Profile Settings on top */}
+          <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+              👤 Profile Settings
+            </h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2rem', marginBottom: '2rem' }}>
               {/* Avatar Section */}
               <div style={{ position: 'relative' }}>
@@ -410,7 +396,7 @@ const Profile = () => {
                 )}
               </div>
             </div>
-            {/* Stats Grid (unchanged) */}
+            {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.xp || 0}</div>
@@ -430,11 +416,54 @@ const Profile = () => {
               </div>
             </div>
           </div>
+
+          {/* Manifest Progress below */}
+          <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+              ⚡ Manifest Progress
+            </h2>
+            {playerManifest ? (
+              <ManifestProgress 
+                playerManifest={playerManifest} 
+                onVeilBreak={handleVeilBreak}
+              />
+            ) : (
+              <div style={{ 
+                padding: '2rem', 
+                textAlign: 'center',
+                backgroundColor: '#f8fafc',
+                borderRadius: '0.5rem',
+                border: '1px solid #e2e8f0'
+              }}>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
+                  Choose Your Manifest
+                </h3>
+                <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+                  In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
+                </p>
+                <button
+                  onClick={() => setShowManifestSelection(true)}
+                  style={{
+                    backgroundColor: '#4f46e5',
+                    color: 'white',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '0.5rem',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  Select Your Manifest
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      {/* Purchased Items Gallery and Challenge Tracker remain unchanged */}
-      <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginTop: '2rem' }}>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>Purchased Items</h2>
+      {/* Purchased Items Section */}
+      <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>🛒 Purchased Items</h2>
         {userData?.inventory && userData.inventory.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1.5rem' }}>
             {userData.inventory.map((itemName: string) => {
@@ -467,75 +496,8 @@ const Profile = () => {
           </div>
         )}
       </div>
-      {/* Notifications Section */}
-      <div style={{ marginBottom: '2rem' }}>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#4f46e5', marginBottom: '1rem' }}>Notifications</h2>
-        {notificationsLoading ? (
-          <div style={{ color: '#6b7280' }}>Loading notifications...</div>
-        ) : notifications.length === 0 ? (
-          <div style={{ color: '#6b7280', fontStyle: 'italic' }}>No notifications yet.</div>
-        ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {notifications.map(notif => (
-              <li key={notif.id} style={{ background: notif.type === 'challenge_denied' ? '#fee2e2' : '#d1fae5', color: '#1f2937', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem', border: notif.type === 'challenge_denied' ? '1px solid #dc2626' : '1px solid #10b981', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)', position: 'relative' }}>
-                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>{notif.challengeName}</div>
-                <div>{notif.message}</div>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>{notif.timestamp && typeof notif.timestamp.toDate === 'function' ? notif.timestamp.toDate().toLocaleString() : ''}</div>
-                <button
-                  onClick={() => handleDeleteNotification(notif.id, notif._ref)}
-                  style={{ position: 'absolute', top: 8, right: 8, background: '#ef4444', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.25rem 0.75rem', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}
-                  title="Delete notification"
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      {/* Manifest Progress Section */}
-      {playerManifest ? (
-        <div style={{ marginBottom: '2rem' }}>
-          <ManifestProgress 
-            playerManifest={playerManifest} 
-            onVeilBreak={handleVeilBreak}
-          />
-        </div>
-      ) : (
-        <div style={{ 
-          backgroundColor: 'white', 
-          borderRadius: '0.75rem', 
-          padding: '2rem', 
-          marginBottom: '2rem', 
-          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
-          border: '1px solid #e5e7eb',
-          textAlign: 'center'
-        }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
-            Choose Your Manifest
-          </h2>
-          <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
-            In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
-          </p>
-          <button
-            onClick={() => setShowManifestSelection(true)}
-            style={{
-              backgroundColor: '#4f46e5',
-              color: 'white',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '0.5rem',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: 'bold'
-            }}
-          >
-            Select Your Manifest
-          </button>
-        </div>
-      )}
 
-      <ChallengeTracker />
+
 
       {/* Manifest Selection Modal */}
       {showManifestSelection && (

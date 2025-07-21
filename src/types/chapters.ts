@@ -214,8 +214,7 @@ export const CHAPTERS: Chapter[] = [
         requirements: [{ type: 'artifact', value: 'identified', description: 'Must have identified artifact' }],
         rewards: [
           { type: 'xp', value: 50, description: 'Artifact challenge completion XP' },
-          { type: 'pp', value: 20, description: 'Artifact challenge completion PP' },
-          { type: 'level', value: 1, description: 'Unlock Level 1' }
+          { type: 'pp', value: 20, description: 'Artifact challenge completion PP' }
         ],
         isCompleted: false
       }
@@ -308,7 +307,6 @@ export const CHAPTERS: Chapter[] = [
         type: 'solo',
         requirements: [],
         rewards: [
-          { type: 'level', value: 2, description: 'Unlock Level 2' },
           { type: 'veil', value: 'confronted', description: 'Veil confronted' }
         ],
         isCompleted: false
@@ -416,7 +414,6 @@ export const CHAPTERS: Chapter[] = [
         type: 'solo',
         requirements: [],
         rewards: [
-          { type: 'level', value: 3, description: 'Unlock Level 3' },
           { type: 'manifest', value: 'full', description: 'Full Manifest potential' }
         ],
         isCompleted: false
