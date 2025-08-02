@@ -50,6 +50,20 @@ const NavBar = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -98,54 +112,81 @@ const NavBar = () => {
     };
 
     if (showNotifications) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [showNotifications]);
 
-  // Mark notification as read
   const handleNotificationClick = async (notif: Notification) => {
-    if (notif.read === false) {
+    if (notif.challengeId) {
+      navigate(`/chapters?challenge=${notif.challengeId}`);
+    }
+    
+    // Mark as read
+    if (!notif.read) {
       try {
         await updateDoc(notif._ref, { read: true });
         setNotifications(prev => prev.map(n => 
           n.id === notif.id ? { ...n, read: true } : n
         ));
-      } catch (error) {
-        console.error('Error marking notification as read:', error);
+      } catch (err) {
+        console.error('Failed to mark notification as read:', err);
       }
     }
+    
     setShowNotifications(false);
   };
 
-  // Delete notification
   const handleDeleteNotification = async (notifId: string, notifRef: DocumentReference<DocumentData, DocumentData>) => {
     try {
-      // Note: We'll need to import deleteDoc if we want to actually delete
-      // For now, just mark as read
-      await updateDoc(notifRef, { read: true });
+      await updateDoc(notifRef, { deleted: true });
       setNotifications(prev => prev.filter(n => n.id !== notifId));
     } catch (err) {
       console.error('Failed to delete notification:', err);
     }
   };
 
-  // Helper to handle tooltip show/hide
   const showTooltip = (e: MouseEvent<HTMLDivElement>) => {
-    const tooltip = (e.currentTarget.querySelector('.tooltip') as HTMLElement | null);
+    const tooltip = e.currentTarget.querySelector('.tooltip') as HTMLElement;
     if (tooltip) tooltip.style.opacity = '1';
   };
+
   const hideTooltip = (e: MouseEvent<HTMLDivElement>) => {
-    const tooltip = (e.currentTarget.querySelector('.tooltip') as HTMLElement | null);
+    const tooltip = e.currentTarget.querySelector('.tooltip') as HTMLElement;
     if (tooltip) tooltip.style.opacity = '0';
   };
+
+  const toggleMobileMenu = () => {
+    setIsMobileMenuOpen(!isMobileMenuOpen);
+  };
+
+  const closeMobileMenu = () => {
+    setIsMobileMenuOpen(false);
+  };
+
+  // Navigation items
+  const navItems = [
+    { to: '/', label: 'Training Grounds', tooltip: 'Dashboard' },
+    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System' },
+    { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
+  ];
+
+  const userNavItems = currentUser ? [
+    { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation' },
+    { to: '/marketplace', label: 'MST MKT', tooltip: 'Artifact Marketplace' },
+  ] : [];
+
+  const adminNavItems = currentUser?.email === 'edm21179@gmail.com' ? [
+    { to: '/admin', label: "Sage's Chamber", tooltip: 'Admin Panel', isAdmin: true }
+  ] : [];
 
   return (
     <nav style={{
       background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
       color: 'white',
-      padding: '1rem',
-      boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+      padding: isMobile ? '0.75rem' : '1rem',
+      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+      position: 'relative'
     }}>
       <div style={{
         maxWidth: '1200px',
@@ -154,8 +195,9 @@ const NavBar = () => {
         justifyContent: 'space-between',
         alignItems: 'center'
       }}>
+        {/* Logo */}
         <Link to="/" style={{
-          fontSize: '1.5rem',
+          fontSize: isMobile ? '1.25rem' : '1.5rem',
           fontWeight: 'bold',
           color: 'white',
           textDecoration: 'none',
@@ -166,71 +208,64 @@ const NavBar = () => {
         }}>
           🏛️ Xiotein School
         </Link>
+
+        {/* Desktop Navigation */}
+        {!isMobile && (
+          <div style={{
+            display: 'flex',
+            gap: '1rem',
+            alignItems: 'center'
+          }}>
+            {navItems.map((item) => (
+              <div key={item.to} style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+              </div>
+            ))}
+
+            {userNavItems.map((item) => (
+              <div key={item.to} style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+              </div>
+            ))}
+
+            {adminNavItems.map((item) => (
+              <div key={item.to} style={{ ...navItemStyle, backgroundColor: '#dc2626' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* User Section */}
         <div style={{
           display: 'flex',
-          gap: '1rem',
-          alignItems: 'center'
+          alignItems: 'center',
+          gap: isMobile ? '0.5rem' : '1rem'
         }}>
-          {/* Training Grounds (Dashboard) */}
-          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-            <Link to="/" style={{ color: 'inherit', textDecoration: 'none' }}>Training Grounds</Link>
-            <span className="tooltip" style={tooltipStyle}>Dashboard</span>
-          </div>
-          {/* Player's Journey (Chapters) */}
-          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-            <Link to="/chapters" style={{ color: 'inherit', textDecoration: 'none' }}>Player's Journey</Link>
-            <span className="tooltip" style={tooltipStyle}>Chapter System</span>
-          </div>
-          {/* Hall of Fame (Leaderboard) */}
-          <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-            <Link to="/leaderboard" style={{ color: 'inherit', textDecoration: 'none' }}>Hall of Fame</Link>
-            <span className="tooltip" style={tooltipStyle}>Leaderboard</span>
-          </div>
-
           {currentUser && (
             <>
-              {/* My Profile */}
-              <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to="/profile" style={{ color: 'inherit', textDecoration: 'none' }}>My Profile</Link>
-                <span className="tooltip" style={tooltipStyle}>My Manifestation</span>
-              </div>
-              {/* MST MKT (Marketplace) */}
-              <div style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to="/marketplace" style={{ color: 'inherit', textDecoration: 'none' }}>MST MKT</Link>
-                <span className="tooltip" style={tooltipStyle}>Artifact Marketplace</span>
-              </div>
-              {/* Sage's Chamber (Admin Panel) */}
-              {currentUser.email === 'edm21179@gmail.com' && (
-                <div style={{ ...navItemStyle, backgroundColor: '#dc2626' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                  <Link to="/admin" style={{ color: 'inherit', textDecoration: 'none' }}>Sage's Chamber</Link>
-                  <span className="tooltip" style={tooltipStyle}>Admin Panel</span>
-                </div>
-              )}
-            </>
-          )}
-          {currentUser ? (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '1rem'
-            }}>
               {/* Notifications Bell */}
-              <div style={{ position: 'relative' }} data-notifications onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+              <div style={{ position: 'relative' }} data-notifications onMouseEnter={!isMobile ? showTooltip : undefined} onMouseLeave={!isMobile ? hideTooltip : undefined}>
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
                   style={{
                     background: 'none',
                     border: 'none',
                     color: 'white',
-                    fontSize: '1.25rem',
+                    fontSize: isMobile ? '1rem' : '1.25rem',
                     cursor: 'pointer',
-                    padding: '0.5rem',
+                    padding: isMobile ? '0.75rem' : '0.5rem',
                     borderRadius: '0.25rem',
                     position: 'relative',
-                    transition: 'background-color 0.2s'
+                    transition: 'background-color 0.2s',
+                    minWidth: isMobile ? '44px' : 'auto',
+                    minHeight: isMobile ? '44px' : 'auto'
                   }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  onMouseEnter={e => !isMobile && (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
+                  onMouseLeave={e => !isMobile && (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   🔔
                   {notifications.filter(n => !n.read).length > 0 && (
@@ -241,9 +276,9 @@ const NavBar = () => {
                       background: '#ef4444',
                       color: 'white',
                       borderRadius: '50%',
-                      width: '18px',
-                      height: '18px',
-                      fontSize: '0.75rem',
+                      width: isMobile ? '20px' : '18px',
+                      height: isMobile ? '20px' : '18px',
+                      fontSize: isMobile ? '0.875rem' : '0.75rem',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -252,7 +287,7 @@ const NavBar = () => {
                       {notifications.filter(n => !n.read).length}
                     </span>
                   )}
-                  <span className="tooltip" style={tooltipStyle}>Notifications</span>
+                  {!isMobile && <span className="tooltip" style={tooltipStyle}>Notifications</span>}
                 </button>
 
                 {/* Notifications Dropdown */}
@@ -261,7 +296,7 @@ const NavBar = () => {
                     position: 'absolute',
                     top: '100%',
                     right: '0',
-                    width: '350px',
+                    width: isMobile ? '280px' : '350px',
                     maxHeight: '400px',
                     backgroundColor: 'white',
                     borderRadius: '0.5rem',
@@ -298,146 +333,285 @@ const NavBar = () => {
                         notifications.map(notif => {
                           // Get notification styling based on type
                           const getNotificationStyle = () => {
-                            if (notif.read) return { bg: 'white', border: '#f3f4f6' };
-                            
                             switch (notif.type) {
-                              case 'challenge_approved':
-                                return { bg: '#dcfce7', border: '#22c55e' };
-                              case 'challenge_denied':
-                                return { bg: '#fee2e2', border: '#ef4444' };
-                              case 'challenge_auto_completed':
-                                return { bg: '#dbeafe', border: '#3b82f6' };
-                              case 'challenge_submitted':
-                                return { bg: '#fef3c7', border: '#f59e0b' };
+                              case 'challenge_complete':
+                                return { backgroundColor: '#dcfce7', borderColor: '#22c55e' };
+                              case 'level_up':
+                                return { backgroundColor: '#fef3c7', borderColor: '#fbbf24' };
+                              case 'artifact_purchase':
+                                return { backgroundColor: '#e0e7ff', borderColor: '#6366f1' };
                               default:
-                                return { bg: '#fef3c7', border: '#f59e0b' };
+                                return { backgroundColor: '#f3f4f6', borderColor: '#9ca3af' };
                             }
                           };
-                          
+
                           const style = getNotificationStyle();
-                          
+
                           return (
-                            <div
-                              key={notif.id}
-                              onClick={() => handleNotificationClick(notif)}
-                              style={{
-                                padding: '1rem',
-                                borderBottom: `1px solid ${style.border}`,
-                                cursor: 'pointer',
-                                backgroundColor: style.bg,
-                                transition: 'background-color 0.2s'
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.backgroundColor = notif.read ? '#f9fafb' : style.bg}
-                              onMouseLeave={e => e.currentTarget.style.backgroundColor = notif.read ? 'white' : style.bg}
+                            <div key={notif.id} style={{
+                              padding: '1rem',
+                              borderBottom: '1px solid #e5e7eb',
+                              borderLeft: `3px solid ${style.borderColor}`,
+                              backgroundColor: style.backgroundColor,
+                              cursor: 'pointer',
+                              transition: 'background-color 0.2s'
+                            }}
+                            onClick={() => handleNotificationClick(notif)}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = style.backgroundColor}
                             >
-                            <div style={{ 
-                              display: 'flex', 
-                              justifyContent: 'space-between', 
-                              alignItems: 'flex-start',
-                              marginBottom: '0.5rem'
-                            }}>
-                              <div style={{ 
-                                fontWeight: 'bold', 
-                                color: '#374151',
-                                fontSize: '0.875rem'
-                              }}>
-                                {notif.challengeName || 'Notification'}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div style={{ flex: 1 }}>
+                                  <p style={{ 
+                                    margin: '0 0 0.5rem 0', 
+                                    fontSize: '0.875rem',
+                                    color: '#374151',
+                                    fontWeight: notif.read ? 'normal' : 'bold'
+                                  }}>
+                                    {notif.message}
+                                  </p>
+                                  <span style={{ 
+                                    fontSize: '0.75rem', 
+                                    color: '#6b7280' 
+                                  }}>
+                                    {notif.timestamp?.toDate ? 
+                                      notif.timestamp.toDate().toLocaleDateString() : 
+                                      'Recently'
+                                    }
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteNotification(notif.id, notif._ref);
+                                  }}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#6b7280',
+                                    cursor: 'pointer',
+                                    padding: '0.25rem',
+                                    fontSize: '0.75rem'
+                                  }}
+                                  onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                                  onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
+                                >
+                                  ✕
+                                </button>
                               </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteNotification(notif.id, notif._ref);
-                                }}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: '#ef4444',
-                                  cursor: 'pointer',
-                                  fontSize: '1rem',
-                                  padding: '0',
-                                  marginLeft: '0.5rem'
-                                }}
-                                title="Delete notification"
-                              >
-                                ×
-                              </button>
                             </div>
-                            <div style={{ 
-                              color: '#6b7280', 
-                              fontSize: '0.875rem',
-                              marginBottom: '0.5rem'
-                            }}>
-                              {notif.message}
-                            </div>
-                            {notif.timestamp && (
-                              <div style={{ 
-                                fontSize: '0.75rem', 
-                                color: '#9ca3af'
-                              }}>
-                                {notif.timestamp.toDate ? 
-                                  notif.timestamp.toDate().toLocaleString() : 
-                                  new Date(notif.timestamp).toLocaleString()
-                                }
-                              </div>
-                            )}
-                          </div>
-                        );
+                          );
                         })
                       )}
                     </div>
                   </div>
                 )}
               </div>
+            </>
+          )}
 
-              <img
-                src={currentUser.photoURL || `https://ui-avatars.com/api/?name=${displayName}&background=4f46e5&color=fff&size=32`}
-                alt="Avatar"
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  objectFit: 'cover'
-                }}
-              />
-              <span style={{ fontSize: '0.875rem' }}>
-                Welcome, {displayName}
+          {/* Mobile Menu Button */}
+          {isMobile && (
+            <button
+              onClick={toggleMobileMenu}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'white',
+                fontSize: '1.5rem',
+                cursor: 'pointer',
+                padding: '0.5rem',
+                borderRadius: '0.25rem',
+                minWidth: '44px',
+                minHeight: '44px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              {isMobileMenuOpen ? '✕' : '☰'}
+            </button>
+          )}
+
+          {/* User Info & Logout */}
+          {currentUser && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <span style={{ 
+                fontSize: isMobile ? '0.875rem' : '1rem',
+                fontWeight: '500'
+              }}>
+                {isMobile ? displayName.substring(0, 8) + '...' : displayName}
               </span>
               <button
                 onClick={handleLogout}
                 disabled={isLoggingOut}
                 style={{
-                  backgroundColor: '#dc2626',
+                  background: 'rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(255,255,255,0.2)',
                   color: 'white',
-                  padding: '0.5rem 1rem',
+                  padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
                   borderRadius: '0.25rem',
-                  fontSize: '0.875rem',
-                  border: 'none',
-                  cursor: isLoggingOut ? 'not-allowed' : 'pointer',
-                  opacity: isLoggingOut ? 0.5 : 1,
-                  transition: 'background-color 0.2s'
+                  cursor: 'pointer',
+                  fontSize: isMobile ? '0.75rem' : '0.875rem',
+                  transition: 'all 0.2s',
+                  minWidth: isMobile ? '60px' : 'auto',
+                  minHeight: isMobile ? '36px' : 'auto'
                 }}
-                onMouseEnter={e => !isLoggingOut && (e.currentTarget.style.backgroundColor = '#b91c1c')}
-                onMouseLeave={e => !isLoggingOut && (e.currentTarget.style.backgroundColor = '#dc2626')}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
               >
-                {isLoggingOut ? 'Departing...' : 'Depart'}
+                {isLoggingOut ? '...' : 'Logout'}
               </button>
             </div>
-          ) : (
-            <Link to="/login" style={{
-              backgroundColor: '#4f46e5',
-              color: 'white',
-              padding: '0.5rem 1rem',
-              borderRadius: '0.25rem',
-              fontSize: '0.875rem',
-              textDecoration: 'none',
-              transition: 'background-color 0.2s'
-            }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#3730a3'}
-               onMouseLeave={e => e.currentTarget.style.backgroundColor = '#4f46e5'}>
-              Begin Manifestation
-            </Link>
           )}
         </div>
       </div>
+
+      {/* Mobile Menu */}
+      {isMobile && isMobileMenuOpen && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          left: '0',
+          right: '0',
+          backgroundColor: '#1e293b',
+          borderTop: '1px solid #334155',
+          zIndex: 1000,
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ padding: '1rem' }}>
+            {/* Navigation Items */}
+            <div style={{ marginBottom: '1.5rem' }}>
+              <div style={{
+                fontSize: '0.875rem',
+                color: '#9ca3af',
+                fontWeight: '600',
+                marginBottom: '0.75rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              }}>
+                Main Navigation
+              </div>
+              {navItems.map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={closeMobileMenu}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: 'white',
+                    textDecoration: 'none',
+                    padding: '0.875rem 1rem',
+                    borderRadius: '0.5rem',
+                    marginBottom: '0.25rem',
+                    transition: 'all 0.2s ease',
+                    fontSize: '1rem',
+                    fontWeight: '500',
+                    minHeight: '48px'
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+
+            {/* User Navigation Items */}
+            {userNavItems.length > 0 && (
+              <div style={{ 
+                marginBottom: '1.5rem', 
+                borderTop: '1px solid #374151', 
+                paddingTop: '1.5rem' 
+              }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  color: '#9ca3af',
+                  fontWeight: '600',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  My Account
+                </div>
+                {userNavItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={closeMobileMenu}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      color: 'white',
+                      textDecoration: 'none',
+                      padding: '0.875rem 1rem',
+                      borderRadius: '0.5rem',
+                      marginBottom: '0.25rem',
+                      transition: 'all 0.2s ease',
+                      fontSize: '1rem',
+                      fontWeight: '500',
+                      minHeight: '48px'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            )}
+
+            {/* Admin Navigation Items */}
+            {adminNavItems.length > 0 && (
+              <div style={{ 
+                borderTop: '1px solid #374151', 
+                paddingTop: '1.5rem' 
+              }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  color: '#9ca3af',
+                  fontWeight: '600',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Administration
+                </div>
+                {adminNavItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={closeMobileMenu}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      color: 'white',
+                      textDecoration: 'none',
+                      padding: '0.875rem 1rem',
+                      borderRadius: '0.5rem',
+                      marginBottom: '0.25rem',
+                      transition: 'all 0.2s ease',
+                      fontSize: '1rem',
+                      fontWeight: '500',
+                      backgroundColor: '#dc2626',
+                      minHeight: '48px'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = '#b91c1c'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = '#dc2626'}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </nav>
   );
 };

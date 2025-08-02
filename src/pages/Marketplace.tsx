@@ -99,7 +99,9 @@ const artifacts: Artifact[] = [
     icon: '🌀', 
     image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
-    rarity: 'legendary'
+    rarity: 'legendary',
+    originalPrice: 250,
+    discount: 20
   },
   { 
     id: 'lunch-mosley',
@@ -120,41 +122,67 @@ const Marketplace = () => {
   const [powerPoints, setPowerPoints] = useState(0);
   const [inventory, setInventory] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [selectedRarity, setSelectedRarity] = useState<string>('all');
-  const [showPurchaseSuccess, setShowPurchaseSuccess] = useState(false);
-  const [purchasedItem, setPurchasedItem] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedRarity, setSelectedRarity] = useState('all');
+  const [isMobile, setIsMobile] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
       if (!currentUser) return;
-      
-      const userRef = doc(db, 'students', currentUser.uid);
-      const docSnap = await getDoc(userRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setPowerPoints(data.powerPoints || 0);
-        setInventory(data.inventory || []);
+
+      try {
+        const userRef = doc(db, 'students', currentUser.uid);
+        const userSnap = await getDoc(userRef);
+        
+        if (userSnap.exists()) {
+          const userData = userSnap.data();
+          setPowerPoints(userData.powerPoints || 0);
+          setInventory(userData.inventory || []);
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
       }
     };
-    if (currentUser) fetchData();
+
+    fetchData();
   }, [currentUser]);
 
   const handlePurchase = async (item: Artifact) => {
-    if (!currentUser || powerPoints < item.price) return;
+    if (!currentUser) return;
     
-    const newPP = powerPoints - item.price;
-    const newInventory = [...inventory, item.name];
-    setPowerPoints(newPP);
-    setInventory(newInventory);
-    setPurchasedItem(item.name);
-    setShowPurchaseSuccess(true);
-    
-    const userRef = doc(db, 'students', currentUser.uid);
-    await updateDoc(userRef, { powerPoints: newPP, inventory: newInventory });
-    
-    // Auto-hide success message
-    setTimeout(() => setShowPurchaseSuccess(false), 3000);
+    if (powerPoints < item.price) {
+      alert('Insufficient Power Points!');
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(userRef, {
+        powerPoints: powerPoints - item.price,
+        inventory: [...inventory, item.name]
+      });
+      
+      setPowerPoints(prev => prev - item.price);
+      setInventory(prev => [...prev, item.name]);
+      
+      alert(`Successfully purchased ${item.name}!`);
+    } catch (error) {
+      console.error('Error purchasing item:', error);
+      alert('Failed to purchase item. Please try again.');
+    }
   };
 
   const getRarityColor = (rarity: string) => {
@@ -208,22 +236,38 @@ const Marketplace = () => {
       <div style={{ 
         backgroundColor: 'white', 
         borderBottom: '1px solid #e5e7eb',
-        padding: '1rem 0'
+        padding: isMobile ? '0.75rem 0' : '1rem 0'
       }}>
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
-              <h1 style={{ fontSize: '1.875rem', fontWeight: 'bold', color: '#1f2937' }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem' }}>
+          <div style={{ 
+            display: 'flex', 
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'center', 
+            justifyContent: 'space-between',
+            gap: isMobile ? '1rem' : '0'
+          }}>
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: isMobile ? 'column' : 'row',
+              alignItems: isMobile ? 'stretch' : 'center', 
+              gap: isMobile ? '1rem' : '2rem'
+            }}>
+              <h1 style={{ 
+                fontSize: isMobile ? '1.5rem' : '1.875rem', 
+                fontWeight: 'bold', 
+                color: '#1f2937',
+                margin: 0
+              }}>
                 Artifact Shop
               </h1>
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', width: isMobile ? '100%' : '300px' }}>
                 <input
                   type="text"
                   placeholder="What are you looking for?"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   style={{
-                    width: '300px',
+                    width: '100%',
                     padding: '0.75rem 1rem 0.75rem 2.5rem',
                     border: '1px solid #d1d5db',
                     borderRadius: '0.5rem',
@@ -248,7 +292,8 @@ const Marketplace = () => {
                 padding: '0.5rem 1rem', 
                 borderRadius: '0.5rem',
                 fontWeight: 'bold',
-                fontSize: '0.875rem'
+                fontSize: '0.875rem',
+                whiteSpace: 'nowrap'
               }}>
                 ⚡ {powerPoints} Power Points
               </div>
@@ -261,23 +306,56 @@ const Marketplace = () => {
       <div style={{ 
         backgroundColor: '#ec4899', 
         color: 'white', 
-        padding: '1rem 0',
+        padding: isMobile ? '0.75rem 0' : '1rem 0',
         textAlign: 'center',
         fontWeight: 'bold'
       }}>
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 1.5rem' }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem' }}>
           🎯 SPECIAL OFFER - Epic and Legendary artifacts now available! Limited time only.
         </div>
       </div>
 
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-        <div style={{ display: 'flex', gap: '2rem' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '1rem' : '2rem 1.5rem' }}>
+        {/* Mobile Filter Toggle */}
+        {isMobile && (
+          <div style={{ marginBottom: '1rem' }}>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem',
+                backgroundColor: 'white',
+                border: '1px solid #d1d5db',
+                borderRadius: '0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: '500'
+              }}
+            >
+              <span>🔧 Filters</span>
+              <span>{showFilters ? '▲' : '▼'}</span>
+            </button>
+          </div>
+        )}
+
+        <div style={{ 
+          display: 'flex', 
+          flexDirection: isMobile ? 'column' : 'row',
+          gap: isMobile ? '1rem' : '2rem' 
+        }}>
           {/* Sidebar Filters */}
-          <div style={{ width: '250px', flexShrink: 0 }}>
+          <div style={{ 
+            width: isMobile ? '100%' : '250px', 
+            flexShrink: 0,
+            display: isMobile && !showFilters ? 'none' : 'block'
+          }}>
             <div style={{ 
               backgroundColor: 'white', 
               borderRadius: '0.75rem', 
-              padding: '1.5rem',
+              padding: isMobile ? '1rem' : '1.5rem',
               boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
               border: '1px solid #e5e7eb'
             }}>
@@ -364,14 +442,25 @@ const Marketplace = () => {
           <div style={{ flex: 1 }}>
             <div style={{ 
               display: 'flex', 
+              flexDirection: isMobile ? 'column' : 'row',
               justifyContent: 'space-between', 
-              alignItems: 'center',
-              marginBottom: '1.5rem'
+              alignItems: isMobile ? 'stretch' : 'center',
+              marginBottom: '1.5rem',
+              gap: isMobile ? '0.5rem' : '0'
             }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
+              <h2 style={{ 
+                fontSize: isMobile ? '1.25rem' : '1.5rem', 
+                fontWeight: 'bold', 
+                color: '#1f2937',
+                margin: 0
+              }}>
                 Artifacts ({filteredArtifacts.length})
               </h2>
-              <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+              <div style={{ 
+                fontSize: '0.875rem', 
+                color: '#6b7280',
+                textAlign: isMobile ? 'left' : 'right'
+              }}>
                 Showing {filteredArtifacts.length} of {artifacts.length} artifacts
               </div>
             </div>
@@ -379,8 +468,10 @@ const Marketplace = () => {
             {/* Product Grid */}
             <div style={{ 
               display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
-              gap: '1.5rem' 
+              gridTemplateColumns: isMobile 
+                ? 'repeat(auto-fill, minmax(280px, 1fr))' 
+                : 'repeat(auto-fill, minmax(280px, 1fr))', 
+              gap: isMobile ? '1rem' : '1.5rem' 
             }}>
               {filteredArtifacts.map((artifact) => {
                 const purchased = inventory.includes(artifact.name);
@@ -396,14 +487,16 @@ const Marketplace = () => {
                     opacity: purchased ? 0.7 : 1
                   }}
                   onMouseEnter={(e) => {
-                    if (!purchased) {
+                    if (!purchased && !isMobile) {
                       e.currentTarget.style.transform = 'translateY(-2px)';
                       e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
                     }
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 1px 3px 0 rgba(0, 0, 0, 0.1)';
+                    if (!isMobile) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 1px 3px 0 rgba(0, 0, 0, 0.1)';
+                    }
                   }}
                   >
                     {/* Product Image */}
@@ -413,7 +506,7 @@ const Marketplace = () => {
                         alt={artifact.name} 
                         style={{ 
                           width: '100%', 
-                          height: '200px', 
+                          height: isMobile ? '180px' : '200px', 
                           objectFit: 'cover' 
                         }} 
                       />
@@ -448,11 +541,11 @@ const Marketplace = () => {
                     </div>
 
                     {/* Product Info */}
-                    <div style={{ padding: '1rem' }}>
+                    <div style={{ padding: isMobile ? '0.75rem' : '1rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '1.5rem' }}>{artifact.icon}</span>
+                        <span style={{ fontSize: isMobile ? '1.25rem' : '1.5rem' }}>{artifact.icon}</span>
                         <h3 style={{ 
-                          fontSize: '1.125rem', 
+                          fontSize: isMobile ? '1rem' : '1.125rem', 
                           fontWeight: 'bold',
                           color: '#1f2937',
                           margin: 0
@@ -475,7 +568,7 @@ const Marketplace = () => {
                           {artifact.originalPrice ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                               <span style={{ 
-                                fontSize: '1.25rem', 
+                                fontSize: isMobile ? '1.125rem' : '1.25rem', 
                                 fontWeight: 'bold',
                                 color: '#1f2937'
                               }}>
@@ -491,7 +584,7 @@ const Marketplace = () => {
                             </div>
                           ) : (
                             <span style={{ 
-                              fontSize: '1.25rem', 
+                              fontSize: isMobile ? '1.125rem' : '1.25rem', 
                               fontWeight: 'bold',
                               color: '#1f2937'
                             }}>
@@ -500,36 +593,36 @@ const Marketplace = () => {
                           )}
                         </div>
 
-                        {purchased ? (
-                          <span style={{ 
-                            backgroundColor: '#10b981', 
-                            color: 'white', 
-                            padding: '0.5rem 1rem', 
+                        <button
+                          onClick={() => handlePurchase(artifact)}
+                          disabled={purchased || powerPoints < artifact.price}
+                          style={{
+                            backgroundColor: purchased ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
                             borderRadius: '0.375rem',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✅ Purchased
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handlePurchase(artifact)}
-                            disabled={powerPoints < artifact.price}
-                            style={{
-                              backgroundColor: powerPoints >= artifact.price ? '#1f2937' : '#9ca3af',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '0.375rem',
-                              padding: '0.5rem 1rem',
-                              fontSize: '0.875rem',
-                              fontWeight: 'bold',
-                              cursor: powerPoints >= artifact.price ? 'pointer' : 'not-allowed',
-                              transition: 'background-color 0.2s ease-in-out'
-                            }}
-                          >
-                            Buy
-                          </button>
-                        )}
+                            fontSize: isMobile ? '0.75rem' : '0.875rem',
+                            fontWeight: '500',
+                            cursor: purchased || powerPoints < artifact.price ? 'not-allowed' : 'pointer',
+                            opacity: purchased || powerPoints < artifact.price ? 0.6 : 1,
+                            transition: 'all 0.2s',
+                            minWidth: isMobile ? '80px' : 'auto',
+                            minHeight: isMobile ? '36px' : 'auto'
+                          }}
+                          onMouseEnter={e => {
+                            if (!purchased && powerPoints >= artifact.price && !isMobile) {
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                            }
+                          }}
+                          onMouseLeave={e => {
+                            if (!isMobile) {
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }
+                          }}
+                        >
+                          {purchased ? 'Owned' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -537,47 +630,21 @@ const Marketplace = () => {
               })}
             </div>
 
+            {/* No Results */}
             {filteredArtifacts.length === 0 && (
-              <div style={{ 
-                textAlign: 'center', 
-                padding: '3rem',
+              <div style={{
+                textAlign: 'center',
+                padding: '3rem 1rem',
                 color: '#6b7280'
               }}>
                 <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                  No artifacts found
-                </h3>
-                <p>Try adjusting your filters or search terms.</p>
+                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>No artifacts found</h3>
+                <p>Try adjusting your search terms or filters.</p>
               </div>
             )}
           </div>
         </div>
       </div>
-
-      {/* Purchase Success Notification */}
-      {showPurchaseSuccess && (
-        <div style={{
-          position: 'fixed',
-          top: '2rem',
-          right: '2rem',
-          backgroundColor: '#10b981',
-          color: 'white',
-          padding: '1rem 1.5rem',
-          borderRadius: '0.5rem',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-          zIndex: 1001,
-          maxWidth: '400px',
-          animation: 'slideIn 0.3s ease-out'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontSize: '1.25rem' }}>🎉</span>
-            <div>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>Purchase Successful!</div>
-              <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>You now own "{purchasedItem}"</div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

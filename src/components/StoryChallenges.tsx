@@ -35,7 +35,10 @@ const StoryChallenges = () => {
     if (!currentUser) return;
 
     const userRef = doc(db, 'users', currentUser.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
+    const studentRef = doc(db, 'students', currentUser.uid);
+    
+    // Listen to both collections for manifest data
+    const unsubscribeUsers = onSnapshot(userRef, (doc) => {
       if (doc.exists()) {
         const userData = doc.data();
         setUserProgress(userData);
@@ -47,7 +50,31 @@ const StoryChallenges = () => {
       }
     });
 
-    return () => unsubscribe();
+    const unsubscribeStudents = onSnapshot(studentRef, (doc) => {
+      if (doc.exists()) {
+        const studentData = doc.data();
+        // Merge student data with user data, prioritizing student data for manifest
+        setUserProgress((prev: any) => ({
+          ...prev,
+          ...studentData,
+          manifest: studentData.manifest || prev?.manifest
+        }));
+        
+        // Check manifest completion with merged data
+        if (studentData.manifest) {
+          checkAndCompleteManifestChallenge({
+            ...userProgress,
+            ...studentData,
+            manifest: studentData.manifest
+          });
+        }
+      }
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeStudents();
+    };
   }, [currentUser]);
 
   // Additional effect to check profile and manifest completion on mount
@@ -174,8 +201,11 @@ const StoryChallenges = () => {
         // Create notification instead of alert
         await createChallengeNotification('Update Your Profile', 15, 5, true);
         
-        // Show a brief success message
-        alert('✅ Profile challenge auto-completed! Check your notifications for details.');
+        // Show a brief success message only once per session
+        if (!sessionStorage.getItem('profileAutoCompleteAlertShown')) {
+          alert('✅ Profile challenge auto-completed! Check your notifications for details.');
+          sessionStorage.setItem('profileAutoCompleteAlertShown', 'true');
+        }
       } else {
         console.log('Profile not complete yet:', { hasDisplayName, hasAvatar });
       }
@@ -205,9 +235,6 @@ const StoryChallenges = () => {
                           userData.manifest.manifestId !== 'None' &&
                           userData.manifest.manifestId !== '') ||
                          (userData.manifest && 
-                          userData.manifest.manifestId && 
-                          userData.manifest.manifestId !== 'None') ||
-                         (userData.manifest && 
                           typeof userData.manifest === 'object' && 
                           Object.keys(userData.manifest).length > 0) ||
                          (userData.manifest && 
@@ -221,7 +248,8 @@ const StoryChallenges = () => {
       console.log('Manifest completion check:', { 
         hasManifest, 
         manifest: userData.manifest,
-        manifestId: userData.manifest?.manifestId
+        manifestId: userData.manifest?.manifestId,
+        manifestationType: userData.manifestationType
       });
       
       if (hasManifest) {
@@ -271,8 +299,11 @@ const StoryChallenges = () => {
         // Create notification instead of alert
         await createChallengeNotification('Declare Your Manifest', 20, 8, true);
         
-        // Show a brief success message
-        alert('✅ Manifest challenge auto-completed! Check your notifications for details.');
+        // Show a brief success message only once per session
+        if (!sessionStorage.getItem('manifestAutoCompleteAlertShown')) {
+          alert('✅ Manifest challenge auto-completed! Check your notifications for details.');
+          sessionStorage.setItem('manifestAutoCompleteAlertShown', 'true');
+        }
       } else {
         console.log('Manifest not chosen yet:', { hasManifest });
       }
@@ -293,8 +324,37 @@ const StoryChallenges = () => {
   const manualCheckManifestCompletion = () => {
     if (userProgress) {
       console.log('Manual manifest completion check triggered');
+      console.log('Current userProgress:', userProgress);
+      console.log('Manifest data:', userProgress.manifest);
       checkAndCompleteManifestChallenge(userProgress);
     }
+  };
+
+  // Debug function to check manifest data
+  const debugManifestData = () => {
+    console.log('=== MANIFEST DEBUG INFO ===');
+    console.log('userProgress:', userProgress);
+    console.log('userProgress.manifest:', userProgress?.manifest);
+    console.log('userProgress.manifest.manifestId:', userProgress?.manifest?.manifestId);
+    console.log('userProgress.manifestationType:', userProgress?.manifestationType);
+    
+    const hasManifest = (userProgress?.manifest && 
+                        userProgress?.manifest.manifestId && 
+                        userProgress?.manifest.manifestId !== 'None' &&
+                        userProgress?.manifest.manifestId !== '') ||
+                       (userProgress?.manifest && 
+                        typeof userProgress?.manifest === 'object' && 
+                        Object.keys(userProgress?.manifest).length > 0) ||
+                       (userProgress?.manifest && 
+                        typeof userProgress?.manifest === 'string' && 
+                        userProgress?.manifest !== 'None' && 
+                        userProgress?.manifest !== '') ||
+                       (userProgress?.manifestationType && 
+                        userProgress?.manifestationType !== 'None' && 
+                        userProgress?.manifestationType !== '');
+    
+    console.log('hasManifest:', hasManifest);
+    console.log('=== END DEBUG INFO ===');
   };
 
   // Function to create notifications for challenge completion
@@ -1049,33 +1109,50 @@ const StoryChallenges = () => {
                         }}>
                           <div style={{
                             padding: '0.5rem',
-                            backgroundColor: ((userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None') ||
-                                             (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
-                                             (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None') ||
-                                             (userProgress?.manifestationType && userProgress?.manifestationType !== 'None')) ? '#dcfce7' : '#fef2f2',
-                            border: `1px solid ${((userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None') ||
-                                                (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
-                                                (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None') ||
-                                                (userProgress?.manifestationType && userProgress?.manifestationType !== 'None')) ? '#22c55e' : '#ef4444'}`,
+                            backgroundColor: (() => {
+                              // Check for manifest in multiple possible locations and formats
+                              const hasManifest = 
+                                (userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None' && userProgress?.manifest?.manifestId !== '') ||
+                                (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
+                                (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None' && userProgress?.manifest !== '') ||
+                                (userProgress?.manifestationType && userProgress?.manifestationType !== 'None' && userProgress?.manifestationType !== '');
+                              return hasManifest ? '#dcfce7' : '#fef2f2';
+                            })(),
+                            border: `1px solid ${(() => {
+                              const hasManifest = 
+                                (userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None' && userProgress?.manifest?.manifestId !== '') ||
+                                (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
+                                (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None' && userProgress?.manifest !== '') ||
+                                (userProgress?.manifestationType && userProgress?.manifestationType !== 'None' && userProgress?.manifestationType !== '');
+                              return hasManifest ? '#22c55e' : '#ef4444';
+                            })()}`,
                             borderRadius: '0.25rem',
                             textAlign: 'center'
                           }}>
                             <div style={{ 
                               fontSize: '0.75rem', 
                               fontWeight: 'bold',
-                              color: ((userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None') ||
-                                     (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
-                                     (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None') ||
-                                     (userProgress?.manifestationType && userProgress?.manifestationType !== 'None')) ? '#166534' : '#dc2626'
+                              color: (() => {
+                                const hasManifest = 
+                                  (userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None' && userProgress?.manifest?.manifestId !== '') ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None' && userProgress?.manifest !== '') ||
+                                  (userProgress?.manifestationType && userProgress?.manifestationType !== 'None' && userProgress?.manifestationType !== '');
+                                return hasManifest ? '#166534' : '#dc2626';
+                              })()
                             }}>
                               Manifest Chosen
                             </div>
                             <div style={{ 
                               fontSize: '0.875rem',
-                              color: ((userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None') ||
-                                     (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
-                                     (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None') ||
-                                     (userProgress?.manifestationType && userProgress?.manifestationType !== 'None')) ? '#166534' : '#dc2626'
+                              color: (() => {
+                                const hasManifest = 
+                                  (userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None' && userProgress?.manifest?.manifestId !== '') ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None' && userProgress?.manifest !== '') ||
+                                  (userProgress?.manifestationType && userProgress?.manifestationType !== 'None' && userProgress?.manifestationType !== '');
+                                return hasManifest ? '#166534' : '#dc2626';
+                              })()
                             }}>
                               {(() => {
                                 // Get manifest name from various possible formats
@@ -1084,10 +1161,13 @@ const StoryChallenges = () => {
                                                    userProgress?.manifestationType ||
                                                    (userProgress?.manifest && typeof userProgress?.manifest === 'object' ? 'Object' : null);
                                 
-                                return ((userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None') ||
-                                        (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
-                                        (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None') ||
-                                        (userProgress?.manifestationType && userProgress?.manifestationType !== 'None')) 
+                                const hasManifest = 
+                                  (userProgress?.manifest?.manifestId && userProgress?.manifest?.manifestId !== 'None' && userProgress?.manifest?.manifestId !== '') ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'object' && Object.keys(userProgress?.manifest).length > 0) ||
+                                  (userProgress?.manifest && typeof userProgress?.manifest === 'string' && userProgress?.manifest !== 'None' && userProgress?.manifest !== '') ||
+                                  (userProgress?.manifestationType && userProgress?.manifestationType !== 'None' && userProgress?.manifestationType !== '');
+                                
+                                return hasManifest 
                                   ? `✅ ${manifestName}` 
                                   : '❌ Not Chosen';
                               })()}
@@ -1105,10 +1185,27 @@ const StoryChallenges = () => {
                             cursor: 'pointer',
                             fontSize: '0.875rem',
                             fontWeight: 'bold',
-                            width: '100%'
+                            width: '100%',
+                            marginBottom: '0.5rem'
                           }}
                         >
                           Check & Complete Manifest Challenge
+                        </button>
+                        <button
+                          onClick={debugManifestData}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#6b7280',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%'
+                          }}
+                        >
+                          🔍 Debug Manifest Data (Check Console)
                         </button>
                       </div>
                     )}

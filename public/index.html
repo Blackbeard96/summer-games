@@ -3,13 +3,34 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, user-scalable=no" />
+    <meta name="theme-color" content="#4f46e5" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Xiotein School" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="msapplication-TileColor" content="#4f46e5" />
+    <meta name="msapplication-tap-highlight" content="no" />
     <meta
       name="description"
-      content="Web site created using create-react-app"
+      content="Xiotein School - A gamified learning platform where students manifest their truth through challenges and achievements"
     />
+    <meta name="keywords" content="education, gamification, learning, challenges, achievements, school, students" />
+    <meta name="author" content="Xiotein School" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:title" content="Xiotein School - Manifestation Game" />
+    <meta property="og:description" content="A gamified learning platform where students manifest their truth through challenges and achievements" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://mstgames.net" />
+    <meta property="og:image" content="%PUBLIC_URL%/logo512.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Xiotein School - Manifestation Game" />
+    <meta name="twitter:description" content="A gamified learning platform where students manifest their truth through challenges and achievements" />
+    <meta name="twitter:image" content="%PUBLIC_URL%/logo512.png" />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="apple-touch-icon" sizes="167x167" href="%PUBLIC_URL%/logo192.png" />
     <!--
       manifest.json provides metadata used when your web app is installed on a
       user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
@@ -24,11 +45,67 @@
       work correctly both with client-side routing and a non-root public URL.
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
-    <title>React App</title>
+    <title>Xiotein School - Manifestation Game</title>
+    <style>
+      /* Prevent flash of unstyled content */
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+          'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        background-color: #f9fafb;
+        overflow-x: hidden;
+      }
+      
+      /* Loading spinner */
+      .loading-spinner {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        flex-direction: column;
+      }
+      
+      .spinner {
+        border: 4px solid #f3f4f6;
+        border-top: 4px solid #4f46e5;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin-bottom: 1rem;
+      }
+      
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      
+      /* Mobile-specific styles */
+      @media (max-width: 768px) {
+        .loading-spinner {
+          padding: 1rem;
+        }
+        
+        .spinner {
+          width: 32px;
+          height: 32px;
+        }
+      }
+    </style>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Loading screen while React app loads -->
+      <div class="loading-spinner">
+        <div class="spinner"></div>
+        <div style="color: #6b7280; font-size: 1rem;">Loading Xiotein School...</div>
+      </div>
+    </div>
     <!--
       This HTML file is a template.
       If you open it directly in the browser, you will see an empty page.
