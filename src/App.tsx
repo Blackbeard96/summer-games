@@ -1,5 +1,6 @@
 
 import Chapters from './pages/Chapters'; // Add Chapters import
+import Squads from './pages/Squads'; // Add Squads import
 import { Link } from 'react-router-dom';
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -12,7 +13,10 @@ import Marketplace from './pages/Marketplace';
 import Leaderboard from './pages/Leaderboard';
 import NavBar from './components/NavBar';
 import FirebaseStatus from './components/FirebaseStatus';
+import TutorialManager from './components/TutorialManager';
+import InvitationManager from './components/InvitationManager';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { LevelUpProvider } from './context/LevelUpContext';
 // Firebase services are imported but not directly used in this component
 // They are used by child components through the firebase.ts file
 
@@ -32,20 +36,25 @@ const ProtectedAdminRoute = () => {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <NavBar />
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/reset-password" element={<PasswordReset />} />
-          <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/admin" element={<ProtectedAdminRoute />} />
-          <Route path="/marketplace" element={<Marketplace />} />
-          <Route path="/chapters" element={<Chapters />} />
-        </Routes>
-        {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
-      </Router>
+      <LevelUpProvider>
+        <Router>
+          <NavBar />
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/profile" element={<Profile />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/reset-password" element={<PasswordReset />} />
+            <Route path="/leaderboard" element={<Leaderboard />} />
+            <Route path="/admin" element={<ProtectedAdminRoute />} />
+            <Route path="/marketplace" element={<Marketplace />} />
+            <Route path="/chapters" element={<Chapters />} />
+            <Route path="/squads" element={<Squads />} />
+          </Routes>
+          <TutorialManager />
+          <InvitationManager />
+          {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
+        </Router>
+      </LevelUpProvider>
     </AuthProvider>
   );
 }

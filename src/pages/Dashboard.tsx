@@ -29,15 +29,35 @@ const Dashboard = () => {
 
   useEffect(() => {
     const fetchManifest = async () => {
-      if (!currentUser) return;
+      if (!currentUser) {
+        console.log('Dashboard: No current user, setting loading to false');
+        setLoading(false);
+        return;
+      }
 
+      console.log('Dashboard: Fetching manifest for user:', currentUser.uid);
+      
+      // Add a timeout to prevent infinite loading
+      const timeoutId = setTimeout(() => {
+        console.log('Dashboard: Loading timeout reached, forcing completion');
+        setLoading(false);
+        setShowManifestSelection(true);
+      }, 10000); // 10 second timeout
+      
       try {
-        const userRef = doc(db, 'students', currentUser.uid);
-        const docSnap = await getDoc(userRef);
+        // Try to get manifest from students collection first
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
         
-        if (docSnap.exists()) {
-          const manifestData = docSnap.data().manifest;
+        console.log('Dashboard: Student document exists:', studentDoc.exists());
+        
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          console.log('Dashboard: Student data:', studentData);
+          
+          const manifestData = studentData.manifest;
           if (manifestData) {
+            console.log('Dashboard: Found manifest in students collection');
             // Convert Firestore timestamp to Date if needed
             const processedManifest = {
               ...manifestData,
@@ -47,16 +67,56 @@ const Dashboard = () => {
             };
             setPlayerManifest(processedManifest);
           } else {
-            // No manifest found - automatically show selection
-            setShowManifestSelection(true);
+            console.log('Dashboard: No manifest found in students collection, checking users collection');
+            // Try users collection as fallback
+            const userRef = doc(db, 'users', currentUser.uid);
+            const userDoc = await getDoc(userRef);
+            
+            if (userDoc.exists()) {
+              const userData = userDoc.data();
+              console.log('Dashboard: User data:', userData);
+              
+              if (userData.manifest) {
+                console.log('Dashboard: Found manifest in users collection');
+                setPlayerManifest(userData.manifest);
+              } else {
+                console.log('Dashboard: No manifest found in either collection, showing selection');
+                setShowManifestSelection(true);
+              }
+            } else {
+              console.log('Dashboard: No user document found, showing manifest selection');
+              setShowManifestSelection(true);
+            }
           }
         } else {
-          // User document doesn't exist - show manifest selection
-          setShowManifestSelection(true);
+          console.log('Dashboard: No student document found, checking users collection');
+          // Try users collection as fallback
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userRef);
+          
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            console.log('Dashboard: User data:', userData);
+            
+            if (userData.manifest) {
+              console.log('Dashboard: Found manifest in users collection');
+              setPlayerManifest(userData.manifest);
+            } else {
+              console.log('Dashboard: No manifest found in users collection, showing selection');
+              setShowManifestSelection(true);
+            }
+          } else {
+            console.log('Dashboard: No documents found, showing manifest selection');
+            setShowManifestSelection(true);
+          }
         }
       } catch (error) {
-        console.error('Error fetching manifest:', error);
+        console.error('Dashboard: Error fetching manifest:', error);
+        // Even if there's an error, don't leave the user in loading state
+        setShowManifestSelection(true);
       } finally {
+        console.log('Dashboard: Setting loading to false');
+        clearTimeout(timeoutId);
         setLoading(false);
       }
     };
@@ -99,6 +159,7 @@ const Dashboard = () => {
   };
 
   if (loading) {
+    console.log('Dashboard: Rendering loading screen');
     return (
       <div style={{ 
         padding: isMobile ? '1rem' : '1.5rem', 
@@ -111,6 +172,30 @@ const Dashboard = () => {
         <div>
           <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⚡</div>
           <p style={{ fontSize: isMobile ? '1rem' : '1.1rem' }}>Loading your manifestation journey...</p>
+          <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
+            User: {currentUser ? currentUser.uid : 'Not authenticated'}
+          </p>
+          {currentUser && (
+            <button 
+              onClick={() => {
+                console.log('Dashboard: Force loading completion');
+                setLoading(false);
+                setShowManifestSelection(true);
+              }}
+              style={{
+                marginTop: '1rem',
+                padding: '0.5rem 1rem',
+                backgroundColor: '#4f46e5',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem'
+              }}
+            >
+              Continue Anyway
+            </button>
+          )}
         </div>
       </div>
     );
@@ -122,6 +207,7 @@ const Dashboard = () => {
       maxWidth: '1200px', 
       margin: '0 auto' 
     }}>
+      {/* Welcome Message */}
       <div style={{ 
         textAlign: 'center', 
         marginBottom: isMobile ? '1.5rem' : '2rem' 
@@ -152,7 +238,7 @@ const Dashboard = () => {
       
       {/* Manifest Selection Prompt */}
       {!playerManifest && (
-        <div style={{ 
+        <div className="manifest-selection" style={{ 
           backgroundColor: 'white', 
           borderRadius: '0.75rem', 
           padding: isMobile ? '1.5rem' : '2rem', 
@@ -178,6 +264,7 @@ const Dashboard = () => {
             In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
           </p>
           <button
+            className="manifest-confirm"
             onClick={() => setShowManifestSelection(true)}
             style={{
               backgroundColor: '#4f46e5',

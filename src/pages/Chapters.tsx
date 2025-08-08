@@ -15,8 +15,8 @@ const Chapters: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 py-8">
-      <div className="max-w-6xl mx-auto px-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 py-20 chapters-page">
+      <div className="max-w-6xl mx-auto px-16 chapters-container">
         {selectedChapter ? (
           <ChapterDetail 
             chapter={selectedChapter} 

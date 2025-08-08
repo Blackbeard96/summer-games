@@ -3,6 +3,7 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { CHAPTERS } from '../types/chapters';
+import OAuthSetupModal from './OAuthSetupModal';
 
 const classroomScopes = [
   'openid',
@@ -110,6 +111,7 @@ const GoogleClassroomIntegration: React.FC = () => {
   const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showOAuthSetupModal, setShowOAuthSetupModal] = useState(false);
 
   const login = useGoogleLogin({
     scope: classroomScopes,
@@ -133,6 +135,7 @@ const GoogleClassroomIntegration: React.FC = () => {
     },
     onError: () => {
       setError('Login Failed');
+      setShowOAuthSetupModal(true);
     },
     flow: 'implicit',
   });
@@ -161,9 +164,25 @@ const GoogleClassroomIntegration: React.FC = () => {
     <div style={{ maxWidth: 800, margin: '2rem auto', padding: 24, background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.07)' }}>
       <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 16 }}>Chapter Assignment Integration</h2>
       {!accessToken ? (
-        <button onClick={() => login()} style={{ background: '#4285F4', color: 'white', border: 'none', borderRadius: 4, padding: '0.75rem 1.5rem', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
-          Sign in with Google
-        </button>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <button onClick={() => login()} style={{ background: '#4285F4', color: 'white', border: 'none', borderRadius: 4, padding: '0.75rem 1.5rem', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
+            Sign in with Google
+          </button>
+          <button 
+            onClick={() => setShowOAuthSetupModal(true)} 
+            style={{ 
+              background: 'transparent', 
+              color: '#6b7280', 
+              border: '1px solid #d1d5db', 
+              borderRadius: 4, 
+              padding: '0.75rem 1.5rem', 
+              fontSize: '0.875rem', 
+              cursor: 'pointer' 
+            }}
+          >
+            OAuth Setup Help
+          </button>
+        </div>
       ) : (
         <div>
           <h3 style={{ marginTop: 24, marginBottom: 8 }}>Your Courses</h3>
@@ -202,6 +221,13 @@ const GoogleClassroomIntegration: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* OAuth Setup Modal */}
+      <OAuthSetupModal
+        isOpen={showOAuthSetupModal}
+        onClose={() => setShowOAuthSetupModal(false)}
+        clientId="281092791460-085tqid3jq8e9llqdmlps0f5d6c835n5.apps.googleusercontent.com"
+      />
     </div>
   );
 };

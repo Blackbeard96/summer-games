@@ -233,7 +233,7 @@ const Marketplace = () => {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
       {/* Header */}
-      <div style={{ 
+      <div className="marketplace-header" style={{ 
         backgroundColor: 'white', 
         borderBottom: '1px solid #e5e7eb',
         padding: isMobile ? '0.75rem 0' : '1rem 0'
@@ -286,7 +286,7 @@ const Marketplace = () => {
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ 
+              <div className="power-points" style={{ 
                 backgroundColor: '#fbbf24', 
                 color: '#1f2937', 
                 padding: '0.5rem 1rem', 
@@ -347,7 +347,7 @@ const Marketplace = () => {
           gap: isMobile ? '1rem' : '2rem' 
         }}>
           {/* Sidebar Filters */}
-          <div style={{ 
+          <div className="category-filters" style={{ 
             width: isMobile ? '100%' : '250px', 
             flexShrink: 0,
             display: isMobile && !showFilters ? 'none' : 'block'
@@ -476,7 +476,7 @@ const Marketplace = () => {
               {filteredArtifacts.map((artifact) => {
                 const purchased = inventory.includes(artifact.name);
                 return (
-                  <div key={artifact.id} style={{ 
+                  <div key={artifact.id} className="artifact-card" style={{ 
                     backgroundColor: 'white',
                     borderRadius: '0.75rem',
                     overflow: 'hidden',

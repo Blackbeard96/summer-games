@@ -71,15 +71,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Fetch user profile from Firestore
   const fetchUserProfile = async (user: User) => {
     try {
+      console.log('AuthContext: Starting fetchUserProfile for user:', user.uid);
       const userDoc = await getDoc(doc(db, 'users', user.uid));
+      console.log('AuthContext: User document exists:', userDoc.exists());
+      
       if (userDoc.exists()) {
         const userData = userDoc.data() as UserProfile;
+        console.log('AuthContext: Setting existing user profile');
         setUserProfile(userData);
         
         // Migrate existing user to chapter system if needed
+        console.log('AuthContext: Migrating user to chapter system...');
         await migrateExistingUserToChapters(user.uid);
+        console.log('AuthContext: Migration completed');
       } else {
         // Create new user profile
+        console.log('AuthContext: Creating new user profile');
         const newProfile: UserProfile = {
           displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Student'),
           email: user.email || '',
@@ -95,21 +102,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUserProfile(newProfile);
         
         // Initialize chapter progress for new user
+        console.log('AuthContext: Initializing chapter progress...');
         await initializeChapterProgress(user.uid);
+        console.log('AuthContext: Chapter progress initialized');
       }
     } catch (error) {
-      console.error('Error fetching user profile:', error);
+      console.error('AuthContext: Error fetching user profile:', error);
     }
   };
 
   useEffect(() => {
+    console.log('AuthContext: Setting up auth state listener...');
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log('AuthContext: Auth state changed:', { user: user ? user.uid : 'null' });
       setCurrentUser(user);
       if (user) {
+        console.log('AuthContext: Fetching user profile...');
         await fetchUserProfile(user);
+        console.log('AuthContext: User profile fetched');
       } else {
+        console.log('AuthContext: No user, setting profile to null');
         setUserProfile(null);
       }
+      console.log('AuthContext: Setting loading to false');
       setLoading(false);
     });
 

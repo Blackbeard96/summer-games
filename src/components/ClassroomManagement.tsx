@@ -1,0 +1,1544 @@
+import React, { useState, useEffect } from 'react';
+import { db } from '../firebase';
+import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { getLevelFromXP } from '../utils/leveling';
+import OAuthSetupModal from './OAuthSetupModal';
+import { useGoogleLogin } from '@react-oauth/google';
+
+// Google Classroom API types
+interface GoogleClassroomCourse {
+  id: string;
+  name: string;
+  description?: string;
+  section?: string;
+  ownerId: string;
+  creationTime: string;
+  updateTime: string;
+  enrollmentCode: string;
+  courseState: string;
+  alternateLink: string;
+  teacherGroupEmail: string;
+  courseGroupEmail: string;
+  guardiansEnabled: boolean;
+  calendarId: string;
+}
+
+interface GoogleClassroomStudent {
+  profile: {
+    id: string;
+    name: {
+      givenName: string;
+      familyName: string;
+      fullName: string;
+    };
+    emailAddress: string;
+    permissions: Array<{
+      permission: string;
+    }>;
+    photoUrl?: string;
+    verifiedTeacher: boolean;
+  };
+  courseId: string;
+  courseWorkId?: string;
+  id: string;
+  userId: string;
+  creationTime: string;
+  updateTime: string;
+  state: string;
+  late: boolean;
+  draftGrade?: number;
+  assignedGrade?: number;
+  alternateLink: string;
+  courseWorkType: string;
+  assignmentSubmission?: {
+    attachments: Array<{
+      driveFile?: {
+        driveFile: {
+          id: string;
+          title: string;
+          alternateLink: string;
+        };
+        shareMode: string;
+      };
+      youTubeVideo?: {
+        id: string;
+        title: string;
+        alternateLink: string;
+        thumbnailUrl: string;
+      };
+      form?: {
+        formUrl: string;
+        responseUrl: string;
+        title: string;
+        thumbnailUrl: string;
+      };
+      link?: {
+        url: string;
+        title: string;
+        thumbnailUrl: string;
+      };
+    }>;
+  };
+}
+
+interface Classroom {
+  id: string;
+  name: string;
+  description?: string;
+  students: string[];
+  createdAt: Date;
+  maxStudents?: number;
+}
+
+interface Student {
+  id: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  level: number;
+  xp: number;
+}
+
+const ClassroomManagement: React.FC = () => {
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showAddStudentsModal, setShowAddStudentsModal] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [newClassroom, setNewClassroom] = useState({ name: '', description: '', maxStudents: 30 });
+  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  
+  // Google Classroom import states
+  const [showGoogleImportModal, setShowGoogleImportModal] = useState(false);
+  const [googleImportTargetClassroom, setGoogleImportTargetClassroom] = useState<string | null>(null);
+  const [googleCourses, setGoogleCourses] = useState<GoogleClassroomCourse[]>([]);
+  const [selectedCourse, setSelectedCourse] = useState<string>('');
+  const [googleStudents, setGoogleStudents] = useState<GoogleClassroomStudent[]>([]);
+  const [importingStudents, setImportingStudents] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const [googleAuthToken, setGoogleAuthToken] = useState<string>('');
+  const [showOAuthSetupModal, setShowOAuthSetupModal] = useState(false);
+
+  // Fetch classrooms and students
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        // Fetch classrooms
+        const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+        const classroomsData: Classroom[] = classroomsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as Classroom));
+        setClassrooms(classroomsData);
+
+        // Fetch students
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const studentsSnapshot = await getDocs(collection(db, 'students'));
+        
+        const studentsMap = new Map();
+        studentsSnapshot.docs.forEach(doc => {
+          studentsMap.set(doc.id, doc.data());
+        });
+        
+        const studentsData: Student[] = usersSnapshot.docs.map(doc => {
+          const userData = doc.data();
+          const studentData = studentsMap.get(doc.id) || {};
+          
+          const xp = studentData.xp || 0;
+          const calculatedLevel = getLevelFromXP(xp);
+          
+          return {
+            id: doc.id,
+            displayName: studentData.displayName || userData.displayName || userData.email?.split('@')[0] || 'Unknown',
+            email: userData.email || '',
+            photoURL: userData.photoURL,
+            level: calculatedLevel,
+            xp: xp
+          };
+        });
+        setStudents(studentsData);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+
+    // Set up real-time listener for classrooms
+    const unsubscribe = onSnapshot(collection(db, 'classrooms'), (snapshot) => {
+      const classroomsData: Classroom[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Classroom));
+      setClassrooms(classroomsData);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const createClassroom = async () => {
+    if (!newClassroom.name.trim()) return;
+
+    try {
+      await addDoc(collection(db, 'classrooms'), {
+        name: newClassroom.name.trim(),
+        description: newClassroom.description.trim(),
+        maxStudents: newClassroom.maxStudents,
+        students: [],
+        createdAt: new Date()
+      });
+
+      setNewClassroom({ name: '', description: '', maxStudents: 30 });
+      setShowCreateModal(false);
+    } catch (error) {
+      console.error('Error creating classroom:', error);
+      alert('Failed to create classroom. Please try again.');
+    }
+  };
+
+  const addStudentsToClassroom = async (classroomId: string) => {
+    if (selectedStudents.length === 0) return;
+
+    try {
+      const classroomRef = doc(db, 'classrooms', classroomId);
+      const classroom = classrooms.find(c => c.id === classroomId);
+      
+      if (!classroom) return;
+
+      const updatedStudents = Array.from(new Set([...classroom.students, ...selectedStudents]));
+      
+      await updateDoc(classroomRef, {
+        students: updatedStudents
+      });
+
+      setSelectedStudents([]);
+      setShowAddStudentsModal(null);
+    } catch (error) {
+      console.error('Error adding students to classroom:', error);
+      alert('Failed to add students to classroom. Please try again.');
+    }
+  };
+
+  const removeStudentFromClassroom = async (classroomId: string, studentId: string) => {
+    try {
+      const classroomRef = doc(db, 'classrooms', classroomId);
+      const classroom = classrooms.find(c => c.id === classroomId);
+      
+      if (!classroom) return;
+
+      const updatedStudents = classroom.students.filter(id => id !== studentId);
+      
+      await updateDoc(classroomRef, {
+        students: updatedStudents
+      });
+    } catch (error) {
+      console.error('Error removing student from classroom:', error);
+      alert('Failed to remove student from classroom. Please try again.');
+    }
+  };
+
+  const deleteClassroom = async (classroomId: string) => {
+    try {
+      await deleteDoc(doc(db, 'classrooms', classroomId));
+      setShowDeleteConfirm(null);
+    } catch (error) {
+      console.error('Error deleting classroom:', error);
+      alert('Failed to delete classroom. Please try again.');
+    }
+  };
+
+  const getStudentById = (studentId: string) => {
+    return students.find(student => student.id === studentId);
+  };
+
+  const getAvailableStudents = (classroomId: string) => {
+    const classroom = classrooms.find(c => c.id === classroomId);
+    if (!classroom) return students;
+    
+    return students.filter(student => !classroom.students.includes(student.id));
+  };
+
+  const clearOAuthCache = () => {
+    localStorage.removeItem('google_oauth_token');
+    localStorage.removeItem('google_oauth_token_expiry');
+    setGoogleAuthToken('');
+    console.log('OAuth cache cleared');
+  };
+
+  // Google Classroom API functions
+  const googleLogin = useGoogleLogin({
+    scope: 'https://www.googleapis.com/auth/classroom.courses.readonly https://www.googleapis.com/auth/classroom.rosters.readonly',
+    onSuccess: async (tokenResponse) => {
+      console.log('Google OAuth successful:', tokenResponse);
+      setGoogleAuthToken(tokenResponse.access_token);
+      localStorage.setItem('google_oauth_token', tokenResponse.access_token);
+      localStorage.setItem('google_oauth_token_expiry', (new Date().getTime() + (tokenResponse.expires_in * 1000)).toString());
+      
+      // Fetch courses immediately after successful login
+      await fetchGoogleCoursesWithToken(tokenResponse.access_token);
+    },
+    onError: (error) => {
+      console.error('Google OAuth error:', error);
+      setShowOAuthSetupModal(true);
+    },
+    flow: 'implicit',
+  });
+
+  const authenticateGoogle = async () => {
+    try {
+      // Check if we already have a valid token
+      const existingToken = localStorage.getItem('google_oauth_token');
+      const tokenExpiry = localStorage.getItem('google_oauth_token_expiry');
+      
+      if (existingToken && tokenExpiry && new Date().getTime() < parseInt(tokenExpiry)) {
+        console.log('Using existing OAuth token');
+        setGoogleAuthToken(existingToken);
+        return existingToken;
+      }
+      
+      // If no valid token, trigger Google login
+      console.log('No valid token found, triggering Google login...');
+      googleLogin();
+      return null;
+    } catch (error) {
+      console.error('Google authentication error:', error);
+      return null;
+    }
+  };
+
+  const fetchGoogleCoursesWithToken = async (token: string) => {
+    try {
+      console.log('Fetching Google Classroom courses with token');
+      
+      const response = await fetch('https://classroom.googleapis.com/v1/courses', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('API Response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Google Classroom courses:', data);
+        setGoogleCourses(data.courses || []);
+      } else {
+        const errorData = await response.text();
+        console.error('Failed to fetch courses:', errorData);
+        setShowOAuthSetupModal(true);
+      }
+    } catch (error) {
+      console.error('Error fetching Google Classroom courses:', error);
+      setShowOAuthSetupModal(true);
+    }
+  };
+
+  const fetchGoogleCourses = async () => {
+    if (!googleAuthToken) {
+      const token = await authenticateGoogle();
+      if (!token) return;
+    }
+
+    // If using demo token, show demo data
+    if (googleAuthToken === 'demo-token') {
+      console.log('Showing demo Google Classroom courses');
+      setGoogleCourses([
+        {
+          id: 'demo-course-1',
+          name: 'Computer Science Fundamentals',
+          description: 'Introduction to programming and computer science concepts',
+          section: 'CS101',
+          ownerId: 'demo-teacher-1',
+          creationTime: new Date().toISOString(),
+          updateTime: new Date().toISOString(),
+          enrollmentCode: 'demo-abc123',
+          courseState: 'ACTIVE',
+          alternateLink: 'https://classroom.google.com/c/demo-course-1',
+          teacherGroupEmail: 'cs101@demo.com',
+          courseGroupEmail: 'cs101-students@demo.com',
+          guardiansEnabled: false,
+          calendarId: 'demo-calendar-1'
+        },
+        {
+          id: 'demo-course-2',
+          name: 'Advanced Mathematics',
+          description: 'Advanced mathematical concepts and problem solving',
+          section: 'MATH201',
+          ownerId: 'demo-teacher-2',
+          creationTime: new Date().toISOString(),
+          updateTime: new Date().toISOString(),
+          enrollmentCode: 'demo-def456',
+          courseState: 'ACTIVE',
+          alternateLink: 'https://classroom.google.com/c/demo-course-2',
+          teacherGroupEmail: 'math201@demo.com',
+          courseGroupEmail: 'math201-students@demo.com',
+          guardiansEnabled: true,
+          calendarId: 'demo-calendar-2'
+        },
+        {
+          id: 'demo-course-3',
+          name: 'English Literature',
+          description: 'Exploring classic and contemporary literature',
+          section: 'ENG301',
+          ownerId: 'demo-teacher-3',
+          creationTime: new Date().toISOString(),
+          updateTime: new Date().toISOString(),
+          enrollmentCode: 'demo-ghi789',
+          courseState: 'ACTIVE',
+          alternateLink: 'https://classroom.google.com/c/demo-course-3',
+          teacherGroupEmail: 'eng301@demo.com',
+          courseGroupEmail: 'eng301-students@demo.com',
+          guardiansEnabled: false,
+          calendarId: 'demo-calendar-3'
+        }
+      ]);
+      return;
+    }
+
+    try {
+      console.log('Fetching Google Classroom courses with OAuth token');
+      
+      // Use the new function with the current token
+      await fetchGoogleCoursesWithToken(googleAuthToken);
+    } catch (error) {
+      console.error('Error fetching Google Classroom courses:', error);
+      setShowOAuthSetupModal(true);
+    }
+  };
+
+    const fetchGoogleStudents = async (courseId: string) => {
+      if (!googleAuthToken) {
+        const token = await authenticateGoogle();
+        if (!token) return;
+      }
+
+      // If using demo token, show demo students
+      if (googleAuthToken === 'demo-token') {
+        console.log('Showing demo students for course:', courseId);
+        setGoogleStudents([
+          {
+            profile: {
+              id: 'demo-student-1',
+              name: { givenName: 'John', familyName: 'Doe', fullName: 'John Doe' },
+              emailAddress: 'john.doe@student.com',
+              permissions: [{ permission: 'STUDENT' }],
+              photoUrl: 'https://ui-avatars.com/api/?name=John+Doe&background=4f46e5&color=fff&size=32',
+              verifiedTeacher: false
+            },
+            courseId: courseId,
+            id: 'demo-enrollment-1',
+            userId: 'demo-student-1',
+            creationTime: new Date().toISOString(),
+            updateTime: new Date().toISOString(),
+            state: 'ACTIVE',
+            late: false,
+            alternateLink: `https://classroom.google.com/c/${courseId}/user/demo-student-1`,
+            courseWorkType: 'ASSIGNMENT'
+          },
+          {
+            profile: {
+              id: 'demo-student-2',
+              name: { givenName: 'Jane', familyName: 'Smith', fullName: 'Jane Smith' },
+              emailAddress: 'jane.smith@student.com',
+              permissions: [{ permission: 'STUDENT' }],
+              photoUrl: 'https://ui-avatars.com/api/?name=Jane+Smith&background=10b981&color=fff&size=32',
+              verifiedTeacher: false
+            },
+            courseId: courseId,
+            id: 'demo-enrollment-2',
+            userId: 'demo-student-2',
+            creationTime: new Date().toISOString(),
+            updateTime: new Date().toISOString(),
+            state: 'ACTIVE',
+            late: false,
+            alternateLink: `https://classroom.google.com/c/${courseId}/user/demo-student-2`,
+            courseWorkType: 'ASSIGNMENT'
+          },
+          {
+            profile: {
+              id: 'demo-student-3',
+              name: { givenName: 'Mike', familyName: 'Johnson', fullName: 'Mike Johnson' },
+              emailAddress: 'mike.johnson@student.com',
+              permissions: [{ permission: 'STUDENT' }],
+              photoUrl: 'https://ui-avatars.com/api/?name=Mike+Johnson&background=f59e0b&color=fff&size=32',
+              verifiedTeacher: false
+            },
+            courseId: courseId,
+            id: 'demo-enrollment-3',
+            userId: 'demo-student-3',
+            creationTime: new Date().toISOString(),
+            updateTime: new Date().toISOString(),
+            state: 'ACTIVE',
+            late: false,
+            alternateLink: `https://classroom.google.com/c/${courseId}/user/demo-student-3`,
+            courseWorkType: 'ASSIGNMENT'
+          }
+        ]);
+        return;
+      }
+
+      try {
+        console.log('Fetching students for course:', courseId);
+        
+        // Real Google Classroom API call with OAuth token
+        const response = await fetch(`https://classroom.googleapis.com/v1/courses/${courseId}/students`, {
+          headers: {
+            'Authorization': `Bearer ${googleAuthToken}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        console.log('Students API Response status:', response.status);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Google Classroom students response:', data);
+          
+          if (data.students && data.students.length > 0) {
+            setGoogleStudents(data.students);
+          } else {
+            setGoogleStudents([]);
+            alert('No students found in this Google Classroom course.');
+          }
+        } else {
+          const errorData = await response.text();
+          console.error('Google Classroom students API error:', response.status, errorData);
+          
+          if (response.status === 403) {
+            alert('Access denied to course students. Please check OAuth permissions.');
+          } else if (response.status === 404) {
+            alert('Course not found or you don\'t have access to it.');
+          } else {
+            alert(`Error fetching students: ${response.status} - ${errorData}`);
+          }
+          
+          setGoogleStudents([]);
+        }
+      } catch (error) {
+        console.error('Error fetching Google students:', error);
+        alert('Network error when fetching students. Please try again.');
+        setGoogleStudents([]);
+      }
+    };
+
+    const importGoogleStudents = async (classroomId: string) => {
+      if (!selectedCourse || googleStudents.length === 0) return;
+
+      setImportingStudents(true);
+      setImportProgress({ current: 0, total: googleStudents.length });
+
+      try {
+        console.log('Looking for classroom with ID:', classroomId);
+        console.log('Available classrooms:', classrooms.map(c => ({ id: c.id, name: c.name })));
+        
+        let classroom = classrooms.find(c => c.id === classroomId);
+        if (!classroom) {
+          console.error('Classroom not found! Available IDs:', classrooms.map(c => c.id));
+          console.log('Attempting to refresh classrooms data...');
+          
+                     // Try to refresh classrooms data  
+          const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+          const refreshedClassrooms: Classroom[] = classroomsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          } as Classroom));
+          setClassrooms(refreshedClassrooms);
+          classroom = refreshedClassrooms.find(c => c.id === classroomId);
+          
+          if (!classroom) {
+            throw new Error(`Classroom not found with ID: ${classroomId}. Please refresh the page and try again.`);
+          }
+        }
+
+        console.log('Found classroom:', classroom);
+
+        // Filter out students that are already in the classroom
+        const newStudents = googleStudents.filter(googleStudent => 
+          !classroom!.students.includes(googleStudent.profile.id)
+        );
+
+        // Add students to the classroom
+        for (let i = 0; i < newStudents.length; i++) {
+          const googleStudent = newStudents[i];
+          
+          try {
+            console.log(`Processing student ${i + 1}/${newStudents.length}: ${googleStudent.profile.name.fullName}`);
+            
+            // Check if student already exists in our system
+            const existingStudent = students.find(s => s.email === googleStudent.profile.emailAddress);
+            
+            if (!existingStudent) {
+              console.log(`Creating new student account for: ${googleStudent.profile.emailAddress}`);
+              
+              // Create new student account
+              const newStudentData = {
+                displayName: googleStudent.profile.name.fullName,
+                email: googleStudent.profile.emailAddress,
+                photoURL: googleStudent.profile.photoUrl,
+                xp: 0,
+                powerPoints: 0,
+                createdAt: new Date()
+              };
+
+              // Add to users collection
+              const userRef = await addDoc(collection(db, 'users'), newStudentData);
+              console.log(`Created user document: ${userRef.id}`);
+              
+              // Add to students collection
+              await addDoc(collection(db, 'students'), {
+                ...newStudentData,
+                userId: userRef.id
+              });
+              console.log(`Created student document for user: ${userRef.id}`);
+
+                          // Add to classroom
+            await updateDoc(doc(db, 'classrooms', classroomId), {
+              students: [...classroom!.students, userRef.id]
+            });
+              console.log(`Added student ${userRef.id} to classroom ${classroomId}`);
+            } else {
+              console.log(`Found existing student: ${existingStudent.email}`);
+                          // Add existing student to classroom if not already there
+            if (!classroom!.students.includes(existingStudent.id)) {
+              await updateDoc(doc(db, 'classrooms', classroomId), {
+                students: [...classroom!.students, existingStudent.id]
+              });
+                console.log(`Added existing student ${existingStudent.id} to classroom ${classroomId}`);
+              } else {
+                console.log(`Student ${existingStudent.id} already in classroom`);
+              }
+            }
+
+            setImportProgress({ current: i + 1, total: newStudents.length });
+          } catch (studentError) {
+            console.error(`Error processing student ${googleStudent.profile.name.fullName}:`, studentError);
+            // Continue with next student instead of failing completely
+          }
+        }
+
+        // Reset Google import state and refresh data
+        setGoogleImportTargetClassroom(null);
+        setShowGoogleImportModal(false);
+        window.location.reload();
+      } catch (error) {
+        console.error('Error importing students:', error);
+        
+        // More detailed error message
+        let errorMessage = 'Error importing students. ';
+        if (error instanceof Error) {
+          errorMessage += `Details: ${error.message}`;
+        } else {
+          errorMessage += 'Please try again.';
+        }
+        
+        alert(errorMessage);
+      } finally {
+        setImportingStudents(false);
+        setImportProgress({ current: 0, total: 0 });
+      }
+    };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
+        Loading classroom data...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: '#f8fafc',
+      borderRadius: '0.75rem',
+      padding: '2rem',
+      minHeight: '300px',
+      color: '#374151',
+      border: '1px solid #e5e7eb',
+      marginBottom: '2rem'
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+            🏫 Classroom Management
+          </h2>
+          <p style={{ fontSize: '1.125rem', color: '#6b7280' }}>
+            Create and manage classrooms, add students, and organize your learning environment.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowCreateModal(true)}
+          style={{
+            backgroundColor: '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}
+        >
+          ➕ Create Classroom
+        </button>
+      </div>
+
+      {/* Classrooms Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' }}>
+        {classrooms.map((classroom) => (
+          <div key={classroom.id} style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            border: '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                  {classroom.name}
+                </h3>
+                {classroom.description && (
+                  <p style={{ color: '#6b7280', fontSize: '0.875rem', margin: 0 }}>
+                    {classroom.description}
+                  </p>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={() => setShowAddStudentsModal(classroom.id)}
+                  style={{
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  👥 Add Students
+                </button>
+                <button
+                  onClick={() => {
+                    setGoogleImportTargetClassroom(classroom.id);
+                    setShowGoogleImportModal(true);
+                    fetchGoogleCourses();
+                  }}
+                  style={{
+                    backgroundColor: '#f59e0b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  📚 Import from Google
+                </button>
+                <button
+                  onClick={() => setShowOAuthSetupModal(true)}
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: '#6b7280',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                  title="OAuth Setup Help"
+                >
+                  ⚙️ OAuth Help
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(classroom.id)}
+                  style={{
+                    backgroundColor: '#dc2626',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  🗑️ Delete
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{
+                backgroundColor: '#f3f4f6',
+                color: '#374151',
+                padding: '0.25rem 0.75rem',
+                borderRadius: '1rem',
+                fontSize: '0.75rem',
+                fontWeight: '500'
+              }}>
+                {classroom.students.length}/{classroom.maxStudents || '∞'} Students
+              </span>
+            </div>
+
+            {/* Students List */}
+            <div>
+              <h4 style={{ fontSize: '1rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+                Students
+              </h4>
+              {classroom.students.length === 0 ? (
+                <p style={{ color: '#9ca3af', fontSize: '0.875rem', fontStyle: 'italic' }}>
+                  No students enrolled yet
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {classroom.students.map((studentId) => {
+                    const student = getStudentById(studentId);
+                    if (!student) return null;
+
+                    return (
+                      <div key={studentId} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.5rem',
+                        backgroundColor: '#f9fafb',
+                        borderRadius: '0.375rem'
+                      }}>
+                        <img
+                          src={student.photoURL || '/default-avatar.png'}
+                          alt={student.displayName}
+                          style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '50%',
+                            objectFit: 'cover'
+                          }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937' }}>
+                            {student.displayName}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                            Level {student.level} • {student.xp} XP
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeStudentFromClassroom(classroom.id, studentId)}
+                          style={{
+                            backgroundColor: '#fef2f2',
+                            color: '#dc2626',
+                            border: '1px solid #fecaca',
+                            borderRadius: '0.25rem',
+                            padding: '0.25rem 0.5rem',
+                            fontSize: '0.75rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {classrooms.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '3rem', color: '#9ca3af' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🏫</div>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+            No Classrooms Yet
+          </h3>
+          <p style={{ fontSize: '1rem' }}>
+            Create your first classroom to start organizing students.
+          </p>
+        </div>
+      )}
+
+      {/* Create Classroom Modal */}
+      {showCreateModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            maxWidth: '500px',
+            width: '90%',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.5rem' }}>
+              Create New Classroom
+            </h3>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Classroom Name *
+              </label>
+              <input
+                type="text"
+                value={newClassroom.name}
+                onChange={(e) => setNewClassroom({ ...newClassroom, name: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '0.375rem',
+                  fontSize: '0.875rem'
+                }}
+                placeholder="Enter classroom name"
+              />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Description
+              </label>
+              <textarea
+                value={newClassroom.description}
+                onChange={(e) => setNewClassroom({ ...newClassroom, description: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '0.375rem',
+                  fontSize: '0.875rem',
+                  minHeight: '80px',
+                  resize: 'vertical'
+                }}
+                placeholder="Enter classroom description (optional)"
+              />
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Maximum Students
+              </label>
+              <input
+                type="number"
+                value={newClassroom.maxStudents}
+                onChange={(e) => setNewClassroom({ ...newClassroom, maxStudents: parseInt(e.target.value) || 30 })}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '0.375rem',
+                  fontSize: '0.875rem'
+                }}
+                placeholder="30"
+                min="1"
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createClassroom}
+                disabled={!newClassroom.name.trim()}
+                style={{
+                  backgroundColor: newClassroom.name.trim() ? '#10b981' : '#9ca3af',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: newClassroom.name.trim() ? 'pointer' : 'not-allowed',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Create Classroom
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Students Modal */}
+      {showAddStudentsModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem' }}>
+              Add Students to Classroom
+            </h3>
+            
+            <div style={{ flex: 1, overflow: 'auto', marginBottom: '1rem' }}>
+              {getAvailableStudents(showAddStudentsModal).length === 0 ? (
+                <p style={{ color: '#9ca3af', textAlign: 'center', padding: '2rem' }}>
+                  All students are already enrolled in this classroom.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {getAvailableStudents(showAddStudentsModal).map((student) => (
+                    <label key={student.id} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.75rem',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      backgroundColor: selectedStudents.includes(student.id) ? '#f0f9ff' : 'white'
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedStudents.includes(student.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedStudents([...selectedStudents, student.id]);
+                          } else {
+                            setSelectedStudents(selectedStudents.filter(id => id !== student.id));
+                          }
+                        }}
+                        style={{ margin: 0 }}
+                      />
+                      <img
+                        src={student.photoURL || '/default-avatar.png'}
+                        alt={student.displayName}
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          objectFit: 'cover'
+                        }}
+                      />
+                      <div>
+                        <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937' }}>
+                          {student.displayName}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                          Level {student.level} • {student.xp} XP
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => {
+                  setShowAddStudentsModal(null);
+                  setSelectedStudents([]);
+                }}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => addStudentsToClassroom(showAddStudentsModal)}
+                disabled={selectedStudents.length === 0}
+                style={{
+                  backgroundColor: selectedStudents.length > 0 ? '#3b82f6' : '#9ca3af',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: selectedStudents.length > 0 ? 'pointer' : 'not-allowed',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Add {selectedStudents.length} Student{selectedStudents.length !== 1 ? 's' : ''}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            maxWidth: '400px',
+            width: '90%',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            textAlign: 'center'
+          }}>
+            <div style={{
+              fontSize: '3rem',
+              marginBottom: '1rem'
+            }}>
+              ⚠️
+            </div>
+            
+            <h3 style={{
+              fontSize: '1.25rem',
+              fontWeight: 'bold',
+              color: '#1f2937',
+              marginBottom: '1rem'
+            }}>
+              Delete Classroom
+            </h3>
+            
+            <p style={{
+              color: '#6b7280',
+              marginBottom: '1.5rem',
+              lineHeight: '1.5'
+            }}>
+              Are you sure you want to delete this classroom? This action cannot be undone.
+            </p>
+            
+            <p style={{
+              color: '#dc2626',
+              fontSize: '0.875rem',
+              marginBottom: '1.5rem',
+              fontStyle: 'italic'
+            }}>
+              All students will be removed from this classroom.
+            </p>
+            
+            <div style={{
+              display: 'flex',
+              gap: '1rem',
+              justifyContent: 'center'
+            }}>
+              <button
+                onClick={() => setShowDeleteConfirm(null)}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              
+              <button
+                onClick={() => deleteClassroom(showDeleteConfirm)}
+                style={{
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Delete Classroom
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Google Classroom Import Modal */}
+      {showGoogleImportModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            maxWidth: '800px',
+            width: '90%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1.5rem'
+            }}>
+              <h3 style={{
+                fontSize: '1.5rem',
+                fontWeight: 'bold',
+                color: '#1f2937',
+                margin: 0
+              }}>
+                📚 Import from Google Classroom
+              </h3>
+              <button
+                onClick={() => {
+                  setShowGoogleImportModal(false);
+                  setSelectedCourse('');
+                  setGoogleStudents([]);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  padding: '0.25rem'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Step 1: Select Course */}
+            <div style={{ marginBottom: '2rem' }}>
+              <h4 style={{
+                fontSize: '1.125rem',
+                fontWeight: '600',
+                color: '#374151',
+                marginBottom: '1rem'
+              }}>
+                Step 1: Select a Google Classroom Course
+              </h4>
+              
+              {googleCourses.length === 0 ? (
+                <div style={{
+                  backgroundColor: '#f3f4f6',
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  textAlign: 'center',
+                  color: '#6b7280'
+                }}>
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+                  <p>Loading Google Classroom courses...</p>
+                  <button
+                    onClick={fetchGoogleCourses}
+                    style={{
+                      backgroundColor: '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.375rem',
+                      padding: '0.5rem 1rem',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      marginTop: '0.5rem'
+                    }}
+                  >
+                    Refresh Courses
+                  </button>
+                </div>
+              ) : (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                  gap: '1rem'
+                }}>
+                  {googleCourses.map((course) => (
+                    <div
+                      key={course.id}
+                      onClick={() => {
+                        setSelectedCourse(course.id);
+                        fetchGoogleStudents(course.id);
+                      }}
+                      style={{
+                        border: selectedCourse === course.id ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                        borderRadius: '0.5rem',
+                        padding: '1rem',
+                        cursor: 'pointer',
+                        backgroundColor: selectedCourse === course.id ? '#eff6ff' : 'white',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      <h5 style={{
+                        fontSize: '1rem',
+                        fontWeight: '600',
+                        color: '#1f2937',
+                        margin: '0 0 0.5rem 0'
+                      }}>
+                        {course.name}
+                      </h5>
+                      {course.section && (
+                        <p style={{
+                          fontSize: '0.875rem',
+                          color: '#6b7280',
+                          margin: '0 0 0.5rem 0'
+                        }}>
+                          Section: {course.section}
+                        </p>
+                      )}
+                      {course.description && (
+                        <p style={{
+                          fontSize: '0.875rem',
+                          color: '#6b7280',
+                          margin: 0,
+                          lineHeight: '1.4'
+                        }}>
+                          {course.description}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Review Students */}
+            {selectedCourse && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h4 style={{
+                  fontSize: '1.125rem',
+                  fontWeight: '600',
+                  color: '#374151',
+                  marginBottom: '1rem'
+                }}>
+                  Step 2: Review Students to Import
+                </h4>
+                
+                {googleStudents.length === 0 ? (
+                  <div style={{
+                    backgroundColor: '#f3f4f6',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    textAlign: 'center',
+                    color: '#6b7280'
+                  }}>
+                    <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>👥</div>
+                    <p>Loading students from selected course...</p>
+                  </div>
+                ) : (
+                  <div style={{
+                    backgroundColor: '#f9fafb',
+                    borderRadius: '0.5rem',
+                    padding: '1rem',
+                    maxHeight: '300px',
+                    overflow: 'auto'
+                  }}>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                      gap: '0.75rem'
+                    }}>
+                      {googleStudents.map((student) => (
+                        <div key={student.profile.id} style={{
+                          backgroundColor: 'white',
+                          borderRadius: '0.375rem',
+                          padding: '0.75rem',
+                          border: '1px solid #e5e7eb',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem'
+                        }}>
+                          <img
+                            src={student.profile.photoUrl || `https://ui-avatars.com/api/?name=${student.profile.name.fullName}&background=4f46e5&color=fff&size=32`}
+                            alt={student.profile.name.fullName}
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '50%',
+                              objectFit: 'cover'
+                            }}
+                          />
+                          <div>
+                            <div style={{
+                              fontSize: '0.875rem',
+                              fontWeight: '500',
+                              color: '#1f2937'
+                            }}>
+                              {student.profile.name.fullName}
+                            </div>
+                            <div style={{
+                              fontSize: '0.75rem',
+                              color: '#6b7280'
+                            }}>
+                              {student.profile.emailAddress}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Import Progress */}
+            {importingStudents && (
+              <div style={{
+                backgroundColor: '#f0f9ff',
+                border: '1px solid #0ea5e9',
+                borderRadius: '0.5rem',
+                padding: '1rem',
+                marginBottom: '1.5rem'
+              }}>
+                <h4 style={{
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  color: '#0ea5e9',
+                  margin: '0 0 0.5rem 0'
+                }}>
+                  Importing Students...
+                </h4>
+                <div style={{
+                  backgroundColor: '#e0f2fe',
+                  borderRadius: '0.25rem',
+                  height: '8px',
+                  marginBottom: '0.5rem'
+                }}>
+                  <div style={{
+                    backgroundColor: '#0ea5e9',
+                    height: '100%',
+                    borderRadius: '0.25rem',
+                    width: `${(importProgress.current / importProgress.total) * 100}%`,
+                    transition: 'width 0.3s ease'
+                  }} />
+                </div>
+                <p style={{
+                  fontSize: '0.875rem',
+                  color: '#0ea5e9',
+                  margin: 0
+                }}>
+                  {importProgress.current} of {importProgress.total} students imported
+                </p>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div style={{
+              display: 'flex',
+              gap: '1rem',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={() => {
+                  setShowGoogleImportModal(false);
+                  setGoogleImportTargetClassroom(null);
+                  setSelectedCourse('');
+                  setGoogleStudents([]);
+                }}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              
+              {selectedCourse && googleStudents.length > 0 && !importingStudents && (
+                <button
+                  onClick={() => importGoogleStudents(googleImportTargetClassroom || '')}
+                  style={{
+                    backgroundColor: '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: '600'
+                  }}
+                >
+                  Import {googleStudents.length} Students
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OAuth Setup Modal */}
+      <OAuthSetupModal
+        isOpen={showOAuthSetupModal}
+        onClose={() => setShowOAuthSetupModal(false)}
+        clientId="281092791460-085tqid3jq8e9llqdmlps0f5d6c835n5.apps.googleusercontent.com"
+      />
+    </div>
+  );
+};
+
+export default ClassroomManagement; 

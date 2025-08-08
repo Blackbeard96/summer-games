@@ -91,26 +91,25 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-xl p-8">
+    <div className="bg-white rounded-xl shadow-xl p-16 mx-12 my-16 max-w-5xl mx-auto">
       {/* Player's Journey Header */}
-      <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 mb-4 rounded-lg text-center font-bold">
-        🏛️ The Player's Journey - Card-Based UI 🏛️
+      <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 mb-6 rounded-lg text-center font-bold">
       </div>
       
-      <div className="mb-8 text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full mb-4">
+      <div className="mb-10 text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full mb-6">
           <span className="text-2xl">🏛️</span>
         </div>
-        <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent mb-3">
+        <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent mb-4">
           The Player's Journey
         </h2>
-        <p className="text-lg text-gray-600 max-w-2xl mx-auto leading-relaxed">
+        <p className="text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">
           Embark on your epic quest through the Nine Knowings Universe. Each chapter reveals new mysteries, challenges, and opportunities for growth.
         </p>
       </div>
 
       {/* Progress Summary Cards - Inline Styles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
         <div style={{ background: 'linear-gradient(135deg, #dbeafe 0%, #c7d2fe 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #93c5fd' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
@@ -165,8 +164,8 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
       </div>
 
       {/* Chapter Cards Grid */}
-      <div className="mb-6">
-        <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+      <div className="mb-8">
+        <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center">
           <span className="mr-2">📚</span>
           Your Journey Chapters
         </h3>
@@ -175,7 +174,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
 
       
       {/* Chapter Cards - Inline Styles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
         {CHAPTERS.map((chapter, index) => {
           const status = getChapterStatus(chapter);
           const progress = getChapterProgress(chapter);

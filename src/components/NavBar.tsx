@@ -173,7 +173,9 @@ const NavBar = () => {
 
   const userNavItems = currentUser ? [
     { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation' },
+    { to: '/squads', label: 'Squads', tooltip: 'Team Management' },
     { to: '/marketplace', label: 'MST MKT', tooltip: 'Artifact Marketplace' },
+    { to: '#', label: '📚 Review Tutorials', tooltip: 'Review Tutorials', isButton: true, onClick: () => (window as any).tutorialTriggers?.showReviewModal?.() },
   ] : [];
 
   const adminNavItems = currentUser?.email === 'edm21179@gmail.com' ? [
@@ -181,33 +183,45 @@ const NavBar = () => {
   ] : [];
 
   return (
-    <nav style={{
-      background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-      color: 'white',
-      padding: isMobile ? '0.75rem' : '1rem',
-      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-      position: 'relative'
+    <nav className="nav" style={{
+      backgroundColor: '#1f2937',
+      padding: isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
+      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+      position: 'sticky',
+      top: 0,
+      zIndex: 50
     }}>
       <div style={{
         maxWidth: '1200px',
         margin: '0 auto',
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
+        alignItems: 'center',
+        justifyContent: 'space-between'
       }}>
-        {/* Logo */}
-        <Link to="/" style={{
-          fontSize: isMobile ? '1.25rem' : '1.5rem',
-          fontWeight: 'bold',
-          color: 'white',
-          textDecoration: 'none',
-          background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 50%, #34d399 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text'
-        }}>
-          🏛️ Xiotein School
-        </Link>
+        {/* Logo/Brand */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{
+            width: isMobile ? '32px' : '40px',
+            height: isMobile ? '32px' : '40px',
+            backgroundColor: '#4f46e5',
+            borderRadius: '0.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontSize: isMobile ? '1rem' : '1.25rem',
+            fontWeight: 'bold'
+          }}>
+            X
+          </div>
+          <span style={{
+            fontSize: isMobile ? '1.125rem' : '1.25rem',
+            fontWeight: 'bold',
+            color: 'white'
+          }}>
+            Xiotein School
+          </span>
+        </div>
 
         {/* Desktop Navigation */}
         {!isMobile && (
@@ -225,7 +239,24 @@ const NavBar = () => {
 
             {userNavItems.map((item) => (
               <div key={item.to} style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                {item.isButton ? (
+                  <button
+                    onClick={item.onClick}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'inherit',
+                      textDecoration: 'none',
+                      cursor: 'pointer',
+                      fontSize: 'inherit',
+                      fontFamily: 'inherit'
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ) : (
+                  <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                )}
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
               </div>
             ))}
@@ -434,7 +465,7 @@ const NavBar = () => {
           )}
 
           {/* User Info & Logout */}
-          {currentUser && (
+          {currentUser ? (
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -442,7 +473,8 @@ const NavBar = () => {
             }}>
               <span style={{ 
                 fontSize: isMobile ? '0.875rem' : '1rem',
-                fontWeight: '500'
+                fontWeight: '500',
+                color: 'white'
               }}>
                 {isMobile ? displayName.substring(0, 8) + '...' : displayName}
               </span>
@@ -466,6 +498,33 @@ const NavBar = () => {
               >
                 {isLoggingOut ? '...' : 'Logout'}
               </button>
+            </div>
+          ) : (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <Link
+                to="/login"
+                style={{
+                  background: 'rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  color: 'white',
+                  padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
+                  borderRadius: '0.25rem',
+                  cursor: 'pointer',
+                  fontSize: isMobile ? '0.75rem' : '0.875rem',
+                  transition: 'all 0.2s',
+                  textDecoration: 'none',
+                  minWidth: isMobile ? '60px' : 'auto',
+                  minHeight: isMobile ? '36px' : 'auto'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+              >
+                Login
+              </Link>
             </div>
           )}
         </div>
@@ -607,6 +666,47 @@ const NavBar = () => {
                     {item.label}
                   </Link>
                 ))}
+              </div>
+            )}
+
+            {/* Login Section for Unauthenticated Users */}
+            {!currentUser && (
+              <div style={{ 
+                borderTop: '1px solid #374151', 
+                paddingTop: '1.5rem' 
+              }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  color: '#9ca3af',
+                  fontWeight: '600',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Account
+                </div>
+                <Link
+                  to="/login"
+                  onClick={closeMobileMenu}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: 'white',
+                    textDecoration: 'none',
+                    padding: '0.875rem 1rem',
+                    borderRadius: '0.5rem',
+                    marginBottom: '0.25rem',
+                    transition: 'all 0.2s ease',
+                    fontSize: '1rem',
+                    fontWeight: '500',
+                    backgroundColor: '#4f46e5',
+                    minHeight: '48px'
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = '#4338ca'}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = '#4f46e5'}
+                >
+                  Login / Sign Up
+                </Link>
               </div>
             )}
           </div>

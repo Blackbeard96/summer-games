@@ -208,6 +208,67 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         return;
       }
 
+      // Update both the legacy system (students collection) and new system (users collection)
+      const studentRefSubmit = doc(db, 'students', currentUser.uid);
+      const userRefSubmit = doc(db, 'users', currentUser.uid);
+      
+      // Update legacy challenges field for compatibility
+      const studentDocSubmit = await getDoc(studentRefSubmit);
+      if (studentDocSubmit.exists()) {
+        const studentData = studentDocSubmit.data();
+        const updatedChallenges = {
+          ...studentData.challenges,
+          [challenge.id]: {
+            ...(studentData.challenges?.[challenge.id] || {}),
+            submitted: true,
+            status: 'pending',
+            completed: false
+          }
+        };
+        
+        await updateDoc(studentRefSubmit, {
+          challenges: updatedChallenges
+        });
+      }
+      
+      // Update new chapter system for ChallengeTracker display
+      const userDocSubmit = await getDoc(userRefSubmit);
+      if (userDocSubmit.exists()) {
+        const userData = userDocSubmit.data();
+        
+        // Debug logging
+        console.log('ChapterDetail: Updating user chapters system:', {
+          chapterId: chapter.id,
+          chapterIdType: typeof chapter.id,
+          challengeId: challenge.id,
+          challengeIdType: typeof challenge.id,
+          currentChapters: userData.chapters,
+          currentChapterData: userData.chapters?.[chapter.id],
+          chapterKeys: Object.keys(userData.chapters || {})
+        });
+        
+        const updatedChapters = {
+          ...userData.chapters,
+          [chapter.id]: {
+            ...userData.chapters?.[chapter.id],
+            challenges: {
+              ...userData.chapters?.[chapter.id]?.challenges,
+              [challenge.id]: {
+                submitted: true,
+                status: 'pending',
+                isCompleted: false
+              }
+            }
+          }
+        };
+        
+        console.log('ChapterDetail: Updated chapters data:', updatedChapters);
+        
+        await updateDoc(userRefSubmit, {
+          chapters: updatedChapters
+        });
+      }
+
       // Submit challenge for admin approval
       await addDoc(collection(db, 'challengeSubmissions'), {
         userId: currentUser.uid,

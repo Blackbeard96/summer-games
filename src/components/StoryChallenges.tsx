@@ -47,6 +47,8 @@ const StoryChallenges = () => {
         checkAndCompleteProfileChallenge(userData);
         // Check and auto-complete manifest declaration challenge
         checkAndCompleteManifestChallenge(userData);
+        
+        // Chapter progression is now handled by a dedicated useEffect
       }
     });
 
@@ -68,6 +70,8 @@ const StoryChallenges = () => {
             manifest: studentData.manifest
           });
         }
+        
+        // Chapter progression is now handled by a dedicated useEffect
       }
     });
 
@@ -122,6 +126,24 @@ const StoryChallenges = () => {
       checkAndCompleteManifestChallenge(userProgress);
     }
   }, [currentUser, userProgress]);
+
+  // Effect to check chapter progression when userProgress changes
+  useEffect(() => {
+    if (!currentUser || !userProgress || !userProgress.chapters) return;
+
+    console.log('User progress updated, checking chapter progression...');
+    
+    // Check all chapters for progression
+    Object.keys(userProgress.chapters).forEach(chapterId => {
+      const chapterNum = parseInt(chapterId);
+      if (!isNaN(chapterNum)) {
+        // Use setTimeout to ensure this runs after the state is fully updated
+        setTimeout(() => {
+          checkAndProgressChapter(chapterNum);
+        }, 200);
+      }
+    });
+  }, [userProgress]);
 
   // Function to check and auto-complete profile update challenge
   const checkAndCompleteProfileChallenge = async (userData: any) => {
@@ -200,6 +222,9 @@ const StoryChallenges = () => {
         
         // Create notification instead of alert
         await createChallengeNotification('Update Your Profile', 15, 5, true);
+        
+        // Check if Chapter 1 is now complete and progress to Chapter 2
+        await checkAndProgressChapter(1);
         
         // Show a brief success message only once per session
         if (!sessionStorage.getItem('profileAutoCompleteAlertShown')) {
@@ -299,6 +324,9 @@ const StoryChallenges = () => {
         // Create notification instead of alert
         await createChallengeNotification('Declare Your Manifest', 20, 8, true);
         
+        // Check if Chapter 1 is now complete and progress to Chapter 2
+        await checkAndProgressChapter(1);
+        
         // Show a brief success message only once per session
         if (!sessionStorage.getItem('manifestAutoCompleteAlertShown')) {
           alert('✅ Manifest challenge auto-completed! Check your notifications for details.');
@@ -313,20 +341,24 @@ const StoryChallenges = () => {
   };
 
   // Manual trigger function for testing
-  const manualCheckProfileCompletion = () => {
+  const manualCheckProfileCompletion = async () => {
     if (userProgress) {
       console.log('Manual profile completion check triggered');
-      checkAndCompleteProfileChallenge(userProgress);
+      await checkAndCompleteProfileChallenge(userProgress);
+      // Check for chapter progression after manual completion
+      await checkAndProgressChapter(1);
     }
   };
 
   // Manual trigger function for manifest testing
-  const manualCheckManifestCompletion = () => {
+  const manualCheckManifestCompletion = async () => {
     if (userProgress) {
       console.log('Manual manifest completion check triggered');
       console.log('Current userProgress:', userProgress);
       console.log('Manifest data:', userProgress.manifest);
-      checkAndCompleteManifestChallenge(userProgress);
+      await checkAndCompleteManifestChallenge(userProgress);
+      // Check for chapter progression after manual completion
+      await checkAndProgressChapter(1);
     }
   };
 
@@ -355,6 +387,63 @@ const StoryChallenges = () => {
     
     console.log('hasManifest:', hasManifest);
     console.log('=== END DEBUG INFO ===');
+  };
+
+  // Function to manually complete all Chapter 1 challenges for testing
+  const completeAllChapter1Challenges = async () => {
+    if (!currentUser || !userProgress) return;
+    
+    console.log('=== COMPLETING ALL CHAPTER 1 CHALLENGES ===');
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      
+      // Complete all Chapter 1 challenges
+      const updatedChapters = {
+        ...currentData.chapters,
+        [1]: {
+          ...currentData.chapters?.[1],
+          challenges: {
+            ...currentData.chapters?.[1]?.challenges,
+            'ch1-update-profile': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: true
+            },
+            'ch1-declare-manifest': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: true
+            },
+            'ch1-artifact-identification': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: true
+            },
+            'ch1-artifact-challenge': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: true
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      console.log('All Chapter 1 challenges completed!');
+      alert('✅ All Chapter 1 challenges have been completed! Check if Chapter 2 activates.');
+      
+      // Check for chapter progression
+      await checkAndProgressChapter(1);
+      
+    } catch (error) {
+      console.error('Error completing Chapter 1 challenges:', error);
+      alert('❌ Error completing challenges. Check console for details.');
+    }
   };
 
   // Function to create notifications for challenge completion
@@ -471,6 +560,11 @@ const StoryChallenges = () => {
 
         // Create notification for challenge submission
         await createChallengeNotification(challengeName, 15, 8, false);
+        
+        // Check if current chapter is now complete and progress to next chapter
+        if (currentChapter) {
+          await checkAndProgressChapter(currentChapter.id);
+        }
       }
 
       setSelectedFiles(prev => ({ ...prev, [challengeName]: null }));
@@ -546,6 +640,102 @@ const StoryChallenges = () => {
     return Object.values(userProgress.chapters).filter((chapter: any) => 
       chapter.isCompleted
     ).length;
+  };
+
+  // Function to check if a chapter is complete and automatically progress to next chapter
+  const checkAndProgressChapter = async (chapterId: number) => {
+    console.log(`=== CHECKING CHAPTER ${chapterId} PROGRESSION ===`);
+    console.log('Current user:', currentUser?.uid);
+    console.log('User progress:', userProgress);
+    console.log('Chapters data:', userProgress?.chapters);
+    
+    if (!currentUser || !userProgress?.chapters) {
+      console.log('Missing currentUser or userProgress.chapters');
+      return;
+    }
+    
+    const chapterProgress = userProgress.chapters[chapterId];
+    console.log(`Chapter ${chapterId} progress:`, chapterProgress);
+    
+    if (!chapterProgress || chapterProgress.isCompleted) {
+      console.log(`Chapter ${chapterId} not found or already completed`);
+      return;
+    }
+    
+    const chapter = CHAPTERS.find(c => c.id === chapterId);
+    console.log(`Chapter ${chapterId} definition:`, chapter);
+    
+    if (!chapter) {
+      console.log(`Chapter ${chapterId} not found in CHAPTERS`);
+      return;
+    }
+    
+    // Check if all challenges in the chapter are completed
+    const completedChallenges = chapter.challenges.filter(challenge => 
+      chapterProgress.challenges?.[challenge.id]?.isCompleted
+    );
+    const allChallengesCompleted = completedChallenges.length === chapter.challenges.length;
+    
+    console.log(`Chapter ${chapterId} challenges:`, chapter.challenges);
+    console.log(`Chapter ${chapterId} completed challenges:`, completedChallenges);
+    console.log(`All challenges completed:`, allChallengesCompleted);
+    console.log(`Chapter already completed:`, chapterProgress.isCompleted);
+    
+    if (allChallengesCompleted && !chapterProgress.isCompleted) {
+      console.log(`Chapter ${chapterId} is complete! Progressing to next chapter...`);
+      
+      const userRef = doc(db, 'users', currentUser.uid);
+      
+      try {
+        // Mark current chapter as completed
+        await updateDoc(userRef, {
+          [`chapters.${chapterId}.isCompleted`]: true,
+          [`chapters.${chapterId}.completionDate`]: new Date(),
+          [`chapters.${chapterId}.isActive`]: false
+        });
+        
+        // Activate next chapter if available
+        const nextChapterId = chapterId + 1;
+        const nextChapter = CHAPTERS.find(c => c.id === nextChapterId);
+        
+        if (nextChapter) {
+          await updateDoc(userRef, {
+            [`chapters.${nextChapterId}.isActive`]: true,
+            [`chapters.${nextChapterId}.unlockDate`]: new Date()
+          });
+          
+          console.log(`Chapter ${nextChapterId} activated!`);
+          
+          // Create notification for chapter completion
+          await createChallengeNotification(
+            `Chapter ${chapterId} Complete!`,
+            0,
+            0,
+            true
+          );
+          
+          // Add specific chapter unlock notification
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'chapter_unlocked',
+            message: `🎉 Chapter ${chapterId} Complete! Chapter ${nextChapterId} is now unlocked!`,
+            chapterId: nextChapterId,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+          
+          // Show success message to user
+          alert(`🎉 Chapter ${chapterId} Complete! Chapter ${nextChapterId} is now unlocked!`);
+        } else {
+          console.log(`No next chapter available. Chapter ${chapterId} is the final chapter.`);
+        }
+      } catch (error) {
+        console.error('Error progressing to next chapter:', error);
+      }
+    } else {
+      console.log(`Chapter ${chapterId} not complete yet. Progress: ${chapter.challenges.filter(challenge => 
+        chapterProgress.challenges?.[challenge.id]?.isCompleted
+      ).length}/${chapter.challenges.length} challenges completed.`);
+    }
   };
 
   return (
@@ -745,7 +935,7 @@ const StoryChallenges = () => {
                 const classroomAssignment = chapterClassroomAssignments[challenge.id];
                 
                 return (
-                  <div key={challenge.id} style={{ 
+                  <div key={challenge.id} className={`challenge-${challenge.id.replace('ch1-', '')}`} style={{ 
                     padding: '1rem', 
                     backgroundColor: isCompleted ? '#f0fdf4' : '#f9fafb',
                     border: isCompleted ? '1px solid #22c55e' : '1px solid #e5e7eb',
@@ -798,7 +988,7 @@ const StoryChallenges = () => {
                           {challenge.description}
                         </p>
                         {challenge.id === 'ch1-update-profile' && !isCompleted && (
-                          <div style={{
+                          <div className="challenge-profile" style={{
                             padding: '0.75rem',
                             backgroundColor: '#dbeafe',
                             border: '1px solid #3b82f6',
@@ -1084,7 +1274,7 @@ const StoryChallenges = () => {
 
                     {/* Manifest challenge - NO file upload, only status tracking */}
                     {!isCompleted && challenge.id === 'ch1-declare-manifest' && (
-                      <div style={{
+                      <div className="challenge-manifest" style={{
                         padding: '1rem',
                         backgroundColor: '#f0fdf4',
                         border: '1px solid #22c55e',
@@ -1202,10 +1392,44 @@ const StoryChallenges = () => {
                             cursor: 'pointer',
                             fontSize: '0.75rem',
                             fontWeight: '500',
-                            width: '100%'
+                            width: '100%',
+                            marginBottom: '0.5rem'
                           }}
                         >
                           🔍 Debug Manifest Data (Check Console)
+                        </button>
+                        <button
+                          onClick={() => checkAndProgressChapter(1)}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#8b5cf6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%',
+                            marginBottom: '0.5rem'
+                          }}
+                        >
+                          🚀 Test Chapter 1 Progression (Check Console)
+                        </button>
+                        <button
+                          onClick={completeAllChapter1Challenges}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#dc2626',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%'
+                          }}
+                        >
+                          ⚡ Complete All Chapter 1 Challenges (TEST)
                         </button>
                       </div>
                     )}

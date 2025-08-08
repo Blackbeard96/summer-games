@@ -104,6 +104,68 @@ interface GoogleClassroomAssignment {
 
 const ChallengeTracker = () => {
   const { currentUser } = useAuth();
+  
+  // Helper function to update the new chapter system after legacy challenge submission
+  const updateChapterSystem = async (challengeName: string, submitted: boolean, completed: boolean = false) => {
+    if (!currentUser) return;
+    
+    const currentChapter = getCurrentChapter();
+    if (!currentChapter) return;
+    
+    const userRef = doc(db, 'users', currentUser.uid);
+    const userDoc = await getDoc(userRef);
+    if (userDoc.exists()) {
+      const userData = userDoc.data();
+      const updatedChapters = {
+        ...userData.chapters,
+        [currentChapter.id]: {
+          ...userData.chapters?.[currentChapter.id],
+          challenges: {
+            ...userData.chapters?.[currentChapter.id]?.challenges,
+            [challengeName]: {
+              submitted: submitted,
+              status: submitted && !completed ? 'pending' : completed ? 'completed' : 'not_started',
+              isCompleted: completed
+            }
+          }
+        }
+      };
+      
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+    }
+  };
+  
+  // One-time sync function to fix existing submissions
+  const syncExistingSubmissions = async () => {
+    if (!currentUser || !userProgress) {
+      console.log('Sync skipped: no currentUser or userProgress');
+      return;
+    }
+    
+    console.log('Running sync check...');
+    console.log('User progress:', userProgress);
+    console.log('Legacy challenges:', userProgress.challenges);
+    console.log('New chapters:', userProgress.chapters);
+    
+    // Check if ch1-artifact-challenge is submitted in legacy but not in new system
+    const legacyChallenge = userProgress.challenges?.['ch1-artifact-challenge'];
+    const newChallenge = userProgress.chapters?.[1]?.challenges?.['ch1-artifact-challenge'];
+    
+    console.log('Legacy ch1-artifact-challenge:', legacyChallenge);
+    console.log('New ch1-artifact-challenge:', newChallenge);
+    
+    if (legacyChallenge?.submitted && !newChallenge?.submitted) {
+      console.log('Syncing ch1-artifact-challenge to new chapter system...');
+      await updateChapterSystem('ch1-artifact-challenge', true, legacyChallenge.completed || false);
+    } else {
+      console.log('No sync needed or already synced');
+    }
+  };
+  
+
+
   const [challenges, setChallenges] = useState<{[key: string]: ChallengeData}>({});
   const [xp, setXP] = useState(0);
   const [level, setLevel] = useState(1);
@@ -116,6 +178,13 @@ const ChallengeTracker = () => {
   const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [userProgress, setUserProgress] = useState<any>(null);
+  
+  // Run sync when userProgress loads
+  React.useEffect(() => {
+    if (userProgress) {
+      syncExistingSubmissions();
+    }
+  }, [userProgress]);
 
   // Elemental manifestation types for new students
   const elementalTypes: ElementalType[] = [
@@ -337,24 +406,27 @@ const ChallengeTracker = () => {
         [challengeName]: {
           ...challenge,
           file: downloadURL,
-          completed: true
+          submitted: true,
+          status: 'pending',
+          completed: false
         }
       };
       
       setChallenges(updated);
-      const newXP = challenge.completed ? xp : xp + xpReward;
-      const newPP = challenge.completed ? powerPoints : powerPoints + ppReward;
-      setXP(newXP);
-      setPowerPoints(newPP);
-      const newLevel = Math.floor(newXP / 50) + 1;
-      setLevel(newLevel);
-      updateUnlocks(newLevel);
+      // Don't award XP/PP until challenge is approved by admin
+      // const newXP = challenge.completed ? xp : xp + xpReward;
+      // const newPP = challenge.completed ? powerPoints : powerPoints + ppReward;
+      // setXP(newXP);
+      // setPowerPoints(newPP);
+      // const newLevel = Math.floor(newXP / 50) + 1;
+      // setLevel(newLevel);
+      // updateUnlocks(newLevel);
       
       const userRef = doc(db, 'students', currentUser.uid);
       await updateDoc(userRef, { 
-        challenges: updated, 
-        xp: newXP, 
-        powerPoints: newPP
+        challenges: updated
+        // xp: newXP, 
+        // powerPoints: newPP
       });
 
       // Only add to challengeSubmissions if not already completed
@@ -907,6 +979,9 @@ const ChallengeTracker = () => {
         const currentChapter = getCurrentChapter();
         if (!currentChapter) return null;
         
+        // Debug current chapter
+        console.log('ChallengeTracker: Current chapter:', currentChapter);
+        
         return (
           <div style={{ marginBottom: '2rem' }}>
             <h3 style={{ 
@@ -927,14 +1002,25 @@ const ChallengeTracker = () => {
               {currentChapter.challenges.map((challenge) => {
                 const challengeData = userProgress?.chapters?.[currentChapter.id]?.challenges?.[challenge.id] || {};
                 const isCompleted = challengeData.isCompleted;
+                const isSubmitted = challengeData.submitted && !isCompleted;
+                
+                // Debug logging for challenge status
+                if (challenge.id === 'ch1-artifact-challenge') {
+                  console.log(`ChallengeTracker: ${challenge.id} status:`, {
+                    challengeData,
+                    isCompleted,
+                    isSubmitted,
+                    chapterData: userProgress?.chapters?.[currentChapter.id]?.challenges?.[challenge.id]
+                  });
+                }
                 const hasFile = !!challengeData.file;
                 const classroomAssignment = chapterClassroomAssignments[challenge.id];
                 
                 return (
                   <div key={challenge.id} style={{ 
                     padding: '1rem', 
-                    backgroundColor: isCompleted ? '#f0fdf4' : '#f9fafb',
-                    border: isCompleted ? '1px solid #22c55e' : '1px solid #e5e7eb',
+                    backgroundColor: isCompleted ? '#f0fdf4' : isSubmitted ? '#fef3c7' : '#f9fafb',
+                    border: isCompleted ? '1px solid #22c55e' : isSubmitted ? '1px solid #f59e0b' : '1px solid #e5e7eb',
                     borderRadius: '0.5rem',
                     transition: 'all 0.3s ease'
                   }}>
@@ -942,7 +1028,7 @@ const ChallengeTracker = () => {
                       <div style={{ 
                         width: '20px', 
                         height: '20px', 
-                        backgroundColor: isCompleted ? '#22c55e' : '#e5e7eb', 
+                        backgroundColor: isCompleted ? '#22c55e' : isSubmitted ? '#f59e0b' : '#e5e7eb', 
                         borderRadius: '50%',
                         display: 'flex',
                         alignItems: 'center',
@@ -951,14 +1037,14 @@ const ChallengeTracker = () => {
                         fontSize: '12px',
                         fontWeight: 'bold'
                       }}>
-                        {isCompleted ? '✓' : '○'}
+                        {isCompleted ? '✓' : isSubmitted ? '⏳' : '○'}
                       </div>
                       <div style={{ flex: 1 }}>
                         <h4 style={{ 
                           fontSize: '1rem', 
                           fontWeight: 'bold', 
                           marginBottom: '0.5rem',
-                          color: isCompleted ? '#22c55e' : '#1f2937'
+                          color: isCompleted ? '#22c55e' : isSubmitted ? '#d97706' : '#1f2937'
                         }}>
                           {challenge.title}
                         </h4>
@@ -970,6 +1056,22 @@ const ChallengeTracker = () => {
                         }}>
                           {challenge.description}
                         </p>
+                        
+                        {/* Status Badge */}
+                        {isSubmitted && (
+                          <div style={{ 
+                            display: 'inline-block',
+                            padding: '0.25rem 0.5rem',
+                            backgroundColor: '#f59e0b',
+                            color: 'white',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            marginBottom: '0.5rem'
+                          }}>
+                            ⏳ Submitted for Review
+                          </div>
+                        )}
                         
                         {/* Google Classroom Assignment Information */}
                         {classroomAssignment && (
@@ -1113,7 +1215,7 @@ const ChallengeTracker = () => {
                       </div>
                     </div>
 
-                    {!isCompleted && (
+                    {!isCompleted && !isSubmitted && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -1154,7 +1256,7 @@ const ChallengeTracker = () => {
                       </div>
                     )}
 
-                    {hasFile && (
+                    {(hasFile && (isCompleted || isSubmitted)) && (
                       <div style={{ 
                         display: 'flex', 
                         alignItems: 'center', 
@@ -1178,22 +1280,24 @@ const ChallengeTracker = () => {
                         >
                           View Manifestation
                         </a>
-                        <button
-                          type="button"
-                          style={{ 
-                            padding: '0.25rem 0.5rem', 
-                            background: '#dc2626', 
-                            color: 'white', 
-                            border: 'none', 
-                            borderRadius: '0.25rem', 
-                            cursor: 'pointer',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold'
-                          }}
-                          onClick={() => handleRemoveSubmission(challenge.id)}
-                        >
-                          Remove
-                        </button>
+                        {!isCompleted && (
+                          <button
+                            type="button"
+                            style={{ 
+                              padding: '0.25rem 0.5rem', 
+                              background: '#dc2626', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: '0.25rem', 
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: 'bold'
+                            }}
+                            onClick={() => handleRemoveSubmission(challenge.id)}
+                          >
+                            Remove
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

@@ -8,10 +8,16 @@ import PlayerCard from '../components/PlayerCard';
 import ChapterAssignmentManager from '../components/ChapterAssignmentManager';
 import GoogleClassroomIntegration from '../components/GoogleClassroomIntegration';
 import { getLevelFromXP } from '../utils/leveling';
+import { MANIFESTS } from '../types/manifest';
+import { CHAPTERS } from '../types/chapters';
+import { useLevelUp } from '../context/LevelUpContext';
+import ClassroomManagement from '../components/ClassroomManagement';
 
 interface ChallengeData {
   completed?: boolean;
   file?: string;
+  submitted?: boolean;
+  status?: string;
 }
 
 interface Student {
@@ -23,7 +29,8 @@ interface Student {
   challenges?: { [name: string]: ChallengeData };
   photoURL?: string; // Added for profile pictures
   manifestationType?: string;
-  manifest?: string;
+  manifest?: string | any; // Can be string or PlayerManifest object
+  style?: string;
   rarity?: number;
   bio?: string;
   cardBgColor?: string;
@@ -33,6 +40,7 @@ interface Student {
 }
 
 const AdminPanel: React.FC = () => {
+  const { showLevelUpNotification } = useLevelUp();
   const [students, setStudents] = useState<Student[]>([]);
   const [editingStudent, setEditingStudent] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ displayName: '', email: '' });
@@ -40,7 +48,7 @@ const AdminPanel: React.FC = () => {
   const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -50,6 +58,88 @@ const AdminPanel: React.FC = () => {
   const [rowLoading, setRowLoading] = useState<{ [id: string]: boolean }>({});
   const [rowError, setRowError] = useState<{ [id: string]: string }>({});
   const [pendingSubmissionCount, setPendingSubmissionCount] = useState(0);
+  const [viewingFile, setViewingFile] = useState<{ url: string; name: string; type: string } | null>(null);
+
+  // Helper function to get manifest display name
+  const getManifestDisplayName = (student: Student): string => {
+    // If student.manifest is an object with manifestId, look it up
+    if (student.manifest && typeof student.manifest === 'object' && 'manifestId' in student.manifest) {
+      const manifest = MANIFESTS.find(m => m.id === (student.manifest as any).manifestId);
+      return manifest ? manifest.name : 'Unknown Manifest';
+    }
+    
+    // If student.manifest is a string, look it up directly
+    if (typeof student.manifest === 'string') {
+      const manifest = MANIFESTS.find(m => m.id === student.manifest || m.name === student.manifest);
+      return manifest ? manifest.name : student.manifest;
+    }
+    
+    // Fall back to other properties
+    return student.manifestationType || student.style || 'None';
+  };
+
+  // Helper function to get chapter progress with pending submissions
+  const getChapterProgress = (student: Student) => {
+    const challenges = student.challenges || {};
+    
+    // Determine current chapter based on storyChapter property or completed challenges
+    let currentChapter = student.storyChapter || 1;
+    
+    // Debug logging
+    console.log(`Getting chapter progress for student ${student.id}:`, {
+      storyChapter: student.storyChapter,
+      currentChapter,
+      totalChallenges: Object.keys(challenges).length,
+      completedChallenges: Object.values(challenges).filter((ch: any) => ch?.completed).length
+    });
+    
+    // Find the chapter data
+    const chapter = CHAPTERS.find(ch => ch.id === currentChapter);
+    if (!chapter) {
+      console.warn(`Chapter ${currentChapter} not found for student ${student.id}`);
+      return {
+        currentChapter: 1,
+        chapterTitle: "Unknown Chapter",
+        completed: 0,
+        total: 0,
+        challenges: []
+      };
+    }
+    
+    // Calculate progress within the chapter
+    const chapterChallenges = chapter.challenges.map(challenge => {
+      const isCompleted = challenges[challenge.id]?.completed || false;
+      const isSubmitted = challenges[challenge.id]?.submitted || false;
+      const status = challenges[challenge.id]?.status || 'not_started';
+      
+      return {
+        id: challenge.id,
+        title: challenge.title,
+        completed: isCompleted,
+        submitted: isSubmitted,
+        status: status,
+        isPending: isSubmitted && !isCompleted && status === 'pending'
+      };
+    });
+    
+    const completedCount = chapterChallenges.filter(c => c.completed).length;
+    
+    console.log(`Chapter ${currentChapter} progress for student ${student.id}:`, {
+      completed: completedCount,
+      total: chapterChallenges.length,
+      challengeStatus: chapterChallenges.map(ch => 
+        `${ch.title}: ${ch.completed ? '✅' : ch.isPending ? '⏳' : '❌'}`
+      ).join(', ')
+    });
+    
+    return {
+      currentChapter: chapter.id,
+      chapterTitle: chapter.title,
+      completed: completedCount,
+      total: chapterChallenges.length,
+      challenges: chapterChallenges
+    };
+  };
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -167,8 +257,40 @@ const AdminPanel: React.FC = () => {
   const handleViewFile = (fileUrl: string, fileName: string = 'Submitted File') => {
     console.log('handleViewFile called with:', { fileUrl, fileName });
     
-    // Open file in new tab to avoid CORS issues
-    window.open(fileUrl, '_blank', 'noopener,noreferrer');
+    // Detect file type based on URL and filename
+    let fileType = 'unknown';
+    
+    // Check URL for MIME type hints
+    if (fileUrl.includes('image/') || fileUrl.includes('image%2F')) {
+      fileType = 'image';
+    } else if (fileUrl.includes('application/pdf') || fileUrl.includes('application%2Fpdf')) {
+      fileType = 'pdf';
+    } else {
+      // Check file extension
+      const extension = fileName.split('.').pop()?.toLowerCase();
+      if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(extension || '')) {
+        fileType = 'image';
+      } else if (['pdf'].includes(extension || '')) {
+        fileType = 'pdf';
+      } else if (['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'html', 'css'].includes(extension || '')) {
+        fileType = 'text';
+      } else if (['stl', 'obj', 'fbx', 'dae'].includes(extension || '')) {
+        fileType = '3d';
+      } else {
+        // Try to detect if it's an image by attempting to load it
+        const img = new Image();
+        img.onload = () => {
+          setViewingFile({ url: fileUrl, name: fileName, type: 'image' });
+        };
+        img.onerror = () => {
+          setViewingFile({ url: fileUrl, name: fileName, type: 'unknown' });
+        };
+        img.src = fileUrl;
+        return; // Exit early, will set state in onload/onerror
+      }
+    }
+    
+    setViewingFile({ url: fileUrl, name: fileName, type: fileType });
   };
 
   const toggleChallengeCompletion = async (studentId: string, challenge: string) => {
@@ -503,6 +625,12 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  // Test level-up notification
+  const testLevelUpNotification = () => {
+    // Test level up from Level 1 to Level 2 (0 XP to 100 XP)
+    showLevelUpNotification(100, 0);
+  };
+
   // Approve submission handler
   const handleApprove = async (sub: any) => {
     setRowLoading(prev => ({ ...prev, [sub.id]: true }));
@@ -549,9 +677,21 @@ const AdminPanel: React.FC = () => {
           powerPoints: newPP
         });
         
+        // Also update legacy challenges field for profile display compatibility
+        const updatedLegacyChallenges = {
+          ...studentData.challenges,
+          [sub.challengeId]: {
+            ...(studentData.challenges?.[sub.challengeId] || {}),
+            completed: true,
+            submitted: true,
+            status: 'approved'
+          }
+        };
+        
         await updateDoc(studentRef, {
           xp: (studentData.xp || 0) + (sub.xpReward || 0),
-          powerPoints: (studentData.powerPoints || 0) + (sub.ppReward || 0)
+          powerPoints: (studentData.powerPoints || 0) + (sub.ppReward || 0),
+          challenges: updatedLegacyChallenges
         });
         
         // Check if all challenges in chapter are completed
@@ -573,6 +713,20 @@ const AdminPanel: React.FC = () => {
               [`chapters.${nextChapter}.isActive`]: true,
               [`chapters.${nextChapter}.unlockDate`]: new Date()
             });
+            
+            // Update storyChapter in students collection for profile display
+            await updateDoc(studentRef, {
+              storyChapter: nextChapter
+            });
+            
+            // Add notification for chapter unlock
+            await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+              type: 'chapter_unlocked',
+              message: `🎉 Chapter ${sub.chapterId} Complete! Chapter ${nextChapter} is now unlocked!`,
+              chapterId: nextChapter,
+              timestamp: serverTimestamp(),
+              read: false
+            });
           }
         }
       } else {
@@ -585,17 +739,47 @@ const AdminPanel: React.FC = () => {
           challenges[sub.challengeId] = {
             ...(challenges[sub.challengeId] || {}),
             completed: true,
+            submitted: true,
+            status: 'approved',
             file: sub.fileUrl
           };
           const xpReward = sub.xpReward || 10;
           const ppReward = sub.ppReward || 5;
           const newXP = (studentData.xp || 0) + xpReward;
           const newPP = (studentData.powerPoints || 0) + ppReward;
-          await updateDoc(studentRef, {
+          
+          // Check if this challenge completion should advance to next chapter
+          const currentChapter = studentData.storyChapter || 1;
+          const chapter = CHAPTERS.find(ch => ch.id === currentChapter);
+          let updateData: any = {
             challenges,
             xp: newXP,
             powerPoints: newPP
-          });
+          };
+          
+          if (chapter) {
+            // Check if all chapter challenges are now completed
+            const chapterChallengeIds = chapter.challenges.map(ch => ch.id);
+            const completedChapterChallenges = chapterChallengeIds.filter(id => 
+              challenges[id]?.completed || id === sub.challengeId
+            );
+            
+            // If all chapter challenges are completed, advance to next chapter
+            if (completedChapterChallenges.length === chapterChallengeIds.length && currentChapter < 9) {
+              updateData.storyChapter = currentChapter + 1;
+              
+              // Add notification for chapter completion
+              await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+                type: 'chapter_unlocked',
+                message: `🎉 Chapter ${currentChapter} Complete! Chapter ${currentChapter + 1} is now unlocked!`,
+                chapterId: currentChapter + 1,
+                timestamp: serverTimestamp(),
+                read: false
+              });
+            }
+          }
+          
+          await updateDoc(studentRef, updateData);
         }
       }
       
@@ -681,6 +865,21 @@ const AdminPanel: React.FC = () => {
             }}
           >
             Fix User Names
+          </button>
+          <button
+            onClick={testLevelUpNotification}
+            style={{
+              backgroundColor: '#f59e0b',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            Test Level Up
           </button>
         </div>
       </div>
@@ -797,6 +996,36 @@ const AdminPanel: React.FC = () => {
         >
           Google Classroom
         </button>
+        <button
+          onClick={() => setActiveTab('classroom-management')}
+          style={{
+            backgroundColor: activeTab === 'classroom-management' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'classroom-management' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          Classroom Management
+        </button>
+        <button
+          onClick={() => setActiveTab('manifests')}
+          style={{
+            backgroundColor: activeTab === 'manifests' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'manifests' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          Manifests
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -807,6 +1036,89 @@ const AdminPanel: React.FC = () => {
         <ChapterAssignmentManager />
       ) : activeTab === 'classroom' ? (
         <GoogleClassroomIntegration />
+      ) : activeTab === 'classroom-management' ? (
+        <ClassroomManagement />
+      ) : activeTab === 'manifests' ? (
+        <div style={{
+          background: '#f8fafc',
+          borderRadius: '0.75rem',
+          padding: '2rem',
+          minHeight: '300px',
+          color: '#374151',
+          border: '1px solid #e5e7eb',
+          marginBottom: '2rem'
+        }}>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>All Manifests</h2>
+          <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
+            View all available manifests in the Nine Knowings Universe and their details.
+          </p>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+            {MANIFESTS.map((manifest) => (
+              <div key={manifest.id} style={{
+                background: 'white',
+                borderRadius: '0.75rem',
+                padding: '1.5rem',
+                border: '1px solid #e5e7eb',
+                boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+                  <span style={{ fontSize: '2rem', marginRight: '0.75rem' }}>{manifest.icon}</span>
+                  <div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: manifest.color, margin: 0 }}>
+                      {manifest.name}
+                    </h3>
+                    <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
+                      ID: {manifest.id}
+                    </p>
+                  </div>
+                </div>
+                
+                <p style={{ color: '#374151', marginBottom: '1rem', lineHeight: '1.5' }}>
+                  {manifest.description}
+                </p>
+                
+                <div style={{ marginBottom: '1rem' }}>
+                  <strong style={{ color: '#374151' }}>Catalyst:</strong> {manifest.catalyst}
+                </div>
+                
+                <div style={{ marginBottom: '1rem' }}>
+                  <strong style={{ color: '#374151' }}>Signature Move:</strong> {manifest.signatureMove}
+                </div>
+                
+                <div>
+                  <strong style={{ color: '#374151' }}>Levels:</strong>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    {manifest.levels.map((level) => (
+                      <div key={level.level} style={{
+                        background: level.unlocked ? '#f0f9ff' : '#f3f4f6',
+                        border: `1px solid ${level.unlocked ? '#0ea5e9' : '#d1d5db'}`,
+                        borderRadius: '0.375rem',
+                        padding: '0.75rem',
+                        marginBottom: '0.5rem'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                          <span style={{ fontWeight: 'bold', color: level.unlocked ? '#0ea5e9' : '#6b7280' }}>
+                            Level {level.level}: {level.scale}
+                          </span>
+                          <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                            {level.xpRequired} XP
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: '0.25rem 0' }}>
+                          {level.description}
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#059669', fontStyle: 'italic', margin: 0 }}>
+                          Example: {level.example}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : activeTab === 'submissions' ? (
         <>
           <div style={{
@@ -872,101 +1184,31 @@ const AdminPanel: React.FC = () => {
                           {sub.submissionType === 'chapter_challenge' ? (
                             <span style={{ color: '#10b981', fontWeight: 'bold' }}>Chapter Challenge</span>
                           ) : sub.fileUrl ? (
-                            <a
-                              href={sub.fileUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download={sub.fileName || 'submitted-file'}
-                              onClick={async (e) => {
-                                // Force download for binary files like .STL
-                                console.log('=== DOWNLOAD DEBUG START ===');
-                                console.log('Button clicked, fileUrl:', sub.fileUrl);
-                                
-                                // Extract filename from URL if not available
-                                let fileName = sub.fileName;
-                                if (!fileName && sub.fileUrl) {
-                                  // Try to extract filename from the URL path
-                                  const urlPath = sub.fileUrl.split('?')[0]; // Remove query parameters
-                                  const pathParts = urlPath.split('/');
-                                  fileName = pathParts[pathParts.length - 1];
-                                  
-                                  // If it's still not a proper filename, use the challenge ID
-                                  if (!fileName || fileName.includes('%')) {
-                                    fileName = `${sub.challengeId || sub.challengeName || 'submission'}.stl`;
-                                  }
-                                }
-                                
-                                console.log('Final filename:', fileName);
-                                
-                                e.preventDefault();
-                                
-                                // Show helpful message to user with copy-to-clipboard option
-                                const message = `📁 DOWNLOADING 3D MODEL FILE
-
-✅ The file is downloading now...
-⚠️  IMPORTANT: Due to browser security, it may download without the .stl extension.
-
-📝 AFTER DOWNLOAD:
-1. Find the downloaded file (usually in Downloads folder)
-2. Rename it to: "${fileName}"
-3. Open it in your 3D modeling software
-
-💡 TIP: The filename "${fileName}" has been copied to your clipboard for easy pasting!`;
-                                
-                                // Copy filename to clipboard
-                                try {
-                                  await navigator.clipboard.writeText(fileName);
-                                  console.log('Filename copied to clipboard:', fileName);
-                                } catch (err) {
-                                  console.log('Could not copy to clipboard, but that\'s okay');
-                                }
-                                
-                                alert(message);
-                                
-                                // Try multiple download methods
-                                console.log('Method 1: Direct download...');
-                                const link = document.createElement('a');
-                                link.href = sub.fileUrl;
-                                link.download = fileName || 'submitted-file.stl';
-                                link.target = '_blank';
-                                link.rel = 'noopener noreferrer';
-                                
-                                document.body.appendChild(link);
-                                link.click();
-                                document.body.removeChild(link);
-                                
-                                // Also try window.open as backup
-                                setTimeout(() => {
-                                  console.log('Method 2: Window.open backup...');
-                                  window.open(sub.fileUrl, '_blank');
-                                }, 100);
-                                
-                                console.log('=== DOWNLOAD DEBUG END ===');
-                              }}
-                              style={{ 
-                                color: '#2563eb', 
-                                textDecoration: 'underline', 
-                                background: '#f8fafc', 
-                                border: '1px solid #d1d5db', 
+                            <button
+                              onClick={() => handleViewFile(sub.fileUrl, sub.fileName || 'Submitted File')}
+                              style={{
+                                color: '#2563eb',
+                                textDecoration: 'underline',
+                                background: '#f8fafc',
+                                border: '1px solid #d1d5db',
                                 cursor: 'pointer',
                                 fontSize: 'inherit',
                                 padding: '6px 12px',
                                 borderRadius: '6px',
                                 transition: 'all 0.2s',
-                                fontWeight: '500',
-                                display: 'inline-block'
+                                fontWeight: '500'
                               }}
-                              onMouseEnter={e => {
+                              onMouseEnter={(e) => {
                                 e.currentTarget.style.backgroundColor = '#e5e7eb';
                                 e.currentTarget.style.borderColor = '#9ca3af';
                               }}
-                              onMouseLeave={e => {
+                              onMouseLeave={(e) => {
                                 e.currentTarget.style.backgroundColor = '#f8fafc';
                                 e.currentTarget.style.borderColor = '#d1d5db';
                               }}
                             >
-                              📁 Download File
-                            </a>
+                              📁 View File
+                            </button>
                           ) : (
                             <span style={{ color: '#9ca3af' }}>No file</span>
                           )}
@@ -999,12 +1241,729 @@ const AdminPanel: React.FC = () => {
             )}
           </div>
         </>
+      ) : activeTab === 'students' ? (
+        <>
+          {/* Student Management Content */}
+          <div style={{
+            background: '#f8fafc',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            minHeight: '300px',
+            color: '#374151',
+            border: '1px solid #e5e7eb',
+            marginBottom: '2rem'
+          }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>
+              👥 Student Management
+            </h2>
+            <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
+              Manage student accounts, view progress, and adjust settings.
+            </p>
+
+            {/* Batch Operations */}
+            <div style={{ marginBottom: '2rem' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem' }}>Batch Operations</h3>
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                <button
+                  onClick={selectAll}
+                  style={{
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 1rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: '500'
+                  }}
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={deselectAll}
+                  style={{
+                    backgroundColor: '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 1rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: '500'
+                  }}
+                >
+                  Deselect All
+                </button>
+              </div>
+              
+              {selected.length > 0 && (
+                <div style={{
+                  backgroundColor: '#f0f9ff',
+                  border: '1px solid #0ea5e9',
+                  borderRadius: '0.5rem',
+                  padding: '1rem',
+                  marginBottom: '1rem'
+                }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#0ea5e9' }}>
+                    Batch Operations ({selected.length} selected)
+                  </h4>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <input
+                      type="number"
+                      value={batchPP}
+                      onChange={(e) => setBatchPP(parseInt(e.target.value) || 1)}
+                      style={{
+                        width: '80px',
+                        padding: '0.5rem',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem'
+                      }}
+                      min="1"
+                    />
+                    <button
+                      onClick={() => adjustBatchPowerPoints(1)}
+                      style={{
+                        backgroundColor: '#10b981',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        padding: '0.5rem 1rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Add {batchPP} PP
+                    </button>
+                    <button
+                      onClick={() => adjustBatchPowerPoints(-1)}
+                      style={{
+                        backgroundColor: '#dc2626',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        padding: '0.5rem 1rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Remove {batchPP} PP
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Students Table */}
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '0.5rem',
+              overflow: 'hidden',
+              boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+            }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f9fafb' }}>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.length === students.length && students.length > 0}
+                        onChange={() => selected.length === students.length ? deselectAll() : selectAll()}
+                      />
+                    </th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Student</th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Level</th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>XP</th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Power Points</th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {students.map((student) => (
+                    <tr key={student.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                      <td style={{ padding: '1rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(student.id)}
+                          onChange={() => toggleSelect(student.id)}
+                        />
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <img
+                            src={student.photoURL || `https://ui-avatars.com/api/?name=${student.displayName}&background=4f46e5&color=fff&size=32`}
+                            alt={student.displayName}
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '50%',
+                              objectFit: 'cover'
+                            }}
+                          />
+                          <div>
+                            <div style={{ fontWeight: '600', color: '#1f2937' }}>
+                              {student.displayName}
+                            </div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                              {student.email}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <span style={{
+                          backgroundColor: '#f0f9ff',
+                          color: '#0ea5e9',
+                          padding: '0.25rem 0.75rem',
+                          borderRadius: '1rem',
+                          fontSize: '0.875rem',
+                          fontWeight: '500'
+                        }}>
+                          Level {getLevelFromXP(student.xp || 0)}
+                        </span>
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <span style={{ fontWeight: '500', color: '#1f2937' }}>
+                          {student.xp || 0} XP
+                        </span>
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontWeight: '500', color: '#1f2937' }}>
+                            {student.powerPoints || 0} PP
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.25rem' }}>
+                            <button
+                              onClick={() => adjustPowerPoints(student.id, 1)}
+                              style={{
+                                backgroundColor: '#10b981',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.25rem',
+                                padding: '0.25rem 0.5rem',
+                                cursor: 'pointer',
+                                fontSize: '0.75rem',
+                                fontWeight: '500'
+                              }}
+                            >
+                              +
+                            </button>
+                            <button
+                              onClick={() => adjustPowerPoints(student.id, -1)}
+                              style={{
+                                backgroundColor: '#dc2626',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.25rem',
+                                padding: '0.25rem 0.5rem',
+                                cursor: 'pointer',
+                                fontSize: '0.75rem',
+                                fontWeight: '500'
+                              }}
+                            >
+                              -
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            onClick={() => viewStudentProfile(student.id)}
+                            style={{
+                              backgroundColor: '#3b82f6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.375rem',
+                              padding: '0.5rem 0.75rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: '500'
+                            }}
+                          >
+                            View Profile
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {students.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '3rem', color: '#9ca3af' }}>
+                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>👥</div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                  No Students Found
+                </h3>
+                <p style={{ fontSize: '1rem' }}>
+                  Students will appear here once they register and start using the platform.
+                </p>
+              </div>
+            )}
+          </div>
+        </>
       ) : (
         <>
           {/* Student Management Content */}
           {/* ... existing student management code ... */}
         </>
       )}
+
+      {/* File Viewer Modal */}
+      {viewingFile && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '2rem'
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setViewingFile(null);
+          }
+        }}
+        >
+          <div style={{
+            background: 'white',
+            borderRadius: '0.75rem',
+            maxWidth: '90vw',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            position: 'relative',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+          }}>
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '1rem 1.5rem',
+              borderBottom: '1px solid #e5e7eb',
+              background: '#f8fafc'
+            }}>
+              <h3 style={{ margin: 0, fontWeight: 'bold', color: '#374151' }}>
+                {viewingFile.name}
+              </h3>
+              <button
+                onClick={() => setViewingFile(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  padding: '0.25rem'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content */}
+            <div style={{ padding: '1.5rem' }}>
+              {viewingFile.type === 'image' ? (
+                <img
+                  src={viewingFile.url}
+                  alt={viewingFile.name}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '70vh',
+                    objectFit: 'contain',
+                    borderRadius: '0.5rem'
+                  }}
+                />
+              ) : viewingFile.type === 'pdf' ? (
+                <iframe
+                  src={viewingFile.url}
+                  style={{
+                    width: '100%',
+                    height: '70vh',
+                    border: 'none',
+                    borderRadius: '0.5rem'
+                  }}
+                  title={viewingFile.name}
+                />
+              ) : viewingFile.type === 'text' ? (
+                <div style={{
+                  background: '#f8fafc',
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  fontFamily: 'monospace',
+                  fontSize: '0.875rem',
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: '70vh',
+                  overflow: 'auto'
+                }}>
+                  <div style={{ color: '#6b7280', marginBottom: '0.5rem' }}>
+                    Text content preview not available. Please download the file to view.
+                  </div>
+                </div>
+              ) : viewingFile.type === '3d' ? (
+                <div style={{
+                  background: '#f8fafc',
+                  padding: '2rem',
+                  borderRadius: '0.5rem',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🗿</div>
+                  <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                    3D Model File
+                  </div>
+                  <div style={{ color: '#6b7280', marginBottom: '1rem' }}>
+                    This is a 3D model file ({viewingFile.name.split('.').pop()?.toUpperCase()}). 
+                    Please download it to view in your 3D modeling software.
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  background: '#f8fafc',
+                  padding: '2rem',
+                  borderRadius: '0.5rem',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
+                  <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                    Unknown File Type
+                  </div>
+                  <div style={{ color: '#6b7280', marginBottom: '1rem' }}>
+                    Unable to preview this file type. Please download to view.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '1rem 1.5rem',
+              borderTop: '1px solid #e5e7eb',
+              background: '#f8fafc'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                File type: {viewingFile.type.toUpperCase()}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = viewingFile.url;
+                    link.download = viewingFile.name;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }}
+                  style={{
+                    background: '#2563eb',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 1rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  Download
+                </button>
+                <button
+                  onClick={() => window.open(viewingFile.url, '_blank')}
+                  style={{
+                    background: '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 1rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  Open in New Tab
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student Profile View Modal */}
+      {viewingProfile && (() => {
+        const student = students.find(s => s.id === viewingProfile);
+        if (!student) return null;
+
+        return (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '0.75rem',
+              padding: '2rem',
+              maxWidth: '600px',
+              width: '90%',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+            }}>
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937', margin: 0 }}>
+                  Student Profile
+                </h2>
+                <button
+                  onClick={closeProfileView}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '1.5rem',
+                    cursor: 'pointer',
+                    color: '#6b7280',
+                    padding: '0.25rem'
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Student Info */}
+              <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem' }}>
+                <img
+                  src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName || 'Student')}&background=4f46e5&color=fff&size=128`}
+                  alt={student.displayName || 'Student'}
+                  style={{
+                    width: '128px',
+                    height: '128px',
+                    borderRadius: '50%',
+                    objectFit: 'cover'
+                  }}
+                />
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                    {student.displayName || 'Unnamed Student'}
+                  </h3>
+                  <p style={{ color: '#6b7280', margin: '0 0 0.5rem 0' }}>
+                    {student.email || 'No email'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#4f46e5' }}>
+                        Level {getLevelFromXP(student.xp || 0)}
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Level</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
+                        {student.xp || 0}
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>XP</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                        {student.powerPoints || 0} PP
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Power Points</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bio */}
+              {student.bio && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                    Bio
+                  </h4>
+                  <p style={{ color: '#6b7280', margin: 0 }}>
+                    {student.bio}
+                  </p>
+                </div>
+              )}
+
+              {/* Character Card Info */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                    Manifestation Type
+                  </h4>
+                  <div style={{ 
+                    backgroundColor: student.cardBgColor || '#e0e7ff',
+                    padding: '0.5rem',
+                    borderRadius: '0.375rem',
+                    textAlign: 'center',
+                    fontWeight: 'bold'
+                  }}>
+                    {getManifestDisplayName(student)}
+                  </div>
+                </div>
+                <div>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                    Rarity
+                  </h4>
+                  <div style={{ 
+                    backgroundColor: '#f3f4f6',
+                    padding: '0.5rem',
+                    borderRadius: '0.375rem',
+                    textAlign: 'center',
+                    fontWeight: 'bold'
+                  }}>
+                    {student.rarity ? '★'.repeat(student.rarity) : '☆'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Moves */}
+              {student.moves && student.moves.length > 0 && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                    Moves
+                  </h4>
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {student.moves.map((move: any, index: number) => (
+                      <div key={index} style={{
+                        backgroundColor: '#f3f4f6',
+                        padding: '0.75rem',
+                        borderRadius: '0.375rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>{move.icon}</span>
+                          <div>
+                            <div style={{ fontWeight: 'bold' }}>{move.name}</div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{move.description}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Chapter Progress */}
+              {(() => {
+                const chapterProgress = getChapterProgress(student);
+                return (
+                  <div>
+                    <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                      Chapter Progress
+                    </h4>
+                    
+                    {/* Current Chapter Info */}
+                    <div style={{ 
+                      backgroundColor: '#f8fafc', 
+                      padding: '1rem', 
+                      borderRadius: '0.5rem', 
+                      marginBottom: '1rem',
+                      border: '1px solid #e2e8f0'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <h5 style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#4f46e5', margin: 0 }}>
+                          Chapter {chapterProgress.currentChapter}
+                        </h5>
+                        <span style={{ 
+                          fontSize: '0.75rem', 
+                          fontWeight: 'bold',
+                          color: chapterProgress.completed === chapterProgress.total ? '#10b981' : '#f59e0b'
+                        }}>
+                          {chapterProgress.completed} / {chapterProgress.total} Complete
+                        </span>
+                      </div>
+                      <h6 style={{ fontSize: '0.875rem', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+                        {chapterProgress.chapterTitle}
+                      </h6>
+                      
+                      {/* Progress Bar */}
+                      <div style={{ 
+                        backgroundColor: '#e2e8f0', 
+                        borderRadius: '0.25rem', 
+                        height: '0.5rem', 
+                        width: '100%',
+                        overflow: 'hidden'
+                      }}>
+                        <div style={{ 
+                          width: `${chapterProgress.total > 0 ? (chapterProgress.completed / chapterProgress.total) * 100 : 0}%`,
+                          backgroundColor: chapterProgress.completed === chapterProgress.total ? '#10b981' : '#4f46e5',
+                          height: '100%',
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+
+                    {/* Chapter Challenges */}
+                    {chapterProgress.challenges.length > 0 && (
+                      <div style={{ display: 'grid', gap: '0.5rem' }}>
+                        {chapterProgress.challenges.map((challenge: any) => {
+                          const getStatusColor = () => {
+                            if (challenge.completed) return '#dcfce7';
+                            if (challenge.isPending) return '#e0e7ff';
+                            return '#fef3c7';
+                          };
+                          
+                          const getBadgeColor = () => {
+                            if (challenge.completed) return '#10b981';
+                            if (challenge.isPending) return '#6366f1';
+                            return '#f59e0b';
+                          };
+                          
+                          const getStatusText = () => {
+                            if (challenge.completed) return 'Completed';
+                            if (challenge.isPending) return 'Pending Review';
+                            return 'In Progress';
+                          };
+                          
+                          return (
+                            <div key={challenge.id} style={{
+                              backgroundColor: getStatusColor(),
+                              padding: '0.75rem',
+                              borderRadius: '0.375rem',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center'
+                            }}>
+                              <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{challenge.title}</span>
+                              <span style={{
+                                backgroundColor: getBadgeColor(),
+                                color: 'white',
+                                padding: '0.25rem 0.5rem',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold'
+                              }}>
+                                {getStatusText()}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

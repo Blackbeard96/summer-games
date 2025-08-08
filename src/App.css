@@ -10,6 +10,29 @@ body {
   overflow-x: hidden;
 }
 
+/* Ensure proper margins for the Player's Journey page */
+.chapters-page {
+  padding: 2rem 4rem !important;
+  margin: 0 auto !important;
+  max-width: 100% !important;
+}
+
+.chapters-container {
+  margin: 0 auto !important;
+  padding: 0 2rem !important;
+  max-width: 1200px !important;
+}
+
+@media (max-width: 768px) {
+  .chapters-page {
+    padding: 1rem 2rem !important;
+  }
+  
+  .chapters-container {
+    padding: 0 1rem !important;
+  }
+}
+
 .App {
   min-height: 100vh;
 }
