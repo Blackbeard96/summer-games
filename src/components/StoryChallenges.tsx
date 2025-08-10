@@ -6,6 +6,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage
 import { storage } from '../firebase';
 import { CHAPTERS } from '../types/chapters';
 import ModelPreview from './ModelPreview';
+import RivalSelectionModal from './RivalSelectionModal';
 
 interface ChallengeData {
   completed?: boolean;
@@ -30,6 +31,7 @@ const StoryChallenges = () => {
   const [userProgress, setUserProgress] = useState<any>(null);
   const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
   const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
+  const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -47,6 +49,8 @@ const StoryChallenges = () => {
         checkAndCompleteProfileChallenge(userData);
         // Check and auto-complete manifest declaration challenge
         checkAndCompleteManifestChallenge(userData);
+        // Check and auto-complete rival selection challenge
+        checkAndCompleteRivalChallenge(userData);
         
         // Chapter progression is now handled by a dedicated useEffect
       }
@@ -340,6 +344,87 @@ const StoryChallenges = () => {
     }
   };
 
+  // Function to check and auto-complete rival selection challenge
+  const checkAndCompleteRivalChallenge = async (userData: any) => {
+    if (!currentUser) return;
+
+    try {
+      // Check if we're in Chapter 2
+      if (!userData.chapters?.[2]?.isActive) return;
+
+      // Check if challenge is already completed
+      const isAlreadyCompleted = userData.chapters?.[2]?.challenges?.['ch2-rival-selection']?.isCompleted;
+      if (isAlreadyCompleted) {
+        console.log('Rival selection challenge already completed');
+        return;
+      }
+
+      // Check if rival is chosen
+      const hasRival = userData.rival || userData.chapters?.[2]?.rival;
+      
+      console.log('Rival completion check:', { 
+        hasRival, 
+        rival: userData.rival,
+        chapterRival: userData.chapters?.[2]?.rival
+      });
+      
+      if (hasRival) {
+        console.log('Rival is chosen, auto-completing challenge...');
+        
+        // Auto-complete the rival selection challenge
+        const userRef = doc(db, 'users', currentUser.uid);
+        const updatedChapters = {
+          ...userData.chapters,
+          [2]: {
+            ...userData.chapters?.[2],
+            challenges: {
+              ...userData.chapters?.[2]?.challenges,
+              'ch2-rival-selection': {
+                isCompleted: true,
+                completedAt: serverTimestamp(),
+                autoCompleted: true
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Add to challenge submissions for tracking
+        await addDoc(collection(db, 'challengeSubmissions'), {
+          userId: currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || '',
+          challengeId: 'ch2-rival-selection',
+          challengeName: 'Choose Your Rival',
+          submissionType: 'auto_completed',
+          status: 'approved',
+          timestamp: serverTimestamp(),
+          xpReward: 20,
+          ppReward: 10,
+          manifestationType: 'Chapter Challenge',
+          character: 'Chapter System',
+          autoCompleted: true
+        });
+
+        console.log('Rival selection challenge auto-completed!');
+        
+        // Create notification
+        await createChallengeNotification('Choose Your Rival', 20, 10, true);
+        
+        // Check if Chapter 2 is now complete and progress to Chapter 3
+        await checkAndProgressChapter(2);
+      } else {
+        console.log('Rival not chosen yet:', { hasRival });
+      }
+    } catch (error) {
+      console.error('Error auto-completing rival challenge:', error);
+    }
+  };
+
   // Manual trigger function for testing
   const manualCheckProfileCompletion = async () => {
     if (userProgress) {
@@ -609,6 +694,112 @@ const StoryChallenges = () => {
     } catch (error) {
       console.error('Error removing submission:', error);
       alert('Failed to remove manifestation. Please try again.');
+    }
+  };
+
+  const handleRivalSelected = async (rivalId: string, rivalName: string) => {
+    if (!currentUser) return;
+
+    try {
+      console.log('StoryChallenges: Rival selected:', { rivalId, rivalName });
+      
+      // Update user's rival in the database
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Update new chapter system
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const currentChapter = getCurrentChapter();
+        
+        if (currentChapter) {
+          const updatedChapters = {
+            ...userData.chapters,
+            [currentChapter.id]: {
+              ...userData.chapters?.[currentChapter.id],
+              rival: {
+                id: rivalId,
+                name: rivalName,
+                type: 'external',
+                description: `Your rival ${rivalName} - a worthy opponent to overcome`,
+                challenge: `Defeat ${rivalName} in battle or prove your superiority`,
+                isDefeated: false
+              },
+              challenges: {
+                ...userData.chapters?.[currentChapter.id]?.challenges,
+                'ch2-rival-selection': {
+                  isCompleted: true,
+                  status: 'approved',
+                  completionDate: new Date()
+                }
+              }
+            }
+          };
+
+          await updateDoc(userRef, {
+            chapters: updatedChapters
+          });
+        }
+      }
+
+      // Also update the legacy system
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        await updateDoc(studentRef, {
+          rival: {
+            id: rivalId,
+            name: rivalName,
+            type: 'external',
+            description: `Your rival ${rivalName} - a worthy opponent to overcome`,
+            challenge: `Defeat ${rivalName} in battle or prove your superiority`,
+            isDefeated: false
+          },
+          challenges: {
+            ...studentData.challenges,
+            'ch2-rival-selection': {
+              completed: true,
+              status: 'approved',
+              completionDate: new Date()
+            }
+          },
+          xp: (studentData.xp || 0) + 20,
+          powerPoints: (studentData.powerPoints || 0) + 10
+        });
+      }
+
+      // Add notification
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🏆 Challenge "Choose Your Rival" completed! You selected ${rivalName} as your rival. You earned 20 XP and 10 PP.`,
+        challengeId: 'ch2-rival-selection',
+        challengeName: 'Choose Your Rival',
+        xpReward: 20,
+        ppReward: 10,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+
+      // Refresh user data to show the selected rival
+      const fetchUserData = async () => {
+        try {
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            setUserProgress(userDoc.data());
+          }
+        } catch (error) {
+          console.error('Error refreshing user data:', error);
+        }
+      };
+      fetchUserData();
+
+      console.log('StoryChallenges: Rival selection completed successfully');
+      
+    } catch (error) {
+      console.error('Error selecting rival:', error);
+      alert('Failed to select rival. Please try again.');
     }
   };
 
@@ -1143,8 +1334,8 @@ const StoryChallenges = () => {
                       </div>
                     </div>
 
-                    {/* File upload section - EXCLUDES profile and manifest challenges */}
-                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && (
+                    {/* File upload section - EXCLUDES profile, manifest, and rival selection challenges */}
+                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -1181,6 +1372,37 @@ const StoryChallenges = () => {
                           onClick={() => handleFileUpload(challenge.id)}
                         >
                           Submit
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Rival selection challenge - special handling */}
+                    {!isCompleted && challenge.id === 'ch2-rival-selection' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          style={{ 
+                            padding: '0.75rem 1.5rem', 
+                            background: '#dc2626', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '0.5rem', 
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.875rem',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => setShowRivalSelectionModal(true)}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = '#b91c1c';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = '#dc2626';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                          }}
+                        >
+                          🏆 Select Rival
                         </button>
                       </div>
                     )}
@@ -1504,6 +1726,13 @@ const StoryChallenges = () => {
           </div>
         );
       })()}
+
+      {/* Rival Selection Modal */}
+      <RivalSelectionModal
+        isOpen={showRivalSelectionModal}
+        onClose={() => setShowRivalSelectionModal(false)}
+        onRivalSelected={handleRivalSelected}
+      />
     </div>
   );
 };

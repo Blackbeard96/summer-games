@@ -148,6 +148,31 @@ export interface OfflineMove {
   result?: any;
 }
 
+export interface VaultSiegeAttack {
+  id: string;
+  attackerId: string;
+  attackerName: string;
+  targetId: string;
+  targetName: string;
+  moveId?: string;
+  moveName?: string;
+  actionCardId?: string;
+  actionCardName?: string;
+  damage: number;
+  ppStolen: number;
+  shieldDamage: number;
+  message: string;
+  timestamp: Date;
+  targetVaultBefore: {
+    currentPP: number;
+    shieldStrength: number;
+  };
+  targetVaultAfter: {
+    currentPP: number;
+    shieldStrength: number;
+  };
+}
+
 export interface BattleLobby {
   id: string;
   name: string;
@@ -207,6 +232,16 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     cooldown: 3,
   },
   {
+    name: 'Shield Strike',
+    description: 'Deals massive damage to enemy shields',
+    type: 'attack',
+    manifestType: 'gaming',
+    elementalAffinity: 'fire',
+    cost: 25,
+    damage: 20,
+    cooldown: 4,
+  },
+  {
     name: 'Shield Boost',
     description: 'Increase your vault\'s shield strength',
     type: 'defense',
@@ -228,6 +263,31 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
   },
 ];
 
+// Move damage and PP steal values
+export const MOVE_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
+  'Manifest Strike': { shieldDamage: 10, ppSteal: 0 },
+  'Vault Hack': { shieldDamage: 5, ppSteal: 8 },
+  'Shield Strike': { shieldDamage: 20, ppSteal: 0 },
+  'Shield Boost': { shieldDamage: 0, ppSteal: 0 }, // Defensive move
+  'Elemental Burst': { shieldDamage: 15, ppSteal: 12 },
+};
+
+// Action card damage values
+export const ACTION_CARD_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
+  'Shield Breaker': { shieldDamage: 22, ppSteal: 0 },
+  'PP Restore': { shieldDamage: 0, ppSteal: 0 }, // Self-heal
+  'Teleport PP': { shieldDamage: 0, ppSteal: 25 },
+  'Double XP': { shieldDamage: 0, ppSteal: 0 }, // Utility
+};
+
+// PP Range for each move (for display purposes)
+export const MOVE_PP_RANGES: Record<string, { min: number; max: number }> = {
+  'Manifest Strike': { min: 3, max: 7 },
+  'Vault Hack': { min: 5, max: 10 },
+  'Shield Boost': { min: 0, max: 0 }, // No PP gain for defensive moves
+  'Elemental Burst': { min: 8, max: 15 },
+};
+
 // Action Card Templates
 export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
   {
@@ -240,7 +300,7 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
     maxUses: 3,
     effect: {
       type: 'shield_breach',
-      strength: 30,
+      strength: 22, // Average of 15-30 range
     },
   },
   {

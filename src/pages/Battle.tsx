@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
-import { BATTLE_CONSTANTS } from '../types/battle';
+import { BATTLE_CONSTANTS, MOVE_PP_RANGES, MOVE_DAMAGE_VALUES } from '../types/battle';
+import VaultSiegeModal from '../components/VaultSiegeModal';
+import AttackHistory from '../components/AttackHistory';
 
 const Battle: React.FC = () => {
   const { currentUser } = useAuth();
@@ -12,18 +14,21 @@ const Battle: React.FC = () => {
     actionCards, 
     battleLobbies, 
     offlineMoves,
+    attackHistory,
     getRemainingOfflineMoves,
     createBattle,
     joinBattle,
     submitOfflineMove,
     syncVaultPP,
+    updateVault,
     loading,
     error 
   } = useBattle();
   const navigate = useNavigate();
   
-  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline'>('lobby');
+  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history'>('lobby');
   const [selectedTarget, setSelectedTarget] = useState<string>('');
+  const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
 
   if (!currentUser) {
     navigate('/login');
@@ -50,10 +55,21 @@ const Battle: React.FC = () => {
   const unlockedCards = actionCards.filter(card => card.unlocked);
 
   const handleCreateBattle = async (type: 'live' | 'vault_siege') => {
+    if (type === 'vault_siege') {
+      setShowVaultSiegeModal(true);
+      return;
+    }
+
     try {
+      console.log('Battle page: Creating battle with type:', type);
+      console.log('Battle page: Current user:', currentUser);
+      console.log('Battle page: Vault state:', vault);
+      
       const battleId = await createBattle(type);
+      console.log('Battle page: Battle created successfully with ID:', battleId);
       alert(`Battle created! ID: ${battleId}`);
     } catch (err) {
+      console.error('Battle page: Error creating battle:', err);
       alert('Failed to create battle');
     }
   };
@@ -83,6 +99,38 @@ const Battle: React.FC = () => {
       alert('Offline move submitted!');
     } catch (err) {
       alert('Failed to submit offline move');
+    }
+  };
+
+  const handleRestoreShields = async (shieldAmount: number, cost: number) => {
+    if (!vault) {
+      alert('Vault not loaded');
+      return;
+    }
+
+    if (vault.currentPP < cost) {
+      alert(`Not enough PP! You need ${cost} PP but only have ${vault.currentPP} PP.`);
+      return;
+    }
+
+    if (vault.shieldStrength >= vault.maxShieldStrength) {
+      alert('Your shields are already at maximum strength!');
+      return;
+    }
+
+    try {
+      const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + shieldAmount);
+      const newPP = vault.currentPP - cost;
+      
+      await updateVault({
+        shieldStrength: newShieldStrength,
+        currentPP: newPP
+      });
+      
+      alert(`Shields restored! +${shieldAmount} shields for ${cost} PP.`);
+    } catch (err) {
+      console.error('Error restoring shields:', err);
+      alert('Failed to restore shields');
     }
   };
 
@@ -194,6 +242,7 @@ const Battle: React.FC = () => {
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
           { id: 'offline', label: 'Offline Moves', icon: '⏰' },
+          { id: 'history', label: 'Attack History', icon: '📜' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -359,6 +408,105 @@ const Battle: React.FC = () => {
                 </button>
               </div>
             </div>
+            
+            {/* Shield Restoration Section */}
+            <div style={{ marginTop: '2rem' }}>
+              <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Shield Restoration</h3>
+              <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
+                Restore your vault's shield strength. Current shields: {vault?.shieldStrength || 0}/{vault?.maxShieldStrength || 50}
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                <button 
+                  onClick={() => handleRestoreShields(5, 5)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+5 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 5 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => handleRestoreShields(10, 8)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+10 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 8 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => handleRestoreShields(25, 15)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+25 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 15 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => handleRestoreShields(50, 20)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 20 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    if (vault) {
+                      const neededShields = vault.maxShieldStrength - vault.shieldStrength;
+                      handleRestoreShields(neededShields, 30);
+                    }
+                  }}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>Full Restore</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 30 PP</div>
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -397,7 +545,16 @@ const Battle: React.FC = () => {
                       fontSize: '0.75rem',
                       color: '#374151'
                     }}>
-                      Cost: {move.cost} PP
+                      Cost: 1 Move
+                    </span>
+                    <span style={{ 
+                      background: '#f3f4f6',
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: '0.25rem',
+                      fontSize: '0.75rem',
+                      color: '#374151'
+                    }}>
+                      Shield: {MOVE_DAMAGE_VALUES[move.name]?.shieldDamage || 0} • PP: {MOVE_DAMAGE_VALUES[move.name]?.ppSteal || 0}
                     </span>
                     <span style={{ 
                       background: '#f3f4f6',
@@ -601,7 +758,19 @@ const Battle: React.FC = () => {
             )}
           </div>
         )}
+
+        {activeTab === 'history' && (
+          <div>
+            <AttackHistory attacks={attackHistory} />
+          </div>
+        )}
       </div>
+
+      {/* Vault Siege Modal */}
+      <VaultSiegeModal
+        isOpen={showVaultSiegeModal}
+        onClose={() => setShowVaultSiegeModal(false)}
+      />
     </div>
   );
 };

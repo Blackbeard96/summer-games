@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Chapter, ChapterChallenge, Team, Rival, Veil, ReflectionEcho, EthicsArchetype } from '../types/chapters';
 import { getLevelFromXP } from '../utils/leveling';
+import RivalSelectionModal from './RivalSelectionModal';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -17,6 +18,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [loading, setLoading] = useState(true);
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'challenges' | 'team' | 'rival' | 'veil' | 'ethics'>('overview');
+  const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -326,6 +328,24 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   }, []);
 
+  const handleRivalSelected = (rivalId: string, rivalName: string) => {
+    // Refresh user data to show the selected rival
+    if (currentUser) {
+      const fetchUserData = async () => {
+        try {
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            setUserProgress(userDoc.data());
+          }
+        } catch (error) {
+          console.error('Error refreshing user data:', error);
+        }
+      };
+      fetchUserData();
+    }
+  };
+
   const handleChallengeComplete = async (challenge: ChapterChallenge) => {
     if (!currentUser) return;
 
@@ -356,6 +376,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         alert('Please choose your manifestation type first. You can do this from your profile or dashboard.');
         return;
       }
+    }
+
+    // Special handling for rival selection challenge
+    if (challenge.id === 'ch2-rival-selection') {
+      setShowRivalSelectionModal(true);
+      setCompletingChallenge(null);
+      return;
     }
 
     setCompletingChallenge(challenge.id);
@@ -832,33 +859,47 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     </div>
   );
 
-  const renderRivalSection = () => (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800 mb-4">Rival Selection</h3>
-      {!userProgress?.rival ? (
-        <div className="bg-white p-4 rounded-lg border">
-          <p className="text-gray-700 mb-4">
-            Choose your rival - an enemy or internalized foe to overcome in this chapter.
-          </p>
-          <button className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors">
-            Select Rival
-          </button>
-        </div>
-      ) : (
-        <div className="bg-white p-4 rounded-lg border">
-          <div className="text-gray-700 mb-2">
-            <strong>Current Rival:</strong> {userProgress.rival.name}
+  const renderRivalSection = () => {
+    // Check for rival in both legacy and new chapter system
+    const rival = userProgress?.rival || userProgress?.chapters?.[chapter.id]?.rival;
+    
+    return (
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Rival Selection</h3>
+        {!rival ? (
+          <div className="bg-white p-4 rounded-lg border">
+            <p className="text-gray-700 mb-4">
+              Choose your rival - an enemy or internalized foe to overcome in this chapter.
+            </p>
+            <button 
+              onClick={() => setShowRivalSelectionModal(true)}
+              className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors"
+            >
+              Select Rival
+            </button>
           </div>
-          <p className="text-sm text-gray-600 mb-2">{userProgress.rival.description}</p>
-          {userProgress.rival.isDefeated ? (
-            <div className="text-green-700">✓ Rival defeated</div>
-          ) : (
-            <div className="text-red-700">⚠ Rival not yet defeated</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+        ) : (
+          <div className="bg-white p-4 rounded-lg border">
+            <div className="text-gray-700 mb-2">
+              <strong>Current Rival:</strong> {rival.name}
+            </div>
+            <p className="text-sm text-gray-600 mb-2">{rival.description}</p>
+            {rival.isDefeated ? (
+              <div className="text-green-700">✓ Rival defeated</div>
+            ) : (
+              <div className="text-red-700">⚠ Rival not yet defeated</div>
+            )}
+            <button 
+              onClick={() => setShowRivalSelectionModal(true)}
+              className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 transition-colors mt-2"
+            >
+              Change Rival
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderVeilSection = () => (
     <div className="space-y-4">
@@ -1081,6 +1122,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         {activeTab === 'veil' && renderVeilSection()}
         {activeTab === 'ethics' && renderEthicsSection()}
       </div>
+
+      {/* Rival Selection Modal */}
+      <RivalSelectionModal
+        isOpen={showRivalSelectionModal}
+        onClose={() => setShowRivalSelectionModal(false)}
+        onRivalSelected={handleRivalSelected}
+      />
     </div>
   );
 };

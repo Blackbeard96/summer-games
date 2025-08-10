@@ -9,6 +9,7 @@ import ManifestSelection from './ManifestSelection';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { getLevelFromXP } from '../utils/leveling';
+import RivalSelectionModal from './RivalSelectionModal';
 
 interface Badge {
   id: string;
@@ -232,9 +233,10 @@ const ChallengeTracker = () => {
           console.log('ChallengeTracker: Team formation challenge auto-complete check:', { shouldAutoComplete, isInSquad });
           break;
         case 'ch2-rival-selection':
-          // Auto-complete if user has chosen a rival
-          shouldAutoComplete = !!userProgress.rival;
-          console.log('ChallengeTracker: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!userProgress.rival });
+          // Auto-complete if user has chosen a rival (check both legacy and new chapter system)
+          const rival = userProgress.rival || userProgress.chapters?.[currentChapter.id]?.rival;
+          shouldAutoComplete = !!rival;
+          console.log('ChallengeTracker: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!rival });
           break;
         case 'ch1-update-profile':
           // Auto-complete if profile is complete
@@ -327,6 +329,7 @@ const ChallengeTracker = () => {
   const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
   const [showElementSelection, setShowElementSelection] = useState(false);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
+  const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [userProgress, setUserProgress] = useState<any>(null);
@@ -721,6 +724,24 @@ const ChallengeTracker = () => {
     } catch (error) {
       console.error('Error setting manifest:', error);
       alert('Failed to set manifest. Please try again.');
+    }
+  };
+
+  const handleRivalSelected = (rivalId: string, rivalName: string) => {
+    // Refresh user data to show the selected rival
+    if (currentUser) {
+      const fetchUserData = async () => {
+        try {
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            setUserProgress(userDoc.data());
+          }
+        } catch (error) {
+          console.error('Error refreshing user data:', error);
+        }
+      };
+      fetchUserData();
     }
   };
 
@@ -1387,44 +1408,76 @@ const ChallengeTracker = () => {
                       </div>
                     </div>
 
-                    {!isCompleted && !isSubmitted && (
+                                        {!isCompleted && !isSubmitted && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <input
-                          type="file"
-                          accept=".stl,.obj,.jpg,.jpeg,.png,.pdf"
-                          style={{ 
-                            padding: '0.5rem',
-                            background: 'white',
-                            border: '1px solid #d1d5db',
-                            borderRadius: '0.25rem',
-                            color: '#374151',
-                            fontSize: '0.875rem'
-                          }}
-                          onChange={e => {
-                            handleFileSelect(challenge.id, e.target.files && e.target.files[0] ? e.target.files[0] : null);
-                          }}
-                        />
-                        {selectedFiles[challenge.id] ? (
-                          <ModelPreview file={selectedFiles[challenge.id] as File} />
-                        ) : null}
-                        <button
-                          type="button"
-                          style={{ 
-                            padding: '0.5rem 1rem', 
-                            background: selectedFiles[challenge.id] ? '#22c55e' : '#6b7280', 
-                            color: 'white', 
-                            border: 'none', 
-                            borderRadius: '0.25rem', 
-                            cursor: selectedFiles[challenge.id] ? 'pointer' : 'not-allowed',
-                            opacity: selectedFiles[challenge.id] ? 1 : 0.5,
-                            fontWeight: 'bold',
-                            fontSize: '0.875rem'
-                          }}
-                          disabled={!selectedFiles[challenge.id]}
-                          onClick={() => handleFileUpload(challenge.id)}
-                        >
-                          Submit
-                        </button>
+                        {challenge.id === 'ch2-rival-selection' ? (
+                          // Special handling for rival selection challenge
+                          <button
+                            type="button"
+                            style={{ 
+                              padding: '0.75rem 1.5rem', 
+                              background: '#dc2626', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: '0.5rem', 
+                              cursor: 'pointer',
+                              fontWeight: 'bold',
+                              fontSize: '0.875rem',
+                              transition: 'all 0.2s ease'
+                            }}
+                            onClick={() => setShowRivalSelectionModal(true)}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.background = '#b91c1c';
+                              e.currentTarget.style.transform = 'translateY(-2px)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.background = '#dc2626';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }}
+                          >
+                            🏆 Select Rival
+                          </button>
+                        ) : (
+                          // Regular file upload for other challenges
+                          <>
+                            <input
+                              type="file"
+                              accept=".stl,.obj,.jpg,.jpeg,.png,.pdf"
+                              style={{ 
+                                padding: '0.5rem',
+                                background: 'white',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.25rem',
+                                color: '#374151',
+                                fontSize: '0.875rem'
+                              }}
+                              onChange={e => {
+                                handleFileSelect(challenge.id, e.target.files && e.target.files[0] ? e.target.files[0] : null);
+                              }}
+                            />
+                            {selectedFiles[challenge.id] ? (
+                              <ModelPreview file={selectedFiles[challenge.id] as File} />
+                            ) : null}
+                            <button
+                              type="button"
+                              style={{ 
+                                padding: '0.5rem 1rem', 
+                                background: selectedFiles[challenge.id] ? '#22c55e' : '#6b7280', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: '0.25rem', 
+                                cursor: selectedFiles[challenge.id] ? 'pointer' : 'not-allowed',
+                                opacity: selectedFiles[challenge.id] ? 1 : 0.5,
+                                fontWeight: 'bold',
+                                fontSize: '0.875rem'
+                              }}
+                              disabled={!selectedFiles[challenge.id]}
+                              onClick={() => handleFileUpload(challenge.id)}
+                            >
+                              Submit
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
 
@@ -1509,6 +1562,13 @@ const ChallengeTracker = () => {
           onClose={() => setShowManifestSelection(false)}
         />
       )}
+
+      {/* Rival Selection Modal */}
+      <RivalSelectionModal
+        isOpen={showRivalSelectionModal}
+        onClose={() => setShowRivalSelectionModal(false)}
+        onRivalSelected={handleRivalSelected}
+      />
     </div>
   );
 };

@@ -391,6 +391,38 @@ const Profile = () => {
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
                     </div>
+                    {userData?.rival && (
+                      <div style={{ 
+                        margin: '0.5rem 0', 
+                        padding: '0.75rem', 
+                        backgroundColor: '#fef2f2', 
+                        border: '1px solid #fecaca', 
+                        borderRadius: '0.5rem',
+                        borderLeft: '4px solid #dc2626'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>⚔️</span>
+                          <span style={{ fontWeight: 'bold', color: '#dc2626' }}>Rival:</span>
+                          <span style={{ fontWeight: 'bold' }}>{userData.rival.name}</span>
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          {userData.rival.description}
+                        </div>
+                        {userData.rival.isDefeated && (
+                          <div style={{ 
+                            marginTop: '0.5rem', 
+                            padding: '0.25rem 0.5rem', 
+                            backgroundColor: '#dcfce7', 
+                            color: '#166534', 
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ✅ Rival Defeated
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
                   </div>
                 )}
