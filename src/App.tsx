@@ -17,6 +17,8 @@ import TutorialManager from './components/TutorialManager';
 import InvitationManager from './components/InvitationManager';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LevelUpProvider } from './context/LevelUpContext';
+import { BattleProvider } from './context/BattleContext';
+import Battle from './pages/Battle';
 // Firebase services are imported but not directly used in this component
 // They are used by child components through the firebase.ts file
 
@@ -37,23 +39,26 @@ function App() {
   return (
     <AuthProvider>
       <LevelUpProvider>
-        <Router>
-          <NavBar />
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/reset-password" element={<PasswordReset />} />
-            <Route path="/leaderboard" element={<Leaderboard />} />
-            <Route path="/admin" element={<ProtectedAdminRoute />} />
-            <Route path="/marketplace" element={<Marketplace />} />
-            <Route path="/chapters" element={<Chapters />} />
-            <Route path="/squads" element={<Squads />} />
-          </Routes>
-          <TutorialManager />
-          <InvitationManager />
-          {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
-        </Router>
+        <BattleProvider>
+          <Router>
+            <NavBar />
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/reset-password" element={<PasswordReset />} />
+              <Route path="/leaderboard" element={<Leaderboard />} />
+              <Route path="/admin" element={<ProtectedAdminRoute />} />
+              <Route path="/marketplace" element={<Marketplace />} />
+              <Route path="/chapters" element={<Chapters />} />
+              <Route path="/squads" element={<Squads />} />
+              <Route path="/battle" element={<Battle />} />
+            </Routes>
+            <TutorialManager />
+            <InvitationManager />
+            {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
+          </Router>
+        </BattleProvider>
       </LevelUpProvider>
     </AuthProvider>
   );

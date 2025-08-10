@@ -80,10 +80,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     if (!chapterProgress) return 'locked';
     
     const challengeProgress = chapterProgress.challenges?.[challenge.id];
-    if (challengeProgress?.isCompleted) return 'completed';
     
-    // Check if challenge is pending approval
+    // Check if challenge is pending approval first
     if (pendingSubmissions[challenge.id]) return 'pending';
+    
+    // Check if challenge is completed (only after admin approval)
+    if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted) return 'completed';
     
     // Check if challenge requirements are met
     const requirementsMet = challenge.requirements.every(req => {
@@ -91,7 +93,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         case 'artifact':
           return userProgress.artifact?.identified;
         case 'team':
-          return userProgress.team;
+          // For team requirements, we'll check squad membership in the auto-completion logic
+          return true; // Let auto-completion handle this
         case 'rival':
           return userProgress.rival;
         case 'veil':
@@ -125,7 +128,156 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   // Add state to track pending submissions
   const [pendingSubmissions, setPendingSubmissions] = useState<{[key: string]: boolean}>({});
 
-  // Fetch pending submissions on component mount
+  // Function to check and auto-complete challenges
+  const checkAndAutoCompleteChallenges = async () => {
+    console.log('ChapterDetail: checkAndAutoCompleteChallenges called', {
+      currentUser: !!currentUser,
+      userProgress: !!userProgress,
+      chapterId: chapter.id
+    });
+    
+    if (!currentUser || !userProgress) {
+      console.log('ChapterDetail: Missing currentUser or userProgress, returning');
+      return;
+    }
+
+    const chapterProgress = userProgress.chapters?.[chapter.id];
+    console.log('ChapterDetail: Chapter progress:', chapterProgress);
+    
+    if (!chapterProgress?.isActive) {
+      console.log('ChapterDetail: Chapter not active, returning');
+      return;
+    }
+
+    // Check if user is in a squad
+    let isInSquad = false;
+    try {
+      console.log('ChapterDetail: Checking squad membership for user:', currentUser.uid);
+      const squadsSnapshot = await getDocs(collection(db, 'squads'));
+      console.log('ChapterDetail: Found squads:', squadsSnapshot.docs.length);
+      
+      isInSquad = squadsSnapshot.docs.some(doc => {
+        const squadData = doc.data();
+        console.log('ChapterDetail: Squad data:', { id: doc.id, name: squadData.name, members: squadData.members?.length || 0 });
+        const isMember = squadData.members && squadData.members.some((member: any) => member.uid === currentUser.uid);
+        if (isMember) {
+          console.log('ChapterDetail: User is member of squad:', squadData.name);
+        }
+        return isMember;
+      });
+      console.log('ChapterDetail: User squad membership check result:', { isInSquad, userId: currentUser.uid });
+    } catch (error) {
+      console.error('Error checking squad membership:', error);
+    }
+
+    for (const challenge of chapter.challenges) {
+      console.log('ChapterDetail: Checking challenge:', challenge.id, challenge.title);
+      const challengeProgress = chapterProgress.challenges?.[challenge.id];
+      console.log('ChapterDetail: Challenge progress:', challengeProgress);
+      
+      // Skip if already completed or pending
+      if (challengeProgress?.isCompleted || challengeProgress?.status === 'approved' || pendingSubmissions[challenge.id]) {
+        console.log('ChapterDetail: Skipping challenge (already completed/pending):', challenge.id);
+        continue;
+      }
+
+      // Check if challenge should be auto-completed
+      let shouldAutoComplete = false;
+      
+      switch (challenge.id) {
+        case 'ch2-team-formation':
+          // Auto-complete if user is in a squad
+          shouldAutoComplete = isInSquad;
+          console.log('ChapterDetail: Team formation challenge auto-complete check:', { shouldAutoComplete, isInSquad });
+          break;
+        case 'ch2-rival-selection':
+          // Auto-complete if user has chosen a rival
+          shouldAutoComplete = !!userProgress.rival;
+          console.log('ChapterDetail: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!userProgress.rival });
+          break;
+        case 'ch1-update-profile':
+          // Auto-complete if profile is complete
+          shouldAutoComplete = !!(studentData?.displayName && studentData?.photoURL);
+          console.log('ChapterDetail: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!studentData?.displayName, hasPhotoURL: !!studentData?.photoURL });
+          break;
+        case 'ch1-declare-manifest':
+          // Auto-complete if manifest is chosen
+          shouldAutoComplete = !!(studentData?.manifest?.manifestId || studentData?.manifestationType);
+          console.log('ChapterDetail: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(studentData?.manifest?.manifestId || studentData?.manifestationType) });
+          break;
+        default:
+          // For other challenges, check if they have no requirements and are team-type
+          shouldAutoComplete = challenge.type === 'team' && challenge.requirements.length === 0;
+          console.log('ChapterDetail: Default challenge auto-complete check:', { shouldAutoComplete, challengeType: challenge.type, requirementsLength: challenge.requirements.length });
+      }
+
+      if (shouldAutoComplete) {
+        console.log(`Auto-completing challenge: ${challenge.id}`);
+        
+        // Update both collections
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        // Update user progress
+        const updatedChapters = {
+          ...userProgress.chapters,
+          [chapter.id]: {
+            ...userProgress.chapters?.[chapter.id],
+            challenges: {
+              ...userProgress.chapters?.[chapter.id]?.challenges,
+              [challenge.id]: {
+                isCompleted: true,
+                status: 'approved',
+                completionDate: new Date()
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Apply rewards
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+
+        // Update student data (legacy system)
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          const updatedChallenges = {
+            ...studentData.challenges,
+            [challenge.id]: {
+              completed: true,
+              status: 'approved',
+              completionDate: new Date()
+            }
+          };
+          
+          await updateDoc(studentRef, {
+            challenges: updatedChallenges,
+            xp: (studentData.xp || 0) + xpReward,
+            powerPoints: (studentData.powerPoints || 0) + ppReward
+          });
+        }
+
+        // Add notification
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Challenge "${challenge.title}" completed automatically! You earned ${xpReward} XP and ${ppReward} PP.`,
+          challengeId: challenge.id,
+          challengeName: challenge.title,
+          xpReward: xpReward,
+          ppReward: ppReward,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      }
+    }
+  };
+
+  // Fetch pending submissions and check auto-completion on component mount
   useEffect(() => {
     if (!currentUser) return;
 
@@ -154,8 +306,36 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     fetchPendingSubmissions();
   }, [currentUser, chapter.id]);
 
+  // Check for auto-completion when user progress changes
+  useEffect(() => {
+    if (userProgress && studentData) {
+      console.log('ChapterDetail: Triggering auto-completion check...', {
+        userProgress: !!userProgress,
+        studentData: !!studentData,
+        chapterId: chapter.id
+      });
+      checkAndAutoCompleteChallenges();
+    }
+  }, [userProgress, studentData]);
+
+  // Also check for auto-completion on component mount
+  useEffect(() => {
+    if (userProgress && studentData) {
+      console.log('ChapterDetail: Initial auto-completion check on mount...');
+      checkAndAutoCompleteChallenges();
+    }
+  }, []);
+
   const handleChallengeComplete = async (challenge: ChapterChallenge) => {
     if (!currentUser) return;
+
+    // Check if this is an auto-completable challenge
+    const isAutoCompletable = challenge.type === 'team' && challenge.requirements.length === 0;
+    
+    if (isAutoCompletable) {
+      alert('This challenge will be completed automatically when you meet the requirements. No manual submission needed.');
+      return;
+    }
 
     // Special handling for profile update challenge
     if (challenge.id === 'ch1-update-profile') {
@@ -270,7 +450,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }
 
       // Submit challenge for admin approval
-      await addDoc(collection(db, 'challengeSubmissions'), {
+      const submissionData = {
         userId: currentUser.uid,
         userEmail: currentUser.email || '',
         displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
@@ -285,7 +465,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         xpReward: challenge.rewards.find(r => r.type === 'xp')?.value || 0,
         ppReward: challenge.rewards.find(r => r.type === 'pp')?.value || 0,
         rewards: challenge.rewards
-      });
+      };
+
+      console.log('Creating challenge submission:', submissionData);
+      
+      const submissionRef = await addDoc(collection(db, 'challengeSubmissions'), submissionData);
+      console.log('Submission created with ID:', submissionRef.id);
 
       alert(`🎉 Challenge "${challenge.title}" submitted for admin approval! You'll be notified when it's reviewed.`);
       
@@ -526,7 +711,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                 </span>
               </div>
 
-                          {status === 'available' && (
+                          {status === 'available' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -569,6 +754,20 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                   </>
                 )}
               </button>
+            )}
+
+            {status === 'available' && challenge.type === 'team' && challenge.requirements.length === 0 && (
+              <div style={{
+                background: 'rgba(59, 130, 246, 0.1)',
+                border: '1px solid #3b82f6',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                color: '#1e40af',
+                fontSize: '0.875rem',
+                fontWeight: 'bold'
+              }}>
+                🔄 This challenge will be completed automatically when you join a team.
+              </div>
             )}
 
             {status === 'pending' && (

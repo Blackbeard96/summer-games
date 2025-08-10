@@ -41,6 +41,7 @@ interface Notification {
   challengeName?: string;
   timestamp?: any;
   read?: boolean;
+  deleted?: boolean;
 }
 
 const NavBar = () => {
@@ -87,10 +88,12 @@ const NavBar = () => {
       setNotificationsLoading(true);
       try {
         const notifSnap = await getDocs(collection(db, 'students', currentUser.uid, 'notifications'));
-        const notifList: Notification[] = notifSnap.docs.map(docSnap => {
-          const data = docSnap.data() as Notification;
-          return { ...data, id: docSnap.id, _ref: docSnap.ref };
-        });
+        const notifList: Notification[] = notifSnap.docs
+          .map(docSnap => {
+            const data = docSnap.data() as Notification;
+            return { ...data, id: docSnap.id, _ref: docSnap.ref };
+          })
+          .filter(notif => !notif.deleted); // Filter out deleted notifications
         setNotifications(notifList.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
       } catch (err) {
         setNotifications([]);
@@ -146,6 +149,23 @@ const NavBar = () => {
     }
   };
 
+  const handleClearAllNotifications = async () => {
+    if (!currentUser || notifications.length === 0) return;
+    
+    try {
+      // Mark all notifications as deleted
+      const updatePromises = notifications.map(notif => 
+        updateDoc(notif._ref, { deleted: true })
+      );
+      
+      await Promise.all(updatePromises);
+      setNotifications([]);
+      setShowNotifications(false);
+    } catch (err) {
+      console.error('Failed to clear all notifications:', err);
+    }
+  };
+
   const showTooltip = (e: MouseEvent<HTMLDivElement>) => {
     const tooltip = e.currentTarget.querySelector('.tooltip') as HTMLElement;
     if (tooltip) tooltip.style.opacity = '1';
@@ -168,6 +188,7 @@ const NavBar = () => {
   const navItems = [
     { to: '/', label: 'Training Grounds', tooltip: 'Dashboard' },
     { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System' },
+    { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ];
 
@@ -339,7 +360,10 @@ const NavBar = () => {
                     <div style={{
                       padding: '1rem',
                       borderBottom: '1px solid #e5e7eb',
-                      backgroundColor: '#f8fafc'
+                      backgroundColor: '#f8fafc',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
                     }}>
                       <h3 style={{ 
                         margin: 0, 
@@ -349,6 +373,33 @@ const NavBar = () => {
                       }}>
                         🔔 Notifications
                       </h3>
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={handleClearAllNotifications}
+                          style={{
+                            background: 'none',
+                            border: '1px solid #d1d5db',
+                            borderRadius: '0.25rem',
+                            padding: '0.25rem 0.5rem',
+                            fontSize: '0.75rem',
+                            color: '#6b7280',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={e => {
+                            e.currentTarget.style.backgroundColor = '#ef4444';
+                            e.currentTarget.style.color = 'white';
+                            e.currentTarget.style.borderColor = '#ef4444';
+                          }}
+                          onMouseLeave={e => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                            e.currentTarget.style.color = '#6b7280';
+                            e.currentTarget.style.borderColor = '#d1d5db';
+                          }}
+                        >
+                          Clear All
+                        </button>
+                      )}
                     </div>
                     
                     <div style={{ maxHeight: '300px', overflowY: 'auto' }}>

@@ -163,6 +163,158 @@ const ChallengeTracker = () => {
       console.log('No sync needed or already synced');
     }
   };
+
+  // Function to check and auto-complete challenges
+  const checkAndAutoCompleteChallenges = async () => {
+    console.log('ChallengeTracker: checkAndAutoCompleteChallenges called', {
+      currentUser: !!currentUser,
+      userProgress: !!userProgress
+    });
+    
+    if (!currentUser || !userProgress) {
+      console.log('ChallengeTracker: Missing currentUser or userProgress, returning');
+      return;
+    }
+
+    const currentChapter = getCurrentChapter();
+    if (!currentChapter) {
+      console.log('ChallengeTracker: No current chapter found');
+      return;
+    }
+
+    const chapterProgress = userProgress.chapters?.[currentChapter.id];
+    console.log('ChallengeTracker: Chapter progress:', chapterProgress);
+    
+    if (!chapterProgress?.isActive) {
+      console.log('ChallengeTracker: Chapter not active, returning');
+      return;
+    }
+
+    // Check if user is in a squad
+    let isInSquad = false;
+    try {
+      console.log('ChallengeTracker: Checking squad membership for user:', currentUser.uid);
+      const squadsSnapshot = await getDocs(collection(db, 'squads'));
+      console.log('ChallengeTracker: Found squads:', squadsSnapshot.docs.length);
+      
+      isInSquad = squadsSnapshot.docs.some(doc => {
+        const squadData = doc.data();
+        console.log('ChallengeTracker: Squad data:', { id: doc.id, name: squadData.name, members: squadData.members?.length || 0 });
+        const isMember = squadData.members && squadData.members.some((member: any) => member.uid === currentUser.uid);
+        if (isMember) {
+          console.log('ChallengeTracker: User is member of squad:', squadData.name);
+        }
+        return isMember;
+      });
+      console.log('ChallengeTracker: User squad membership check result:', { isInSquad, userId: currentUser.uid });
+    } catch (error) {
+      console.error('Error checking squad membership:', error);
+    }
+
+    for (const challenge of currentChapter.challenges) {
+      console.log('ChallengeTracker: Checking challenge:', challenge.id, challenge.title);
+      const challengeProgress = chapterProgress.challenges?.[challenge.id];
+      console.log('ChallengeTracker: Challenge progress:', challengeProgress);
+      
+      // Skip if already completed or pending
+      if (challengeProgress?.isCompleted || challengeProgress?.status === 'approved') {
+        console.log('ChallengeTracker: Skipping challenge (already completed):', challenge.id);
+        continue;
+      }
+
+      // Check if challenge should be auto-completed
+      let shouldAutoComplete = false;
+      
+      switch (challenge.id) {
+        case 'ch2-team-formation':
+          // Auto-complete if user is in a squad
+          shouldAutoComplete = isInSquad;
+          console.log('ChallengeTracker: Team formation challenge auto-complete check:', { shouldAutoComplete, isInSquad });
+          break;
+        case 'ch2-rival-selection':
+          // Auto-complete if user has chosen a rival
+          shouldAutoComplete = !!userProgress.rival;
+          console.log('ChallengeTracker: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!userProgress.rival });
+          break;
+        case 'ch1-update-profile':
+          // Auto-complete if profile is complete
+          shouldAutoComplete = !!(userProgress.displayName && userProgress.photoURL);
+          console.log('ChallengeTracker: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!userProgress.displayName, hasPhotoURL: !!userProgress.photoURL });
+          break;
+        case 'ch1-declare-manifest':
+          // Auto-complete if manifest is chosen
+          shouldAutoComplete = !!(userProgress.manifest?.manifestId || userProgress.manifestationType);
+          console.log('ChallengeTracker: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(userProgress.manifest?.manifestId || userProgress.manifestationType) });
+          break;
+        default:
+          // For other challenges, check if they have no requirements and are team-type
+          shouldAutoComplete = challenge.type === 'team' && challenge.requirements.length === 0;
+          console.log('ChallengeTracker: Default challenge auto-complete check:', { shouldAutoComplete, challengeType: challenge.type, requirementsLength: challenge.requirements.length });
+      }
+
+      if (shouldAutoComplete) {
+        console.log(`ChallengeTracker: Auto-completing challenge: ${challenge.id}`);
+        
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        const updatedChapters = {
+          ...userProgress.chapters,
+          [currentChapter.id]: {
+            ...userProgress.chapters[currentChapter.id],
+            challenges: {
+              ...userProgress.chapters[currentChapter.id]?.challenges,
+              [challenge.id]: {
+                isCompleted: true,
+                status: 'approved',
+                completionDate: new Date()
+              }
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Apply rewards
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+
+        // Update student data (legacy system)
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          const updatedChallenges = {
+            ...studentData.challenges,
+            [challenge.id]: {
+              completed: true,
+              status: 'approved',
+              completionDate: new Date()
+            }
+          };
+          
+          await updateDoc(studentRef, {
+            challenges: updatedChallenges,
+            xp: (studentData.xp || 0) + xpReward,
+            powerPoints: (studentData.powerPoints || 0) + ppReward
+          });
+        }
+
+        // Add notification
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Challenge "${challenge.title}" completed automatically! You earned ${xpReward} XP and ${ppReward} PP.`,
+          challengeId: challenge.id,
+          challengeName: challenge.title,
+          xpReward: xpReward,
+          ppReward: ppReward,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      }
+    }
+  };
   
 
 
@@ -185,6 +337,24 @@ const ChallengeTracker = () => {
       syncExistingSubmissions();
     }
   }, [userProgress]);
+
+  // Check for auto-completion when user progress changes
+  React.useEffect(() => {
+    if (userProgress) {
+      console.log('ChallengeTracker: Triggering auto-completion check...', {
+        userProgress: !!userProgress
+      });
+      checkAndAutoCompleteChallenges();
+    }
+  }, [userProgress]);
+
+  // Also check for auto-completion on component mount
+  React.useEffect(() => {
+    if (userProgress) {
+      console.log('ChallengeTracker: Initial auto-completion check on mount...');
+      checkAndAutoCompleteChallenges();
+    }
+  }, []);
 
   // Elemental manifestation types for new students
   const elementalTypes: ElementalType[] = [
@@ -444,7 +614,9 @@ const ChallengeTracker = () => {
           xpReward: xpReward,
           ppReward: ppReward,
           manifestationType: 'Chapter Challenge',
-          character: 'Chapter System'
+          character: 'Chapter System',
+          submissionType: 'chapter_challenge',
+          chapterId: 1 // Default to Chapter 1 for legacy challenges
         });
       }
 
@@ -1001,7 +1173,7 @@ const ChallengeTracker = () => {
             <div style={{ display: 'grid', gap: '1rem' }}>
               {currentChapter.challenges.map((challenge) => {
                 const challengeData = userProgress?.chapters?.[currentChapter.id]?.challenges?.[challenge.id] || {};
-                const isCompleted = challengeData.isCompleted;
+                const isCompleted = challengeData.status === 'approved' || challengeData.isCompleted;
                 const isSubmitted = challengeData.submitted && !isCompleted;
                 
                 // Debug logging for challenge status

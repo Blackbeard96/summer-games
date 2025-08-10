@@ -108,9 +108,10 @@ const AdminPanel: React.FC = () => {
     
     // Calculate progress within the chapter
     const chapterChallenges = chapter.challenges.map(challenge => {
-      const isCompleted = challenges[challenge.id]?.completed || false;
-      const isSubmitted = challenges[challenge.id]?.submitted || false;
-      const status = challenges[challenge.id]?.status || 'not_started';
+      const challengeData = challenges[challenge.id] || {};
+      const isCompleted = challengeData.status === 'approved' || challengeData.completed || false;
+      const isSubmitted = challengeData.submitted || false;
+      const status = challengeData.status || 'not_started';
       
       return {
         id: challenge.id,
@@ -225,6 +226,20 @@ const AdminPanel: React.FC = () => {
         );
         const snapshot = await getDocs(q);
         const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        console.log('Admin Panel - Fetched pending submissions:', {
+          totalSubmissions: snapshot.docs.length,
+          submissions: list.map((s: any) => ({
+            id: s.id,
+            userId: s.userId,
+            displayName: s.displayName,
+            challengeId: s.challengeId,
+            challengeName: s.challengeName,
+            status: s.status,
+            submittedAt: s.submittedAt
+          }))
+        });
+        
         setSubmissions(list);
         
         // Update pending submission count
@@ -631,6 +646,106 @@ const AdminPanel: React.FC = () => {
     showLevelUpNotification(100, 0);
   };
 
+  // Utility function to manually fix chapter progression
+  const fixChapterProgression = async (studentId: string) => {
+    try {
+      const student = students.find(s => s.id === studentId);
+      if (!student) {
+        alert('Student not found!');
+        return;
+      }
+
+      const studentRef = doc(db, 'students', studentId);
+      const userRef = doc(db, 'users', studentId);
+      
+      // Get current data
+      const studentDoc = await getDoc(studentRef);
+      const userDoc = await getDoc(userRef);
+      const studentData = studentDoc.exists() ? studentDoc.data() : {};
+      const userData = userDoc.exists() ? userDoc.data() : {};
+
+      // Calculate which chapter they should be on based on completed challenges
+      const challenges = studentData.challenges || {};
+      let targetChapter = 1;
+
+      console.log('Analyzing challenges for chapter progression:', {
+        studentName: student.displayName,
+        allChallenges: Object.keys(challenges),
+        completedChallenges: Object.keys(challenges).filter(k => challenges[k]?.completed),
+        challengeDetails: Object.entries(challenges).map(([k, v]: [string, any]) => ({ id: k, completed: v?.completed, submitted: v?.submitted, status: v?.status }))
+      });
+
+      // Check if they have completed Chapter 1 challenges
+      const chapter1Challenges = ['ch1-update-profile', 'ch1-declare-manifest', 'ch1-artifact-challenge'];
+      const chapter1Completed = chapter1Challenges.every(challengeId => 
+        challenges[challengeId]?.completed
+      );
+
+      console.log('Chapter 1 completion check:', {
+        chapter1Challenges,
+        chapter1Completed,
+        individualStatus: chapter1Challenges.map(id => ({ id, completed: challenges[id]?.completed }))
+      });
+
+      if (chapter1Completed) {
+        targetChapter = 2;
+        
+        // Check Chapter 2 challenges
+        const chapter2Challenges = ['ch2-team-formation', 'ch2-rival-identification'];
+        const chapter2Completed = chapter2Challenges.every(challengeId => 
+          challenges[challengeId]?.completed
+        );
+        
+        if (chapter2Completed) {
+          targetChapter = 3;
+        }
+      }
+
+      // Special case: If they have high XP/Level but are stuck in Chapter 1, 
+      // and have completed at least 2 out of 3 Chapter 1 challenges, advance them
+      if (targetChapter === 1 && (studentData.xp || 0) > 50) {
+        const completedChapter1Count = chapter1Challenges.filter(id => challenges[id]?.completed).length;
+        if (completedChapter1Count >= 2) {
+          console.log('Special case: High XP student with most Chapter 1 challenges completed, advancing to Chapter 2');
+          targetChapter = 2;
+        }
+      }
+
+      console.log(`Fixing chapter progression for ${student.displayName}:`, {
+        currentChapter: studentData.storyChapter || 1,
+        targetChapter,
+        challenges: Object.keys(challenges).filter(k => challenges[k]?.completed)
+      });
+
+      // Update both collections
+      await updateDoc(studentRef, {
+        storyChapter: targetChapter
+      });
+
+      // Also update the users collection chapters structure
+      const updatedChapters = {
+        ...userData.chapters,
+        [targetChapter]: {
+          ...userData.chapters?.[targetChapter],
+          isActive: true,
+          unlockDate: new Date()
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      alert(`✅ Fixed chapter progression for ${student.displayName}! Advanced to Chapter ${targetChapter}.`);
+      
+      // Refresh the students list
+      window.location.reload();
+    } catch (error) {
+      console.error('Error fixing chapter progression:', error);
+      alert('Failed to fix chapter progression. Please try again.');
+    }
+  };
+
   // Approve submission handler
   const handleApprove = async (sub: any) => {
     setRowLoading(prev => ({ ...prev, [sub.id]: true }));
@@ -880,6 +995,28 @@ const AdminPanel: React.FC = () => {
             }}
           >
             Test Level Up
+          </button>
+          <button
+            onClick={() => {
+              const yondaime = students.find(s => s.displayName === 'Yondaime');
+              if (yondaime) {
+                fixChapterProgression(yondaime.id);
+              } else {
+                alert('Yondaime not found in the students list!');
+              }
+            }}
+            style={{
+              backgroundColor: '#ef4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            Fix Yondaime's Chapter
           </button>
         </div>
       </div>
