@@ -7,7 +7,8 @@ import {
   Buff, 
   Debuff,
   Vault,
-  BATTLE_CONSTANTS 
+  BATTLE_CONSTANTS,
+  MOVE_DAMAGE_VALUES
 } from '../types/battle';
 
 export interface BattleCalculation {
@@ -158,7 +159,15 @@ export class BattleEngine {
           message = vaultResult.message;
         } else {
           damage = this.calculateDamage(attacker, defender, move);
-          message = `${attacker.displayName} used ${move.name} for ${damage} damage!`;
+          
+          // Check for PP steal in move damage values
+          const moveDamageValues = MOVE_DAMAGE_VALUES[move.name];
+          if (moveDamageValues && moveDamageValues.ppSteal > 0) {
+            ppStolen = Math.min(defender.vault.currentPP, moveDamageValues.ppSteal);
+            message = `${attacker.displayName} used ${move.name} for ${damage} damage and stole ${ppStolen} PP!`;
+          } else {
+            message = `${attacker.displayName} used ${move.name} for ${damage} damage!`;
+          }
         }
         break;
 
@@ -180,9 +189,107 @@ export class BattleEngine {
         }
         break;
 
-      case 'special':
-        damage = this.calculateDamage(attacker, defender, move);
-        message = `${attacker.displayName} unleashed ${move.name} for ${damage} damage!`;
+      case 'support':
+        if (move.shieldBoost) {
+          const shieldBoost = this.calculateMovePower(move);
+          buffsApplied.push({
+            id: `shield_boost_${Date.now()}`,
+            type: 'shield_boost',
+            strength: shieldBoost,
+            duration: move.duration || 3,
+            remainingTurns: move.duration || 3,
+            source: move.name
+          });
+          message = `${attacker.displayName} boosted shields by ${shieldBoost}!`;
+        } else if (move.healing) {
+          healing = this.calculateHealing(attacker, move);
+          message = `${attacker.displayName} healed for ${healing}!`;
+        } else if (move.buffType) {
+          const buffStrength = this.calculateMovePower(move);
+          buffsApplied.push({
+            id: `${move.buffType}_${Date.now()}`,
+            type: move.buffType,
+            strength: buffStrength,
+            duration: move.duration || 2,
+            remainingTurns: move.duration || 2,
+            source: move.name
+          });
+          message = `${attacker.displayName} applied ${move.buffType} buff!`;
+        }
+        break;
+
+      case 'control':
+        if (move.debuffType) {
+          const debuffStrength = move.debuffStrength || 0;
+          debuffsApplied.push({
+            id: `${move.debuffType}_${Date.now()}`,
+            type: move.debuffType,
+            strength: debuffStrength,
+            duration: move.duration || 1,
+            remainingTurns: move.duration || 1,
+            source: move.name
+          });
+          message = `${attacker.displayName} applied ${move.debuffType} debuff!`;
+        }
+        break;
+
+      case 'mobility':
+        if (move.buffType) {
+          const buffStrength = this.calculateMovePower(move);
+          buffsApplied.push({
+            id: `${move.buffType}_${Date.now()}`,
+            type: move.buffType,
+            strength: buffStrength,
+            duration: move.duration || 1,
+            remainingTurns: move.duration || 1,
+            source: move.name
+          });
+          message = `${attacker.displayName} gained ${move.buffType} buff!`;
+        }
+        break;
+
+      case 'stealth':
+        if (move.buffType) {
+          const buffStrength = this.calculateMovePower(move);
+          buffsApplied.push({
+            id: `${move.buffType}_${Date.now()}`,
+            type: move.buffType,
+            strength: buffStrength,
+            duration: move.duration || 1,
+            remainingTurns: move.duration || 1,
+            source: move.name
+          });
+          message = `${attacker.displayName} entered stealth mode!`;
+        }
+        break;
+
+      case 'reveal':
+        if (move.buffType) {
+          const buffStrength = this.calculateMovePower(move);
+          buffsApplied.push({
+            id: `${move.buffType}_${Date.now()}`,
+            type: move.buffType,
+            strength: buffStrength,
+            duration: move.duration || 1,
+            remainingTurns: move.duration || 1,
+            source: move.name
+          });
+          message = `${attacker.displayName} revealed hidden information!`;
+        }
+        break;
+
+      case 'cleanse':
+        if (move.healing) {
+          healing = this.calculateHealing(attacker, move);
+          message = `${attacker.displayName} cleansed and healed for ${healing}!`;
+        } else {
+          message = `${attacker.displayName} cleansed debuffs!`;
+        }
+        break;
+
+      case 'utility':
+        // Utility moves are typically passive or informational
+        message = `${attacker.displayName} used ${move.name}!`;
         break;
 
       default:

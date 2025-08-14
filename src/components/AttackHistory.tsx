@@ -30,8 +30,13 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
   };
 
   const sortedAttacks = [...attacks].sort((a, b) => {
-    const aTime = (a.timestamp as any).toDate ? (a.timestamp as any).toDate() : new Date(a.timestamp);
-    const bTime = (b.timestamp as any).toDate ? (b.timestamp as any).toDate() : new Date(b.timestamp);
+    // Handle null timestamps by providing fallback dates
+    const aTime = a.timestamp ? 
+      ((a.timestamp as any).toDate ? (a.timestamp as any).toDate() : new Date(a.timestamp)) : 
+      new Date(0);
+    const bTime = b.timestamp ? 
+      ((b.timestamp as any).toDate ? (b.timestamp as any).toDate() : new Date(b.timestamp)) : 
+      new Date(0);
     return bTime.getTime() - aTime.getTime();
   });
 
@@ -40,122 +45,309 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
       <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>
         ⚔️ Attack History
       </h3>
-      <div style={{ display: 'grid', gap: '1rem' }}>
-        {sortedAttacks.map((attack) => {
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
+        gap: '1rem' 
+      }}>
+        {sortedAttacks.slice(0, 6).map((attack) => {
           const isAttacker = attack.attackerId === currentUser?.uid;
           const isTarget = attack.targetId === currentUser?.uid;
           
+          // Determine card background based on attack type
+          const getCardBackground = () => {
+            if (isAttacker) {
+              return 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+            } else if (isTarget) {
+              return 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+            } else {
+              return 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)';
+            }
+          };
+
+          // Get attack type icon
+          const getAttackIcon = () => {
+            if (isAttacker) return '⚔️';
+            if (isTarget) return '🛡️';
+            return '⚡';
+          };
+
           return (
             <div
               key={attack.id}
               style={{
-                background: 'white',
-                border: `2px solid ${isAttacker ? '#10b981' : isTarget ? '#ef4444' : '#e5e7eb'}`,
-                borderRadius: '8px',
+                background: getCardBackground(),
+                border: '2px solid #ffffff',
+                borderRadius: '12px',
                 padding: '1rem',
                 position: 'relative',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                transition: 'all 0.2s ease',
+                cursor: 'pointer',
+                minHeight: '200px',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
+                e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.25)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
               }}
             >
+              {/* Card Header */}
+              <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+                <div style={{ 
+                  fontSize: '1.5rem', 
+                  marginBottom: '0.25rem',
+                  filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'
+                }}>
+                  {getAttackIcon()}
+                </div>
+                <div style={{ 
+                  fontWeight: 'bold', 
+                  color: 'white',
+                  fontSize: '0.875rem',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.5)'
+                }}>
+                  {isAttacker ? 'ATTACK' : isTarget ? 'DEFENDED' : 'BATTLE'}
+                </div>
+              </div>
+
               {/* Attack Type Badge */}
               <div style={{
                 position: 'absolute',
-                top: '0.5rem',
-                right: '0.5rem',
-                background: isAttacker ? '#10b981' : '#ef4444',
-                color: 'white',
+                top: '0.75rem',
+                right: '0.75rem',
+                background: 'rgba(255,255,255,0.9)',
                 padding: '0.25rem 0.5rem',
-                borderRadius: '4px',
+                borderRadius: '0.5rem',
                 fontSize: '0.75rem',
                 fontWeight: 'bold',
+                color: '#374151',
+                backdropFilter: 'blur(10px)'
               }}>
-                {isAttacker ? 'ATTACK' : 'DEFENDED'}
+                {attack.moveName ? 'MOVE' : attack.actionCardName ? 'CARD' : 'ATTACK'}
               </div>
 
-              {/* Attack Details */}
-              <div style={{ marginBottom: '0.5rem' }}>
-                <div style={{ fontWeight: 'bold', color: '#1f2937', marginBottom: '0.25rem' }}>
+              {/* Attack Description */}
+              <div style={{ 
+                background: 'rgba(255,255,255,0.95)',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                marginBottom: '0.75rem',
+                backdropFilter: 'blur(10px)'
+              }}>
+                <div style={{ 
+                  color: '#374151', 
+                  fontSize: '0.875rem', 
+                  lineHeight: '1.4',
+                  margin: '0',
+                  textAlign: 'center',
+                  fontWeight: '500'
+                }}>
                   {isAttacker ? (
-                    <>You attacked <span style={{ color: '#ef4444' }}>{attack.targetName}</span></>
+                    <>Attacked <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{attack.targetName}</span></>
                   ) : (
-                    <>You were attacked by <span style={{ color: '#10b981' }}>{attack.attackerName}</span></>
+                    <>Attacked by <span style={{ color: '#059669', fontWeight: 'bold' }}>{attack.attackerName}</span></>
                   )}
                 </div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                <div style={{ 
+                  fontSize: '0.75rem', 
+                  color: '#6b7280',
+                  textAlign: 'center',
+                  marginTop: '0.25rem'
+                }}>
                   {formatTimestamp(attack.timestamp)}
                 </div>
               </div>
 
-              {/* Attack Results */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              {/* Before/After Stats */}
+              {attack.targetVaultBefore && attack.targetVaultAfter && (
+                <div style={{ 
+                  background: 'rgba(255,255,255,0.95)',
+                  padding: '0.75rem',
+                  borderRadius: '0.75rem',
+                  marginBottom: '0.75rem',
+                  backdropFilter: 'blur(10px)',
+                  border: (() => {
+                    // Check for discrepancies between calculated damage and actual changes
+                    const expectedShieldChange = attack.shieldDamage;
+                    const actualShieldChange = attack.targetVaultBefore.shieldStrength - attack.targetVaultAfter.shieldStrength;
+                    const expectedPPChange = attack.ppStolen;
+                    const actualPPChange = attack.targetVaultBefore.currentPP - attack.targetVaultAfter.currentPP;
+                    
+                    if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1 || Math.abs(expectedPPChange - actualPPChange) > 0.1) {
+                      return '2px solid #ef4444'; // Red border for discrepancies
+                    }
+                    return 'none';
+                  })()
+                }}>
+                  <div style={{ 
+                    fontSize: '0.75rem', 
+                    fontWeight: 'bold', 
+                    color: '#374151', 
+                    marginBottom: '0.5rem',
+                    textAlign: 'center'
+                  }}>
+                    Target Vault Status
+                    {(() => {
+                      // Check for discrepancies and show warning
+                      const expectedShieldChange = attack.shieldDamage;
+                      const actualShieldChange = attack.targetVaultBefore.shieldStrength - attack.targetVaultAfter.shieldStrength;
+                      const expectedPPChange = attack.ppStolen;
+                      const actualPPChange = attack.targetVaultBefore.currentPP - attack.targetVaultAfter.currentPP;
+                      
+                      if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1 || Math.abs(expectedPPChange - actualPPChange) > 0.1) {
+                        return (
+                          <div style={{ 
+                            fontSize: '0.625rem', 
+                            color: '#ef4444', 
+                            fontWeight: 'bold',
+                            marginTop: '0.25rem'
+                          }}>
+                            ⚠️ DISCREPANCY DETECTED
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                  <div style={{ 
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '0.5rem'
+                  }}>
+                    {/* Shield Before/After */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD</div>
+                      <div style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 'bold' }}>
+                        {attack.targetVaultBefore.shieldStrength} → {attack.targetVaultAfter.shieldStrength}
+                      </div>
+                      <div style={{ 
+                        fontSize: '0.625rem', 
+                        color: attack.targetVaultAfter.shieldStrength < attack.targetVaultBefore.shieldStrength ? '#dc2626' : '#10b981',
+                        fontWeight: '500'
+                      }}>
+                        {attack.targetVaultAfter.shieldStrength < attack.targetVaultBefore.shieldStrength ? 
+                          `-${attack.targetVaultBefore.shieldStrength - attack.targetVaultAfter.shieldStrength}` : 
+                          attack.targetVaultAfter.shieldStrength > attack.targetVaultBefore.shieldStrength ? 
+                          `+${attack.targetVaultAfter.shieldStrength - attack.targetVaultBefore.shieldStrength}` : 
+                          'No change'
+                        }
+                      </div>
+                    </div>
+                    
+                    {/* PP Before/After */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>POWER POINTS</div>
+                      <div style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 'bold' }}>
+                        {attack.targetVaultBefore.currentPP} → {attack.targetVaultAfter.currentPP}
+                      </div>
+                      <div style={{ 
+                        fontSize: '0.625rem', 
+                        color: attack.targetVaultAfter.currentPP < attack.targetVaultBefore.currentPP ? '#dc2626' : '#10b981',
+                        fontWeight: '500'
+                      }}>
+                        {attack.targetVaultAfter.currentPP < attack.targetVaultBefore.currentPP ? 
+                          `-${attack.targetVaultBefore.currentPP - attack.targetVaultAfter.currentPP}` : 
+                          attack.targetVaultAfter.currentPP > attack.targetVaultBefore.currentPP ? 
+                          `+${attack.targetVaultAfter.currentPP - attack.targetVaultBefore.currentPP}` : 
+                          'No change'
+                        }
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Attack Stats Grid */}
+              <div style={{ 
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '0.5rem',
+                marginBottom: '0.75rem'
+              }}>
                 {attack.ppStolen > 0 && (
-                  <div style={{ background: '#fef3c7', padding: '0.5rem', borderRadius: '4px' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 'bold' }}>PP Stolen</div>
-                    <div style={{ fontSize: '1rem', color: '#92400e' }}>{attack.ppStolen}</div>
+                  <div style={{
+                    background: 'rgba(255,255,255,0.9)',
+                    padding: '0.5rem',
+                    borderRadius: '0.5rem',
+                    textAlign: 'center',
+                    backdropFilter: 'blur(10px)'
+                  }}>
+                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>PP STOLEN</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#f59e0b' }}>{attack.ppStolen}</div>
                   </div>
                 )}
                 {attack.shieldDamage > 0 && (
-                  <div style={{ background: '#dbeafe', padding: '0.5rem', borderRadius: '4px' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>Shield Damage</div>
-                    <div style={{ fontSize: '1rem', color: '#1e40af' }}>{attack.shieldDamage}</div>
+                  <div style={{
+                    background: 'rgba(255,255,255,0.9)',
+                    padding: '0.5rem',
+                    borderRadius: '0.5rem',
+                    textAlign: 'center',
+                    backdropFilter: 'blur(10px)'
+                  }}>
+                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD DMG</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#dc2626' }}>{attack.shieldDamage}</div>
                   </div>
                 )}
                 {attack.damage > 0 && (
-                  <div style={{ background: '#fee2e2', padding: '0.5rem', borderRadius: '4px' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>Damage</div>
-                    <div style={{ fontSize: '1rem', color: '#991b1b' }}>{attack.damage}</div>
+                  <div style={{
+                    background: 'rgba(255,255,255,0.9)',
+                    padding: '0.5rem',
+                    borderRadius: '0.5rem',
+                    textAlign: 'center',
+                    backdropFilter: 'blur(10px)',
+                    gridColumn: 'span 2'
+                  }}>
+                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#991b1b' }}>{attack.damage}</div>
                   </div>
                 )}
               </div>
 
               {/* Weapons Used */}
-              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                {attack.moveName && (
-                  <span style={{ background: '#f3f4f6', padding: '0.25rem 0.5rem', borderRadius: '4px', marginRight: '0.5rem' }}>
-                    Move: {attack.moveName}
-                  </span>
-                )}
-                {attack.actionCardName && (
-                  <span style={{ background: '#f3f4f6', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
-                    Card: {attack.actionCardName}
-                  </span>
-                )}
-              </div>
-
-              {/* Target Vault Impact */}
               <div style={{ 
-                background: '#f9fafb', 
-                padding: '0.75rem', 
-                borderRadius: '4px',
-                fontSize: '0.875rem'
+                background: 'rgba(255,255,255,0.9)',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                backdropFilter: 'blur(10px)'
               }}>
-                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem', color: '#374151' }}>
-                  Target Vault Impact:
+                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                  Weapons Used
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                  <div>
-                    <span style={{ color: '#6b7280' }}>PP: </span>
-                    <span style={{ 
-                      color: attack.targetVaultAfter?.currentPP < attack.targetVaultBefore?.currentPP ? '#ef4444' : '#10b981',
-                      fontWeight: 'bold'
-                    }}>
-                      {attack.targetVaultBefore?.currentPP || 'N/A'} → {attack.targetVaultAfter?.currentPP || 'N/A'}
-                    </span>
-                  </div>
-                  <div>
-                    <span style={{ color: '#6b7280' }}>Shields: </span>
-                    <span style={{ 
-                      color: attack.targetVaultAfter?.shieldStrength < attack.targetVaultBefore?.shieldStrength ? '#ef4444' : '#10b981',
-                      fontWeight: 'bold'
-                    }}>
-                      {attack.targetVaultBefore?.shieldStrength || 'N/A'} → {attack.targetVaultAfter?.shieldStrength || 'N/A'}
-                    </span>
-                  </div>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280', lineHeight: '1.3' }}>
+                  {attack.moveName && (
+                    <div style={{ marginBottom: '0.125rem' }}>
+                      <span style={{ color: '#059669', fontWeight: '500' }}>Move:</span> {attack.moveName}
+                    </div>
+                  )}
+                  {attack.actionCardName && (
+                    <div>
+                      <span style={{ color: '#7c3aed', fontWeight: '500' }}>Card:</span> {attack.actionCardName}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
       </div>
+      
+      {sortedAttacks.length > 6 && (
+        <div style={{ 
+          textAlign: 'center', 
+          marginTop: '1rem',
+          color: '#6b7280',
+          fontSize: '0.875rem'
+        }}>
+          Showing 6 most recent attacks. {sortedAttacks.length - 6} more attacks in history.
+        </div>
+      )}
     </div>
   );
 };

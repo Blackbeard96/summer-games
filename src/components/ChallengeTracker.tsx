@@ -1549,7 +1549,7 @@ const ChallengeTracker = () => {
             textAlign: 'center'
           }}>
             <p style={{ fontWeight: 'bold', color: '#fbbf24' }}>
-              Complete all manifestations in Chapter {currentChapter.id} to unlock the next chapter of your story!
+              Complete all Challenges in Chapter {currentChapter.id} to unlock the next chapter of your story!
             </p>
           </div>
         );
