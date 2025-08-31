@@ -28,6 +28,7 @@ export interface Move {
   level: number; // 1-4 for elemental moves, 1-5 for others
   cost: number; // PP cost
   damage?: number;
+  ppSteal?: number; // PP stolen from target
   healing?: number;
   shieldBoost?: number;
   debuffType?: 'burn' | 'soak' | 'shock' | 'root' | 'stun' | 'silence' | 'dread' | 'vault_hack' | 'shield_break' | 'pp_drain' | 'move_lock' | 'dodge' | 'accuracy' | 'confusion';
@@ -52,12 +53,92 @@ export interface ActionCard {
   uses: number;
   maxUses: number;
   effect: {
-    type: 'shield_breach' | 'pp_restore' | 'teleport_pp' | 'reverse_dues' | 'double_xp' | 'move_disrupt';
+    type: 'shield_breach' | 'pp_restore' | 'teleport_pp' | 'reverse_dues' | 'double_xp' | 'move_disrupt' | 'shield_restore';
     strength: number;
     duration?: number;
   };
   imageUrl?: string;
   unlocked: boolean;
+  masteryLevel: number; // 1-5, affects power
+  upgradeCost: number; // PP cost to upgrade to next level
+  nextLevelEffect?: {
+    strength: number;
+    duration?: number;
+  };
+}
+
+export interface ManifestMilestone {
+  id: string;
+  manifestType: 'reading' | 'writing' | 'drawing' | 'athletics' | 'singing' | 'gaming' | 'observation' | 'empathy' | 'creating' | 'cooking';
+  level: number; // 1-5, corresponds to move levels
+  name: string;
+  description: string;
+  requirements: {
+    level1MovesUsed: number; // Number of times Level 1 moves must be used
+    masteryLevel: number; // Minimum mastery level required
+    movesUnlocked: number; // Number of moves that must be unlocked
+    battlesWon: number; // Number of battles won with this manifest
+    ppEarned: number; // PP earned through this manifest's moves
+  };
+  rewards: {
+    xp: number;
+    pp: number;
+    newMoveUnlocked: boolean;
+    masteryBonus: number;
+  };
+  completed: boolean;
+  completedAt?: Date;
+}
+
+export interface ElementalMilestone {
+  id: string;
+  elementalType: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  level: number; // 1-4, corresponds to elemental move levels
+  name: string;
+  description: string;
+  requirements: {
+    level1MovesUsed: number; // Number of times Level 1 elemental moves must be used
+    masteryLevel: number; // Minimum mastery level required
+    movesUnlocked: number; // Number of elemental moves that must be unlocked
+    battlesWon: number; // Number of battles won with this element
+    ppEarned: number; // PP earned through this element's moves
+  };
+  rewards: {
+    xp: number;
+    pp: number;
+    newMoveUnlocked: boolean;
+    masteryBonus: number;
+  };
+  completed: boolean;
+  completedAt?: Date;
+}
+
+export interface PlayerManifestProgress {
+  userId: string;
+  manifestType: 'reading' | 'writing' | 'drawing' | 'athletics' | 'singing' | 'gaming' | 'observation' | 'empathy' | 'creating' | 'cooking';
+  currentLevel: number;
+  totalXp: number;
+  masteryLevel: number;
+  movesUnlocked: number;
+  battlesWon: number;
+  ppEarned: number;
+  level1MovesUsed: number; // Track how many times Level 1 moves have been used
+  milestones: ManifestMilestone[];
+  lastUpdated: Date;
+}
+
+export interface PlayerElementalProgress {
+  userId: string;
+  elementalType: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  currentLevel: number;
+  totalXp: number;
+  masteryLevel: number;
+  movesUnlocked: number;
+  battlesWon: number;
+  ppEarned: number;
+  level1MovesUsed: number; // Track how many times Level 1 elemental moves have been used
+  milestones: ElementalMilestone[];
+  lastUpdated: Date;
 }
 
 export interface BattleState {
@@ -146,7 +227,7 @@ export interface BattleMessage {
 export interface OfflineMove {
   id: string;
   userId: string;
-  type: 'vault_attack' | 'shield_buff' | 'pp_trade' | 'mastery_challenge';
+  type: 'vault_attack' | 'shield_buff' | 'pp_trade' | 'mastery_challenge' | 'move_restore';
   targetUserId?: string;
   moveId?: string;
   actionCardId?: string;
@@ -229,8 +310,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'reading',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 8,
+    ppSteal: 0,
     debuffType: 'accuracy',
     debuffStrength: 20,
     duration: 2,
@@ -244,8 +326,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'reading',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 15,
+    ppSteal: 0,
     buffType: 'dodge',
     buffStrength: 25,
     duration: 2,
@@ -261,8 +344,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'writing',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 12,
+    ppSteal: 0,
     debuffType: 'confusion',
     debuffStrength: 30,
     duration: 2,
@@ -276,8 +360,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'writing',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 18,
+    ppSteal: 0,
     buffType: 'fortify',
     buffStrength: 20,
     duration: 3,
@@ -293,8 +378,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'drawing',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 10,
+    ppSteal: 0,
     debuffType: 'accuracy',
     debuffStrength: 35,
     duration: 2,
@@ -308,8 +394,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'drawing',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 12,
+    ppSteal: 0,
     buffType: 'stealth',
     buffStrength: 30,
     duration: 2,
@@ -325,8 +412,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'athletics',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 14,
+    ppSteal: 0,
     buffType: 'speed',
     buffStrength: 25,
     duration: 1,
@@ -340,8 +428,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'athletics',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 16,
+    ppSteal: 0,
     buffType: 'dodge',
     buffStrength: 40,
     duration: 2,
@@ -357,8 +446,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'singing',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 11,
+    ppSteal: 0,
     debuffType: 'silence',
     debuffStrength: 25,
     duration: 2,
@@ -372,8 +462,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'singing',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 14,
+    ppSteal: 0,
     buffType: 'immunity',
     buffStrength: 20,
     duration: 2,
@@ -389,8 +480,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'gaming',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 16,
+    ppSteal: 8,
     debuffType: 'stun',
     debuffStrength: 15,
     duration: 1,
@@ -404,8 +496,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'gaming',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 25,
+    ppSteal: 0,
     buffType: 'accuracy',
     buffStrength: 30,
     duration: 2,
@@ -421,8 +514,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'observation',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 13,
+    ppSteal: 0,
     buffType: 'accuracy',
     buffStrength: 50,
     duration: 1,
@@ -436,8 +530,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'observation',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 17,
+    ppSteal: 0,
     buffType: 'fortify',
     buffStrength: 25,
     duration: 2,
@@ -453,8 +548,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'empathy',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 9,
+    ppSteal: 0,
     debuffType: 'dread',
     debuffStrength: 40,
     duration: 3,
@@ -468,8 +564,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'empathy',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 13,
+    ppSteal: 0,
     buffType: 'immunity',
     buffStrength: 35,
     duration: 2,
@@ -485,8 +582,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'creating',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 15,
+    ppSteal: 0,
     buffType: 'crit',
     buffStrength: 25,
     duration: 1,
@@ -500,8 +598,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'creating',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 22,
+    ppSteal: 0,
     buffType: 'fortify',
     buffStrength: 30,
     duration: 3,
@@ -517,8 +616,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     manifestType: 'cooking',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 12,
+    ppSteal: 0,
     healing: 8,
     cooldown: 3,
     targetType: 'single',
@@ -530,8 +630,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'defense',
     manifestType: 'cooking',
     level: 1,
-    cost: 0,
+    cost: 1,
     shieldBoost: 16,
+    ppSteal: 0,
     healing: 12,
     cooldown: 4,
     targetType: 'self',
@@ -545,8 +646,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'fire',
     level: 1,
-    cost: 0,
+    cost: 1,
     damage: 8,
+    ppSteal: 7,
     debuffType: 'burn',
     debuffStrength: 3,
     duration: 2,
@@ -560,7 +662,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'mobility',
     elementalAffinity: 'fire',
     level: 2,
-    cost: 0,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'crit',
     buffStrength: 50,
     duration: 1,
@@ -574,8 +677,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'fire',
     level: 3,
-    cost: 0,
+    cost: 1,
     damage: 12,
+    ppSteal: 0,
     debuffType: 'burn',
     debuffStrength: 5,
     duration: 3,
@@ -589,7 +693,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'fire',
     level: 4,
-    cost: 0,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'crit',
     buffStrength: 30,
     duration: 2,
@@ -605,8 +710,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'water',
     level: 1,
-    cost: 10,
+    cost: 1,
     damage: 6,
+    ppSteal: 0,
     debuffType: 'soak',
     debuffStrength: 25,
     duration: 2,
@@ -620,7 +726,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'water',
     level: 2,
-    cost: 18,
+    cost: 1,
+    ppSteal: 0,
     healing: 20,
     cooldown: 3,
     targetType: 'single',
@@ -632,7 +739,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'water',
     level: 3,
-    cost: 22,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'move_lock',
     debuffStrength: 1,
     duration: 1,
@@ -646,7 +754,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'water',
     level: 4,
-    cost: 30,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'dodge',
     buffStrength: 40,
     duration: 2,
@@ -662,7 +771,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'air',
     level: 1,
-    cost: 8,
+    cost: 1,
+    ppSteal: 0,
     cooldown: 2,
     targetType: 'single',
   },
@@ -673,7 +783,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'air',
     level: 2,
-    cost: 12,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'speed',
     buffStrength: 50,
     duration: 1,
@@ -687,7 +798,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'air',
     level: 3,
-    cost: 20,
+    cost: 1,
+    ppSteal: 0,
     cooldown: 4,
     targetType: 'enemy_team',
   },
@@ -698,7 +810,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'air',
     level: 4,
-    cost: 28,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'silence',
     debuffStrength: 1,
     duration: 1,
@@ -714,7 +827,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'earth',
     level: 1,
-    cost: 10,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'fortify',
     buffStrength: 20,
     duration: 2,
@@ -728,8 +842,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'earth',
     level: 2,
-    cost: 15,
+    cost: 1,
     damage: 10,
+    ppSteal: 0,
     debuffType: 'root',
     debuffStrength: 1,
     duration: 1,
@@ -743,7 +858,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'earth',
     level: 3,
-    cost: 25,
+    cost: 1,
+    ppSteal: 0,
     shieldBoost: 25,
     cooldown: 4,
     targetType: 'team',
@@ -755,7 +871,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'earth',
     level: 4,
-    cost: 35,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'dodge',
     debuffStrength: -30,
     buffType: 'immunity',
@@ -773,8 +890,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'lightning',
     level: 1,
-    cost: 12,
+    cost: 1,
     damage: 8,
+    ppSteal: 0,
     debuffType: 'shock',
     debuffStrength: 30,
     duration: 1,
@@ -788,7 +906,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'lightning',
     level: 2,
-    cost: 15,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'speed',
     buffStrength: 100,
     duration: 1,
@@ -802,7 +921,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'lightning',
     level: 3,
-    cost: 22,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'shock',
     debuffStrength: 35,
     duration: 2,
@@ -816,8 +936,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'lightning',
     level: 4,
-    cost: 35,
+    cost: 1,
     damage: 25,
+    ppSteal: 0,
     cooldown: 5,
     targetType: 'enemy_team',
   },
@@ -830,7 +951,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'reveal',
     elementalAffinity: 'light',
     level: 1,
-    cost: 8,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'accuracy',
     buffStrength: 50,
     duration: 1,
@@ -844,7 +966,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'cleanse',
     elementalAffinity: 'light',
     level: 2,
-    cost: 15,
+    cost: 1,
+    ppSteal: 0,
     healing: 15,
     cooldown: 3,
     targetType: 'single',
@@ -856,7 +979,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'light',
     level: 3,
-    cost: 20,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'accuracy',
     buffStrength: 40,
     duration: 2,
@@ -870,7 +994,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'light',
     level: 4,
-    cost: 30,
+    cost: 1,
+    ppSteal: 0,
     shieldBoost: 30,
     duration: 3,
     cooldown: 5,
@@ -885,7 +1010,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'stealth',
     elementalAffinity: 'shadow',
     level: 1,
-    cost: 10,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'stealth',
     buffStrength: 1,
     duration: 1,
@@ -899,7 +1025,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'shadow',
     level: 2,
-    cost: 12,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'dread',
     debuffStrength: 25,
     duration: 2,
@@ -913,7 +1040,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'shadow',
     level: 3,
-    cost: 18,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'stun',
     debuffStrength: 1,
     duration: 1,
@@ -927,7 +1055,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'shadow',
     level: 4,
-    cost: 25,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'accuracy',
     debuffStrength: -40,
     duration: 2,
@@ -943,8 +1072,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'attack',
     elementalAffinity: 'metal',
     level: 1,
-    cost: 12,
+    cost: 1,
     damage: 10,
+    ppSteal: 0,
     cooldown: 2,
     targetType: 'single',
   },
@@ -955,7 +1085,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'utility',
     elementalAffinity: 'metal',
     level: 2,
-    cost: 15,
+    cost: 1,
+    ppSteal: 0,
     cooldown: 3,
     targetType: 'single',
   },
@@ -966,7 +1097,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'support',
     elementalAffinity: 'metal',
     level: 3,
-    cost: 20,
+    cost: 1,
+    ppSteal: 0,
     buffType: 'immunity',
     buffStrength: 100,
     duration: 2,
@@ -980,7 +1112,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     type: 'control',
     elementalAffinity: 'metal',
     level: 4,
-    cost: 28,
+    cost: 1,
+    ppSteal: 0,
     debuffType: 'move_lock',
     debuffStrength: 2,
     duration: 2,
@@ -995,8 +1128,9 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     category: 'system',
     type: 'attack',
     level: 1,
-    cost: 20,
+    cost: 1,
     damage: 5,
+    ppSteal: 8,
     debuffType: 'vault_hack',
     debuffStrength: 10,
     cooldown: 3,
@@ -1008,7 +1142,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     category: 'system',
     type: 'support',
     level: 1,
-    cost: 15,
+    cost: 1,
+    ppSteal: 0,
     shieldBoost: 20,
     cooldown: 2,
     targetType: 'self',
@@ -1018,7 +1153,7 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
 // Move damage and PP steal values for new elemental system
 export const MOVE_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
   // Manifest Moves (Reading)
-  'Emotional Read': { shieldDamage: 8, ppSteal: 0 },
+  'Emotional Read': { shieldDamage: 8, ppSteal: 5 },
   'Pattern Shield': { shieldDamage: 0, ppSteal: 0 },
   
   // Manifest Moves (Writing)
@@ -1113,7 +1248,7 @@ export const MOVE_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal:
 // Action card damage values
 export const ACTION_CARD_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
   'Shield Breaker': { shieldDamage: 22, ppSteal: 0 },
-  'PP Restore': { shieldDamage: 0, ppSteal: 0 }, // Self-heal
+  'Shield Restore': { shieldDamage: 0, ppSteal: 0 }, // Self-heal
   'Teleport PP': { shieldDamage: 0, ppSteal: 25 },
   'Double XP': { shieldDamage: 0, ppSteal: 0 }, // Utility
 };
@@ -1140,18 +1275,28 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
       type: 'shield_breach',
       strength: 22, // Average of 15-30 range
     },
+    masteryLevel: 1,
+    upgradeCost: 100,
+    nextLevelEffect: {
+      strength: 30,
+    },
   },
   {
-    name: 'PP Restore',
-    description: 'Instantly restore PP to your vault',
+    name: 'Shield Restore',
+    description: 'Instantly restore 10 points to your shield',
     type: 'defense',
     rarity: 'common',
     truthMetalCost: 150,
     uses: 2,
     maxUses: 2,
     effect: {
-      type: 'pp_restore',
-      strength: 50,
+      type: 'shield_restore',
+      strength: 10,
+    },
+    masteryLevel: 1,
+    upgradeCost: 100,
+    nextLevelEffect: {
+      strength: 15,
     },
   },
   {
@@ -1166,6 +1311,11 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
       type: 'teleport_pp',
       strength: 25,
     },
+    masteryLevel: 1,
+    upgradeCost: 150,
+    nextLevelEffect: {
+      strength: 35,
+    },
   },
   {
     name: 'Double XP',
@@ -1179,5 +1329,1104 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
       type: 'double_xp',
       strength: 2, // multiplier
     },
+    masteryLevel: 1,
+    upgradeCost: 200,
+    nextLevelEffect: {
+      strength: 3, // triple XP
+    },
   },
 ]; 
+
+// Elemental Milestone Templates
+export const ELEMENTAL_MILESTONE_TEMPLATES: Record<string, ElementalMilestone[]> = {
+  fire: [
+    {
+      id: 'fire_1',
+      elementalType: 'fire',
+      level: 1,
+      name: 'Flame Initiate',
+      description: 'Master the basics of fire manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'fire_2',
+      elementalType: 'fire',
+      level: 2,
+      name: 'Blaze Master',
+      description: 'Unlock advanced fire techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'fire_3',
+      elementalType: 'fire',
+      level: 3,
+      name: 'Inferno Lord',
+      description: 'Achieve mastery in fire warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  water: [
+    {
+      id: 'water_1',
+      elementalType: 'water',
+      level: 1,
+      name: 'Wave Initiate',
+      description: 'Master the basics of water manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'water_2',
+      elementalType: 'water',
+      level: 2,
+      name: 'Tide Master',
+      description: 'Unlock advanced water techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'water_3',
+      elementalType: 'water',
+      level: 3,
+      name: 'Ocean Lord',
+      description: 'Achieve mastery in water warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  air: [
+    {
+      id: 'air_1',
+      elementalType: 'air',
+      level: 1,
+      name: 'Breeze Initiate',
+      description: 'Master the basics of air manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'air_2',
+      elementalType: 'air',
+      level: 2,
+      name: 'Wind Master',
+      description: 'Unlock advanced air techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'air_3',
+      elementalType: 'air',
+      level: 3,
+      name: 'Storm Lord',
+      description: 'Achieve mastery in air warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  earth: [
+    {
+      id: 'earth_1',
+      elementalType: 'earth',
+      level: 1,
+      name: 'Stone Initiate',
+      description: 'Master the basics of earth manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'earth_2',
+      elementalType: 'earth',
+      level: 2,
+      name: 'Mountain Master',
+      description: 'Unlock advanced earth techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'earth_3',
+      elementalType: 'earth',
+      level: 3,
+      name: 'Tectonic Lord',
+      description: 'Achieve mastery in earth warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  lightning: [
+    {
+      id: 'lightning_1',
+      elementalType: 'lightning',
+      level: 1,
+      name: 'Spark Initiate',
+      description: 'Master the basics of lightning manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'lightning_2',
+      elementalType: 'lightning',
+      level: 2,
+      name: 'Thunder Master',
+      description: 'Unlock advanced lightning techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'lightning_3',
+      elementalType: 'lightning',
+      level: 3,
+      name: 'Storm Lord',
+      description: 'Achieve mastery in lightning warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  light: [
+    {
+      id: 'light_1',
+      elementalType: 'light',
+      level: 1,
+      name: 'Glow Initiate',
+      description: 'Master the basics of light manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'light_2',
+      elementalType: 'light',
+      level: 2,
+      name: 'Radiance Master',
+      description: 'Unlock advanced light techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'light_3',
+      elementalType: 'light',
+      level: 3,
+      name: 'Solar Lord',
+      description: 'Achieve mastery in light warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  shadow: [
+    {
+      id: 'shadow_1',
+      elementalType: 'shadow',
+      level: 1,
+      name: 'Shade Initiate',
+      description: 'Master the basics of shadow manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'shadow_2',
+      elementalType: 'shadow',
+      level: 2,
+      name: 'Umbral Master',
+      description: 'Unlock advanced shadow techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'shadow_3',
+      elementalType: 'shadow',
+      level: 3,
+      name: 'Void Lord',
+      description: 'Achieve mastery in shadow warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  metal: [
+    {
+      id: 'metal_1',
+      elementalType: 'metal',
+      level: 1,
+      name: 'Iron Initiate',
+      description: 'Master the basics of metal manipulation',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'metal_2',
+      elementalType: 'metal',
+      level: 2,
+      name: 'Steel Master',
+      description: 'Unlock advanced metal techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'metal_3',
+      elementalType: 'metal',
+      level: 3,
+      name: 'Truth Lord',
+      description: 'Achieve mastery in metal warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ]
+}; 
+
+// Move Upgrade Templates - Defines how moves scale with levels 1-4
+export const MOVE_UPGRADE_TEMPLATES: Record<string, {
+  level1: { damage?: number; ppSteal?: number; debuffStrength?: number; buffStrength?: number; shieldBoost?: number; healing?: number };
+  level2: { damage?: number; ppSteal?: number; debuffStrength?: number; buffStrength?: number; shieldBoost?: number; healing?: number };
+  level3: { damage?: number; ppSteal?: number; debuffStrength?: number; buffStrength?: number; shieldBoost?: number; healing?: number };
+  level4: { damage?: number; ppSteal?: number; debuffStrength?: number; buffStrength?: number; shieldBoost?: number; healing?: number };
+}> = {
+  // Manifest Moves (Reading)
+  'Emotional Read': {
+    level1: { damage: 8, ppSteal: 0, debuffStrength: 20 },
+    level2: { damage: 12, ppSteal: 3, debuffStrength: 30 },
+    level3: { damage: 16, ppSteal: 6, debuffStrength: 40 },
+    level4: { damage: 20, ppSteal: 10, debuffStrength: 50 }
+  },
+  'Pattern Shield': {
+    level1: { shieldBoost: 15, buffStrength: 25 },
+    level2: { shieldBoost: 22, buffStrength: 35 },
+    level3: { shieldBoost: 30, buffStrength: 45 },
+    level4: { shieldBoost: 40, buffStrength: 60 }
+  },
+  
+  // Manifest Moves (Writing)
+  'Reality Rewrite': {
+    level1: { damage: 12, ppSteal: 0, debuffStrength: 30 },
+    level2: { damage: 18, ppSteal: 5, debuffStrength: 45 },
+    level3: { damage: 24, ppSteal: 10, debuffStrength: 60 },
+    level4: { damage: 32, ppSteal: 15, debuffStrength: 80 }
+  },
+  'Narrative Barrier': {
+    level1: { shieldBoost: 18, buffStrength: 20 },
+    level2: { shieldBoost: 26, buffStrength: 30 },
+    level3: { shieldBoost: 35, buffStrength: 40 },
+    level4: { shieldBoost: 45, buffStrength: 55 }
+  },
+  
+  // Manifest Moves (Drawing)
+  'Illusion Strike': {
+    level1: { damage: 10, ppSteal: 0, debuffStrength: 35 },
+    level2: { damage: 15, ppSteal: 4, debuffStrength: 50 },
+    level3: { damage: 20, ppSteal: 8, debuffStrength: 65 },
+    level4: { damage: 26, ppSteal: 12, debuffStrength: 85 }
+  },
+  'Mirage Shield': {
+    level1: { shieldBoost: 12, buffStrength: 30 },
+    level2: { shieldBoost: 18, buffStrength: 40 },
+    level3: { shieldBoost: 25, buffStrength: 50 },
+    level4: { shieldBoost: 35, buffStrength: 65 }
+  },
+  
+  // Manifest Moves (Athletics)
+  'Flow Strike': {
+    level1: { damage: 14, ppSteal: 0, buffStrength: 25 },
+    level2: { damage: 20, ppSteal: 5, buffStrength: 35 },
+    level3: { damage: 26, ppSteal: 10, buffStrength: 45 },
+    level4: { damage: 34, ppSteal: 15, buffStrength: 60 }
+  },
+  'Rhythm Guard': {
+    level1: { shieldBoost: 16, buffStrength: 40 },
+    level2: { shieldBoost: 24, buffStrength: 50 },
+    level3: { shieldBoost: 32, buffStrength: 60 },
+    level4: { shieldBoost: 42, buffStrength: 75 }
+  },
+  
+  // Manifest Moves (Singing)
+  'Harmonic Blast': {
+    level1: { damage: 11, ppSteal: 0, debuffStrength: 25 },
+    level2: { damage: 16, ppSteal: 4, debuffStrength: 35 },
+    level3: { damage: 21, ppSteal: 8, debuffStrength: 45 },
+    level4: { damage: 28, ppSteal: 12, debuffStrength: 60 }
+  },
+  'Melody Shield': {
+    level1: { shieldBoost: 14, buffStrength: 20 },
+    level2: { shieldBoost: 21, buffStrength: 30 },
+    level3: { shieldBoost: 28, buffStrength: 40 },
+    level4: { shieldBoost: 38, buffStrength: 55 }
+  },
+  
+  // Manifest Moves (Gaming)
+  'Pattern Break': {
+    level1: { damage: 16, ppSteal: 8, debuffStrength: 15 },
+    level2: { damage: 22, ppSteal: 12, debuffStrength: 25 },
+    level3: { damage: 28, ppSteal: 16, debuffStrength: 35 },
+    level4: { damage: 36, ppSteal: 20, debuffStrength: 50 }
+  },
+  'Strategy Matrix': {
+    level1: { shieldBoost: 25, buffStrength: 30 },
+    level2: { shieldBoost: 35, buffStrength: 40 },
+    level3: { shieldBoost: 45, buffStrength: 50 },
+    level4: { shieldBoost: 60, buffStrength: 65 }
+  },
+  
+  // Manifest Moves (Observation)
+  'Precision Strike': {
+    level1: { damage: 13, ppSteal: 0, buffStrength: 50 },
+    level2: { damage: 19, ppSteal: 5, buffStrength: 60 },
+    level3: { damage: 25, ppSteal: 10, buffStrength: 70 },
+    level4: { damage: 33, ppSteal: 15, buffStrength: 85 }
+  },
+  'Memory Shield': {
+    level1: { shieldBoost: 17, buffStrength: 25 },
+    level2: { shieldBoost: 25, buffStrength: 35 },
+    level3: { shieldBoost: 33, buffStrength: 45 },
+    level4: { shieldBoost: 43, buffStrength: 60 }
+  },
+  
+  // Manifest Moves (Empathy)
+  'Emotional Resonance': {
+    level1: { damage: 9, ppSteal: 0, debuffStrength: 40 },
+    level2: { damage: 14, ppSteal: 4, debuffStrength: 55 },
+    level3: { damage: 19, ppSteal: 8, debuffStrength: 70 },
+    level4: { damage: 25, ppSteal: 12, debuffStrength: 90 }
+  },
+  'Empathic Barrier': {
+    level1: { shieldBoost: 13, buffStrength: 35 },
+    level2: { shieldBoost: 20, buffStrength: 45 },
+    level3: { shieldBoost: 27, buffStrength: 55 },
+    level4: { shieldBoost: 37, buffStrength: 70 }
+  },
+  
+  // Manifest Moves (Creating)
+  'Tool Strike': {
+    level1: { damage: 15, ppSteal: 0, buffStrength: 25 },
+    level2: { damage: 21, ppSteal: 5, buffStrength: 35 },
+    level3: { damage: 27, ppSteal: 10, buffStrength: 45 },
+    level4: { damage: 35, ppSteal: 15, buffStrength: 60 }
+  },
+  'Construct Shield': {
+    level1: { shieldBoost: 22, buffStrength: 30 },
+    level2: { shieldBoost: 30, buffStrength: 40 },
+    level3: { shieldBoost: 38, buffStrength: 50 },
+    level4: { shieldBoost: 48, buffStrength: 65 }
+  },
+  
+  // Manifest Moves (Cooking)
+  'Energy Feast': {
+    level1: { damage: 12, ppSteal: 0, healing: 8 },
+    level2: { damage: 18, ppSteal: 4, healing: 12 },
+    level3: { damage: 24, ppSteal: 8, healing: 16 },
+    level4: { damage: 32, ppSteal: 12, healing: 20 }
+  },
+  'Nourishing Barrier': {
+    level1: { shieldBoost: 16, healing: 12 },
+    level2: { shieldBoost: 24, healing: 18 },
+    level3: { shieldBoost: 32, healing: 24 },
+    level4: { shieldBoost: 42, healing: 30 }
+  },
+  
+  // Fire Elemental Moves
+  'Ember Jab': {
+    level1: { damage: 8, ppSteal: 7, debuffStrength: 3 },
+    level2: { damage: 12, ppSteal: 10, debuffStrength: 5 },
+    level3: { damage: 16, ppSteal: 13, debuffStrength: 7 },
+    level4: { damage: 20, ppSteal: 16, debuffStrength: 10 }
+  },
+  'Flame Dash': {
+    level1: { buffStrength: 50 },
+    level2: { buffStrength: 60 },
+    level3: { buffStrength: 70 },
+    level4: { buffStrength: 85 }
+  },
+  'Wildfire': {
+    level1: { damage: 12, ppSteal: 0, debuffStrength: 5 },
+    level2: { damage: 18, ppSteal: 5, debuffStrength: 8 },
+    level3: { damage: 24, ppSteal: 10, debuffStrength: 11 },
+    level4: { damage: 30, ppSteal: 15, debuffStrength: 15 }
+  },
+  'Inferno Screen': {
+    level1: { buffStrength: 30 },
+    level2: { buffStrength: 40 },
+    level3: { buffStrength: 50 },
+    level4: { buffStrength: 65 }
+  },
+  
+  // Water Elemental Moves
+  'Ripple': {
+    level1: { damage: 6, ppSteal: 0, debuffStrength: 25 },
+    level2: { damage: 9, ppSteal: 3, debuffStrength: 35 },
+    level3: { damage: 12, ppSteal: 6, debuffStrength: 45 },
+    level4: { damage: 16, ppSteal: 9, debuffStrength: 60 }
+  },
+  'Tide Mend': {
+    level1: { healing: 20 },
+    level2: { healing: 28 },
+    level3: { healing: 36 },
+    level4: { healing: 45 }
+  },
+  'Undertow': {
+    level1: { debuffStrength: 1 },
+    level2: { debuffStrength: 1 },
+    level3: { debuffStrength: 2 },
+    level4: { debuffStrength: 2 }
+  },
+  'Mist Veil': {
+    level1: { buffStrength: 40 },
+    level2: { buffStrength: 50 },
+    level3: { buffStrength: 60 },
+    level4: { buffStrength: 75 }
+  },
+  
+  // Air Elemental Moves
+  'Gust': {
+    level1: {},
+    level2: {},
+    level3: {},
+    level4: {}
+  },
+  'Quickening': {
+    level1: { buffStrength: 50 },
+    level2: { buffStrength: 60 },
+    level3: { buffStrength: 70 },
+    level4: { buffStrength: 85 }
+  },
+  'Crosswind': {
+    level1: {},
+    level2: {},
+    level3: {},
+    level4: {}
+  },
+  'Vacuum Seal': {
+    level1: { debuffStrength: 1 },
+    level2: { debuffStrength: 1 },
+    level3: { debuffStrength: 2 },
+    level4: { debuffStrength: 2 }
+  },
+  
+  // Earth Elemental Moves
+  'Pebbleguard': {
+    level1: { buffStrength: 20 },
+    level2: { buffStrength: 30 },
+    level3: { buffStrength: 40 },
+    level4: { buffStrength: 55 }
+  },
+  'Seismic Tap': {
+    level1: { damage: 10, ppSteal: 0, debuffStrength: 1 },
+    level2: { damage: 15, ppSteal: 4, debuffStrength: 1 },
+    level3: { damage: 20, ppSteal: 8, debuffStrength: 2 },
+    level4: { damage: 26, ppSteal: 12, debuffStrength: 2 }
+  },
+  'Bulwark': {
+    level1: { shieldBoost: 25 },
+    level2: { shieldBoost: 35 },
+    level3: { shieldBoost: 45 },
+    level4: { shieldBoost: 60 }
+  },
+  'Bedrock Lock': {
+    level1: { debuffStrength: -30, buffStrength: 50 },
+    level2: { debuffStrength: -35, buffStrength: 60 },
+    level3: { debuffStrength: -40, buffStrength: 70 },
+    level4: { debuffStrength: -45, buffStrength: 85 }
+  },
+  
+  // Lightning Elemental Moves
+  'Spark': {
+    level1: { damage: 8, ppSteal: 0, debuffStrength: 30 },
+    level2: { damage: 12, ppSteal: 4, debuffStrength: 40 },
+    level3: { damage: 16, ppSteal: 8, debuffStrength: 50 },
+    level4: { damage: 20, ppSteal: 12, debuffStrength: 65 }
+  },
+  'Overclock': {
+    level1: { buffStrength: 100 },
+    level2: { buffStrength: 120 },
+    level3: { buffStrength: 140 },
+    level4: { buffStrength: 170 }
+  },
+  'Arc Net': {
+    level1: { debuffStrength: 35 },
+    level2: { debuffStrength: 45 },
+    level3: { debuffStrength: 55 },
+    level4: { debuffStrength: 70 }
+  },
+  'Thunderbreak': {
+    level1: { damage: 25, ppSteal: 0 },
+    level2: { damage: 35, ppSteal: 8 },
+    level3: { damage: 45, ppSteal: 16 },
+    level4: { damage: 55, ppSteal: 24 }
+  },
+  
+  // Light Elemental Moves
+  'Glint': {
+    level1: { buffStrength: 50 },
+    level2: { buffStrength: 60 },
+    level3: { buffStrength: 70 },
+    level4: { buffStrength: 85 }
+  },
+  'Radiance': {
+    level1: { healing: 15 },
+    level2: { healing: 22 },
+    level3: { healing: 29 },
+    level4: { healing: 37 }
+  },
+  'Beacon': {
+    level1: { buffStrength: 40 },
+    level2: { buffStrength: 50 },
+    level3: { buffStrength: 60 },
+    level4: { buffStrength: 75 }
+  },
+  'Solar Aegis': {
+    level1: { shieldBoost: 30 },
+    level2: { shieldBoost: 40 },
+    level3: { shieldBoost: 50 },
+    level4: { shieldBoost: 65 }
+  },
+  
+  // Shadow Elemental Moves
+  'Veilstep': {
+    level1: { buffStrength: 1 },
+    level2: { buffStrength: 1 },
+    level3: { buffStrength: 2 },
+    level4: { buffStrength: 2 }
+  },
+  'Dread Whisper': {
+    level1: { debuffStrength: 25 },
+    level2: { debuffStrength: 35 },
+    level3: { debuffStrength: 45 },
+    level4: { debuffStrength: 60 }
+  },
+  'Umbral Chain': {
+    level1: { debuffStrength: 1 },
+    level2: { debuffStrength: 1 },
+    level3: { debuffStrength: 2 },
+    level4: { debuffStrength: 2 }
+  },
+  'Blackout': {
+    level1: { debuffStrength: -40 },
+    level2: { debuffStrength: -45 },
+    level3: { debuffStrength: -50 },
+    level4: { debuffStrength: -60 }
+  },
+  
+  // Metal Elemental Moves
+  'Truth Edge': {
+    level1: { damage: 10, ppSteal: 0 },
+    level2: { damage: 15, ppSteal: 5 },
+    level3: { damage: 20, ppSteal: 10 },
+    level4: { damage: 26, ppSteal: 15 }
+  },
+  'Refraction': {
+    level1: {},
+    level2: {},
+    level3: {},
+    level4: {}
+  },
+  'Integrity Field': {
+    level1: { buffStrength: 100 },
+    level2: { buffStrength: 100 },
+    level3: { buffStrength: 100 },
+    level4: { buffStrength: 100 }
+  },
+  'Truth Lock': {
+    level1: { debuffStrength: 2 },
+    level2: { debuffStrength: 2 },
+    level3: { debuffStrength: 3 },
+    level4: { debuffStrength: 3 }
+  },
+  
+  // System Moves
+  'Vault Hack': {
+    level1: { damage: 5, ppSteal: 8, debuffStrength: 10 },
+    level2: { damage: 8, ppSteal: 12, debuffStrength: 15 },
+    level3: { damage: 11, ppSteal: 16, debuffStrength: 20 },
+    level4: { damage: 14, ppSteal: 20, debuffStrength: 25 }
+  },
+  'Shield Restoration': {
+    level1: { shieldBoost: 20 },
+    level2: { shieldBoost: 28 },
+    level3: { shieldBoost: 36 },
+    level4: { shieldBoost: 45 }
+  }
+}; 
+
+// Manifest Milestone Templates
+export const MANIFEST_MILESTONE_TEMPLATES: Record<string, ManifestMilestone[]> = {
+  reading: [
+    {
+      id: 'reading_1',
+      manifestType: 'reading',
+      level: 1,
+      name: 'Novice Reader',
+      description: 'Master the basics of emotional reading',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'reading_2',
+      manifestType: 'reading',
+      level: 2,
+      name: 'Emotional Scholar',
+      description: 'Unlock advanced reading techniques',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'reading_3',
+      manifestType: 'reading',
+      level: 3,
+      name: 'Mind Reader',
+      description: 'Achieve mastery in psychological warfare',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  writing: [
+    {
+      id: 'writing_1',
+      manifestType: 'writing',
+      level: 1,
+      name: 'Story Weaver',
+      description: 'Begin crafting narrative reality',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'writing_2',
+      manifestType: 'writing',
+      level: 2,
+      name: 'Reality Author',
+      description: 'Manipulate the fabric of battle',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'writing_3',
+      manifestType: 'writing',
+      level: 3,
+      name: 'Narrative Master',
+      description: 'Become the architect of victory',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ],
+  gaming: [
+    {
+      id: 'gaming_1',
+      manifestType: 'gaming',
+      level: 1,
+      name: 'Strategy Novice',
+      description: 'Learn the fundamentals of tactical thinking',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 1,
+        movesUnlocked: 1,
+        battlesWon: 0,
+        ppEarned: 0
+      },
+      rewards: {
+        xp: 50,
+        pp: 25,
+        newMoveUnlocked: true,
+        masteryBonus: 1
+      },
+      completed: false
+    },
+    {
+      id: 'gaming_2',
+      manifestType: 'gaming',
+      level: 2,
+      name: 'Tactical Expert',
+      description: 'Master advanced strategic maneuvers',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 2,
+        movesUnlocked: 2,
+        battlesWon: 3,
+        ppEarned: 100
+      },
+      rewards: {
+        xp: 100,
+        pp: 50,
+        newMoveUnlocked: true,
+        masteryBonus: 2
+      },
+      completed: false
+    },
+    {
+      id: 'gaming_3',
+      manifestType: 'gaming',
+      level: 3,
+      name: 'Strategic Grandmaster',
+      description: 'Achieve ultimate tactical supremacy',
+      requirements: {
+        level1MovesUsed: 9,
+        masteryLevel: 3,
+        movesUnlocked: 3,
+        battlesWon: 7,
+        ppEarned: 250
+      },
+      rewards: {
+        xp: 200,
+        pp: 100,
+        newMoveUnlocked: true,
+        masteryBonus: 3
+      },
+      completed: false
+    }
+  ]
+  // Add other manifest types as needed...
+};

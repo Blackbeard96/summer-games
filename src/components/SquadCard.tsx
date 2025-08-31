@@ -56,7 +56,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
   const [showRemoveConfirm, setShowRemoveConfirm] = useState<{ memberId: string; memberName: string } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
-  const isLeader = squad.leader === currentUserId;
+
   const currentMember = squad.members.find(m => m.uid === currentUserId);
   const isAdmin = currentMember?.isLeader || currentMember?.isAdmin;
   const canJoin = !isCurrentUserInSquad && squad.members.length < squad.maxMembers;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
 import { db, storage } from '../firebase';
 import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -8,6 +9,7 @@ import { updateProfile } from 'firebase/auth';
 import ChallengeTracker from '../components/ChallengeTracker';
 import PlayerCard from '../components/PlayerCard';
 import ManifestProgress from '../components/ManifestProgress';
+import ManifestChallenges from '../components/ManifestChallenges';
 import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
@@ -490,6 +492,13 @@ const Profile = () => {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Battle Manifest Progress */}
+          <div style={{ marginTop: '1rem' }}>
+            <ManifestChallenges 
+              playerManifest={playerManifest} 
+            />
           </div>
         </div>
       </div>

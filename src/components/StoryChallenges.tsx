@@ -8,11 +8,6 @@ import { CHAPTERS } from '../types/chapters';
 import ModelPreview from './ModelPreview';
 import RivalSelectionModal from './RivalSelectionModal';
 
-interface ChallengeData {
-  completed?: boolean;
-  file?: string;
-}
-
 interface GoogleClassroomAssignment {
   id: string;
   title: string;

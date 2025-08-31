@@ -1,7 +1,6 @@
 
 import Chapters from './pages/Chapters'; // Add Chapters import
 import Squads from './pages/Squads'; // Add Squads import
-import { Link } from 'react-router-dom';
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';

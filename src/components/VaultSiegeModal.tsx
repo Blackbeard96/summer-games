@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
-import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { Move, ActionCard, MOVE_PP_RANGES, MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
+import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/firestore';
+import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
 
 interface VaultSiegeModalProps {
   isOpen: boolean;
   onClose: () => void;
   battleId?: string;
+  onAttackComplete?: () => void;
 }
 
 interface Player {
@@ -20,20 +22,46 @@ interface Player {
   maxShieldStrength?: number;
 }
 
-const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, battleId }) => {
+const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultSiegeModalProps) => {
+  console.log('VaultSiegeModal: Component rendered with isOpen:', isOpen);
   const { currentUser } = useAuth();
-  const { vault, moves, actionCards, executeVaultSiegeAttack, syncVaultPP, getRemainingOfflineMoves } = useBattle();
+  const { vault, moves, actionCards, executeVaultSiegeAttack, syncVaultPP, syncStudentPP, refreshVaultData, getRemainingOfflineMoves, offlineMoves, attackHistory } = useBattle();
   
   const [players, setPlayers] = useState<Player[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
   const [selectedActionCards, setSelectedActionCards] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // Debug loading state changes
+  useEffect(() => {
+    console.log('🔄 Loading state changed:', loading);
+  }, [loading]);
   const [targetVault, setTargetVault] = useState<any>(null);
   const [attackResults, setAttackResults] = useState<any>(null);
+  const [remainingMoves, setRemainingMoves] = useState<number>(0);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Debug effect to check if modal is rendered
+  useEffect(() => {
+    if (isOpen && modalRef.current) {
+      console.log('VaultSiegeModal: Modal element found in DOM:', modalRef.current);
+      console.log('VaultSiegeModal: Modal element styles:', window.getComputedStyle(modalRef.current));
+      console.log('VaultSiegeModal: Modal element rect:', modalRef.current.getBoundingClientRect());
+    }
+  }, [isOpen]);
+
+  // Update remaining moves when offline moves or attack history changes
+  useEffect(() => {
+    const moves = getRemainingOfflineMoves();
+    setRemainingMoves(moves);
+    console.log('VaultSiegeModal: Updated remaining moves:', moves);
+  }, [offlineMoves, attackHistory, getRemainingOfflineMoves]);
 
   // Function to restore a move for 20 PP
   const handleRestoreMove = async () => {
+    console.log('VaultSiegeModal: handleRestoreMove function called!');
+    
     if (!currentUser || !vault) return;
     
     if (vault.currentPP < 20) {
@@ -49,21 +77,43 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
       
       // Update vault PP
       const newPP = vault.currentPP - 20;
-      const newMovesRemaining = Math.min(vault.movesRemaining + 1, vault.maxMovesPerDay);
+      console.log('VaultSiegeModal: PP deduction - current:', vault.currentPP, 'new:', newPP);
+      
+      // Create a move_restore record to track the restoration
+      const restoreMoveData = {
+        userId: currentUser.uid,
+        type: 'move_restore' as const,
+        status: 'completed' as const,
+        createdAt: new Date(),
+      };
+      
+      console.log('VaultSiegeModal: Creating restore record:', restoreMoveData);
+      await addDoc(collection(db, 'offlineMoves'), restoreMoveData);
       
       // Update vault in Firestore
       const vaultRef = doc(db, 'vaults', currentUser.uid);
+      console.log('VaultSiegeModal: Updating vault PP in Firestore to:', newPP);
       await updateDoc(vaultRef, {
         currentPP: newPP,
-        movesRemaining: newMovesRemaining,
       });
 
       // Update local state
+      console.log('VaultSiegeModal: Syncing vault PP...');
       await syncVaultPP();
+      
+      // Force refresh of vault data
+      await refreshVaultData();
+      
+      // Recalculate remaining moves
+      const currentMovesRemaining = getRemainingOfflineMoves();
+      console.log('VaultSiegeModal: Recalculated remaining moves:', currentMovesRemaining);
+      
+      // Update local state
+      setRemainingMoves(currentMovesRemaining);
       
       setAttackResults({
         success: true,
-        message: `Move restored! Spent 20 PP. You now have ${newMovesRemaining} moves remaining.`,
+        message: `Move restored! Spent 20 PP. You now have ${currentMovesRemaining} moves remaining.`,
         ppSpent: 20,
         movesRestored: 1,
       });
@@ -203,59 +253,160 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
   };
 
   const handleAttack = async () => {
-    if (!selectedTarget || (!selectedMoves.length && !selectedActionCards.length)) {
-      alert('Please select a target and at least one move or action card.');
-      return;
-    }
-
-    // Check if player has enough offline moves
-    const totalMovesToUse = selectedMoves.length + selectedActionCards.length;
-    const remainingOfflineMoves = getRemainingOfflineMoves();
-    
-    if (totalMovesToUse > remainingOfflineMoves) {
-      alert(`Not enough offline moves! You have ${remainingOfflineMoves} moves remaining today, but trying to use ${totalMovesToUse} moves.`);
-      return;
-    }
-
-    setLoading(true);
     try {
+      console.log('🚀 handleAttack called!', {
+        selectedTarget,
+        currentUserId: currentUser?.uid,
+        isAttackingSelf: selectedTarget === currentUser?.uid,
+        selectedMoves,
+        selectedActionCards,
+        remainingOfflineMoves: getRemainingOfflineMoves()
+      });
+      
+      if (!selectedTarget || (!selectedMoves.length && !selectedActionCards.length)) {
+        alert('Please select a target and at least one move or action card.');
+        return;
+      }
+
+      // Prevent attacking yourself
+      if (selectedTarget === currentUser?.uid) {
+        alert('You cannot attack yourself! Please select a different target.');
+        return;
+      }
+
+      // Check if player has enough offline moves
+      const totalMovesToUse = selectedMoves.length + selectedActionCards.length;
+      const remainingOfflineMoves = getRemainingOfflineMoves();
+      
+      if (totalMovesToUse > remainingOfflineMoves) {
+        alert(`Not enough offline moves! You have ${remainingOfflineMoves} moves remaining today, but trying to use ${totalMovesToUse} moves.`);
+        return;
+      }
+
+      setLoading(true);
+      console.log('⚔️ Starting attack execution...');
+      let totalPPStolen = 0;
+      let totalXP = 0;
+      let totalShieldDamage = 0;
+      let allMessages: string[] = [];
+      let usedMoves: string[] = [];
+
+      console.log('⚔️ Executing moves:', selectedMoves);
       // Execute each selected move
       for (const moveId of selectedMoves) {
-        await executeVaultSiegeAttack(moveId, selectedTarget);
-      }
-
-      // Execute each selected action card
-      for (const cardId of selectedActionCards) {
-        await executeVaultSiegeAttack(null, selectedTarget, cardId);
-      }
-
-      // Calculate total PP gained from the attack
-      let totalPPGained = 0;
-      for (const moveId of selectedMoves) {
-        const move = moves.find(m => m.id === moveId);
-        if (move) {
-          const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-          if (moveDamage) {
-            totalPPGained += moveDamage.ppSteal;
+        console.log('🔥 About to call executeVaultSiegeAttack with:', { moveId, selectedTarget });
+        const result = await executeVaultSiegeAttack(moveId, selectedTarget);
+        console.log('🔥 executeVaultSiegeAttack returned:', result);
+        if (result?.success) {
+          totalPPStolen += result.ppStolen || 0;
+          totalXP += result.xpGained || 0;
+          totalShieldDamage += result.shieldDamage || 0;
+          if (result.message) {
+            allMessages.push(result.message);
+            // Extract move name from the message (format: "Used MoveName - ...")
+            const moveNameMatch = result.message.match(/Used ([^-]+) -/);
+            if (moveNameMatch) {
+              usedMoves.push(moveNameMatch[1].trim());
+            }
           }
         }
       }
 
+      // Execute each selected action card
+      for (const cardId of selectedActionCards) {
+        const result = await executeVaultSiegeAttack(null, selectedTarget, cardId);
+        if (result?.success) {
+          totalPPStolen += result.ppStolen || 0;
+          totalXP += result.xpGained || 0;
+          totalShieldDamage += result.shieldDamage || 0;
+          if (result.message) {
+            allMessages.push(result.message);
+            // Extract action card name from the message (format: "Used CardName - ...")
+            const cardNameMatch = result.message.match(/Used ([^-]+) -/);
+            if (cardNameMatch) {
+              usedMoves.push(cardNameMatch[1].trim());
+            }
+          }
+        }
+      }
+
+      // Show success message with actual PP and XP gains
+      const targetName = players.find(p => p.uid === selectedTarget)?.displayName || 'Unknown';
+      const successMessage = totalPPStolen > 0 
+        ? `Attack successful! Stole ${totalPPStolen} PP and earned ${totalXP} XP from ${targetName}!`
+        : `Attack executed against ${targetName}! ${totalShieldDamage > 0 ? `Dealt ${totalShieldDamage} shield damage.` : ''}`;
+
       setAttackResults({
         success: true,
-        message: `Attack executed against ${players.find(p => p.uid === selectedTarget)?.displayName}!`,
+        message: successMessage,
         movesUsed: selectedMoves.length,
         cardsUsed: selectedActionCards.length,
-        ppGained: totalPPGained,
+        ppGained: totalPPStolen,
+        xpGained: totalXP,
+        shieldDamage: totalShieldDamage,
+        details: allMessages.join(' • '),
+        usedMoves: usedMoves
       });
 
-      // Refresh vault data to show updated PP
+      // Show notification for actual gains
+      console.log('🎉 Vault Siege Results:', {
+        ppStolen: totalPPStolen,
+        xpGained: totalXP,
+        shieldDamage: totalShieldDamage,
+        targetName: targetName
+      });
+      
+      if (totalPPStolen > 0 || totalXP > 0) {
+        // Show detailed results with move names
+        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
+        const resultMessage = `🎉 Attack Results:\n\n💰 PP Stolen: ${totalPPStolen}\n⚡ XP Earned: ${totalXP}\n🛡️ Shield Damage: ${totalShieldDamage}\n🎯 Target: ${targetName}${movesUsedText}`;
+        alert(resultMessage);
+      } else {
+        console.log('⚠️ Vault Siege completed but no gains - this might be because target has no PP to steal');
+        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
+        alert(`⚠️ Attack completed against ${targetName}!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen} (target had no PP)\n⚡ XP Earned: ${totalXP}${movesUsedText}`);
+      }
+
+      // Refresh vault data to show updated PP and XP
+      await refreshVaultData();
+      
+      // Wait a moment for the Firestore listener to update the offlineMoves state
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Automatically trigger debug update after attack to ensure UI consistency
+      const currentMovesRemaining = getRemainingOfflineMoves();
+      console.log('VaultSiegeModal: Auto-triggering debug update after attack');
+      console.log('VaultSiegeModal: Current offline moves:', offlineMoves);
+      console.log('VaultSiegeModal: Current attack history:', attackHistory);
+      console.log('VaultSiegeModal: Remaining moves after attack:', currentMovesRemaining);
+      
+      // Update local state to reflect the new remaining moves
+      setRemainingMoves(currentMovesRemaining);
+      
+      // Sync vault PP to ensure it matches student PP
       await syncVaultPP();
+      
+      // Force a manual refresh of the student data
+      if (currentUser) {
+        console.log('🔄 Forcing manual refresh of student data...');
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          console.log('📊 Manual refresh - Current student data:', studentData);
+        }
+      }
 
       // Reset selections
       setSelectedMoves([]);
       setSelectedActionCards([]);
       setSelectedTarget('');
+      
+      // Notify parent component that attack is completed
+      if (onAttackComplete) {
+        console.log('VaultSiegeModal: Calling onAttackComplete callback');
+        onAttackComplete();
+      }
     } catch (error) {
       console.error('Error executing attack:', error);
       setAttackResults({
@@ -270,30 +421,81 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
   const unlockedMoves = moves.filter(move => move.unlocked);
   const unlockedCards = actionCards.filter(card => card.unlocked);
 
+  // Only log when modal state changes to avoid excessive logging
+  useEffect(() => {
+    if (isOpen) {
+      console.log('VaultSiegeModal: Modal opened');
+    }
+  }, [isOpen]);
+
+  // Debug button state
+  useEffect(() => {
+    if (isOpen) {
+      console.log('🔘 Button state debug:', {
+        selectedTarget,
+        currentUserId: currentUser?.uid,
+        isAttackingSelf: selectedTarget === currentUser?.uid,
+        selectedMoves: selectedMoves.length,
+        selectedActionCards: selectedActionCards.length,
+        loading,
+        remainingOfflineMoves: getRemainingOfflineMoves(),
+        buttonDisabled: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || getRemainingOfflineMoves() === 0
+      });
+    }
+  }, [isOpen, selectedTarget, selectedMoves, selectedActionCards, loading, currentUser]);
+  
   if (!isOpen) return null;
 
-  return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(0, 0, 0, 0.7)',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      zIndex: 1000,
-    }}>
+  const modalContent = (
+    <div 
+      ref={modalRef}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(255, 0, 0, 0.8)', // Changed to bright red background
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 999999,
+        pointerEvents: 'auto',
+        width: '100vw',
+        height: '100vh',
+        border: '10px solid yellow', // Added bright yellow border
+      }}>
       <div style={{
-        background: 'white',
+        background: 'lime', // Changed to bright lime background
         borderRadius: '12px',
         padding: '2rem',
         maxWidth: '800px',
         maxHeight: '90vh',
         overflow: 'auto',
         width: '90%',
+        border: '10px solid blue', // Changed to bright blue border
+        boxShadow: '0 0 100px rgba(0, 255, 0, 1)', // Bright green shadow
+        position: 'relative',
+        zIndex: 1000000,
+        color: 'black', // Ensure text is visible
+        fontSize: '16px', // Ensure text size is readable
       }}>
+        {/* TEST ELEMENT - THIS SHOULD BE VERY VISIBLE */}
+        <div style={{
+          position: 'fixed',
+          top: '50px',
+          left: '50px',
+          background: 'purple',
+          color: 'white',
+          padding: '20px',
+          fontSize: '24px',
+          fontWeight: 'bold',
+          zIndex: 1000001,
+          border: '5px solid orange',
+        }}>
+          🚨 MODAL IS RENDERED! 🚨
+        </div>
+        
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem' }}>🏰 Vault Siege</h2>
@@ -317,41 +519,54 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
                   borderRadius: '0.25rem',
                   fontWeight: 'bold'
                 }}>
-                  {getRemainingOfflineMoves()}/3
+                  {remainingMoves}/3
                 </span>
+                
+                {/* Restore Move Button */}
+                <button
+                  onClick={() => {
+                    console.log('VaultSiegeModal: Restore Move button clicked!');
+                    console.log('VaultSiegeModal: Current vault PP:', vault?.currentPP);
+                    console.log('VaultSiegeModal: Loading state:', loading);
+                    console.log('VaultSiegeModal: Button disabled state:', loading || !vault || vault.currentPP < 20);
+                    if (!loading && vault && vault.currentPP >= 20) {
+                      handleRestoreMove();
+                    } else {
+                      console.log('VaultSiegeModal: Button is disabled or conditions not met');
+                    }
+                  }}
+                  disabled={loading || !vault || vault.currentPP < 20}
+                  style={{
+                    background: vault && vault.currentPP >= 20 ? '#10b981' : '#9ca3af',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '0.5rem',
+                    cursor: vault && vault.currentPP >= 20 ? 'pointer' : 'not-allowed',
+                    fontSize: '0.875rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    fontWeight: 'bold',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (vault && vault.currentPP >= 20) {
+                      e.currentTarget.style.transform = 'scale(1.05)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (vault && vault.currentPP >= 20) {
+                      e.currentTarget.style.transform = 'scale(1)';
+                    }
+                  }}
+                >
+                  ⚡ Restore Move (20 PP)
+                </button>
+
               </div>
               
-              {/* Restore Move Button */}
-              <button
-                onClick={handleRestoreMove}
-                disabled={loading || !vault || vault.currentPP < 20}
-                style={{
-                  background: vault && vault.currentPP >= 20 ? '#10b981' : '#9ca3af',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '0.5rem',
-                  cursor: vault && vault.currentPP >= 20 ? 'pointer' : 'not-allowed',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem',
-                  fontWeight: 'bold',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  if (vault && vault.currentPP >= 20) {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (vault && vault.currentPP >= 20) {
-                    e.currentTarget.style.transform = 'scale(1)';
-                  }
-                }}
-              >
-                ⚡ Restore Move (20 PP)
-              </button>
+
             </div>
           </div>
           <button
@@ -384,9 +599,29 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
                 {attackResults.success && (
                   <div>
                     <p>Used {attackResults.movesUsed} moves and {attackResults.cardsUsed} action cards.</p>
+                    {attackResults.usedMoves && attackResults.usedMoves.length > 0 && (
+                      <p style={{ color: '#7c3aed', fontWeight: 'bold', fontSize: '0.875rem' }}>
+                        ⚔️ Moves Used: {attackResults.usedMoves.join(', ')}
+                      </p>
+                    )}
                     {attackResults.ppGained > 0 && (
                       <p style={{ color: '#059669', fontWeight: 'bold' }}>
-                        💰 Gained {attackResults.ppGained} PP!
+                        💰 Stole {attackResults.ppGained} PP!
+                      </p>
+                    )}
+                    {attackResults.xpGained > 0 && (
+                      <p style={{ color: '#fbbf24', fontWeight: 'bold' }}>
+                        ⚡ Earned {attackResults.xpGained} XP!
+                      </p>
+                    )}
+                    {attackResults.shieldDamage > 0 && (
+                      <p style={{ color: '#ef4444', fontWeight: 'bold' }}>
+                        🛡️ Dealt {attackResults.shieldDamage} shield damage!
+                      </p>
+                    )}
+                    {attackResults.details && (
+                      <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
+                        {attackResults.details}
                       </p>
                     )}
                   </div>
@@ -492,7 +727,21 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
                 return (
                   <div
                     key={player.uid}
-                    onClick={() => setSelectedTarget(player.uid)}
+                    onClick={() => {
+                      console.log('VaultSiegeModal: Player clicked:', {
+                        playerUid: player.uid,
+                        playerName: player.displayName,
+                        currentSelectedTarget: selectedTarget,
+                        willSetTo: player.uid
+                      });
+                      setSelectedTarget(player.uid);
+                    }}
+                    onMouseDown={() => {
+                      console.log('VaultSiegeModal: Player mousedown:', player.displayName);
+                    }}
+                    onMouseUp={() => {
+                      console.log('VaultSiegeModal: Player mouseup:', player.displayName);
+                    }}
                     style={{
                       background: getCardBackground(),
                       border: `2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.2)'}`,
@@ -670,7 +919,7 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
             }}>
               <span>Selected: {selectedMoves.length}</span>
               <span>•</span>
-              <span>Available: {getRemainingOfflineMoves() - selectedActionCards.length}</span>
+                                <span>Available: {remainingMoves - selectedActionCards.length}</span>
             </div>
           </div>
           <div style={{ 
@@ -860,7 +1109,7 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
             }}>
               <span>Selected: {selectedActionCards.length}</span>
               <span>•</span>
-              <span>Available: {getRemainingOfflineMoves() - selectedMoves.length}</span>
+                                <span>Available: {remainingMoves - selectedMoves.length}</span>
             </div>
           </div>
           <div style={{ 
@@ -1016,8 +1265,53 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
           </div>
         </div>
 
-        {/* Attack Button */}
+        {/* Sync and Attack Buttons */}
         <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+          <button
+            onClick={async () => {
+              console.log('🔄 Manual sync button clicked');
+              if (selectedTarget) {
+                // Get target's vault data before sync
+                const targetVaultRef = doc(db, 'vaults', selectedTarget);
+                const targetVaultDoc = await getDoc(targetVaultRef);
+                const targetVaultPP = targetVaultDoc.exists() ? (targetVaultDoc.data().currentPP || 0) : 0;
+                
+                // Get target's student data before sync
+                const targetStudentRef = doc(db, 'students', selectedTarget);
+                const targetStudentDoc = await getDoc(targetStudentRef);
+                const targetStudentPP = targetStudentDoc.exists() ? (targetStudentDoc.data().powerPoints || 0) : 0;
+                
+                console.log('🔍 Target data BEFORE sync:', {
+                  targetId: selectedTarget,
+                  vaultPP: targetVaultPP,
+                  studentPP: targetStudentPP
+                });
+                
+                await syncStudentPP(selectedTarget);
+                console.log('✅ Target PP synced');
+                
+                // Get target's vault data after sync
+                const targetVaultDocAfter = await getDoc(targetVaultRef);
+                const targetVaultPPAfter = targetVaultDocAfter.exists() ? (targetVaultDocAfter.data().currentPP || 0) : 0;
+                
+                console.log('🔍 Target data AFTER sync:', {
+                  targetId: selectedTarget,
+                  vaultPP: targetVaultPPAfter
+                });
+              }
+            }}
+            style={{
+              background: '#10b981',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem 1rem',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+            }}
+          >
+            🔄 Sync Target PP
+          </button>
           <button
             onClick={onClose}
             style={{
@@ -1032,24 +1326,44 @@ const VaultSiegeModal: React.FC<VaultSiegeModalProps> = ({ isOpen, onClose, batt
             Cancel
           </button>
           <button
-            onClick={handleAttack}
-            disabled={!selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || getRemainingOfflineMoves() === 0}
+            onClick={(e) => {
+              console.log('🔘 Attack button clicked!', {
+                selectedTarget,
+                selectedMoves,
+                selectedActionCards,
+                loading,
+                remainingOfflineMoves: getRemainingOfflineMoves(),
+                disabled: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || getRemainingOfflineMoves() === 0
+              });
+              console.log('🔘 Button state check:', {
+                hasTarget: !!selectedTarget,
+                hasMoves: selectedMoves.length > 0,
+                hasActionCards: selectedActionCards.length > 0,
+                hasAnySelection: selectedMoves.length > 0 || selectedActionCards.length > 0,
+                isLoading: loading,
+                offlineMoves: getRemainingOfflineMoves()
+              });
+              handleAttack();
+            }}
+                              disabled={!selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0}
             style={{
-              background: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || getRemainingOfflineMoves() === 0 ? '#9ca3af' : '#dc2626',
+                              background: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0 ? '#9ca3af' : '#dc2626',
               color: 'white',
               border: 'none',
               padding: '0.75rem 1.5rem',
               borderRadius: '6px',
-              cursor: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || getRemainingOfflineMoves() === 0 ? 'not-allowed' : 'pointer',
+                              cursor: !selectedTarget || (!selectedMoves.length && !selectedActionCards.length) || loading || remainingMoves === 0 ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
             }}
           >
-            {loading ? 'Executing Attack...' : getRemainingOfflineMoves() === 0 ? 'No Offline Moves Remaining' : 'Launch Vault Siege!'}
+                          {loading ? 'Executing Attack...' : remainingMoves === 0 ? 'No Offline Moves Remaining' : 'Launch Vault Siege!'}
           </button>
         </div>
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 };
 
 export default VaultSiegeModal; 

@@ -7,8 +7,10 @@ import VaultSiegeModal from '../components/VaultSiegeModal';
 import AttackHistory from '../components/AttackHistory';
 import VaultStats from '../components/VaultStats';
 import MovesDisplay from '../components/MovesDisplay';
-import { doc, getDoc } from 'firebase/firestore';
+import DashboardActionCards from '../components/DashboardActionCards';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { collection, addDoc } from 'firebase/firestore';
 
 const Battle: React.FC = () => {
   const { currentUser } = useAuth();
@@ -16,6 +18,7 @@ const Battle: React.FC = () => {
     vault, 
     moves, 
     actionCards, 
+    setActionCards,
     battleLobbies, 
     offlineMoves,
     attackHistory,
@@ -26,11 +29,20 @@ const Battle: React.FC = () => {
     syncVaultPP,
     updateVault,
     upgradeMove,
+    upgradeActionCard,
+    resetActionCards,
     unlockElementalMoves,
     forceUnlockAllMoves,
     resetMovesWithElementFilter,
     applyElementFilterToExistingMoves,
     forceMigration,
+    canPurchaseMove,
+    getNextMilestone,
+    manifestProgress,
+    canPurchaseElementalMove,
+    getNextElementalMilestone,
+    elementalProgress,
+    debugOfflineMoves,
     loading,
     error 
   } = useBattle();
@@ -40,6 +52,7 @@ const Battle: React.FC = () => {
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
   const [userElement, setUserElement] = useState<string>('fire'); // Default to fire, will be updated
+  const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
 
   // Fetch user's element from profile
   useEffect(() => {
@@ -62,6 +75,43 @@ const Battle: React.FC = () => {
 
     fetchUserElement();
   }, [currentUser]);
+
+  // Update remaining offline moves when offline moves or attack history changes
+  useEffect(() => {
+    console.log('Battle: Offline moves or attack history changed');
+    console.log('Battle: offlineMoves length:', offlineMoves.length, 'attackHistory length:', attackHistory.length);
+    
+    const moves = getRemainingOfflineMoves();
+    setRemainingOfflineMoves(moves);
+    console.log('Battle: Updated remaining offline moves:', moves);
+  }, [offlineMoves, attackHistory, getRemainingOfflineMoves]);
+
+  // Manual refresh function for debugging
+  const handleRefreshOfflineMoves = () => {
+    console.log('Battle: Manual refresh triggered');
+    const moves = getRemainingOfflineMoves();
+    setRemainingOfflineMoves(moves);
+    console.log('Battle: Manual refresh - remaining offline moves:', moves);
+  };
+
+  // Removed forceUpdateOfflineMoves to simplify the system
+
+  // Debug vault changes
+  useEffect(() => {
+    console.log('Battle: Vault changed - currentPP:', vault?.currentPP, 'shieldStrength:', vault?.shieldStrength);
+  }, [vault?.currentPP, vault?.shieldStrength]);
+
+  // Force refresh when Vault Siege modal closes
+  useEffect(() => {
+    if (!showVaultSiegeModal) {
+      console.log('Battle: Vault Siege modal closed, refreshing offline moves');
+      const moves = getRemainingOfflineMoves();
+      setRemainingOfflineMoves(moves);
+      console.log('Battle: Refresh after modal close - remaining moves:', moves);
+    }
+  }, [showVaultSiegeModal, getRemainingOfflineMoves]);
+
+  // Removed periodic refresh to prevent race conditions
 
   if (!currentUser) {
     navigate('/login');
@@ -104,7 +154,6 @@ const Battle: React.FC = () => {
     );
   }
 
-  const remainingOfflineMoves = getRemainingOfflineMoves();
   const unlockedMoves = moves.filter(move => move.unlocked);
   const unlockedCards = actionCards.filter(card => card.unlocked);
 
@@ -230,9 +279,24 @@ const Battle: React.FC = () => {
         textAlign: 'center'
       }}>
         <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>⚔️ MST Battle Arena</h1>
-        <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
+        <p style={{ fontSize: '1.1rem', opacity: 0.9, marginBottom: '1rem' }}>
           "Master Space & Time" — Fight with your Manifest in the Now
         </p>
+        <button
+          onClick={forceMigration}
+          style={{
+            background: '#059669',
+            color: 'white',
+            border: 'none',
+            padding: '0.75rem 1.5rem',
+            borderRadius: '0.5rem',
+            fontSize: '0.875rem',
+            fontWeight: 'bold',
+            cursor: 'pointer'
+          }}
+        >
+          🔧 Force Migration (Update Cards)
+        </button>
       </div>
 
       {error && (
@@ -262,10 +326,26 @@ const Battle: React.FC = () => {
               borderRadius: '0.5rem',
               fontSize: '0.875rem',
               fontWeight: 'bold',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              marginRight: '0.5rem'
             }}
           >
             🔄 Retry
+          </button>
+          <button
+            onClick={forceMigration}
+            style={{
+              background: '#059669',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem 1.5rem',
+              borderRadius: '0.5rem',
+              fontSize: '0.875rem',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+          >
+            🔧 Force Migration
           </button>
         </div>
       )}
@@ -312,44 +392,13 @@ const Battle: React.FC = () => {
         maxOfflineMoves={BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES}
         onSyncPP={syncVaultPP}
         onRestoreShields={handleRestoreShields}
+        onCreateBattle={handleCreateBattle}
       />
 
       {/* Tab Content */}
       <div style={{ minHeight: '400px' }}>
         {activeTab === 'lobby' && (
           <div>
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-              <button
-                onClick={() => handleCreateBattle('live')}
-                style={{
-                  background: '#059669',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1rem 2rem',
-                  borderRadius: '0.5rem',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
-                🚀 Create Live Battle
-              </button>
-              <button
-                onClick={() => handleCreateBattle('vault_siege')}
-                style={{
-                  background: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1rem 2rem',
-                  borderRadius: '0.5rem',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
-                🏰 Create Vault Siege
-              </button>
-            </div>
 
             <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Available Battles</h3>
             {battleLobbies.length === 0 ? (
@@ -407,6 +456,15 @@ const Battle: React.FC = () => {
             <div style={{ marginTop: '3rem' }}>
               <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Recent Battle History</h3>
               <AttackHistory attacks={attackHistory} />
+            </div>
+
+            {/* Action Cards Section */}
+            <div style={{ marginTop: '3rem' }}>
+              <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>🛡️ Quick Actions</h3>
+              <p style={{ color: '#6b7280', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+                Use your action cards to enhance your abilities and prepare for battle.
+              </p>
+              <DashboardActionCards />
             </div>
           </div>
         )}
@@ -781,16 +839,92 @@ const Battle: React.FC = () => {
           onUnlockElementalMoves={unlockElementalMoves}
           onForceUnlockAllMoves={() => forceUnlockAllMoves(userElement)}
           onResetMovesWithElementFilter={() => resetMovesWithElementFilter(userElement)}
-                        onApplyElementFilterToExistingMoves={() => applyElementFilterToExistingMoves(userElement)}
-              onForceMigration={forceMigration}
-              userElement={userElement}
+          onApplyElementFilterToExistingMoves={() => applyElementFilterToExistingMoves(userElement)}
+          onForceMigration={forceMigration}
+          userElement={userElement}
+          canPurchaseMove={canPurchaseMove}
+          getNextMilestone={getNextMilestone}
+          manifestProgress={manifestProgress}
+          canPurchaseElementalMove={canPurchaseElementalMove}
+          getNextElementalMilestone={getNextElementalMilestone}
+          elementalProgress={elementalProgress}
         />
           </>
         )}
 
         {activeTab === 'cards' && (
           <div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Action Cards</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.25rem', color: '#1f2937', margin: 0 }}>Action Cards</h3>
+              {currentUser?.email === 'edm21179@gmail.com' && (
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={resetActionCards}
+                    style={{
+                      background: '#dc2626',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}
+                  >
+                    🔄 Reset Cards
+                  </button>
+                  <button
+                    onClick={async () => {
+                      // Force fix the Shield Restore card specifically
+                      const updatedCards = actionCards.map((card, index) => {
+                        if (index === 1) { // Second card (Shield Restore)
+                          return {
+                            ...card,
+                            name: 'Shield Restore',
+                            description: 'Instantly restore 10 points to your shield',
+                            effect: {
+                              type: 'shield_restore' as const,
+                              strength: 10
+                            }
+                          };
+                        }
+                        return card;
+                      });
+                      
+                      // Update local state
+                      setActionCards(updatedCards);
+                      
+                      // Also update in database to persist the fix
+                      try {
+                        const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+                        await updateDoc(cardsRef, { cards: updatedCards });
+                        console.log('✅ Shield Restore card fixed in database');
+                      } catch (err) {
+                        console.error('Error updating cards in database:', err);
+                      }
+                    }}
+                    style={{
+                      background: '#059669',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}
+                  >
+                    🛡️ Fix Shield Card
+                  </button>
+                </div>
+              )}
+            </div>
             <div style={{ 
               display: 'grid', 
               gridTemplateColumns: 'repeat(auto-fill, 380px)', 
@@ -935,7 +1069,7 @@ const Battle: React.FC = () => {
                         <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#374151' }}>{card.uses}/{card.maxUses}</div>
                       </div>
 
-                      {/* Rarity */}
+                      {/* Mastery Level */}
                       <div style={{
                         background: 'rgba(255,255,255,0.9)',
                         padding: '0.75rem',
@@ -943,17 +1077,82 @@ const Battle: React.FC = () => {
                         textAlign: 'center',
                         backdropFilter: 'blur(10px)'
                       }}>
-                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>RARITY</div>
-                        <div style={{ 
-                          fontSize: '1rem', 
-                          fontWeight: 'bold', 
-                          color: getRarityColor(),
-                          textTransform: 'uppercase'
-                        }}>
-                          {card.rarity}
-                        </div>
+                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>LEVEL</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#059669' }}>{card.masteryLevel}/5</div>
                       </div>
                     </div>
+
+                    {/* Rarity */}
+                    <div style={{
+                      background: 'rgba(255,255,255,0.9)',
+                      padding: '0.75rem',
+                      borderRadius: '0.75rem',
+                      textAlign: 'center',
+                      backdropFilter: 'blur(10px)',
+                      marginBottom: '1rem'
+                    }}>
+                      <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>RARITY</div>
+                      <div style={{ 
+                        fontSize: '1rem', 
+                        fontWeight: 'bold', 
+                        color: getRarityColor(),
+                        textTransform: 'uppercase'
+                      }}>
+                        {card.rarity}
+                      </div>
+                    </div>
+
+                    {/* Next Level Preview */}
+                    {card.unlocked && card.masteryLevel < 5 && card.nextLevelEffect && (
+                      <div style={{
+                        background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
+                        border: '2px solid #10b981',
+                        borderRadius: '0.75rem',
+                        padding: '1rem',
+                        marginBottom: '1rem',
+                        backdropFilter: 'blur(10px)'
+                      }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#065f46', marginBottom: '0.5rem', textAlign: 'center' }}>
+                          Next Level Preview
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#065f46', textAlign: 'center' }}>
+                          Strength: {card.effect.strength} → {card.nextLevelEffect.strength}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Upgrade Button */}
+                    {card.unlocked && card.masteryLevel < 5 && (
+                      <button
+                        onClick={() => upgradeActionCard(card.id)}
+                        disabled={!vault || vault.currentPP < card.upgradeCost}
+                        style={{
+                          background: (!vault || vault.currentPP < card.upgradeCost) ? '#9ca3af' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          color: 'white',
+                          border: 'none',
+                          padding: '0.75rem',
+                          borderRadius: '0.75rem',
+                          cursor: (!vault || vault.currentPP < card.upgradeCost) ? 'not-allowed' : 'pointer',
+                          fontSize: '0.875rem',
+                          fontWeight: 'bold',
+                          width: '100%',
+                          marginBottom: '1rem',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (vault && vault.currentPP >= card.upgradeCost) {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 4px 8px rgba(16, 185, 129, 0.3)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                      >
+                        ⬆️ Upgrade to Level {card.masteryLevel + 1} ({card.upgradeCost} PP)
+                      </button>
+                    )}
 
                     {/* Card Type Badge */}
                     <div style={{ 
@@ -1172,6 +1371,10 @@ const Battle: React.FC = () => {
       <VaultSiegeModal
         isOpen={showVaultSiegeModal}
         onClose={() => setShowVaultSiegeModal(false)}
+        onAttackComplete={() => {
+          console.log('Battle: Attack completed, forcing immediate refresh');
+          handleRefreshOfflineMoves();
+        }}
       />
     </div>
   );

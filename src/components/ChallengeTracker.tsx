@@ -1,14 +1,13 @@
  import ModelPreview from './ModelPreview';
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, where, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
 import ManifestSelection from './ManifestSelection';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
-import { getLevelFromXP } from '../utils/leveling';
 import RivalSelectionModal from './RivalSelectionModal';
 
 interface Badge {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, doc, addDoc, updateDoc, onSnapshot, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, query, where, getDocs, Timestamp } from 'firebase/firestore';
 
 interface SquadMember {
   uid: string;

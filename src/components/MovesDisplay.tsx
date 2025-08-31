@@ -1,5 +1,5 @@
 import React from 'react';
-import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
+import { Move, MOVE_UPGRADE_TEMPLATES } from '../types/battle';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -13,6 +13,12 @@ interface MovesDisplayProps {
   onApplyElementFilterToExistingMoves?: () => void;
   onForceMigration?: () => void;
   userElement?: string;
+  canPurchaseMove?: (category: 'manifest' | 'elemental' | 'system') => boolean;
+  getNextMilestone?: (manifestType: string) => any;
+  manifestProgress?: any;
+  canPurchaseElementalMove?: (elementalType: string) => boolean;
+  getNextElementalMilestone?: (elementalType: string) => any;
+  elementalProgress?: any;
 }
 
 const MovesDisplay: React.FC<MovesDisplayProps> = ({ 
@@ -26,11 +32,16 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   onResetMovesWithElementFilter,
   onApplyElementFilterToExistingMoves,
   onForceMigration,
-  userElement
+  userElement,
+  canPurchaseMove,
+  getNextMilestone,
+  manifestProgress,
+  canPurchaseElementalMove,
+  getNextElementalMilestone,
+  elementalProgress,
 }) => {
   console.log('MovesDisplay: movesRemaining:', movesRemaining, 'offlineMovesRemaining:', offlineMovesRemaining);
   console.log('MovesDisplay: Total moves loaded:', moves.length);
-  console.log('MovesDisplay: All moves:', moves.map(m => ({ name: m.name, category: m.category, unlocked: m.unlocked })));
 
   // Filter moves by category and unlocked status
   const manifestMoves = moves.filter(move => move.category === 'manifest' && move.unlocked);
@@ -91,82 +102,28 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     }
   };
 
-  const getCooldownStatus = (move: Move) => {
-    // For manifest and elemental moves, check battle moves remaining
-    if (move.category === 'manifest' || move.category === 'elemental') {
-      if (movesRemaining <= 0) {
-        return {
-          status: 'no_moves',
-          text: `No battle moves remaining (${movesRemaining}/${movesRemaining + 1})`,
-          color: '#9ca3af'
-        };
-      }
-    }
-    
-    // For system moves, check offline moves remaining
-    if (move.category === 'system') {
-      if (offlineMovesRemaining <= 0) {
-        return {
-          status: 'no_moves',
-          text: `No offline moves remaining (${offlineMovesRemaining}/${maxOfflineMoves})`,
-          color: '#9ca3af'
-        };
-      }
-    }
-    
-    if (move.currentCooldown > 0) {
-      return {
-        status: 'cooldown',
-        text: `${move.currentCooldown} turns remaining`,
-        color: '#dc2626'
-      };
-    }
-    
-    // Show available moves count for ready moves
-    if (move.category === 'system') {
-      return {
-        status: 'ready',
-        text: `Ready to use (${offlineMovesRemaining} offline moves left)`,
-        color: '#059669'
-      };
-    } else {
-      return {
-        status: 'ready',
-        text: `Ready to use (${movesRemaining} battle moves left)`,
-        color: '#059669'
-      };
-    }
-  };
-
-  const getUpgradeCost = (currentLevel: number) => {
-    switch (currentLevel) {
-      case 1: return 50;
-      case 2: return 100;
-      case 3: return 200;
-      case 4: return 400;
-      default: return 0;
-    }
-  };
-
   const renderMoveCard = (move: Move) => {
-    const cooldownStatus = getCooldownStatus(move);
-    const upgradeCost = getUpgradeCost(move.masteryLevel);
-    const canUpgrade = move.masteryLevel < 5 && cooldownStatus.status === 'ready';
+    // Check if move can be upgraded
+    const canUpgrade = move.masteryLevel < 5;
+    const upgradeCost = 100; // Fixed cost per upgrade
 
-    // Get move damage values
-    const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-    const shieldDamage = moveDamage?.shieldDamage || 0;
-    const ppSteal = moveDamage?.ppSteal || 0;
+    // Get current stats from upgrade template
+    const upgradeTemplate = MOVE_UPGRADE_TEMPLATES[move.name];
+    const currentLevelStats = upgradeTemplate ? upgradeTemplate[`level${move.masteryLevel}` as keyof typeof upgradeTemplate] : null;
+    const nextLevelStats = upgradeTemplate && move.masteryLevel < 5 ? upgradeTemplate[`level${move.masteryLevel + 1}` as keyof typeof upgradeTemplate] : null;
 
     // Determine card background based on move category
     const getCardBackground = () => {
       if (move.category === 'manifest') {
-        return 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+        const manifestColor = getManifestColor(move.manifestType || 'reading');
+        return `linear-gradient(135deg, ${manifestColor}15 0%, ${manifestColor}25 100%)`;
       } else if (move.category === 'elemental') {
-        return 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)';
-      } else {
-        return 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)';
+        const elementalColor = getElementalColor(move.elementalAffinity || 'fire');
+        return `linear-gradient(135deg, ${elementalColor}15 0%, ${elementalColor}25 100%)`;
+      } else if (move.category === 'system') {
+        return 'linear-gradient(135deg, #3b82f615 0%, #3b82f625 100%)';
       }
+      return 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
     };
 
     // Get category icon
@@ -176,31 +133,41 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       return '⚙️';
     };
 
+    // Get border color based on category
+    const getBorderColor = () => {
+      if (move.category === 'manifest') {
+        return getManifestColor(move.manifestType || 'reading');
+      } else if (move.category === 'elemental') {
+        return getElementalColor(move.elementalAffinity || 'fire');
+      } else if (move.category === 'system') {
+        return '#3b82f6';
+      }
+      return '#cbd5e1';
+    };
+
     return (
       <div key={move.id} style={{
         background: getCardBackground(),
-        border: '3px solid #ffffff',
+        border: `2px solid ${getBorderColor()}`,
         borderRadius: '1.5rem',
         padding: '1.5rem',
         marginBottom: '1.5rem',
         position: 'relative',
-        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
-        transition: 'all 0.3s ease',
-        cursor: 'pointer',
         minHeight: '320px',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between'
+        transition: 'all 0.3s ease',
+        cursor: 'pointer'
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = 'translateY(-8px) scale(1.02)';
-        e.currentTarget.style.boxShadow = '0 20px 40px -10px rgba(0, 0, 0, 0.4)';
+        e.currentTarget.style.boxShadow = '0 20px 40px -10px rgba(0, 0, 0, 0.2)';
+        e.currentTarget.style.borderColor = getBorderColor();
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = 'translateY(0) scale(1)';
-        e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.3)';
+        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.borderColor = getBorderColor();
       }}>
-        
+
         {/* Card Header */}
         <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
           <div style={{ 
@@ -213,9 +180,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           <h3 style={{ 
             fontSize: '1.5rem', 
             fontWeight: 'bold', 
-            color: 'white',
+            color: '#1f2937',
             margin: '0',
-            textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+            textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             textAlign: 'center'
           }}>
             {move.name}
@@ -223,7 +190,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           {move.level > 1 && (
             <span style={{ 
               background: 'rgba(255,255,255,0.2)',
-              color: 'white',
+              color: '#1f2937',
               padding: '0.25rem 0.75rem',
               borderRadius: '1rem',
               fontSize: '0.75rem',
@@ -234,40 +201,6 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               Level {move.level}
             </span>
           )}
-        </div>
-
-        {/* Move Type Badge */}
-        <div style={{ 
-          position: 'absolute',
-          top: '1rem',
-          right: '1rem',
-          background: 'rgba(255,255,255,0.9)',
-          padding: '0.5rem 1rem',
-          borderRadius: '1rem',
-          fontSize: '0.75rem',
-          fontWeight: 'bold',
-          color: '#374151',
-          backdropFilter: 'blur(10px)'
-        }}>
-          {move.type.toUpperCase()}
-        </div>
-
-
-
-        {/* Status Indicator */}
-        <div style={{
-          position: 'absolute',
-          top: '1rem',
-          left: '1rem',
-          background: cooldownStatus.color,
-          color: 'white',
-          padding: '0.25rem 0.75rem',
-          borderRadius: '1rem',
-          fontSize: '0.75rem',
-          fontWeight: 'bold',
-          backdropFilter: 'blur(10px)'
-        }}>
-          {cooldownStatus.status === 'cooldown' ? '⏳' : cooldownStatus.status === 'no_moves' ? '🚫' : '✅'} {cooldownStatus.text}
         </div>
 
         {/* Move Description */}
@@ -288,7 +221,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           }}>
             {move.description}
           </p>
-          
+
           {/* Power Type Information */}
           <div style={{ 
             display: 'flex', 
@@ -331,10 +264,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           </div>
         </div>
 
-        {/* Move Stats Grid */}
+        {/* Stats Grid */}
         <div style={{ 
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(2, 1fr)', 
           gap: '0.75rem',
           marginBottom: '1rem'
         }}>
@@ -347,33 +280,34 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             backdropFilter: 'blur(10px)'
           }}>
             <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>MOVE COST</div>
-            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>1</div>
+            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.cost}</div>
           </div>
 
           {/* Shield Damage */}
-          <div style={{
-            background: 'rgba(255,255,255,0.9)',
-            padding: '0.75rem',
-            borderRadius: '0.75rem',
-            textAlign: 'center',
-            backdropFilter: 'blur(10px)'
-          }}>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD DMG</div>
-            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{shieldDamage}</div>
-          </div>
-
-          {/* PP Steal */}
-          {ppSteal > 0 && (
+          {move.damage && (
             <div style={{
               background: 'rgba(255,255,255,0.9)',
               padding: '0.75rem',
               borderRadius: '0.75rem',
               textAlign: 'center',
-              backdropFilter: 'blur(10px)',
-              gridColumn: 'span 2'
+              backdropFilter: 'blur(10px)'
+            }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD DMG</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{move.damage}</div>
+            </div>
+          )}
+
+          {/* PP Steal */}
+          {move.ppSteal && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              padding: '0.75rem',
+              borderRadius: '0.75rem',
+              textAlign: 'center',
+              backdropFilter: 'blur(10px)'
             }}>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>PP STEAL</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#fbbf24' }}>{ppSteal}</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.ppSteal}</div>
             </div>
           )}
 
@@ -462,6 +396,41 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           </div>
         </div>
 
+        {/* Upgrade Preview (if can upgrade) */}
+        {canUpgrade && nextLevelStats && (
+          <div style={{ 
+            background: 'rgba(34, 197, 94, 0.1)',
+            border: '1px solid rgba(34, 197, 94, 0.2)',
+            padding: '0.75rem',
+            borderRadius: '0.75rem',
+            marginBottom: '1rem'
+          }}>
+            <div style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+              ⬆️ Next Level Preview
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#059669', lineHeight: '1.3' }}>
+              {nextLevelStats.damage !== undefined && (
+                <div>Damage: {move.damage} → {nextLevelStats.damage}</div>
+              )}
+              {nextLevelStats.ppSteal !== undefined && (
+                <div>PP Steal: {move.ppSteal || 0} → {nextLevelStats.ppSteal}</div>
+              )}
+              {nextLevelStats.debuffStrength !== undefined && (
+                <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>
+              )}
+              {nextLevelStats.buffStrength !== undefined && (
+                <div>Buff: {move.buffStrength || 0} → {nextLevelStats.buffStrength}</div>
+              )}
+              {nextLevelStats.shieldBoost !== undefined && (
+                <div>Shield: {move.shieldBoost || 0} → {nextLevelStats.shieldBoost}</div>
+              )}
+              {nextLevelStats.healing !== undefined && (
+                <div>Healing: {move.healing || 0} → {nextLevelStats.healing}</div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Upgrade Button */}
         {move.masteryLevel < 5 && (
           <button
@@ -512,6 +481,35 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     };
 
     const purchaseCost = getPurchaseCost();
+    
+    // Check if purchase is allowed
+    const category = title.includes('Manifest') ? 'manifest' : 
+                    title.includes('Elemental') ? 'elemental' : 'system';
+    
+    let canPurchase = true;
+    let nextMilestone = null;
+    
+    if (title.includes('Manifest') && canPurchaseMove) {
+      canPurchase = canPurchaseMove(category);
+      nextMilestone = (getNextMilestone && manifestProgress) ? 
+        getNextMilestone(manifestProgress.manifestType) : null;
+    } else if (title.includes('Elemental') && canPurchaseElementalMove && elementalProgress) {
+      // For Elemental moves, we need to check the specific element type
+      const elementType = userElement?.toLowerCase();
+      if (elementType) {
+        try {
+          canPurchase = canPurchaseElementalMove(elementType);
+          nextMilestone = (getNextElementalMilestone) ? 
+            getNextElementalMilestone(elementType) : null;
+        } catch (error) {
+          console.error('MovesDisplay: Error checking elemental move purchase:', error);
+          canPurchase = false;
+          nextMilestone = null;
+        }
+      }
+    } else if (canPurchaseMove) {
+      canPurchase = canPurchaseMove(category);
+    }
 
     return (
       <div style={{ marginBottom: '2rem' }}>
@@ -533,6 +531,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             {title} ({moves.length} Available)
           </h4>
         </div>
+        
         <div style={{ 
           display: 'grid', 
           gridTemplateColumns: 'repeat(auto-fill, 380px)', 
@@ -597,50 +596,103 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               textAlign: 'center',
               width: '100%'
             }}>
-              <p style={{ 
-                color: '#6b7280', 
-                fontSize: '0.875rem', 
-                lineHeight: '1.5',
-                margin: '0',
-                marginBottom: '1rem'
-              }}>
-                Unlock a new {title.toLowerCase().replace(' moves', '')} move to expand your arsenal
-              </p>
-              
-              <div style={{
-                background: 'rgba(255,255,255,0.9)',
-                padding: '0.75rem',
-                borderRadius: '0.75rem',
-                textAlign: 'center',
-                marginBottom: '1rem'
-              }}>
-                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>COST</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>{purchaseCost} PP</div>
-              </div>
+              {canPurchase ? (
+                <>
+                  <p style={{ 
+                    color: '#6b7280', 
+                    fontSize: '0.875rem', 
+                    lineHeight: '1.5',
+                    margin: '0',
+                    marginBottom: '1rem'
+                  }}>
+                    Unlock a new {title.toLowerCase().replace(' moves', '')} move to expand your arsenal
+                  </p>
+                  
+                  <div style={{
+                    background: 'rgba(255,255,255,0.9)',
+                    padding: '0.75rem',
+                    borderRadius: '0.75rem',
+                    textAlign: 'center',
+                    marginBottom: '1rem'
+                  }}>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>COST</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>{purchaseCost} PP</div>
+                  </div>
+                </>
+              ) : nextMilestone ? (
+                <>
+                  <p style={{ 
+                    color: '#dc2626', 
+                    fontSize: '0.875rem', 
+                    lineHeight: '1.5',
+                    margin: '0',
+                    marginBottom: '1rem',
+                    fontWeight: 'bold'
+                  }}>
+                    ⚠️ Milestone Required: {nextMilestone?.name || 'Unknown Milestone'}
+                  </p>
+                  
+                  <div style={{
+                    background: 'rgba(220, 38, 38, 0.1)',
+                    padding: '0.75rem',
+                    borderRadius: '0.75rem',
+                    textAlign: 'center',
+                    marginBottom: '1rem',
+                    border: '1px solid rgba(220, 38, 38, 0.2)'
+                  }}>
+                    <div style={{ fontSize: '0.75rem', color: '#dc2626', marginBottom: '0.25rem', fontWeight: 'bold' }}>REQUIREMENTS</div>
+                    <div style={{ fontSize: '0.875rem', color: '#dc2626', marginBottom: '0.5rem' }}>
+                      Level 1 Moves Used: {
+                        title.includes('Manifest') ? 
+                          (manifestProgress?.level1MovesUsed || 0) : 
+                          (elementalProgress?.level1MovesUsed || 0)
+                      }/{nextMilestone?.requirements?.level1MovesUsed || 9}<br/>
+                      Mastery Level: {nextMilestone?.requirements?.masteryLevel || 1}<br/>
+                      Moves Unlocked: {nextMilestone?.requirements?.movesUnlocked || 1}<br/>
+                      Battles Won: {nextMilestone?.requirements?.battlesWon || 0}<br/>
+                      PP Earned: {nextMilestone?.requirements?.ppEarned || 0}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p style={{ 
+                  color: '#6b7280', 
+                  fontSize: '0.875rem', 
+                  lineHeight: '1.5',
+                  margin: '0',
+                  marginBottom: '1rem'
+                }}>
+                  Complete milestones to unlock more moves
+                </p>
+              )}
             </div>
 
             {/* Purchase Button */}
             <button
+              disabled={!canPurchase}
               style={{
-                background: color,
+                background: canPurchase ? color : '#9ca3af',
                 color: 'white',
                 border: 'none',
                 padding: '1rem 2rem',
                 borderRadius: '1rem',
-                cursor: 'pointer',
+                cursor: canPurchase ? 'pointer' : 'not-allowed',
                 fontSize: '1rem',
                 fontWeight: 'bold',
                 transition: 'all 0.2s',
-                width: '100%'
+                width: '100%',
+                opacity: canPurchase ? 1 : 0.6
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'scale(1.05)';
+                if (canPurchase) {
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                }
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.transform = 'scale(1)';
               }}
             >
-              💰 Purchase Move
+              {canPurchase ? '💰 Purchase Move' : '🔒 Milestone Required'}
             </button>
           </div>
         </div>

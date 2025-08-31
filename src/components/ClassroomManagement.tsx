@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import { useGoogleLogin } from '@react-oauth/google';

@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, arrayUnion, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
-import { Chapter, ChapterChallenge, Team, Rival, Veil, ReflectionEcho, EthicsArchetype } from '../types/chapters';
-import { getLevelFromXP } from '../utils/leveling';
+import { Chapter, ChapterChallenge } from '../types/chapters';
 import RivalSelectionModal from './RivalSelectionModal';
 
 interface ChapterDetailProps {

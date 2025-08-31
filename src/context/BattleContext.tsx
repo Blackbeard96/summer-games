@@ -37,6 +37,8 @@ interface BattleContextType {
   updateVault: (updates: Partial<Vault>) => Promise<void>;
   payDues: () => Promise<void>;
   syncVaultPP: () => Promise<void>;
+  syncStudentPP: (userId: string) => Promise<void>;
+  refreshVaultData: () => Promise<void>;
   
   // Move Management
   moves: Move[];
@@ -50,8 +52,23 @@ interface BattleContextType {
   
   // Action Card Management
   actionCards: ActionCard[];
+  setActionCards: React.Dispatch<React.SetStateAction<ActionCard[]>>;
   unlockActionCard: (cardId: string) => Promise<void>;
-  useActionCard: (cardId: string) => Promise<void>;
+  upgradeActionCard: (cardId: string) => Promise<void>;
+  activateActionCard: (cardId: string) => Promise<void>;
+  resetActionCards: () => Promise<void>;
+  
+  // Manifest Progress Management
+  manifestProgress: any;
+  checkManifestMilestones: (manifestType: string) => Promise<void>;
+  canPurchaseMove: (category: 'manifest' | 'elemental' | 'system') => boolean;
+  getNextMilestone: (manifestType: string) => any;
+  
+  // Elemental Progress Management
+  elementalProgress: any;
+  checkElementalMilestones: (elementalType: string) => Promise<void>;
+  canPurchaseElementalMove: (elementalType: string) => boolean;
+  getNextElementalMilestone: (elementalType: string) => any;
   
   // Battle Management
   currentBattle: BattleState | null;
@@ -62,12 +79,14 @@ interface BattleContextType {
   joinBattle: (battleId: string) => Promise<void>;
   leaveBattle: (battleId: string) => Promise<void>;
   submitMove: (moveId: string, targetUserId?: string, actionCardId?: string) => Promise<void>;
-  executeVaultSiegeAttack: (moveId: string | null, targetUserId: string, actionCardId?: string) => Promise<void>;
+  executeVaultSiegeAttack: (moveId: string | null, targetUserId: string, actionCardId?: string) => Promise<{ success: boolean; message: string; ppStolen?: number; xpGained?: number; shieldDamage?: number } | undefined>;
   executePPRestore: () => Promise<{ success: boolean; restored?: number; totalStolen?: number; message?: string }>;
   
   // Offline Moves
   submitOfflineMove: (type: OfflineMove['type'], targetUserId?: string, moveId?: string) => Promise<void>;
   getRemainingOfflineMoves: () => number;
+  consumeOfflineMove: () => Promise<boolean>;
+  debugOfflineMoves: () => void;
   
   // Loading States
   loading: boolean;
@@ -85,6 +104,7 @@ export const useBattle = () => {
 };
 
 export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  console.log('🔥 NEW CODE LOADED - BattleProvider initialized!');
   const { currentUser } = useAuth();
   const [vault, setVault] = useState<Vault | null>(null);
   const [moves, setMoves] = useState<Move[]>([]);
@@ -330,14 +350,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     const unsubscribeStudent = onSnapshot(studentRef, (studentDoc) => {
-      if (studentDoc.exists() && vault) {
-        const playerPP = studentDoc.data().powerPoints || 0;
-        const vaultPP = vault.currentPP;
-        
-        // Sync vault PP with player PP if they differ
-        if (playerPP !== vaultPP) {
-          updateDoc(vaultRef, { currentPP: playerPP });
-        }
+      if (studentDoc.exists()) {
+        // Just log the student data for debugging, don't sync
+        const studentData = studentDoc.data();
+        console.log('BattleContext: Student data updated:', {
+          powerPoints: studentData.powerPoints,
+          xp: studentData.xp,
+          timestamp: new Date().toISOString()
+        });
       }
     });
 
@@ -382,8 +402,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     const movesQuery = query(
       collection(db, 'offlineMoves'),
-      where('userId', '==', currentUser.uid),
-      where('status', '==', 'pending')
+      where('userId', '==', currentUser.uid)
     );
     
     const unsubscribe = onSnapshot(movesQuery, (snapshot) => {
@@ -394,13 +413,40 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         moves.push(moveData);
       });
       console.log('BattleContext: Setting offline moves:', moves);
+      console.log('BattleContext: Total offline moves count:', moves.length);
+      console.log('BattleContext: Vault attack moves count:', moves.filter(m => m.type === 'vault_attack').length);
+      console.log('BattleContext: Move restore moves count:', moves.filter(m => m.type === 'move_restore').length);
+      
+      // Check if this is a new vault_attack record (indicating a move was just consumed)
+      const newVaultAttacks = moves.filter(m => m.type === 'vault_attack');
+      const previousVaultAttacks = offlineMoves.filter(m => m.type === 'vault_attack');
+      const hasNewVaultAttack = newVaultAttacks.length > previousVaultAttacks.length;
+      
       setOfflineMoves(moves);
+      
+      // Trigger a recalculation of remaining offline moves
+      const remainingMoves = getRemainingOfflineMoves();
+      console.log('BattleContext: Offline moves updated, remaining moves:', remainingMoves);
+      
+      // If a new vault_attack was added, this means a move was consumed
+      if (hasNewVaultAttack) {
+        console.log('BattleContext: New vault_attack detected - move was consumed!');
+        console.log('BattleContext: Previous vault attacks:', previousVaultAttacks.length);
+        console.log('BattleContext: New vault attacks:', newVaultAttacks.length);
+        console.log('BattleContext: Remaining moves after consumption:', remainingMoves);
+      }
+      
+      // Automatically trigger debug update to ensure UI consistency
+      console.log('BattleContext: Auto-triggering debug update after offline moves change');
+      console.log('BattleContext: Current offline moves count:', moves.length);
+      console.log('BattleContext: Current attack history count:', attackHistory.length);
+      console.log('BattleContext: Calculated remaining moves:', remainingMoves);
     }, (error) => {
       console.error('BattleContext: Error listening to offline moves:', error);
     });
 
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [currentUser, offlineMoves]); // Added offlineMoves to dependencies to detect changes
 
   // Listen for attack history (attacks by or against current user)
   useEffect(() => {
@@ -408,42 +454,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     console.log('BattleContext: Setting up attack history listener');
     
+    // Get all attacks where user is attacker or target
     const attacksQuery = query(
       collection(db, 'vaultSiegeAttacks'),
       where('attackerId', '==', currentUser.uid)
     );
     
-    const targetAttacksQuery = query(
-      collection(db, 'vaultSiegeAttacks'),
-      where('targetId', '==', currentUser.uid)
-    );
-    
-    const unsubscribeAttacks = onSnapshot(attacksQuery, (snapshot) => {
+    const unsubscribe = onSnapshot(attacksQuery, (snapshot) => {
       const attacks: VaultSiegeAttack[] = [];
       snapshot.forEach((doc) => {
         const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
         console.log('BattleContext: Found attack by user:', attackData);
         attacks.push(attackData);
       });
-      console.log('BattleContext: Setting attacks by user:', attacks);
-      setAttackHistory(prev => [...prev.filter(a => a.attackerId === currentUser.uid), ...attacks]);
+      console.log('BattleContext: Setting attack history:', attacks);
+      setAttackHistory(attacks);
+      
+      // Automatically trigger debug update to ensure UI consistency
+      const remainingMoves = getRemainingOfflineMoves();
+      console.log('BattleContext: Auto-triggering debug update after attack history change');
+      console.log('BattleContext: Current offline moves count:', offlineMoves.length);
+      console.log('BattleContext: Current attack history count:', attacks.length);
+      console.log('BattleContext: Calculated remaining moves:', remainingMoves);
+    }, (error) => {
+      console.error('BattleContext: Error listening to attack history:', error);
     });
 
-    const unsubscribeTargetAttacks = onSnapshot(targetAttacksQuery, (snapshot) => {
-      const attacks: VaultSiegeAttack[] = [];
-      snapshot.forEach((doc) => {
-        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
-        console.log('BattleContext: Found attack against user:', attackData);
-        attacks.push(attackData);
-      });
-      console.log('BattleContext: Setting attacks against user:', attacks);
-      setAttackHistory(prev => [...prev.filter(a => a.targetId === currentUser.uid), ...attacks]);
-    });
-
-    return () => {
-      unsubscribeAttacks();
-      unsubscribeTargetAttacks();
-    };
+    return () => unsubscribe();
   }, [currentUser]);
 
   // Vault Management
@@ -482,24 +519,93 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const syncVaultPP = async () => {
-    if (!currentUser) return;
+    if (!currentUser || !vault) return;
     
     try {
-      // Get current player PP
+      // Get current player PP from student document
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
       const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
       
-      console.log('BattleContext: Manual sync - Player PP:', playerPP, 'Vault PP:', vault?.currentPP);
+      console.log('🔄 Manual sync - Player PP:', playerPP, 'Vault PP:', vault.currentPP);
       
-      // Update vault PP to match player PP
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      await updateDoc(vaultRef, { currentPP: playerPP });
-      
-      console.log('BattleContext: Vault PP synced to:', playerPP);
+      if (playerPP !== vault.currentPP) {
+        // Update vault PP to match player PP
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        await updateDoc(vaultRef, { currentPP: playerPP });
+        
+        // Update local vault state
+        setVault(prevVault => prevVault ? {
+          ...prevVault,
+          currentPP: playerPP
+        } : null);
+        
+        console.log('✅ Vault PP synced to player PP:', playerPP);
+      } else {
+        console.log('✅ Vault PP already in sync with player PP');
+      }
     } catch (err) {
       console.error('Error syncing vault PP:', err);
       setError('Failed to sync vault PP');
+    }
+  };
+
+  // Sync student PP to match vault PP (for targets)
+  const syncStudentPP = async (userId: string) => {
+    try {
+      // Get vault PP
+      const vaultRef = doc(db, 'vaults', userId);
+      const vaultDoc = await getDoc(vaultRef);
+      const vaultPP = vaultDoc.exists() ? (vaultDoc.data().currentPP || 0) : 0;
+      
+      // Get student PP
+      const studentRef = doc(db, 'students', userId);
+      const studentDoc = await getDoc(studentRef);
+      const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+      
+      console.log(`🔄 Syncing student PP for ${userId}:`, { vaultPP, studentPP });
+      
+      if (vaultPP !== studentPP) {
+        // Update student PP to match vault PP
+        await updateDoc(studentRef, { powerPoints: vaultPP });
+        console.log(`✅ Student PP synced to vault PP for ${userId}:`, vaultPP);
+      } else {
+        console.log(`✅ Student PP already in sync with vault PP for ${userId}`);
+      }
+    } catch (err) {
+      console.error(`Error syncing student PP for ${userId}:`, err);
+    }
+  };
+
+  // Refresh vault data to ensure synchronization
+  const refreshVaultData = async () => {
+    if (!currentUser) return;
+    
+    try {
+      console.log('Refreshing vault data...');
+      
+      // Get updated vault data
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const vaultDoc = await getDoc(vaultRef);
+      
+      if (vaultDoc.exists()) {
+        const vaultData = vaultDoc.data() as Vault;
+        const processedVault = checkAndResetDailyMoves(vaultData);
+        setVault(processedVault);
+        console.log('Vault data refreshed:', processedVault);
+      }
+      
+      // Also refresh student data to get updated XP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        console.log('Student data refreshed - XP:', studentData.xp, 'PP:', studentData.powerPoints);
+      }
+      
+    } catch (error) {
+      console.error('Error refreshing vault data:', error);
     }
   };
 
@@ -708,7 +814,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await setDoc(movesRef, { moves: newMoves });
       setMoves(newMoves);
       
-      console.log('BattleContext: Force migration completed successfully');
+                  // Force refresh action cards from templates
+            const updatedActionCards = ACTION_CARD_TEMPLATES.map((template, index) => ({
+              ...template,
+              id: `card_${index + 1}`,
+              unlocked: index < 2, // First 2 cards unlocked by default
+              masteryLevel: 1, // Start at level 1
+              upgradeCost: template.upgradeCost || 100, // Default upgrade cost
+            }));
+      
+      const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+      await setDoc(cardsRef, { cards: updatedActionCards });
+      setActionCards(updatedActionCards);
+      
+      console.log('BattleContext: Force migration completed successfully - moves and action cards updated');
     } catch (err) {
       console.error('BattleContext: Error in force migration:', err);
       setError('Failed to force migration');
@@ -782,22 +901,345 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const useActionCard = async (cardId: string) => {
-    if (!currentUser) return;
+  const upgradeActionCard = async (cardId: string) => {
+    if (!currentUser || !vault) return;
     
     try {
-      const cardsRef = doc(db, 'users', currentUser.uid, 'battle', 'actionCards');
-      const updatedCards = actionCards.map(card => 
-        card.id === cardId && card.uses > 0 
-          ? { ...card, uses: card.uses - 1 } 
-          : card
+      const card = actionCards.find(c => c.id === cardId);
+      if (!card) {
+        setError('Action card not found');
+        return;
+      }
+
+      if (!card.unlocked) {
+        setError('Action card must be unlocked before upgrading');
+        return;
+      }
+
+      if (card.masteryLevel >= 5) {
+        setError('Action card is already at maximum level');
+        return;
+      }
+
+      // Check if player has enough PP
+      if (vault.currentPP < card.upgradeCost) {
+        setError(`Not enough PP. Need ${card.upgradeCost} PP to upgrade.`);
+        return;
+      }
+
+      // Calculate new effect strength based on next level
+      const newStrength = card.nextLevelEffect?.strength || card.effect.strength + 5;
+      
+      // Update action card in database
+      const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+      const updatedCards = actionCards.map(c => 
+        c.id === cardId ? {
+          ...c,
+          masteryLevel: c.masteryLevel + 1,
+          effect: {
+            ...c.effect,
+            strength: newStrength
+          },
+          upgradeCost: Math.floor(c.upgradeCost * 1.5), // Increase upgrade cost
+          nextLevelEffect: c.masteryLevel < 4 ? {
+            strength: Math.floor(newStrength * 1.3), // 30% increase for next level
+            duration: c.nextLevelEffect?.duration
+          } : undefined // No next level at max
+        } : c
       );
       await updateDoc(cardsRef, { cards: updatedCards });
       setActionCards(updatedCards);
+
+      // Deduct PP from vault
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      await updateDoc(vaultRef, { 
+        currentPP: vault.currentPP - card.upgradeCost 
+      });
+
+      console.log(`Upgraded ${card.name} to level ${card.masteryLevel + 1} for ${card.upgradeCost} PP`);
+    } catch (err) {
+      console.error('Error upgrading action card:', err);
+      setError('Failed to upgrade action card');
+    }
+  };
+
+  const activateActionCard = async (cardId: string) => {
+    if (!currentUser) return;
+    
+    try {
+      const card = actionCards.find(c => c.id === cardId);
+      if (!card) {
+        setError('Action card not found');
+        return;
+      }
+
+      if (!card.unlocked) {
+        setError('Action card is not unlocked');
+        return;
+      }
+
+      if (card.uses <= 0) {
+        setError('No uses remaining for this action card');
+        return;
+      }
+
+      // Handle different action card types
+      switch (card.effect.type) {
+        case 'shield_restore':
+          await executeShieldRestore(card);
+          break;
+        default:
+          // For other cards, just consume a use (battle-only cards)
+          const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+          const updatedCards = actionCards.map(c => 
+            c.id === cardId ? { ...c, uses: c.uses - 1 } : c
+          );
+          await updateDoc(cardsRef, { cards: updatedCards });
+          setActionCards(updatedCards);
+          break;
+      }
     } catch (err) {
       console.error('Error using action card:', err);
       setError('Failed to use action card');
     }
+  };
+
+  const executeShieldRestore = async (card: ActionCard) => {
+    if (!currentUser || !vault) return;
+    
+    try {
+      // Calculate shield restoration
+      const shieldRestoreAmount = card.effect.strength;
+      const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + shieldRestoreAmount);
+      const actualShieldRestored = newShieldStrength - vault.shieldStrength;
+
+      if (actualShieldRestored <= 0) {
+        setError('Your shields are already at maximum strength');
+        return;
+      }
+
+      // Update vault shield strength
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      await updateDoc(vaultRef, {
+        shieldStrength: newShieldStrength
+      });
+
+      // Update student document
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, {
+        shieldStrength: newShieldStrength
+      });
+
+      // Update local vault state
+      setVault(prevVault => prevVault ? {
+        ...prevVault,
+        shieldStrength: newShieldStrength
+      } : null);
+
+      // Consume a use from the action card
+      const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+      const updatedCards = actionCards.map(c => 
+        c.id === card.id ? { ...c, uses: c.uses - 1 } : c
+      );
+      await updateDoc(cardsRef, { cards: updatedCards });
+      setActionCards(updatedCards);
+
+      console.log(`🛡️ Shield Restore used: ${vault.shieldStrength} → ${newShieldStrength} (+${actualShieldRestored})`);
+      setError(null); // Clear any previous errors
+    } catch (err) {
+      console.error('Error executing shield restore:', err);
+      setError('Failed to restore shields');
+    }
+  };
+
+  const resetActionCards = async () => {
+    if (!currentUser) return;
+    
+    try {
+      console.log('🔄 Resetting action cards to template defaults...');
+      
+      // Reset action cards to template defaults
+      const resetCards = ACTION_CARD_TEMPLATES.map((template, index) => ({
+        ...template,
+        id: `card_${index + 1}`,
+        unlocked: index < 2, // First two cards unlocked by default
+        uses: template.maxUses, // Reset uses to maximum
+        masteryLevel: 1, // Reset to level 1
+      }));
+      
+      // Update in database
+      const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+      await updateDoc(cardsRef, { cards: resetCards });
+      
+      // Update local state
+      setActionCards(resetCards);
+      
+      console.log('✅ Action cards reset successfully');
+      setError(null);
+    } catch (err) {
+      console.error('Error resetting action cards:', err);
+      setError('Failed to reset action cards');
+    }
+  };
+
+  // Manifest Progress Management
+  const manifestProgress: any = {
+    // This will be populated with actual data from Firestore
+    // For now, it's a placeholder
+    currentLevel: 1,
+    currentXP: 0,
+    nextLevelXP: 100,
+    totalXP: 0,
+    movesUnlocked: 0,
+    lastManifestUpgrade: new Date(),
+  };
+
+  const checkManifestMilestones = async (manifestType: string) => {
+    if (!currentUser) return;
+    
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      const userManifest = studentDoc.exists() ? 
+        (studentDoc.data().manifest?.manifestId || studentDoc.data().manifestationType || 'reading') : 'reading';
+
+      if (userManifest !== manifestType) {
+        console.warn(`User manifest is ${userManifest}, but milestone check requested for ${manifestType}`);
+        return;
+      }
+
+      const milestonesRef = doc(db, 'manifestMilestones', manifestType);
+      const milestonesDoc = await getDoc(milestonesRef);
+
+      if (!milestonesDoc.exists()) {
+        console.warn(`No milestone data found for manifest type: ${manifestType}`);
+        return;
+      }
+
+      const milestones = milestonesDoc.data();
+      const currentXP = manifestProgress.currentXP;
+      const currentLevel = manifestProgress.currentLevel;
+
+      if (currentXP >= milestones.nextLevelXP) {
+        const newLevel = currentLevel + 1;
+        const newXP = currentXP - milestones.nextLevelXP;
+
+        await updateDoc(milestonesRef, {
+          currentLevel: newLevel,
+          currentXP: newXP,
+          nextLevelXP: milestones.nextLevelXP * 2, // Double XP for next level
+          totalXP: milestones.totalXP + milestones.nextLevelXP,
+          movesUnlocked: milestones.movesUnlocked + 1,
+        });
+
+        console.log(`Manifest ${manifestType} leveled up to ${newLevel}!`);
+        // Optionally, unlock a new move here if the milestone unlocks it
+        // For now, just log the event
+      }
+    } catch (err) {
+      console.error('Error checking manifest milestones:', err);
+      setError('Failed to check manifest milestones');
+    }
+  };
+
+  const canPurchaseMove = (category: 'manifest' | 'elemental' | 'system') => {
+    if (!currentUser) return false;
+    
+    // For now, return true for all categories to avoid async issues
+    // This can be enhanced later with proper async data fetching
+    return true;
+  };
+
+  const getNextMilestone = (manifestType: string) => {
+    if (!currentUser) return null;
+    
+    // For now, return a basic milestone structure
+    // This can be enhanced later with proper async data fetching
+    return {
+      level: 2,
+      xpNeeded: 100,
+      description: `Reach level 2 in ${manifestType}`
+    };
+  };
+
+  // Elemental Progress Management
+  const elementalProgress: any = {
+    // This will be populated with actual data from Firestore
+    // For now, it's a placeholder
+    currentLevel: 1,
+    currentXP: 0,
+    nextLevelXP: 100,
+    totalXP: 0,
+    movesUnlocked: 0,
+    lastElementalUpgrade: new Date(),
+  };
+
+  const checkElementalMilestones = async (elementalType: string) => {
+    if (!currentUser) return;
+    
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      const userManifest = studentDoc.exists() ? 
+        (studentDoc.data().manifestationType || 'fire') : 'fire';
+
+      if (userManifest !== elementalType) {
+        console.warn(`User elemental is ${userManifest}, but milestone check requested for ${elementalType}`);
+        return;
+      }
+
+      const milestonesRef = doc(db, 'elementalMilestones', elementalType);
+      const milestonesDoc = await getDoc(milestonesRef);
+
+      if (!milestonesDoc.exists()) {
+        console.warn(`No milestone data found for elemental type: ${elementalType}`);
+        return;
+      }
+
+      const milestones = milestonesDoc.data();
+      const currentXP = elementalProgress.currentXP;
+      const currentLevel = elementalProgress.currentLevel;
+
+      if (currentXP >= milestones.nextLevelXP) {
+        const newLevel = currentLevel + 1;
+        const newXP = currentXP - milestones.nextLevelXP;
+
+        await updateDoc(milestonesRef, {
+          currentLevel: newLevel,
+          currentXP: newXP,
+          nextLevelXP: milestones.nextLevelXP * 2, // Double XP for next level
+          totalXP: milestones.totalXP + milestones.nextLevelXP,
+          movesUnlocked: milestones.movesUnlocked + 1,
+        });
+
+        console.log(`Elemental ${elementalType} leveled up to ${newLevel}!`);
+        // Optionally, unlock a new move here if the milestone unlocks it
+        // For now, just log the event
+      }
+    } catch (err) {
+      console.error('Error checking elemental milestones:', err);
+      setError('Failed to check elemental milestones');
+    }
+  };
+
+  const canPurchaseElementalMove = (elementalType: string) => {
+    if (!currentUser) return false;
+    
+    // For now, return true for all elemental types to avoid async issues
+    // This can be enhanced later with proper async data fetching
+    return true;
+  };
+
+  const getNextElementalMilestone = (elementalType: string) => {
+    if (!currentUser) return null;
+    
+    // For now, return a basic milestone structure
+    // This can be enhanced later with proper async data fetching
+    return {
+      level: 2,
+      xpNeeded: 100,
+      description: `Reach level 2 in ${elementalType}`
+    };
   };
 
   // Battle Management
@@ -1029,15 +1471,98 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const executeVaultSiegeAttack = async (moveId: string | null, targetUserId: string, actionCardId?: string) => {
-    if (!currentUser || !vault) return;
+  // Helper function to calculate XP reward for PP stolen
+  const calculateXpReward = (ppStolen: number): number => {
+    if (ppStolen <= 0) return 0;
     
-    // Consume a move first
-    const moveConsumed = await consumeMove();
-    if (!moveConsumed) return;
+    // XP reward based on PP stolen: 1-5 XP depending on amount
+    if (ppStolen <= 5) return 1;
+    if (ppStolen <= 10) return 2;
+    if (ppStolen <= 20) return 3;
+    if (ppStolen <= 35) return 4;
+    return 5; // 5 XP for 35+ PP stolen
+  };
+
+  // Helper function to award XP for battle actions
+  const awardBattleXp = async (xpAmount: number, reason: string) => {
+    if (!currentUser || xpAmount <= 0) return;
+    
+    try {
+      console.log(`🎯 AWARDING XP: ${xpAmount} XP for: ${reason}`);
+      
+      // Update student document XP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const currentXP = studentData.xp || 0;
+        const newXP = currentXP + xpAmount;
+        
+        console.log(`📊 XP UPDATE: ${currentXP} → ${newXP} (+${xpAmount})`);
+        
+        await updateDoc(studentRef, {
+          xp: newXP
+        });
+        
+        console.log('✅ Student document XP updated in database');
+        
+        // Verify the update by reading the document again
+        const verifyDoc = await getDoc(studentRef);
+        if (verifyDoc.exists()) {
+          const verifyData = verifyDoc.data();
+          console.log('🔍 Verification - XP in database after update:', verifyData.xp);
+          console.log('🔍 Verification - Full student data after update:', verifyData);
+        }
+        
+        // Create notification for XP gain
+        try {
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'xp_gain',
+            title: 'XP Earned!',
+            message: `+${xpAmount} XP for ${reason}`,
+            xpAmount: xpAmount,
+            reason: reason,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+          console.log('📢 XP notification created');
+        } catch (notificationError) {
+          console.error('❌ Error creating XP notification:', notificationError);
+        }
+        
+        console.log(`🎉 XP AWARD COMPLETE: ${currentXP} → ${newXP} (+${xpAmount})`);
+      } else {
+        console.error('❌ Student document not found for XP update');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error awarding battle XP:', error);
+    }
+  };
+
+  const executeVaultSiegeAttack = async (moveId: string | null, targetUserId: string, actionCardId?: string) => {
+    console.log('🔥 NEW CODE - executeVaultSiegeAttack called!');
+    console.log('🔥 Early validation check:', { currentUser: !!currentUser, vault: !!vault });
+    if (!currentUser || !vault) {
+      console.log('🔥 Early return: No user or vault found');
+      return { success: false, message: 'No user or vault found' };
+    }
+    
+    // Consume an offline move first
+    console.log('🔥 About to consume offline move...');
+    const moveConsumed = await consumeOfflineMove();
+    console.log('🔥 Offline move consumed result:', moveConsumed);
+    if (!moveConsumed) {
+      console.log('🔥 Early return: No offline moves remaining');
+      return { success: false, message: 'No offline moves remaining' };
+    }
     
     try {
       console.log('Executing vault siege attack:', { moveId, targetUserId, actionCardId });
+      
+      // Sync target's student PP to match their vault PP before attack
+      await syncStudentPP(targetUserId);
       
       // Get target vault
       const targetVaultRef = doc(db, 'vaults', targetUserId);
@@ -1049,9 +1574,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       const targetVaultData = targetVaultDoc.data() as Vault;
       
+      // Also get target student data to compare
+      const targetStudentRef = doc(db, 'students', targetUserId);
+      const targetStudentDocForComparison = await getDoc(targetStudentRef);
+      const targetStudentPP = targetStudentDocForComparison.exists() ? (targetStudentDocForComparison.data().powerPoints || 0) : 0;
+      
+      console.log('🔍 COMPARISON - Target data sources:', {
+        targetUserId,
+        vaultPP: targetVaultData.currentPP,
+        studentPP: targetStudentPP,
+        vaultDocId: targetVaultDoc.id,
+        studentDocId: targetStudentDocForComparison.id
+      });
+      
+      console.log('🔍 Target vault data loaded:', {
+        targetUserId,
+        targetVaultData: {
+          currentPP: targetVaultData.currentPP,
+          shieldStrength: targetVaultData.shieldStrength,
+          maxShieldStrength: targetVaultData.maxShieldStrength
+        }
+      });
+      
       // Get the move data
       const selectedMove = moveId ? moves.find(m => m.id === moveId) : null;
       const selectedCard = actionCardId ? actionCards.find(c => c.id === actionCardId) : null;
+      
+      console.log('🔍 Move lookup:', { moveId, selectedMove: selectedMove?.name, selectedMoveType: selectedMove?.type });
       
       if (!selectedMove && !selectedCard) {
         throw new Error('No move or action card selected');
@@ -1081,7 +1630,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             shieldStrength: newShieldStrength
           });
           
+          // Update local vault state to reflect shield boost
+          setVault(prevVault => prevVault ? {
+            ...prevVault,
+            shieldStrength: newShieldStrength
+          } : null);
+          
           console.log(`Defensive move ${selectedMove.name} boosted attacker shields: ${vault.shieldStrength} → ${newShieldStrength} (+${actualShieldBoost})`);
+          console.log('Local vault state updated with new shield strength:', newShieldStrength);
           message = `Used ${selectedMove.name} - Boosted shields by ${actualShieldBoost}`;
           
           // For defensive moves, we don't damage the target or steal PP
@@ -1092,7 +1648,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const moveDamage = MOVE_DAMAGE_VALUES[selectedMove.name];
           if (moveDamage) {
             shieldDamage = moveDamage.shieldDamage;
-            console.log(`Move ${selectedMove.name} shield damage: ${shieldDamage}`);
+            console.log(`⚔️ Move ${selectedMove.name} shield damage: ${shieldDamage}`);
+            console.log(`📊 Move damage values:`, moveDamage);
+            console.log(`💰 Move PP steal potential: ${moveDamage.ppSteal}`);
+            console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
+            console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
             
             // Check if shields are down or if this attack will break them
             const remainingShieldAfterAttack = Math.max(0, targetVaultData.shieldStrength - shieldDamage);
@@ -1110,7 +1670,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               message = `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP`;
             } else if (targetVaultData.shieldStrength === 0) {
               // No shields, can steal PP directly
+              console.log(`🛡️ No shields detected - targetVaultData.shieldStrength: ${targetVaultData.shieldStrength}`);
+              console.log(`💰 PP steal calculation: Math.min(${moveDamage.ppSteal}, ${targetVaultData.currentPP})`);
               ppStolen = Math.min(moveDamage.ppSteal, targetVaultData.currentPP);
+              console.log(`💰 Final ppStolen: ${ppStolen}`);
               message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields)`;
             } else {
               // Shields still up, check if we'll break them
@@ -1146,6 +1709,31 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.log(`Action card ${selectedCard.name} shield damage: ${cardShieldDamage}, total shield damage: ${shieldDamage}`);
             message += ` • Used ${selectedCard.name} to breach shields (+${cardShieldDamage} shield damage)`;
             break;
+          case 'shield_restore':
+            // Restore attacker's shield strength
+            const shieldRestoreAmount = selectedCard.effect.strength;
+            const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + shieldRestoreAmount);
+            const actualShieldRestored = newShieldStrength - vault.shieldStrength;
+            
+            // Update attacker's vault with shield restoration
+            await updateDoc(doc(db, 'vaults', currentUser.uid), {
+              shieldStrength: newShieldStrength
+            });
+            
+            // Update attacker's student document
+            await updateDoc(doc(db, 'students', currentUser.uid), {
+              shieldStrength: newShieldStrength
+            });
+            
+            // Update local vault state to reflect shield restoration
+            setVault(prevVault => prevVault ? {
+              ...prevVault,
+              shieldStrength: newShieldStrength
+            } : null);
+            
+            console.log(`🛡️ Shield Restore: ${vault.shieldStrength} → ${newShieldStrength} (+${actualShieldRestored})`);
+            message += ` • Used ${selectedCard.name} to restore shields (+${actualShieldRestored} shield strength)`;
+            break;
           case 'teleport_pp':
             ppStolen = Math.min(selectedCard.effect.strength, targetVaultData.currentPP);
             message += ` • Used ${selectedCard.name} to steal PP`;
@@ -1155,30 +1743,57 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
       
+      console.log(`🔍 Shield damage after move and card processing: ${shieldDamage}`);
+      
       // Apply damage to target vault
       const updates: Partial<Vault> = {};
+      let shieldsCracked = false;
       
       if (shieldDamage > 0) {
         const originalShieldStrength = targetVaultData.shieldStrength;
         const newShieldStrength = Math.max(0, targetVaultData.shieldStrength - shieldDamage);
         updates.shieldStrength = newShieldStrength;
         
-        // Calculate excess damage that converts to PP theft
-        const excessDamage = Math.max(0, shieldDamage - originalShieldStrength);
-        if (excessDamage > 0) {
-          // Convert excess shield damage to PP theft
-          const additionalPPStolen = Math.min(excessDamage, targetVaultData.currentPP);
+        // Check if shields were completely broken (went from >0 to 0)
+        if (originalShieldStrength > 0 && newShieldStrength === 0) {
+          shieldsCracked = true;
+          
+          // When shields are broken, half of the remaining shield damage is deducted from PP
+          const excessDamage = shieldDamage - originalShieldStrength;
+          if (excessDamage > 0) {
+            const ppDamageFromShieldBreak = Math.floor(excessDamage / 2);
+            const additionalPPStolen = Math.min(ppDamageFromShieldBreak, targetVaultData.currentPP);
+            ppStolen += additionalPPStolen;
+            
+            console.log(`🛡️ Shields broken! Excess damage: ${excessDamage}`);
+            console.log(`💰 Half of excess damage (${ppDamageFromShieldBreak}) converted to PP theft`);
+            console.log(`💰 Additional PP stolen from shield break: ${additionalPPStolen}`);
+            console.log(`💰 Total PP stolen: ${ppStolen}`);
+            
+            // Update message to reflect the shield break conversion
+            if (selectedMove) {
+              message = message.replace(
+                `Used ${selectedMove.name} - Broke shields and stole ${ppStolen - additionalPPStolen} PP`,
+                `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP (${additionalPPStolen} from shield break)`
+              );
+            }
+          }
+        } else if (originalShieldStrength === 0 && shieldDamage > 0) {
+          // Target has no shields, so all shield damage converts to PP theft
+          const ppDamageFromNoShields = Math.floor(shieldDamage / 2);
+          const additionalPPStolen = Math.min(ppDamageFromNoShields, targetVaultData.currentPP);
           ppStolen += additionalPPStolen;
           
-          console.log(`Shield damage calculation: ${originalShieldStrength} - ${shieldDamage} = ${newShieldStrength}`);
-          console.log(`Excess damage: ${excessDamage} → Additional PP stolen: ${additionalPPStolen}`);
-          console.log(`Total PP stolen: ${ppStolen}`);
+          console.log(`🛡️ Target has no shields! Shield damage: ${shieldDamage}`);
+          console.log(`💰 Half of shield damage (${ppDamageFromNoShields}) converted to PP theft`);
+          console.log(`💰 Additional PP stolen from no shields: ${additionalPPStolen}`);
+          console.log(`💰 Total PP stolen: ${ppStolen}`);
           
-          // Update message to reflect the conversion
+          // Update message to reflect the no-shields conversion
           if (selectedMove) {
             message = message.replace(
-              `Used ${selectedMove.name} - Broke shields and stole ${ppStolen - additionalPPStolen} PP`,
-              `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP (${additionalPPStolen} from excess damage)`
+              `Used ${selectedMove.name} - Stole ${ppStolen - additionalPPStolen} PP (no shields)`,
+              `Used ${selectedMove.name} - Stole ${ppStolen} PP (${additionalPPStolen} from shield damage)`
             );
           }
         } else {
@@ -1187,6 +1802,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       if (ppStolen > 0) {
+        console.log('💰 PP will be stolen, updating attacker and target PP');
         updates.currentPP = Math.max(0, targetVaultData.currentPP - ppStolen);
         // Add stolen PP to attacker's vault
         const newAttackerPP = vault.currentPP + ppStolen;
@@ -1205,10 +1821,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           powerPoints: updates.currentPP
         });
         
+        // Update local vault state to reflect PP gain
+        setVault(prevVault => prevVault ? {
+          ...prevVault,
+          currentPP: newAttackerPP
+        } : null);
+        
+        // Create notification for PP gain
+        try {
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'pp_gain',
+            title: 'PP Stolen!',
+            message: `+${ppStolen} PP stolen from vault attack`,
+            ppAmount: ppStolen,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+        } catch (notificationError) {
+          console.error('Error creating PP notification:', notificationError);
+        }
+        
         console.log('=== PP TRANSFER COMPLETED ===');
         console.log('Attacker vault updated:', newAttackerPP);
         console.log('Attacker student doc updated:', newAttackerPP);
         console.log('Target student doc updated:', updates.currentPP);
+        console.log('Local vault state updated with new PP:', newAttackerPP);
+      } else {
+        console.log('💰 No PP stolen, skipping PP updates');
       }
       
       // Update target vault
@@ -1249,49 +1888,88 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           newPP: targetVaultData.currentPP - ppStolen,
           change: `-${ppStolen}`
         });
+        
+        // Award XP for stealing PP
+        if (ppStolen > 0) {
+          const xpReward = calculateXpReward(ppStolen);
+          if (xpReward > 0) {
+            await awardBattleXp(xpReward, `Stole ${ppStolen} PP from ${targetName}`);
+          }
+        }
       }
       
-              // Record the attack with detailed information
-        const attackData: any = {
-          attackerId: currentUser.uid,
-          attackerName,
-          targetId: targetUserId,
-          targetName,
-          moveId: moveId || null,
-          moveName: selectedMove?.name || null,
-          damage,
-          ppStolen,
-          shieldDamage,
-          message,
-          timestamp: serverTimestamp(),
-          targetVaultBefore: {
-            currentPP: targetVaultData.currentPP,
-            shieldStrength: targetVaultData.shieldStrength,
-          },
-          targetVaultAfter: {
-            currentPP: updates.currentPP !== undefined ? updates.currentPP : targetVaultData.currentPP,
-            shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
-          },
-          ppStolenFromTarget: ppStolen,
-          ppStolenDate: serverTimestamp(),
-        };
+      // Award XP for shield damage (even if no PP was stolen)
+      console.log(`🔍 Final shield damage value before XP check: ${shieldDamage}`);
+      if (shieldDamage > 0) {
+        const shieldXpReward = Math.min(shieldDamage, 3); // 1-3 XP for shield damage
+        console.log(`🛡️ Awarding ${shieldXpReward} XP for shield damage: ${shieldDamage}`);
+        await awardBattleXp(shieldXpReward, `Dealt ${shieldDamage} shield damage to ${targetName}`);
+      } else {
+        console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
+      }
       
+      // Award XP for cracking shields (even if no PP was stolen)
+      if (shieldsCracked) {
+        const shieldXpReward = 2; // 2 XP for cracking shields
+        await awardBattleXp(shieldXpReward, `Cracked shields of ${targetName}`);
+      }
+    
+      // Record the attack with detailed information
+      const attackData: any = {
+        attackerId: currentUser.uid,
+        attackerName,
+        targetId: targetUserId,
+        targetName,
+        moveId: moveId || null,
+        moveName: selectedMove?.name || null,
+        damage,
+        ppStolen,
+        shieldDamage,
+        message,
+        timestamp: serverTimestamp(),
+        targetVaultBefore: {
+          currentPP: targetVaultData.currentPP,
+          shieldStrength: targetVaultData.shieldStrength,
+        },
+        targetVaultAfter: {
+          currentPP: updates.currentPP !== undefined ? updates.currentPP : targetVaultData.currentPP,
+          shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
+        },
+        ppStolenFromTarget: ppStolen,
+        ppStolenDate: serverTimestamp(),
+      };
+    
       // Only add actionCardId if it has a value
       if (actionCardId) {
         attackData.actionCardId = actionCardId;
         attackData.actionCardName = selectedCard?.name || null;
       }
-      
+    
       const attackDocRef = await addDoc(collection(db, 'vaultSiegeAttacks'), attackData);
-      
+    
       console.log('Vault siege attack completed:', {
         attackId: attackDocRef.id,
         attackData: attackData
       });
+    
+      // Refresh vault data to ensure everything is synchronized
+      await refreshVaultData();
+      
+      // Return the attack results
+      return {
+        success: true,
+        message: message,
+        ppStolen: ppStolen,
+        xpGained: (ppStolen > 0 ? calculateXpReward(ppStolen) : 0) + (shieldDamage > 0 ? Math.min(shieldDamage, 3) : 0) + (shieldsCracked ? 2 : 0),
+        shieldDamage: shieldDamage
+      };
       
     } catch (err) {
       console.error('Error executing vault siege attack:', err);
-      throw err;
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Unknown error occurred'
+      };
     }
   };
 
@@ -1316,25 +1994,71 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const consumeOfflineMove = async (): Promise<boolean> => {
+    if (!currentUser) return false;
+    
+    const remainingMoves = getRemainingOfflineMoves();
+    console.log('🔥 consumeOfflineMove: Current remaining moves before consumption:', remainingMoves);
+    if (remainingMoves <= 0) {
+      console.log('🔥 No offline moves remaining');
+      return false;
+    }
+    
+    try {
+      // Create an offline move record to track the consumption
+      const moveData: Omit<OfflineMove, 'id'> = {
+        userId: currentUser.uid,
+        type: 'vault_attack',
+        status: 'completed',
+        createdAt: new Date(),
+      };
+      
+      console.log('🔥 consumeOfflineMove: Creating vault_attack record:', moveData);
+      await addDoc(collection(db, 'offlineMoves'), moveData);
+      console.log('🔥 Offline move consumed successfully');
+      
+      // Wait a bit for the Firestore listener to update the state
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Force an immediate recalculation after the listener has had time to update
+      const newRemainingMoves = getRemainingOfflineMoves();
+      console.log('🔥 consumeOfflineMove: Remaining moves after consumption (after delay):', newRemainingMoves);
+      
+      return true;
+    } catch (err) {
+      console.error('Error consuming offline move:', err);
+      return false;
+    }
+  };
+
   const getRemainingOfflineMoves = (): number => {
     if (!currentUser) return 0;
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Count offline moves
-    const todayOfflineMoves = offlineMoves.filter(move => {
-      const moveDate = new Date(move.createdAt);
-      moveDate.setHours(0, 0, 0, 0);
-      return moveDate.getTime() === today.getTime();
-    });
-    
-    // Count vault siege attacks (these also consume offline moves)
+    // Count vault siege attacks from attackHistory (these consume offline moves)
     const todayVaultSiegeAttacks = attackHistory.filter(attack => {
       if (!attack.timestamp) return false; // Skip attacks without timestamps
       
       try {
-        const attackDate = new Date((attack.timestamp as any).toDate ? (attack.timestamp as any).toDate() : attack.timestamp);
+        // Handle Firestore Timestamp objects and regular Date objects
+        let attackDate: Date;
+        if (attack.timestamp && typeof attack.timestamp === 'object' && 'toDate' in attack.timestamp) {
+          // Firestore Timestamp
+          attackDate = (attack.timestamp as any).toDate();
+        } else if (attack.timestamp instanceof Date) {
+          // Regular Date object
+          attackDate = attack.timestamp;
+        } else if (typeof attack.timestamp === 'string') {
+          // String timestamp
+          attackDate = new Date(attack.timestamp);
+        } else {
+          // Invalid timestamp
+          console.log('🔥 Invalid attack timestamp:', attack.timestamp);
+          return false;
+        }
+        
         attackDate.setHours(0, 0, 0, 0);
         return attackDate.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
       } catch (error) {
@@ -1342,10 +2066,240 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return false; // Skip attacks with invalid timestamps
       }
     });
+
+    // Also count vault_attack records from offlineMoves collection (these also consume offline moves)
+    const todayOfflineMovesAttacks = offlineMoves.filter(move => {
+      try {
+        // Handle different timestamp formats
+        let moveDate: Date;
+        if (move.createdAt && typeof move.createdAt === 'object' && 'toDate' in move.createdAt) {
+          // Firestore Timestamp
+          moveDate = (move.createdAt as any).toDate();
+        } else if (move.createdAt instanceof Date) {
+          // Regular Date object
+          moveDate = move.createdAt;
+        } else if (typeof move.createdAt === 'string') {
+          // String timestamp
+          moveDate = new Date(move.createdAt);
+        } else {
+          // Invalid timestamp
+          console.log('🔥 Invalid move timestamp:', move.createdAt);
+          return false;
+        }
+        
+        // Check if the date is valid
+        if (isNaN(moveDate.getTime())) {
+          console.log('🔥 Move Filter Debug: Invalid date for move:', {
+            moveId: move.id,
+            moveType: move.type,
+            moveCreatedAt: move.createdAt,
+            error: 'Invalid date'
+          });
+          return false;
+        }
+        
+        moveDate.setHours(0, 0, 0, 0);
+        const isToday = moveDate.getTime() === today.getTime();
+        const isVaultAttack = move.type === 'vault_attack';
+        const isCurrentUser = move.userId === currentUser.uid;
+        
+        console.log('🔥 OfflineMoves Filter Debug:', {
+          moveId: move.id,
+          moveType: move.type,
+          moveDate: moveDate.toISOString(),
+          today: today.toISOString(),
+          isToday,
+          isVaultAttack,
+          isCurrentUser,
+          shouldInclude: isToday && isVaultAttack && isCurrentUser
+        });
+        
+        return isToday && isVaultAttack && isCurrentUser;
+      } catch (error) {
+        console.log('🔥 Move Filter Debug: Error processing move:', {
+          moveId: move.id,
+          moveType: move.type,
+          moveCreatedAt: move.createdAt,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        return false;
+      }
+    });
     
-    const totalMovesUsed = todayOfflineMoves.length + todayVaultSiegeAttacks.length;
+    // Count move restores (these restore offline moves)
+    const todayMoveRestores = offlineMoves.filter(move => {
+      try {
+        // Handle different timestamp formats
+        let moveDate: Date;
+        if (move.createdAt && typeof move.createdAt === 'object' && 'toDate' in move.createdAt) {
+          // Firestore Timestamp
+          moveDate = (move.createdAt as any).toDate();
+        } else if (move.createdAt instanceof Date) {
+          // Regular Date object
+          moveDate = move.createdAt;
+        } else if (typeof move.createdAt === 'string') {
+          // String timestamp
+          moveDate = new Date(move.createdAt);
+        } else {
+          // Invalid timestamp
+          console.log('🔥 Invalid move timestamp:', move.createdAt);
+          return false;
+        }
+        
+        // Check if the date is valid
+        if (isNaN(moveDate.getTime())) {
+          console.log('🔥 Move Filter Debug: Invalid date for move:', {
+            moveId: move.id,
+            moveType: move.type,
+            moveCreatedAt: move.createdAt,
+            error: 'Invalid date'
+          });
+          return false;
+        }
+        
+        moveDate.setHours(0, 0, 0, 0);
+        const isToday = moveDate.getTime() === today.getTime();
+        const isMoveRestore = move.type === 'move_restore';
+        
+        console.log('🔥 Move Filter Debug:', {
+          moveId: move.id,
+          moveType: move.type,
+          moveCreatedAt: move.createdAt,
+          moveDate: moveDate.toISOString(),
+          today: today.toISOString(),
+          isToday,
+          isMoveRestore,
+          shouldInclude: isToday && isMoveRestore
+        });
+        
+        return isToday && isMoveRestore;
+      } catch (error) {
+        console.log('🔥 Move Filter Debug: Error processing move:', {
+          moveId: move.id,
+          moveType: move.type,
+          moveCreatedAt: move.createdAt,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        return false;
+      }
+    });
     
-    return Math.max(0, BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES - totalMovesUsed);
+    // Calculate: start with daily limit, subtract attacks, add restores, but cap at daily limit
+    const baseMoves = BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES; // Start with 3 daily moves
+    const movesUsed = todayVaultSiegeAttacks.length + todayOfflineMovesAttacks.length; // Attacks consume moves (from both sources)
+    const movesRestored = todayMoveRestores.length; // Restores add moves back
+    const remainingMoves = Math.min(
+      BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES, // Cap at daily limit
+      Math.max(0, baseMoves - movesUsed + movesRestored) // Don't go below 0
+    );
+    
+    console.log('🔥 Offline Moves Calculation:', {
+      totalOfflineMoves: offlineMoves.length,
+      baseMoves,
+      todayVaultSiegeAttacks: todayVaultSiegeAttacks.length,
+      todayOfflineMovesAttacks: todayOfflineMovesAttacks.length,
+      todayMoveRestores: todayMoveRestores.length,
+      movesUsed,
+      movesRestored,
+      dailyLimit: BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES,
+      remainingMoves,
+      todayDate: today.toISOString(),
+      attackDetails: todayVaultSiegeAttacks.map(attack => ({
+        id: attack.id,
+        timestamp: attack.timestamp,
+        attackerId: attack.attackerId,
+        targetId: attack.targetId
+      })),
+      offlineMovesAttackDetails: todayOfflineMovesAttacks.map(move => ({
+        id: move.id,
+        createdAt: move.createdAt,
+        type: move.type,
+        userId: move.userId
+      })),
+      restoreDetails: todayMoveRestores.map(move => ({
+        id: move.id,
+        createdAt: move.createdAt,
+        status: move.status,
+        type: move.type
+      }))
+    });
+    
+    return remainingMoves;
+  };
+
+  const debugOfflineMoves = () => {
+    if (!currentUser) {
+      console.log('🔥 Debug: No current user');
+      return;
+    }
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    console.log('🔥 Debug: Offline Moves Analysis');
+    console.log('🔥 Debug: Today:', today.toISOString());
+    console.log('🔥 Debug: Current user:', currentUser.uid);
+    console.log('🔥 Debug: Total offline moves:', offlineMoves.length);
+    console.log('🔥 Debug: Total attack history:', attackHistory.length);
+    
+    // Show all offline moves for today
+    const todayMoves = offlineMoves.filter(move => {
+      try {
+        let moveDate: Date;
+        if (move.createdAt && typeof move.createdAt === 'object' && 'toDate' in move.createdAt) {
+          moveDate = (move.createdAt as any).toDate();
+        } else if (move.createdAt instanceof Date) {
+          moveDate = move.createdAt;
+        } else if (typeof move.createdAt === 'string') {
+          moveDate = new Date(move.createdAt);
+        } else {
+          return false;
+        }
+        
+        moveDate.setHours(0, 0, 0, 0);
+        return moveDate.getTime() === today.getTime() && move.userId === currentUser.uid;
+      } catch (error) {
+        return false;
+      }
+    });
+    
+    console.log('🔥 Debug: Today\'s moves:', todayMoves.map(move => ({
+      id: move.id,
+      type: move.type,
+      status: move.status,
+      createdAt: move.createdAt
+    })));
+    
+    // Show all attack history for today
+    const todayAttacks = attackHistory.filter(attack => {
+      try {
+        let attackDate: Date;
+        if (attack.timestamp && typeof attack.timestamp === 'object' && 'toDate' in attack.timestamp) {
+          attackDate = (attack.timestamp as any).toDate();
+        } else if (attack.timestamp instanceof Date) {
+          attackDate = attack.timestamp;
+        } else if (typeof attack.timestamp === 'string') {
+          attackDate = new Date(attack.timestamp);
+        } else {
+          return false;
+        }
+        
+        attackDate.setHours(0, 0, 0, 0);
+        return attackDate.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
+      } catch (error) {
+        return false;
+      }
+    });
+    
+    console.log('🔥 Debug: Today\'s attacks:', todayAttacks.map(attack => ({
+      id: attack.id,
+      attackerId: attack.attackerId,
+      targetId: attack.targetId,
+      timestamp: attack.timestamp
+    })));
+    
+    const remainingMoves = getRemainingOfflineMoves();
+    console.log('🔥 Debug: Calculated remaining moves:', remainingMoves);
   };
 
   const value: BattleContextType = {
@@ -1353,6 +2307,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     updateVault,
     payDues,
     syncVaultPP,
+    syncStudentPP,
+    refreshVaultData,
     moves,
     unlockMove,
     unlockElementalMoves,
@@ -1362,8 +2318,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     forceMigration,
     upgradeMove,
     actionCards,
+    setActionCards,
     unlockActionCard,
-    useActionCard,
+    upgradeActionCard,
+    activateActionCard,
+    resetActionCards,
+    manifestProgress,
+    checkManifestMilestones,
+    canPurchaseMove,
+    getNextMilestone,
+    elementalProgress,
+    checkElementalMilestones,
+    canPurchaseElementalMove,
+    getNextElementalMilestone,
     currentBattle,
     battleLobbies,
     offlineMoves,
@@ -1376,6 +2343,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     executePPRestore,
     submitOfflineMove,
     getRemainingOfflineMoves,
+    consumeOfflineMove,
+    debugOfflineMoves,
     loading,
     error,
   };

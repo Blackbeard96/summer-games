@@ -45,7 +45,7 @@ const AdminPanel: React.FC = () => {
   const [editingStudent, setEditingStudent] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ displayName: '', email: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ studentId: string; challenge: string } | null>(null);
-  const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number }>({});
+  const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number | undefined }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
   const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests'>('students');
@@ -443,6 +443,26 @@ const AdminPanel: React.FC = () => {
         s.id === studentId ? { ...s, powerPoints: newPP } : s
       )
     );
+  };
+
+  // Set Power Points to absolute value
+  const setPowerPoints = async (studentId: string, amount: number) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+    const newPP = Math.max(0, amount);
+    const studentRef = doc(db, 'students', studentId);
+    await updateDoc(studentRef, { powerPoints: newPP });
+    setStudents(prev =>
+      prev.map(s =>
+        s.id === studentId ? { ...s, powerPoints: newPP } : s
+      )
+    );
+    
+    // Show success message
+    const studentName = student.displayName || student.id;
+    setBatchMessage(`Successfully set ${studentName}'s Power Points to ${newPP}!`);
+    setShowBatchSuccess(true);
+    setTimeout(() => setShowBatchSuccess(false), 3000);
   };
 
   // Batch Power Points adjustment
@@ -1512,7 +1532,12 @@ const AdminPanel: React.FC = () => {
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Student</th>
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Level</th>
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>XP</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Power Points</th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
+                      Power Points
+                      <div style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'normal', marginTop: '0.25rem' }}>
+                        Type amount + Enter or click Set
+                      </div>
+                    </th>
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
                   </tr>
                 </thead>
@@ -1601,6 +1626,76 @@ const AdminPanel: React.FC = () => {
                             >
                               -
                             </button>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginLeft: '0.5rem' }}>
+                            <input
+                              type="number"
+                              placeholder="PP"
+                              value={ppAmount[student.id] || ''}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setPPAmount(prev => ({
+                                  ...prev,
+                                  [student.id]: value === '' ? undefined : parseInt(value) || 0
+                                }));
+                              }}
+                              onKeyPress={(e) => {
+                                if (e.key === 'Enter') {
+                                  const amount = ppAmount[student.id];
+                                  if (amount !== undefined && amount !== 0) {
+                                    setPowerPoints(student.id, amount);
+                                    setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                  }
+                                }
+                              }}
+                              style={{
+                                width: '60px',
+                                padding: '0.25rem 0.5rem',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.75rem',
+                                textAlign: 'center'
+                              }}
+                            />
+                            <button
+                              onClick={() => {
+                                const amount = ppAmount[student.id];
+                                if (amount !== undefined && amount !== 0) {
+                                  setPowerPoints(student.id, amount);
+                                  setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                }
+                              }}
+                              disabled={!ppAmount[student.id] || ppAmount[student.id] === 0}
+                              style={{
+                                backgroundColor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? '#3b82f6' : '#9ca3af',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.25rem',
+                                padding: '0.25rem 0.5rem',
+                                cursor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? 'pointer' : 'not-allowed',
+                                fontSize: '0.75rem',
+                                fontWeight: '500'
+                              }}
+                            >
+                              Set
+                            </button>
+                            {ppAmount[student.id] !== undefined && (
+                              <button
+                                onClick={() => setPPAmount(prev => ({ ...prev, [student.id]: undefined }))}
+                                style={{
+                                  backgroundColor: '#6b7280',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.25rem 0.5rem',
+                                  cursor: 'pointer',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                ×
+                              </button>
+                            )}
                           </div>
                         </div>
                       </td>

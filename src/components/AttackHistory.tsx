@@ -18,7 +18,7 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
         background: '#f9fafb',
         borderRadius: '8px'
       }}>
-        No attack history yet. Launch your first vault siege to see battle records!
+        No battle history yet. Launch your first vault siege to see battle records!
       </div>
     );
   }
@@ -43,7 +43,7 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
   return (
     <div>
       <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>
-        ⚔️ Attack History
+        ⚔️ Battle History
       </h3>
       <div style={{ 
         display: 'grid', 

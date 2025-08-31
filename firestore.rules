@@ -31,6 +31,16 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
     
+    // Allow authenticated users to read and write their own manifest progress
+match /manifestProgress/{userId} {
+  allow read, write: if request.auth != null && request.auth.uid == userId;
+}
+
+// Allow authenticated users to read and write their own elemental progress
+match /elementalProgress/{userId} {
+  allow read, write: if request.auth != null && request.auth.uid == userId;
+}
+    
     // Allow authenticated users to read and write their own vaults
     match /vaults/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;

@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import StoryChallenges from '../components/StoryChallenges';
 import ManifestChallenges from '../components/ManifestChallenges';
 import RecentCompletions from '../components/RecentCompletions';
 import ManifestSelection from '../components/ManifestSelection';
+
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
 const Dashboard = () => {
@@ -297,9 +299,13 @@ const Dashboard = () => {
         
         {/* Manifest Challenges */}
         <div>
-          <ManifestChallenges playerManifest={playerManifest} />
+          <ManifestChallenges 
+            playerManifest={playerManifest} 
+          />
         </div>
       </div>
+
+
 
       {/* Recent Completions Section */}
       <div style={{ marginTop: isMobile ? '1.5rem' : '2rem' }}>

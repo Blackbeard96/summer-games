@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getLevelFromXP } from '../utils/leveling';
+
 
 interface PlayerCardProps {
   name: string;
