@@ -4,6 +4,8 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Chapter, ChapterChallenge } from '../types/chapters';
 import RivalSelectionModal from './RivalSelectionModal';
+import CPUChallenger from './CPUChallenger';
+import PortalTutorial from './PortalTutorial';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -18,6 +20,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'challenges' | 'team' | 'rival' | 'veil' | 'ethics'>('overview');
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
+  const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
+  const [showPortalTutorial, setShowPortalTutorial] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -28,14 +32,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         const userRef = doc(db, 'users', currentUser.uid);
         const userDoc = await getDoc(userRef);
         if (userDoc.exists()) {
-          setUserProgress(userDoc.data());
+          const userData = userDoc.data();
+          console.log('ChapterDetail: User data loaded:', userData);
+          setUserProgress(userData);
         }
 
         // Fetch student data from 'students' collection (for manifest, etc.)
         const studentRef = doc(db, 'students', currentUser.uid);
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
-          setStudentData(studentDoc.data());
+          const studentData = studentDoc.data();
+          console.log('ChapterDetail: Student data loaded:', studentData);
+          setStudentData(studentData);
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -48,9 +56,27 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   }, [currentUser]);
 
   const getRequirementStatus = (requirement: any) => {
+    console.log('ChapterDetail: Checking requirement:', requirement.type, {
+      studentData,
+      userProgress,
+      requirement
+    });
+    
     switch (requirement.type) {
       case 'manifest':
-        return studentData?.manifest?.manifestId || studentData?.manifestationType;
+        // Check multiple possible manifest data locations
+        const hasManifest = studentData?.manifest?.manifestId || 
+                          studentData?.manifestationType || 
+                          studentData?.manifest ||
+                          userProgress?.manifest ||
+                          userProgress?.manifestationType;
+        console.log('ChapterDetail: Manifest check result:', hasManifest, {
+          studentDataManifest: studentData?.manifest,
+          studentDataManifestationType: studentData?.manifestationType,
+          userProgressManifest: userProgress?.manifest,
+          userProgressManifestationType: userProgress?.manifestationType
+        });
+        return hasManifest;
       case 'artifact':
         return userProgress?.artifact?.identified;
       case 'team':
@@ -107,8 +133,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         case 'ethics':
           return userProgress.ethics && userProgress.ethics.length >= req.value;
         case 'manifest':
-          // Check if player has chosen a manifest (from students collection)
-          return studentData?.manifest?.manifestId || studentData?.manifestationType;
+          // Check if player has chosen a manifest (from multiple possible locations)
+          return studentData?.manifest?.manifestId || 
+                 studentData?.manifestationType || 
+                 studentData?.manifest ||
+                 userProgress?.manifest ||
+                 userProgress?.manifestationType;
         case 'leadership':
           return userProgress.leadership?.role;
         case 'profile':
@@ -342,6 +372,111 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         }
       };
       fetchUserData();
+    }
+  };
+
+  const handleCPUBattleComplete = async (victory: boolean, xpGained: number, ppGained: number) => {
+    if (!currentUser) return;
+
+    try {
+      console.log('CPU Battle completed:', { victory, xpGained, ppGained });
+      
+      if (victory) {
+        // Update user progress to mark the challenge as completed
+        const userRef = doc(db, 'users', currentUser.uid);
+        const currentData = userProgress || {};
+        
+        const updatedChapters = {
+          ...currentData.chapters,
+          [chapter.id]: {
+            ...currentData.chapters?.[chapter.id],
+            challenges: {
+              ...currentData.chapters?.[chapter.id]?.challenges,
+              'ep1-manifest-test': {
+                isCompleted: true,
+                completedAt: serverTimestamp(),
+                autoCompleted: true,
+                battleVictory: true,
+                xpGained: xpGained,
+                ppGained: ppGained
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Add to challenge submissions for tracking (auto-completed)
+        await addDoc(collection(db, 'challengeSubmissions'), {
+          userId: currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || '',
+          challengeId: 'ep1-manifest-test',
+          challengeName: 'Test Awakened Abilities',
+          submissionType: 'auto_completed',
+          status: 'approved',
+          timestamp: serverTimestamp(),
+          xpReward: xpGained,
+          ppReward: ppGained,
+          manifestationType: 'Chapter Challenge',
+          character: 'CPU Challenger',
+          autoCompleted: true,
+          battleVictory: true
+        });
+
+        // Create notification for challenge completion
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`,
+          challengeId: 'ep1-manifest-test',
+          challengeName: 'Test Awakened Abilities',
+          xpReward: xpGained,
+          ppReward: ppGained,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+        
+        alert(`🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
+      } else {
+        alert('💪 The CPU challenger proved too strong this time. Try again to test your awakened abilities!');
+      }
+      
+      // Close the battle modal
+      setShowCPUBattleModal(false);
+      
+    } catch (error) {
+      console.error('Error handling CPU battle completion:', error);
+      alert('Failed to process battle results. Please try again.');
+    }
+  };
+
+  const handleTutorialComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      // Create notification for challenge completion
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +20 XP and +10 PP!`,
+        challengeId: 'ep1-portal-sequence',
+        challengeName: 'Navigate the Portal',
+        xpReward: 20,
+        ppReward: 10,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      
+      // Close the tutorial modal
+      setShowPortalTutorial(false);
+      
+      alert('🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +20 XP and +10 PP!');
+      
+    } catch (error) {
+      console.error('Error handling tutorial completion:', error);
+      alert('Failed to process tutorial completion. Please try again.');
     }
   };
 
@@ -737,7 +872,102 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                 </span>
               </div>
 
-                          {status === 'available' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {/* Tutorial section for Navigate the Portal challenge */}
+                          {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                style={{ 
+                                  padding: '0.75rem 1.5rem', 
+                                  background: '#3b82f6', 
+                                  color: 'white', 
+                                  border: 'none', 
+                                  borderRadius: '0.5rem', 
+                                  cursor: 'pointer',
+                                  fontWeight: 'bold',
+                                  fontSize: '0.875rem',
+                                  transition: 'all 0.2s ease'
+                                }}
+                                onClick={() => setShowPortalTutorial(true)}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.background = '#2563eb';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.background = '#3b82f6';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                              >
+                                🎓 Start Tutorial
+                              </button>
+                              <div style={{
+                                padding: '0.75rem',
+                                backgroundColor: '#dbeafe',
+                                border: '1px solid #3b82f6',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.8rem',
+                                color: '#1e40af',
+                                maxWidth: '300px'
+                              }}>
+                                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                                  💡 Tutorial Instructions
+                                </div>
+                                <div>
+                                  Take a guided tour of Xiotein School to learn about all the features and areas. Completing the tutorial will finish this challenge!
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* CPU Battle section for Test Awakened Abilities challenge */}
+                          {status === 'available' && challenge.id === 'ep1-manifest-test' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                style={{ 
+                                  padding: '0.75rem 1.5rem', 
+                                  background: '#dc2626', 
+                                  color: 'white', 
+                                  border: 'none', 
+                                  borderRadius: '0.5rem', 
+                                  cursor: 'pointer',
+                                  fontWeight: 'bold',
+                                  fontSize: '0.875rem',
+                                  transition: 'all 0.2s ease'
+                                }}
+                                onClick={() => setShowCPUBattleModal(true)}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.background = '#b91c1c';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.background = '#dc2626';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                              >
+                                ⚔️ Battle CPU Challenger
+                              </button>
+                              <div style={{
+                                padding: '0.75rem',
+                                backgroundColor: '#fef3c7',
+                                border: '1px solid #f59e0b',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.8rem',
+                                color: '#92400e',
+                                maxWidth: '300px'
+                              }}>
+                                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                                  💡 Battle Instructions
+                                </div>
+                                <div>
+                                  Test your awakened abilities against a CPU challenger using your Power Card moves. Victory will complete this challenge!
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Regular submit button for other challenges */}
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1127,6 +1357,20 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         isOpen={showRivalSelectionModal}
         onClose={() => setShowRivalSelectionModal(false)}
         onRivalSelected={handleRivalSelected}
+      />
+
+      {/* CPU Battle Modal */}
+      <CPUChallenger
+        isOpen={showCPUBattleModal}
+        onClose={() => setShowCPUBattleModal(false)}
+        onBattleComplete={handleCPUBattleComplete}
+      />
+
+      {/* Portal Tutorial Modal */}
+      <PortalTutorial
+        isOpen={showPortalTutorial}
+        onComplete={handleTutorialComplete}
+        onClose={() => setShowPortalTutorial(false)}
       />
     </div>
   );

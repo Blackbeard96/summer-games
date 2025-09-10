@@ -187,7 +187,7 @@ const NavBar = () => {
   // Navigation items
   const navItems = [
     { to: '/', label: 'Training Grounds', tooltip: 'Dashboard' },
-    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System' },
+    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System & Story Mode' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ];

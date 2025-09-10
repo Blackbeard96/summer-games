@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { CHAPTERS, Chapter } from '../types/chapters';
@@ -11,21 +11,87 @@ interface ChapterTrackerProps {
 const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   const { currentUser } = useAuth();
   const [userProgress, setUserProgress] = useState<any>(null);
+  const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!currentUser) return;
 
-    const userRef = doc(db, 'users', currentUser.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
-      if (doc.exists()) {
-        setUserProgress(doc.data());
-      }
-      setLoading(false);
-    });
+    const fetchData = async () => {
+      try {
+        // Fetch user progress from 'users' collection
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          console.log('ChapterTracker: User progress data loaded:', userData);
+          console.log('ChapterTracker: Chapters data:', userData.chapters);
+          setUserProgress(userData);
+        }
 
-    return () => unsubscribe();
-  }, [currentUser]);
+        // Fetch student data from 'students' collection (for manifest, etc.)
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          console.log('ChapterTracker: Student data loaded:', studentData);
+          setStudentData(studentData);
+        }
+      } catch (error) {
+        console.error('ChapterTracker: Error fetching data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [currentUser, refreshKey]);
+
+  const getRequirementStatus = (requirement: any) => {
+    console.log('ChapterTracker: Checking requirement:', requirement.type, {
+      studentData,
+      userProgress,
+      requirement
+    });
+    
+    switch (requirement.type) {
+      case 'manifest':
+        // Check multiple possible manifest data locations
+        const hasManifest = studentData?.manifest?.manifestId || 
+                          studentData?.manifestationType || 
+                          studentData?.manifest ||
+                          userProgress?.manifest ||
+                          userProgress?.manifestationType;
+        console.log('ChapterTracker: Manifest check result:', hasManifest, {
+          studentDataManifest: studentData?.manifest,
+          studentDataManifestationType: studentData?.manifestationType,
+          userProgressManifest: userProgress?.manifest,
+          userProgressManifestationType: userProgress?.manifestationType
+        });
+        return hasManifest;
+      case 'artifact':
+        return userProgress?.artifact?.identified;
+      case 'team':
+        return userProgress?.team;
+      case 'rival':
+        return userProgress?.rival;
+      case 'veil':
+        return userProgress?.veil?.isConfronted;
+      case 'reflection':
+        return userProgress?.reflectionEcho;
+      case 'wisdom':
+        return userProgress?.wisdomPoints && userProgress.wisdomPoints.length > 0;
+      case 'ethics':
+        return userProgress?.ethics && userProgress.ethics.length >= requirement.value;
+      case 'leadership':
+        return userProgress?.leadership?.role;
+      case 'profile':
+        return studentData?.displayName && studentData?.photoURL;
+      default:
+        return false;
+    }
+  };
 
   const getChapterStatus = (chapter: Chapter) => {
     if (!userProgress) return 'locked';
@@ -34,7 +100,16 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     if (chapterProgress?.isCompleted) return 'completed';
     if (chapterProgress?.isActive) return 'active';
     
-    return 'available';
+    // Check if chapter requirements are met
+    const requirementsMet = chapter.requirements.every(req => {
+      const requirementStatus = getRequirementStatus(req);
+      console.log(`ChapterTracker: Chapter ${chapter.id} requirement ${req.type}:`, requirementStatus);
+      return requirementStatus;
+    });
+    
+    console.log(`ChapterTracker: Chapter ${chapter.id} requirements met:`, requirementsMet);
+    
+    return requirementsMet ? 'available' : 'locked';
   };
 
   const getChapterProgress = (chapter: Chapter) => {
@@ -64,6 +139,12 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     if (onChapterSelect) {
       onChapterSelect(chapter);
     }
+  };
+
+  const handleRefresh = () => {
+    setRefreshKey(prev => prev + 1);
+    setLoading(true);
+    console.log('Manual refresh triggered');
   };
 
   const getStatusText = (status: string) => {
@@ -106,10 +187,46 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         <p className="text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">
           Embark on your epic quest through the Nine Knowings Universe. Each chapter reveals new mysteries, challenges, and opportunities for growth.
         </p>
+        <div className="mt-4 flex gap-2 justify-center">
+          <button
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            🔄 Refresh Progress
+          </button>
+          <button
+            onClick={async () => {
+              if (!currentUser) {
+                alert('No current user found');
+                return;
+              }
+              if (!window.confirm('Reset your chapter progress? This will clear all completions.')) {
+                return;
+              }
+              try {
+                console.log('Resetting progress for user:', currentUser.uid);
+                await updateDoc(doc(db, 'users', currentUser.uid), {
+                  chapters: {},
+                  storyChapter: 1,
+                  resetAt: new Date(),
+                  resetBy: 'self'
+                });
+                console.log('Progress reset successfully');
+                alert('Progress reset! Click Refresh to see changes.');
+              } catch (error) {
+                console.error('Error resetting progress:', error);
+                alert('Failed to reset progress');
+              }
+            }}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            🗑️ Reset My Progress
+          </button>
+        </div>
       </div>
 
       {/* Progress Summary Cards - Inline Styles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
         <div style={{ background: 'linear-gradient(135deg, #dbeafe 0%, #c7d2fe 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #93c5fd' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
@@ -118,6 +235,18 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
             </div>
             <div style={{ width: '40px', height: '40px', backgroundColor: '#3b82f6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span style={{ color: 'white', fontSize: '1.125rem' }}>📖</span>
+            </div>
+          </div>
+        </div>
+        
+        <div style={{ background: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)', padding: '1rem', borderRadius: '12px', border: '1px solid #c084fc' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <p style={{ fontSize: '0.875rem', color: '#7c3aed', fontWeight: '500' }}>Story Episodes</p>
+              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#6d28d9' }}>Integrated</p>
+            </div>
+            <div style={{ width: '40px', height: '40px', backgroundColor: '#8b5cf6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ color: 'white', fontSize: '1.125rem' }}>🎭</span>
             </div>
           </div>
         </div>
@@ -278,6 +407,23 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   {getStatusText(status)}
                 </span>
               </div>
+
+              {/* Story Mode Badge for Chapters with Integrated Story Content */}
+              {(chapter.id >= 1 && chapter.id <= 9) && (
+                <div style={{ position: 'absolute', top: '16px', right: '120px' }}>
+                  <span style={{
+                    padding: '4px 8px',
+                    borderRadius: '9999px',
+                    fontSize: '0.625rem',
+                    fontWeight: '600',
+                    backgroundColor: '#f3e8ff',
+                    color: '#7c3aed',
+                    border: '1px solid #c084fc'
+                  }}>
+                    📖 Story
+                  </span>
+                </div>
+              )}
 
               <div style={{ marginLeft: '32px', display: 'flex', flexDirection: 'column', height: '100%' }}>
                 {/* Chapter Header */}

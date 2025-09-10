@@ -158,14 +158,16 @@ export const CHAPTERS: Chapter[] = [
     id: 1,
     title: "Leaving the Ordinary World",
     subtitle: "The Awakening Begins",
-    description: "Players create their profile, choose their Manifest, identify their Artifact, and complete their first personal mission to unlock Level 1.",
-    storyArc: "Call to Adventure",
+    description: "Players create their profile, choose their Manifest, identify their Artifact, and complete their first personal mission to unlock Level 1. Then embark on the story adventure by receiving the Xiotein Letter and awakening your powers.",
+    storyArc: "Call to Adventure + Story Mode - Episode 1",
     requirements: [
       { type: 'manifest', value: 'chosen', description: 'Must have chosen a Manifest' }
     ],
     rewards: [
       { type: 'level', value: 1, description: 'Unlock Level 1' },
-      { type: 'artifact', value: 'personal', description: 'Personal Artifact' }
+      { type: 'artifact', value: 'personal', description: 'Personal Artifact' },
+      { type: 'artifact', value: 'starter_artifact', description: 'Starter Artifact' },
+      { type: 'ability', value: 'shield_restoration', description: 'System Move: Shield Restoration' }
     ],
     challenges: [
       {
@@ -217,6 +219,30 @@ export const CHAPTERS: Chapter[] = [
           { type: 'pp', value: 20, description: 'Artifact challenge completion PP' }
         ],
         isCompleted: false
+      },
+      {
+        id: 'ep1-portal-sequence',
+        title: 'Navigate the Portal',
+        description: 'Navigate the portal to Xiotein',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 25, description: 'Portal navigation XP' },
+          { type: 'pp', value: 10, description: 'Portal navigation PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-manifest-test',
+        title: 'Test Awakened Abilities',
+        description: 'Test your awakened abilities against a training dummy',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 25, description: 'Ability test XP' },
+          { type: 'pp', value: 15, description: 'Ability test PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 1,
@@ -227,15 +253,17 @@ export const CHAPTERS: Chapter[] = [
     id: 2,
     title: "Test, Allies, & Enemies",
     subtitle: "The Team Forms",
-    description: "Form a 4-person team, choose a rival, and complete a team trial focusing on coordination and emotional synergy.",
-    storyArc: "Meeting the Mentor",
+    description: "Form a 4-person team, choose a rival, and complete a team trial focusing on coordination and emotional synergy. Then arrive at Xiotein school and meet your rivals, completing orientation and sparring drills.",
+    storyArc: "Meeting the Mentor + Story Mode - Episode 2",
     requirements: [
       { type: 'level', value: 1, description: 'Must be Level 1' },
       { type: 'previousChapter', value: 1, description: 'Must complete Chapter 1' }
     ],
     rewards: [
       { type: 'team', value: 'formed', description: 'Team formation' },
-      { type: 'rival', value: 'chosen', description: 'Rival identified' }
+      { type: 'rival', value: 'chosen', description: 'Rival identified' },
+      { type: 'ability', value: 'action_card_slot', description: 'Action Card Slot' },
+      { type: 'artifact', value: 'countermeasure_card', description: 'Starter Card: Countermeasure' }
     ],
     challenges: [
       {
@@ -279,6 +307,30 @@ export const CHAPTERS: Chapter[] = [
           { type: 'wisdom', value: 1, description: 'Team wisdom gained' }
         ],
         isCompleted: false
+      },
+      {
+        id: 'ep2-orientation',
+        title: 'Complete Orientation',
+        description: 'Learn the basics of Xiotein',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 30, description: 'Orientation XP' },
+          { type: 'pp', value: 15, description: 'Orientation PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep2-sparring',
+        title: 'Participate in Sparring',
+        description: 'First combat with rivals',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 45, description: 'Sparring XP' },
+          { type: 'pp', value: 35, description: 'Sparring PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 4,
@@ -289,15 +341,17 @@ export const CHAPTERS: Chapter[] = [
     id: 3,
     title: "Approach the Inmost Cave",
     subtitle: "Confronting the Veil",
-    description: "Each player enters a solo trial space reflecting their greatest fear or internal block. Must confront a memory, trauma, or illusion rooted in their Manifest.",
-    storyArc: "Crossing the Threshold",
+    description: "Each player enters a solo trial space reflecting their greatest fear or internal block. Must confront a memory, trauma, or illusion rooted in their Manifest. Then face yourself in the enchanted forest, surviving illusion trials and revealing your personal Veils.",
+    storyArc: "Crossing the Threshold + Story Mode - Episode 3",
     requirements: [
       { type: 'level', value: 1, description: 'Must be Level 1' },
       { type: 'previousChapter', value: 2, description: 'Must complete Chapter 2' }
     ],
     rewards: [
       { type: 'level', value: 2, description: 'Unlock Level 2' },
-      { type: 'veil', value: 'confronted', description: 'Veil confronted' }
+      { type: 'veil', value: 'confronted', description: 'Veil confronted' },
+      { type: 'artifact', value: 'rune_of_clarity', description: 'Rune of Clarity' },
+      { type: 'ability', value: 'elemental_move_l1', description: 'Elemental Move Level 1' }
     ],
     challenges: [
       {
@@ -310,6 +364,30 @@ export const CHAPTERS: Chapter[] = [
           { type: 'veil', value: 'confronted', description: 'Veil confronted' }
         ],
         isCompleted: false
+      },
+      {
+        id: 'ep3-illusion-trials',
+        title: 'Survive Illusion Trials',
+        description: 'Face your deepest fears',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 50, description: 'Illusion trial XP' },
+          { type: 'pp', value: 25, description: 'Illusion trial PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep3-veil-revelation',
+        title: 'Reveal Personal Veils',
+        description: 'Discover your emotional barriers',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 25, description: 'Veil revelation XP' },
+          { type: 'pp', value: 50, description: 'Veil revelation PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 1,
@@ -320,15 +398,17 @@ export const CHAPTERS: Chapter[] = [
     id: 4,
     title: "The Ordeal + Reward, Seizing the Sword",
     subtitle: "The Team's Trial",
-    description: "Group reassembles to face a trial that mirrors a core flaw in the team dynamic. Upon surviving, each member receives a Reflection Echo.",
-    storyArc: "Tests, Allies, Enemies",
+    description: "Group reassembles to face a trial that mirrors a core flaw in the team dynamic. Upon surviving, each member receives a Reflection Echo. Then survive waves of illusions and corrupted beasts, fighting corrupted forest creatures and resisting internal corruption.",
+    storyArc: "Tests, Allies, Enemies + Story Mode - Episode 4",
     requirements: [
       { type: 'level', value: 2, description: 'Must be Level 2' },
       { type: 'previousChapter', value: 3, description: 'Must complete Chapter 3' }
     ],
     rewards: [
       { type: 'reflection', value: 'echo', description: 'Reflection Echo received' },
-      { type: 'level', value: 3, description: 'One member ascends to Level 3' }
+      { type: 'level', value: 3, description: 'One member ascends to Level 3' },
+      { type: 'ability', value: 'manifest_move_l2', description: 'Manifest Move Level 2' },
+      { type: 'artifact', value: 'shield_core', description: 'Vault Materials: Shield Core' }
     ],
     challenges: [
       {
@@ -348,6 +428,30 @@ export const CHAPTERS: Chapter[] = [
         requirements: [{ type: 'reflection', value: 'echo', description: 'Must have Reflection Echo' }],
         rewards: [{ type: 'level', value: 3, description: 'Temporary Level 3' }],
         isCompleted: false
+      },
+      {
+        id: 'ep4-corrupted-beasts',
+        title: 'Fight Corrupted Beasts',
+        description: 'Fight corrupted forest creatures',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 75, description: 'Beast fight XP' },
+          { type: 'pp', value: 50, description: 'Beast fight PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep4-internal-visions',
+        title: 'Resist Internal Corruption',
+        description: 'Resist internal corruption',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 50, description: 'Corruption resistance XP' },
+          { type: 'pp', value: 50, description: 'Corruption resistance PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 4,
@@ -358,15 +462,17 @@ export const CHAPTERS: Chapter[] = [
     id: 5,
     title: "The Road Back",
     subtitle: "Consequences Unfold",
-    description: "The world begins reacting to their changes. Players must take leadership roles and hold each other accountable.",
-    storyArc: "The Road Back",
+    description: "The world begins reacting to their changes. Players must take leadership roles and hold each other accountable. Then navigate an ever-shifting course that punishes mistimed moves, navigating shifting platforms and facing mirror illusions.",
+    storyArc: "The Road Back + Story Mode - Episode 5",
     requirements: [
       { type: 'level', value: 2, description: 'Must be Level 2' },
       { type: 'previousChapter', value: 4, description: 'Must complete Chapter 4' }
     ],
     rewards: [
       { type: 'leadership', value: 'role', description: 'Leadership role' },
-      { type: 'xp', value: 200, description: 'Leadership XP' }
+      { type: 'xp', value: 200, description: 'Leadership XP' },
+      { type: 'artifact', value: 'bond_token', description: 'Bond Token' },
+      { type: 'ability', value: 'elemental_move_l2', description: 'Elemental Move Level 2' }
     ],
     challenges: [
       {
@@ -396,15 +502,17 @@ export const CHAPTERS: Chapter[] = [
     id: 6,
     title: "Resurrection / Apotheosis",
     subtitle: "The Death Sequence",
-    description: "A simulated death sequence where each player faces a version of themselves who never awakened. Must choose to reintegrate or reject aspects of self.",
-    storyArc: "Resurrection",
+    description: "A simulated death sequence where each player faces a version of themselves who never awakened. Must choose to reintegrate or reject aspects of self. Then defend monoliths against summoned constructs, fighting waves of constructs and protecting the ancient monoliths.",
+    storyArc: "Resurrection + Story Mode - Episode 6",
     requirements: [
       { type: 'level', value: 2, description: 'Must be Level 2' },
       { type: 'previousChapter', value: 5, description: 'Must complete Chapter 5' }
     ],
     rewards: [
       { type: 'level', value: 3, description: 'Unlock Level 3 abilities' },
-      { type: 'manifest', value: 'full', description: 'Full Manifest potential' }
+      { type: 'manifest', value: 'full', description: 'Full Manifest potential' },
+      { type: 'ability', value: 'scout_perk', description: 'System Perk: Scout' },
+      { type: 'ability', value: 'action_card_draw_plus_one', description: 'Action Card Draw +1' }
     ],
     challenges: [
       {
@@ -417,6 +525,30 @@ export const CHAPTERS: Chapter[] = [
           { type: 'manifest', value: 'full', description: 'Full Manifest potential' }
         ],
         isCompleted: false
+      },
+      {
+        id: 'ep6-construct-horde',
+        title: 'Fight Construct Horde',
+        description: 'Fight waves of constructs',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 100, description: 'Construct fight XP' },
+          { type: 'pp', value: 75, description: 'Construct fight PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep6-monolith-defense',
+        title: 'Protect Ancient Monoliths',
+        description: 'Protect the ancient monoliths',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 75, description: 'Monolith defense XP' },
+          { type: 'pp', value: 75, description: 'Monolith defense PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 1,
@@ -427,15 +559,17 @@ export const CHAPTERS: Chapter[] = [
     id: 7,
     title: "Return with the Elixir",
     subtitle: "The Mentor's Path",
-    description: "Players return to Xiotein with new insights and unlock the ability to mentor new initiates. Help guide a new player/team through their first challenge.",
-    storyArc: "Return with the Elixir",
+    description: "Players return to Xiotein with new insights and unlock the ability to mentor new initiates. Help guide a new player/team through their first challenge. Then survivors meet the Top 12, learning of higher stakes through intellectual debate and combat precision.",
+    storyArc: "Return with the Elixir + Story Mode - Episode 7",
     requirements: [
       { type: 'level', value: 3, description: 'Must be Level 3' },
       { type: 'previousChapter', value: 6, description: 'Must complete Chapter 6' }
     ],
     rewards: [
       { type: 'wisdom', value: 'points', description: 'Wisdom Points' },
-      { type: 'blessing', value: 'artifact', description: 'Artifact Blessing' }
+      { type: 'blessing', value: 'artifact', description: 'Artifact Blessing' },
+      { type: 'ability', value: 'truth_metal_card_slot', description: 'Truth Metal Card Slot' },
+      { type: 'artifact', value: 'rare_card_choice', description: 'Rare Card Choice' }
     ],
     challenges: [
       {
@@ -449,6 +583,30 @@ export const CHAPTERS: Chapter[] = [
           { type: 'blessing', value: 'artifact', description: 'Artifact Blessing' }
         ],
         isCompleted: false
+      },
+      {
+        id: 'ep7-debate-challenge',
+        title: 'Engage in Intellectual Debate',
+        description: 'Engage in intellectual debate',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 100, description: 'Debate XP' },
+          { type: 'pp', value: 75, description: 'Debate PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep7-precision-spar',
+        title: 'Demonstrate Combat Precision',
+        description: 'Demonstrate combat precision',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 100, description: 'Precision spar XP' },
+          { type: 'pp', value: 100, description: 'Precision spar PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 4,
@@ -459,15 +617,17 @@ export const CHAPTERS: Chapter[] = [
     id: 8,
     title: "Face the 6 Ethics of Life",
     subtitle: "The Archetype Trials",
-    description: "The Ethics manifest as sentient Archetypes. Players must defeat or learn from each, depending on alignment.",
-    storyArc: "The Final Ordeal",
+    description: "The Ethics manifest as sentient Archetypes. Players must defeat or learn from each, depending on alignment. Then students attend advanced classes as rivalries escalate, participating in advanced training and facing escalating rival challenges.",
+    storyArc: "The Final Ordeal + Story Mode - Episode 8",
     requirements: [
       { type: 'level', value: 3, description: 'Must be Level 3' },
       { type: 'previousChapter', value: 7, description: 'Must complete Chapter 7' }
     ],
     rewards: [
       { type: 'ethics', value: 'mastered', description: 'Ethics mastery' },
-      { type: 'xp', value: 500, description: 'Ethics completion XP' }
+      { type: 'xp', value: 500, description: 'Ethics completion XP' },
+      { type: 'ability', value: 'manifest_move_l3', description: 'Manifest Move Level 3' },
+      { type: 'artifact', value: 'firewall_module_v1', description: 'Firewall Module v1' }
     ],
     challenges: [
       {
@@ -523,6 +683,30 @@ export const CHAPTERS: Chapter[] = [
         requirements: [],
         rewards: [{ type: 'ethics', value: 'give', description: 'Give ethic mastered' }],
         isCompleted: false
+      },
+      {
+        id: 'ep8-advanced-classes',
+        title: 'Attend Advanced Classes',
+        description: 'Participate in advanced training',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 125, description: 'Advanced class XP' },
+          { type: 'pp', value: 100, description: 'Advanced class PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep8-rivalry-combat',
+        title: 'Face Escalating Rival Challenges',
+        description: 'Face escalating rival challenges',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 100, description: 'Rivalry combat XP' },
+          { type: 'pp', value: 100, description: 'Rivalry combat PP' }
+        ],
+        isCompleted: false
       }
     ],
     teamSize: 4,
@@ -533,8 +717,8 @@ export const CHAPTERS: Chapter[] = [
     id: 9,
     title: "Final Battle – Synthesis",
     subtitle: "The Veil King",
-    description: "The Ethics reunite under The Veil King. Victory triggers the emergence of the Ninth Knowing.",
-    storyArc: "The Return",
+    description: "The Ethics reunite under The Veil King. Victory triggers the emergence of the Ninth Knowing. Then Deklan is tested before the Top 12 as rivals challenge him, requiring strategic thinking and facing the final challenger.",
+    storyArc: "The Return + Story Mode - Episode 9",
     requirements: [
       { type: 'level', value: 3, description: 'Must be Level 3' },
       { type: 'previousChapter', value: 8, description: 'Must complete Chapter 8' },
@@ -542,7 +726,9 @@ export const CHAPTERS: Chapter[] = [
     ],
     rewards: [
       { type: 'ninth', value: 'knowing', description: 'Ninth Knowing unlocked' },
-      { type: 'title', value: 'Master', description: 'Master title' }
+      { type: 'title', value: 'Master', description: 'Master title' },
+      { type: 'ability', value: 'ascension_level_3', description: 'Ascension to Level 3' },
+      { type: 'artifact', value: 'rare_artifact_choice', description: 'Rare Artifact Choice' }
     ],
     challenges: [
       {
@@ -554,6 +740,30 @@ export const CHAPTERS: Chapter[] = [
         rewards: [
           { type: 'ninth', value: 'knowing', description: 'Ninth Knowing' },
           { type: 'title', value: 'Master', description: 'Master title' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep9-strategy-test',
+        title: 'Demonstrate Strategic Thinking',
+        description: 'Demonstrate strategic thinking',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 150, description: 'Strategy test XP' },
+          { type: 'pp', value: 125, description: 'Strategy test PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep9-final-duel',
+        title: 'Face Final Challenger',
+        description: 'Face your final challenger',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 150, description: 'Final duel XP' },
+          { type: 'pp', value: 125, description: 'Final duel PP' }
         ],
         isCompleted: false
       }

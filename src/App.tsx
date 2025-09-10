@@ -17,6 +17,7 @@ import InvitationManager from './components/InvitationManager';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LevelUpProvider } from './context/LevelUpContext';
 import { BattleProvider } from './context/BattleContext';
+import { StoryProvider } from './context/StoryContext';
 import Battle from './pages/Battle';
 // Firebase services are imported but not directly used in this component
 // They are used by child components through the firebase.ts file
@@ -39,7 +40,8 @@ function App() {
     <AuthProvider>
       <LevelUpProvider>
         <BattleProvider>
-          <Router>
+          <StoryProvider>
+            <Router>
             <NavBar />
             <Routes>
               <Route path="/" element={<Dashboard />} />
@@ -57,6 +59,7 @@ function App() {
             <InvitationManager />
             {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
           </Router>
+          </StoryProvider>
         </BattleProvider>
       </LevelUpProvider>
     </AuthProvider>

@@ -7,6 +7,8 @@ import { storage } from '../firebase';
 import { CHAPTERS } from '../types/chapters';
 import ModelPreview from './ModelPreview';
 import RivalSelectionModal from './RivalSelectionModal';
+import CPUChallenger from './CPUChallenger';
+import PortalTutorial from './PortalTutorial';
 
 interface GoogleClassroomAssignment {
   id: string;
@@ -27,6 +29,8 @@ const StoryChallenges = () => {
   const [selectedFiles, setSelectedFiles] = useState<{ [challenge: string]: File | null }>({});
   const [chapterClassroomAssignments, setChapterClassroomAssignments] = useState<{ [challengeId: string]: GoogleClassroomAssignment }>({});
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
+  const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
+  const [showPortalTutorial, setShowPortalTutorial] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -338,6 +342,33 @@ const StoryChallenges = () => {
       console.error('Error auto-completing manifest challenge:', error);
     }
   };
+
+  // Function to ensure chapters are initialized
+const ensureChaptersInitialized = async () => {
+  if (!currentUser || !userProgress) return;
+
+  try {
+    // Check if chapters exist
+    if (!userProgress.chapters) {
+      console.log('No chapters found, initializing chapter progress...');
+      
+      // Import the initialization function
+      const { initializeChapterProgress } = await import('../utils/chapterInit');
+      await initializeChapterProgress(currentUser.uid);
+      
+      // Refresh user data after initialization
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        const updatedData = userDoc.data();
+        setUserProgress(updatedData);
+      }
+    }
+  } catch (error) {
+    console.error('Error ensuring chapters are initialized:', error);
+  }
+};
+
 
   // Function to check and auto-complete rival selection challenge
   const checkAndCompleteRivalChallenge = async (userData: any) => {
@@ -798,6 +829,123 @@ const StoryChallenges = () => {
     }
   };
 
+  const handleCPUBattleComplete = async (victory: boolean, xpGained: number, ppGained: number) => {
+    if (!currentUser) return;
+
+    try {
+      console.log('CPU Battle completed:', { victory, xpGained, ppGained });
+      
+      if (victory) {
+        // Update user progress to mark the challenge as completed
+        const userRef = doc(db, 'users', currentUser.uid);
+        const currentData = userProgress || {};
+        const currentChapter = getCurrentChapter();
+        
+        if (currentChapter) {
+          const updatedChapters = {
+            ...currentData.chapters,
+            [currentChapter.id]: {
+              ...currentData.chapters?.[currentChapter.id],
+              challenges: {
+                ...currentData.chapters?.[currentChapter.id]?.challenges,
+                'ep1-manifest-test': {
+                  isCompleted: true,
+                  completedAt: serverTimestamp(),
+                  autoCompleted: true,
+                  battleVictory: true,
+                  xpGained: xpGained,
+                  ppGained: ppGained
+                }
+              }
+            }
+          };
+
+          await updateDoc(userRef, {
+            chapters: updatedChapters
+          });
+
+          // Add to challenge submissions for tracking (auto-completed)
+          await addDoc(collection(db, 'challengeSubmissions'), {
+            userId: currentUser.uid,
+            displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+            email: currentUser.email || '',
+            photoURL: currentUser.photoURL || '',
+            challengeId: 'ep1-manifest-test',
+            challengeName: 'Test Awakened Abilities',
+            submissionType: 'auto_completed',
+            status: 'approved',
+            timestamp: serverTimestamp(),
+            xpReward: xpGained,
+            ppReward: ppGained,
+            manifestationType: 'Chapter Challenge',
+            character: 'CPU Challenger',
+            autoCompleted: true,
+            battleVictory: true
+          });
+
+          // Create notification for challenge completion
+          await createChallengeNotification('Test Awakened Abilities', xpGained, ppGained, true);
+          
+          // Check if current chapter is now complete and progress to next chapter
+          await checkAndProgressChapter(currentChapter.id);
+          
+          // Force refresh user progress to ensure UI updates immediately
+          const userRefRefresh = doc(db, 'users', currentUser.uid);
+          const userDocRefresh = await getDoc(userRefRefresh);
+          if (userDocRefresh.exists()) {
+            const userDataRefresh = userDocRefresh.data();
+            setUserProgress(userDataRefresh);
+            console.log('StoryChallenges: User progress refreshed after CPU battle completion');
+          }
+          
+          alert(`🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
+        }
+      } else {
+        alert('💪 The CPU challenger proved too strong this time. Try again to test your awakened abilities!');
+      }
+      
+      // Close the battle modal
+      setShowCPUBattleModal(false);
+      
+    } catch (error) {
+      console.error('Error handling CPU battle completion:', error);
+      alert('Failed to process battle results. Please try again.');
+    }
+  };
+
+  const handleTutorialComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      // Create notification for challenge completion
+      await createChallengeNotification('Navigate the Portal', 20, 10, true);
+      
+      // Check if current chapter is now complete and progress to next chapter
+      const currentChapter = getCurrentChapter();
+      if (currentChapter) {
+        await checkAndProgressChapter(currentChapter.id);
+      }
+      
+      // Close the tutorial modal
+      setShowPortalTutorial(false);
+      
+      // Force refresh user progress to ensure UI updates immediately
+      const userRefRefresh = doc(db, 'users', currentUser.uid);
+      const userDocRefresh = await getDoc(userRefRefresh);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+        console.log('StoryChallenges: User progress refreshed after tutorial completion');
+      }
+      
+      alert('🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +20 XP and +10 PP!');
+      
+    } catch (error) {
+      console.error('Error handling tutorial completion:', error);
+      alert('Failed to process tutorial completion. Please try again.');
+    }
+  };
+
   const getCurrentChapter = () => {
     if (!userProgress?.chapters) return null;
     
@@ -1152,7 +1300,7 @@ const StoryChallenges = () => {
                           }}>
                             {challenge.title}
                           </h3>
-                          {challenge.id === 'ch1-update-profile' && isCompleted && challengeData.autoCompleted && (
+                          {((challenge.id === 'ch1-update-profile' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-manifest-test') && isCompleted && challengeData.autoCompleted) && (
                             <span style={{
                               padding: '0.25rem 0.5rem',
                               background: '#10b981',
@@ -1329,8 +1477,102 @@ const StoryChallenges = () => {
                       </div>
                     </div>
 
-                    {/* File upload section - EXCLUDES profile, manifest, and rival selection challenges */}
-                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && (
+                    {/* Tutorial section for Navigate the Portal challenge */}
+                    {!isCompleted && challenge.id === 'ep1-portal-sequence' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          style={{ 
+                            padding: '0.75rem 1.5rem', 
+                            background: '#3b82f6', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '0.5rem', 
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.875rem',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => setShowPortalTutorial(true)}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = '#2563eb';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = '#3b82f6';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                          }}
+                        >
+                          🎓 Start Tutorial
+                        </button>
+                        <div style={{
+                          padding: '0.75rem',
+                          backgroundColor: '#dbeafe',
+                          border: '1px solid #3b82f6',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.8rem',
+                          color: '#1e40af',
+                          maxWidth: '300px'
+                        }}>
+                          <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                            💡 Tutorial Instructions
+                          </div>
+                          <div>
+                            Take a guided tour of Xiotein School to learn about all the features and areas. Completing the tutorial will finish this challenge!
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* CPU Battle section for Test Awakened Abilities challenge */}
+                    {!isCompleted && challenge.id === 'ep1-manifest-test' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          style={{ 
+                            padding: '0.75rem 1.5rem', 
+                            background: '#dc2626', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '0.5rem', 
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            fontSize: '0.875rem',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => setShowCPUBattleModal(true)}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = '#b91c1c';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = '#dc2626';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                          }}
+                        >
+                          ⚔️ Battle CPU Challenger
+                        </button>
+                        <div style={{
+                          padding: '0.75rem',
+                          backgroundColor: '#fef3c7',
+                          border: '1px solid #f59e0b',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.8rem',
+                          color: '#92400e',
+                          maxWidth: '300px'
+                        }}>
+                          <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                            💡 Battle Instructions
+                          </div>
+                          <div>
+                            Test your awakened abilities against a CPU challenger using your Power Card moves. Victory will complete this challenge!
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* File upload section - EXCLUDES profile, manifest, rival selection, tutorial, and CPU battle challenges */}
+                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -1616,6 +1858,31 @@ const StoryChallenges = () => {
                           🔍 Debug Manifest Data (Check Console)
                         </button>
                         <button
+                          onClick={async () => {
+                            console.log('🔧 Manual manifest sync and challenge check...');
+                            await ensureChaptersInitialized();
+                            if (userProgress?.manifest) {
+                              await checkAndCompleteManifestChallenge(userProgress);
+                            } else {
+                              console.log('No manifest data found in userProgress');
+                            }
+                          }}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#059669',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%',
+                            marginBottom: '0.5rem'
+                          }}
+                        >
+                          🔄 Force Manifest Sync & Challenge Check
+                        </button>
+                        <button
                           onClick={() => checkAndProgressChapter(1)}
                           style={{
                             padding: '0.5rem 1rem',
@@ -1727,6 +1994,20 @@ const StoryChallenges = () => {
         isOpen={showRivalSelectionModal}
         onClose={() => setShowRivalSelectionModal(false)}
         onRivalSelected={handleRivalSelected}
+      />
+
+      {/* CPU Battle Modal */}
+      <CPUChallenger
+        isOpen={showCPUBattleModal}
+        onClose={() => setShowCPUBattleModal(false)}
+        onBattleComplete={handleCPUBattleComplete}
+      />
+
+      {/* Portal Tutorial Modal */}
+      <PortalTutorial
+        isOpen={showPortalTutorial}
+        onComplete={handleTutorialComplete}
+        onClose={() => setShowPortalTutorial(false)}
       />
     </div>
   );

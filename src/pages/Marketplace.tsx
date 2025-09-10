@@ -18,24 +18,24 @@ interface Artifact {
 
 const artifacts: Artifact[] = [
   { 
-    id: 'sleep-30',
-    name: 'Sleep - In 30 min', 
-    description: 'Come to work 30 minutes later (10 am start)', 
-    price: 60, 
-    icon: '😴', 
+    id: 'work-extension',
+    name: 'Work Extension', 
+    description: 'Extend work time by 30 minutes', 
+    price: 30, 
+    icon: '⏰', 
     image: '/sleep-in-30.png',
     category: 'time',
     rarity: 'common'
   },
   { 
-    id: 'sleep-1hr',
-    name: 'Sleep - In 1 hr', 
-    description: 'Come to work 1 hour later (10:30 am start)', 
-    price: 100, 
-    icon: '😴', 
+    id: 'checkin-free',
+    name: 'Get Out of Check-in Free', 
+    description: 'Skip the next check-in requirement', 
+    price: 50, 
+    icon: '🎫', 
     image: '/sleep-in-1hr.png',
-    category: 'time',
-    rarity: 'rare'
+    category: 'protection',
+    rarity: 'common'
   },
   { 
     id: 'shield',
@@ -48,13 +48,23 @@ const artifacts: Artifact[] = [
     rarity: 'common'
   },
   { 
-    id: 'lunch-extension',
-    name: 'Lunch Extension (+15)', 
-    description: 'Extend lunch by 15 minutes (Full Hour)', 
-    price: 30, 
-    icon: '🍕', 
-    image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    id: 'lunch-mosley',
+    name: 'Lunch on Mosley', 
+    description: 'Enjoy a special lunch with Mr. Mosley', 
+    price: 360, 
+    icon: '🍽️', 
+    image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'food',
+    rarity: 'epic'
+  },
+  { 
+    id: 'uxp-credit',
+    name: '+2 UXP Credit', 
+    description: 'Credit to be added to any non-assessment assignment', 
+    price: 50, 
+    icon: '📚', 
+    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'special',
     rarity: 'common'
   },
   { 
@@ -103,18 +113,6 @@ const artifacts: Artifact[] = [
     originalPrice: 250,
     discount: 20
   },
-  { 
-    id: 'lunch-mosley',
-    name: 'Lunch on Mosley', 
-    description: 'Enjoy a special lunch with Mr. Mosley', 
-    price: 720, 
-    icon: '🍽️', 
-    image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'food',
-    rarity: 'legendary',
-    originalPrice: 1000,
-    discount: 28
-  }
 ];
 
 const Marketplace = () => {

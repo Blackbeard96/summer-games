@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 const DashboardActionCards: React.FC = () => {
   const { currentUser } = useAuth();
-  const { actionCards, activateActionCard, vault, error } = useBattle();
+  const { actionCards, activateActionCard, upgradeActionCard, vault, error } = useBattle();
 
   const handleUseCard = (cardId: string) => {
     activateActionCard(cardId);
@@ -173,6 +173,58 @@ const DashboardActionCards: React.FC = () => {
                   <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#059669' }}>{card.masteryLevel}/5</div>
                 </div>
               </div>
+
+              {/* Next Level Preview */}
+              {card.masteryLevel < 5 && card.nextLevelEffect && (
+                <div style={{
+                  background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
+                  border: '2px solid #10b981',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem',
+                  marginBottom: '1rem',
+                  backdropFilter: 'blur(10px)'
+                }}>
+                  <div style={{ fontSize: '0.625rem', fontWeight: 'bold', color: '#065f46', marginBottom: '0.25rem', textAlign: 'center' }}>
+                    Next Level Preview
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#065f46', textAlign: 'center' }}>
+                    Strength: {card.effect.strength} → {card.nextLevelEffect.strength}
+                  </div>
+                </div>
+              )}
+
+              {/* Upgrade Button */}
+              {card.masteryLevel < 5 && (
+                <button
+                  onClick={() => upgradeActionCard(card.id)}
+                  disabled={!vault || vault.currentPP < card.upgradeCost}
+                  style={{
+                    background: (!vault || vault.currentPP < card.upgradeCost) ? '#9ca3af' : 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.5rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.currentPP < card.upgradeCost) ? 'not-allowed' : 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    width: '100%',
+                    marginBottom: '1rem',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (vault && vault.currentPP >= card.upgradeCost) {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(5, 150, 105, 0.3)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                >
+                  ⬆️ Upgrade to Level {card.masteryLevel + 1} ({card.upgradeCost} PP)
+                </button>
+              )}
 
               {/* Use Button */}
               <button

@@ -11,6 +11,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import { MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { useLevelUp } from '../context/LevelUpContext';
+import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
 
 interface ChallengeData {
@@ -27,6 +28,7 @@ interface Student {
   xp?: number;
   powerPoints?: number;
   challenges?: { [name: string]: ChallengeData };
+  chapters?: { [chapterId: string]: any };
   photoURL?: string; // Added for profile pictures
   manifestationType?: string;
   manifest?: string | any; // Can be string or PlayerManifest object
@@ -41,6 +43,7 @@ interface Student {
 
 const AdminPanel: React.FC = () => {
   const { showLevelUpNotification } = useLevelUp();
+  const { currentUser } = useAuth();
   const [students, setStudents] = useState<Student[]>([]);
   const [editingStudent, setEditingStudent] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ displayName: '', email: '' });
@@ -48,7 +51,8 @@ const AdminPanel: React.FC = () => {
   const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number | undefined }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests'>('students');
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -59,6 +63,10 @@ const AdminPanel: React.FC = () => {
   const [rowError, setRowError] = useState<{ [id: string]: string }>({});
   const [pendingSubmissionCount, setPendingSubmissionCount] = useState(0);
   const [viewingFile, setViewingFile] = useState<{ url: string; name: string; type: string } | null>(null);
+  
+  // Story Progress Management
+  const [storyProgressData, setStoryProgressData] = useState<{ [studentId: string]: any }>({});
+  const [storyProgressLoading, setStoryProgressLoading] = useState(false);
 
   // Helper function to get manifest display name
   const getManifestDisplayName = (student: Student): string => {
@@ -140,6 +148,232 @@ const AdminPanel: React.FC = () => {
       total: chapterChallenges.length,
       challenges: chapterChallenges
     };
+  };
+
+  // Story Progress Management Functions
+  const fetchStoryProgress = async () => {
+    setStoryProgressLoading(true);
+    try {
+      const progressData: { [studentId: string]: any } = {};
+      
+      console.log('Fetching story progress for students:', students.length);
+      
+      for (const student of students) {
+        // Use the actual chapter progress from student data
+        const chapters = student.chapters || {};
+        const storyChapter = student.storyChapter || 1;
+        
+        console.log(`Student ${student.displayName} (${student.id}):`, {
+          storyChapter,
+          chapters: Object.keys(chapters),
+          chaptersData: chapters
+        });
+        
+        // Calculate completed chapters
+        const completedChapters = Object.values(chapters).filter((chapter: any) => 
+          chapter?.isCompleted || chapter?.status === 'approved'
+        ).length;
+        
+        // Get current chapter info
+        const currentChapter = CHAPTERS.find(ch => ch.id === storyChapter);
+        const currentChapterTitle = currentChapter ? currentChapter.title : `Chapter ${storyChapter}`;
+        
+        progressData[student.id] = {
+          currentEpisode: `Chapter ${storyChapter}`,
+          currentChapterTitle: currentChapterTitle,
+          completedEpisodes: completedChapters,
+          totalProgress: Math.round((completedChapters / CHAPTERS.length) * 100),
+          seasonRewards: [],
+          chapters: chapters,
+          storyChapter: storyChapter
+        };
+        
+        console.log(`Progress for ${student.displayName}:`, progressData[student.id]);
+      }
+      
+      setStoryProgressData(progressData);
+      console.log('Story progress data set:', progressData);
+    } catch (error) {
+      console.error('Error fetching story progress:', error);
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
+  const resetStoryProgress = async (studentId: string) => {
+    setRowLoading(prev => ({ ...prev, [studentId]: true }));
+    setRowError(prev => ({ ...prev, [studentId]: '' }));
+    
+    try {
+      // Reset chapter progress in the students collection
+      await updateDoc(doc(db, 'students', studentId), {
+        storyChapter: 1,
+        chapters: {},
+        resetAt: new Date(),
+        resetBy: 'admin'
+      });
+      
+      // Also reset the corresponding user document
+      try {
+        await updateDoc(doc(db, 'users', studentId), {
+          chapters: {},
+          storyChapter: 1,
+          resetAt: new Date(),
+          resetBy: 'admin'
+        });
+        console.log(`Successfully reset user document for student ${studentId}`);
+      } catch (userError) {
+        console.log(`User document not found for student ${studentId}, skipping user reset`);
+      }
+      
+      // Refresh students data from Firestore
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const updatedStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      setStudents(updatedStudents);
+      
+      // Update local state
+      setStoryProgressData(prev => ({
+        ...prev,
+        [studentId]: {
+          currentEpisode: 'Chapter 1',
+          currentChapterTitle: 'Leaving the Ordinary World',
+          completedEpisodes: 0,
+          totalProgress: 0,
+          seasonRewards: [],
+          chapters: {},
+          storyChapter: 1
+        }
+      }));
+      
+      console.log(`Chapter progress reset for student ${studentId}`);
+    } catch (error) {
+      console.error(`Error resetting chapter progress for ${studentId}:`, error);
+      setRowError(prev => ({ ...prev, [studentId]: 'Failed to reset chapter progress' }));
+    } finally {
+      setRowLoading(prev => ({ ...prev, [studentId]: false }));
+    }
+  };
+
+  const resetAllStoryProgress = async () => {
+    if (!window.confirm('Are you sure you want to reset chapter progress for ALL students? This action cannot be undone.')) {
+      return;
+    }
+    
+    setStoryProgressLoading(true);
+    try {
+      console.log('Starting reset for all students...');
+      console.log('Students to reset:', students.map(s => ({ id: s.id, name: s.displayName, currentChapter: s.storyChapter })));
+      
+      // Use individual updates instead of batch for better error handling
+      const updatePromises = students.map(async (student) => {
+        try {
+          console.log(`Resetting student ${student.displayName} (${student.id}) from chapter ${student.storyChapter} to chapter 1`);
+          
+          // Reset student document
+          await updateDoc(doc(db, 'students', student.id), {
+            storyChapter: 1,
+            chapters: {},
+            resetAt: new Date(),
+            resetBy: 'admin'
+          });
+          
+          // Also reset the corresponding user document
+          try {
+            await updateDoc(doc(db, 'users', student.id), {
+              chapters: {},
+              storyChapter: 1,
+              resetAt: new Date(),
+              resetBy: 'admin'
+            });
+            console.log(`Successfully reset user document for ${student.displayName} (${student.id})`);
+          } catch (userError) {
+            console.log(`User document not found for ${student.displayName} (${student.id}), skipping user reset`);
+          }
+          
+          console.log(`Successfully reset student ${student.displayName} (${student.id})`);
+          return { success: true, studentId: student.id };
+        } catch (error) {
+          console.error(`Failed to reset student ${student.displayName} (${student.id}):`, error);
+          return { success: false, studentId: student.id, error };
+        }
+      });
+      
+      const results = await Promise.all(updatePromises);
+      const successful = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      
+      console.log(`Reset completed. Successful: ${successful.length}, Failed: ${failed.length}`);
+      if (failed.length > 0) {
+        console.error('Failed resets:', failed);
+      }
+      
+      // Refresh students data from Firestore
+      console.log('Refreshing students data from Firestore...');
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const updatedStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      console.log('Updated students data:', updatedStudents.map(s => ({ 
+        id: s.id, 
+        name: s.displayName, 
+        storyChapter: s.storyChapter,
+        chapters: Object.keys(s.chapters || {})
+      })));
+      
+      setStudents(updatedStudents);
+      
+      // Update local state
+      const resetData = {
+        currentEpisode: 'Chapter 1',
+        currentChapterTitle: 'Leaving the Ordinary World',
+        completedEpisodes: 0,
+        totalProgress: 0,
+        seasonRewards: [],
+        chapters: {},
+        storyChapter: 1
+      };
+      
+      const newProgressData: { [studentId: string]: any } = {};
+      updatedStudents.forEach(student => {
+        newProgressData[student.id] = resetData;
+      });
+      
+      setStoryProgressData(newProgressData);
+      console.log('Chapter progress reset for all students completed');
+    } catch (error) {
+      console.error('Error resetting all chapter progress:', error);
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
+  // Fetch story progress when tab is active
+  useEffect(() => {
+    if (activeTab === 'story-progress') {
+      fetchStoryProgress();
+    }
+  }, [activeTab, students]);
+
+  // Add a function to refresh students data
+  const refreshStudentsData = async () => {
+    try {
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const updatedStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      setStudents(updatedStudents);
+      console.log('Students data refreshed from Firestore');
+    } catch (error) {
+      console.error('Error refreshing students data:', error);
+    }
   };
 
   useEffect(() => {
@@ -511,6 +745,92 @@ const AdminPanel: React.FC = () => {
   };
   const deselectAll = () => {
     setSelected([]);
+  };
+
+  const bulkDeleteStudents = async () => {
+    if (selected.length === 0) return;
+    
+    try {
+      console.log('Starting bulk delete for students:', selected);
+      
+      // Process deletions one by one to avoid overwhelming Firebase
+      const deletedStudents: string[] = [];
+      const failedStudents: { id: string; error: string }[] = [];
+      
+      for (const studentId of selected) {
+        try {
+          console.log(`Deleting student: ${studentId}`);
+          
+          // Delete from students collection
+          const studentRef = doc(db, 'students', studentId);
+          await deleteDoc(studentRef);
+          console.log(`Deleted from students collection: ${studentId}`);
+          
+          // Delete from users collection
+          const userRef = doc(db, 'users', studentId);
+          await deleteDoc(userRef);
+          console.log(`Deleted from users collection: ${studentId}`);
+          
+          // Delete any challenge submissions
+          const submissionsQuery = query(
+            collection(db, 'challengeSubmissions'),
+            where('userId', '==', studentId)
+          );
+          const submissionsSnapshot = await getDocs(submissionsQuery);
+          console.log(`Found ${submissionsSnapshot.docs.length} submissions for ${studentId}`);
+          
+          for (const submissionDoc of submissionsSnapshot.docs) {
+            await deleteDoc(submissionDoc.ref);
+          }
+          
+          // Delete any notifications (if the subcollection exists)
+          try {
+            const notificationsQuery = query(
+              collection(db, 'students', studentId, 'notifications')
+            );
+            const notificationsSnapshot = await getDocs(notificationsQuery);
+            console.log(`Found ${notificationsSnapshot.docs.length} notifications for ${studentId}`);
+            
+            for (const notificationDoc of notificationsSnapshot.docs) {
+              await deleteDoc(notificationDoc.ref);
+            }
+          } catch (notifError) {
+            console.log(`No notifications subcollection for ${studentId} or error accessing it:`, notifError);
+            // Continue - this is not critical
+          }
+          
+          deletedStudents.push(studentId);
+          console.log(`Successfully deleted student: ${studentId}`);
+          
+        } catch (studentError) {
+          console.error(`Failed to delete student ${studentId}:`, studentError);
+          const errorMessage = studentError instanceof Error ? studentError.message : 'Unknown error';
+          failedStudents.push({ id: studentId, error: errorMessage });
+        }
+      }
+      
+      // Update local state to remove successfully deleted students
+      setStudents(prev => prev.filter(s => !deletedStudents.includes(s.id)));
+      setSelected([]);
+      setShowBulkDeleteConfirm(false);
+      
+      // Show appropriate message
+      if (deletedStudents.length > 0) {
+        setBatchMessage(`Successfully deleted ${deletedStudents.length} student account(s)!`);
+        setShowBatchSuccess(true);
+        setTimeout(() => setShowBatchSuccess(false), 3000);
+      }
+      
+      if (failedStudents.length > 0) {
+        console.error('Failed to delete some students:', failedStudents);
+        alert(`Failed to delete ${failedStudents.length} student(s). Check console for details.`);
+      }
+      
+    } catch (error: unknown) {
+      console.error('Error in bulk delete process:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      alert(`Failed to delete students: ${errorMessage}`);
+    }
   };
 
   const viewStudentProfile = (studentId: string) => {
@@ -1183,6 +1503,21 @@ const AdminPanel: React.FC = () => {
         >
           Manifests
         </button>
+        <button
+          onClick={() => setActiveTab('story-progress')}
+          style={{
+            backgroundColor: activeTab === 'story-progress' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'story-progress' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          📖 Story Progress
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -1398,6 +1733,329 @@ const AdminPanel: React.FC = () => {
             )}
           </div>
         </>
+      ) : activeTab === 'story-progress' ? (
+        <div>
+          {/* Story Progress Management */}
+          <div style={{
+            background: '#f8fafc',
+            borderRadius: '0.75rem',
+            padding: '2rem',
+            minHeight: '300px',
+            color: '#374151',
+            border: '1px solid #e5e7eb',
+            marginBottom: '2rem'
+          }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>
+              📖 Story Progress Management
+            </h2>
+            <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
+              Manage student chapter progress. Reset individual or all students' chapter progress for debugging.
+            </p>
+
+            {/* Global Actions */}
+            <div style={{
+              background: 'white',
+              borderRadius: '0.75rem',
+              border: '1px solid #e5e7eb',
+              padding: '1.5rem',
+              marginBottom: '2rem'
+            }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem', color: '#374151' }}>
+                ⚠️ Global Actions
+              </h3>
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                <button
+                  onClick={resetAllStoryProgress}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#dc2626',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Processing...' : '🗑️ Reset All Chapter Progress'}
+                </button>
+                <button
+                  onClick={fetchStoryProgress}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Loading...' : '🔄 Refresh Chapter Data'}
+                </button>
+                <button
+                  onClick={refreshStudentsData}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Loading...' : '🔄 Refresh Students Data'}
+                </button>
+                <button
+                  onClick={async () => {
+                    if (students.length > 0) {
+                      const testStudent = students[0];
+                      console.log('Testing database write for student:', testStudent.displayName);
+                      try {
+                        await updateDoc(doc(db, 'students', testStudent.id), {
+                          testField: new Date().toISOString(),
+                          testBy: 'admin'
+                        });
+                        console.log('Database write test successful');
+                        alert('Database write test successful! Check console for details.');
+                      } catch (error) {
+                        console.error('Database write test failed:', error);
+                        alert('Database write test failed! Check console for details.');
+                      }
+                    }
+                  }}
+                  style={{
+                    background: '#f59e0b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  🧪 Test DB Write
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!currentUser) {
+                      alert('No current user found');
+                      return;
+                    }
+                    if (!window.confirm('Reset YOUR OWN chapter progress? This will clear all your chapter completions.')) {
+                      return;
+                    }
+                    try {
+                      console.log('Resetting current user progress:', currentUser.uid);
+                      
+                      // Reset user document
+                      await updateDoc(doc(db, 'users', currentUser.uid), {
+                        chapters: {},
+                        storyChapter: 1,
+                        resetAt: new Date(),
+                        resetBy: 'self'
+                      });
+                      
+                      // Also reset student document if it exists
+                      try {
+                        await updateDoc(doc(db, 'students', currentUser.uid), {
+                          chapters: {},
+                          storyChapter: 1,
+                          resetAt: new Date(),
+                          resetBy: 'self'
+                        });
+                      } catch (studentError) {
+                        console.log('Student document not found, skipping');
+                      }
+                      
+                      console.log('Current user progress reset successfully');
+                      alert('Your chapter progress has been reset! Refresh the page to see changes.');
+                    } catch (error) {
+                      console.error('Error resetting current user progress:', error);
+                      alert('Failed to reset progress. Check console for details.');
+                    }
+                  }}
+                  style={{
+                    background: '#8b5cf6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  🔄 Reset My Progress
+                </button>
+              </div>
+              <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '1rem', fontStyle: 'italic' }}>
+                ⚠️ Resetting chapter progress will clear all chapter completions and return students to Chapter 1.
+              </p>
+            </div>
+
+            {/* Student Chapter Progress Table */}
+            <div style={{
+              background: 'white',
+              borderRadius: '0.75rem',
+              border: '1px solid #e5e7eb',
+              overflow: 'hidden',
+              boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+            }}>
+              <div style={{
+                background: '#f9fafb',
+                padding: '1rem 1.5rem',
+                borderBottom: '1px solid #e5e7eb'
+              }}>
+                <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', margin: 0, color: '#374151' }}>
+                  Student Chapter Progress ({students.length} students)
+                </h3>
+              </div>
+              
+              {storyProgressLoading ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>
+                  🔄 Loading chapter progress data...
+                </div>
+              ) : (
+                <div style={{ maxHeight: '600px', overflow: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f3f4f6' }}>
+                        <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+                          Student
+                        </th>
+                        <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+                          Current Chapter
+                        </th>
+                        <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+                          Completed Chapters
+                        </th>
+                        <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+                          Progress
+                        </th>
+                        <th style={{ padding: '0.75rem', textAlign: 'center', borderBottom: '1px solid #e5e7eb', fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {students.map((student) => {
+                        const progress = storyProgressData[student.id] || {
+                          currentEpisode: 'Chapter 1',
+                          currentChapterTitle: 'Leaving the Ordinary World',
+                          completedEpisodes: 0,
+                          totalProgress: 0
+                        };
+                        
+                        const completedCount = progress.completedEpisodes || 0;
+                        const progressPercentage = progress.totalProgress || 0;
+                        
+                        return (
+                          <tr key={student.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                            <td style={{ padding: '0.75rem', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                {student.photoURL && (
+                                  <img 
+                                    src={student.photoURL} 
+                                    alt={student.displayName || 'Student'} 
+                                    style={{ 
+                                      width: '32px', 
+                                      height: '32px', 
+                                      borderRadius: '50%',
+                                      objectFit: 'cover'
+                                    }} 
+                                  />
+                                )}
+                                <div>
+                                  <div style={{ fontWeight: 'bold', color: '#374151', fontSize: '0.875rem' }}>
+                                    {student.displayName || 'Unnamed Student'}
+                                  </div>
+                                  <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                                    {student.email}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ fontSize: '0.875rem', color: '#374151' }}>
+                                {progress.currentEpisode || 'Chapter 1'}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                                {progress.currentChapterTitle || 'Leaving the Ordinary World'}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ fontSize: '0.875rem', color: '#374151' }}>
+                                {completedCount}/{CHAPTERS.length} chapters
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                                {completedCount > 0 ? `${completedCount} completed` : 'None completed'}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <div style={{
+                                  width: '100px',
+                                  height: '8px',
+                                  backgroundColor: '#e5e7eb',
+                                  borderRadius: '4px',
+                                  overflow: 'hidden'
+                                }}>
+                                  <div style={{
+                                    width: `${progressPercentage}%`,
+                                    height: '100%',
+                                    backgroundColor: '#10b981',
+                                    transition: 'width 0.3s ease'
+                                  }} />
+                                </div>
+                                <span style={{ fontSize: '0.75rem', color: '#6b7280', minWidth: '30px' }}>
+                                  {progressPercentage}%
+                                </span>
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
+                              <button
+                                onClick={() => resetStoryProgress(student.id)}
+                                disabled={rowLoading[student.id]}
+                                style={{
+                                  background: rowLoading[student.id] ? '#9ca3af' : '#dc2626',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.375rem',
+                                  padding: '0.5rem 1rem',
+                                  fontWeight: 'bold',
+                                  cursor: rowLoading[student.id] ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.75rem',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                              >
+                                {rowLoading[student.id] ? '🔄' : '🗑️'} Reset
+                              </button>
+                              {rowError[student.id] && (
+                                <div style={{ fontSize: '0.75rem', color: '#dc2626', marginTop: '0.25rem' }}>
+                                  {rowError[student.id]}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       ) : activeTab === 'students' ? (
         <>
           {/* Student Management Content */}
@@ -1506,6 +2164,22 @@ const AdminPanel: React.FC = () => {
                       }}
                     >
                       Remove {batchPP} PP
+                    </button>
+                    <button
+                      onClick={() => setShowBulkDeleteConfirm(true)}
+                      style={{
+                        backgroundColor: '#dc2626',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        padding: '0.5rem 1rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        marginLeft: '1rem'
+                      }}
+                    >
+                      🗑️ Delete Selected
                     </button>
                   </div>
                 </div>
@@ -2196,6 +2870,100 @@ const AdminPanel: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '500px',
+            width: '90%',
+            textAlign: 'center'
+          }}>
+            <h2 style={{ 
+              fontSize: '1.5rem', 
+              fontWeight: 'bold', 
+              marginBottom: '1rem',
+              color: '#dc2626'
+            }}>
+              ⚠️ Confirm Bulk Delete
+            </h2>
+            
+            <div style={{
+              background: '#fef2f2',
+              border: '2px solid #fecaca',
+              borderRadius: '0.75rem',
+              padding: '1rem',
+              marginBottom: '1.5rem'
+            }}>
+              <p style={{ color: '#dc2626', fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                Are you sure you want to delete {selected.length} student account(s)?
+              </p>
+              <p style={{ color: '#dc2626', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
+                This action will permanently delete:
+              </p>
+              <ul style={{ color: '#dc2626', fontSize: '0.875rem', textAlign: 'left', margin: '0.5rem 0' }}>
+                <li>Student profiles and progress</li>
+                <li>All challenge submissions</li>
+                <li>All notifications and data</li>
+                <li>User authentication records</li>
+              </ul>
+              <p style={{ color: '#dc2626', fontSize: '0.875rem', fontWeight: 'bold' }}>
+                Deleted students will be able to create new accounts and start over.
+              </p>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+              <button
+                onClick={bulkDeleteStudents}
+                style={{
+                  background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                🗑️ Delete {selected.length} Account(s)
+              </button>
+              
+              <button
+                onClick={() => setShowBulkDeleteConfirm(false)}
+                style={{
+                  background: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
