@@ -196,6 +196,18 @@ export const CHAPTERS: Chapter[] = [
         isCompleted: false
       },
       {
+        id: 'ep1-portal-sequence',
+        title: 'Navigate the Portal',
+        description: 'Navigate the portal to Xiotein',
+        type: 'personal',
+        requirements: [],
+        rewards: [
+          { type: 'xp', value: 25, description: 'Portal navigation XP' },
+          { type: 'pp', value: 10, description: 'Portal navigation PP' }
+        ],
+        isCompleted: false
+      },
+      {
         id: 'ch1-artifact-identification',
         title: 'Identify Your Artifact',
         description: 'Discover the artifact linked to your inner truth',
@@ -217,18 +229,6 @@ export const CHAPTERS: Chapter[] = [
         rewards: [
           { type: 'xp', value: 50, description: 'Artifact challenge completion XP' },
           { type: 'pp', value: 20, description: 'Artifact challenge completion PP' }
-        ],
-        isCompleted: false
-      },
-      {
-        id: 'ep1-portal-sequence',
-        title: 'Navigate the Portal',
-        description: 'Navigate the portal to Xiotein',
-        type: 'personal',
-        requirements: [],
-        rewards: [
-          { type: 'xp', value: 25, description: 'Portal navigation XP' },
-          { type: 'pp', value: 10, description: 'Portal navigation PP' }
         ],
         isCompleted: false
       },
