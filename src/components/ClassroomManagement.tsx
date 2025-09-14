@@ -97,6 +97,7 @@ interface Student {
   photoURL?: string;
   level: number;
   xp: number;
+  powerPoints?: number;
 }
 
 const ClassroomManagement: React.FC = () => {
@@ -108,6 +109,7 @@ const ClassroomManagement: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [newClassroom, setNewClassroom] = useState({ name: '', description: '', maxStudents: 30 });
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const [ppAmount, setPPAmount] = useState<{ [studentId: string]: number | undefined }>({});
   
   // Google Classroom import states
   const [showGoogleImportModal, setShowGoogleImportModal] = useState(false);
@@ -119,6 +121,7 @@ const ClassroomManagement: React.FC = () => {
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   const [googleAuthToken, setGoogleAuthToken] = useState<string>('');
   const [showOAuthSetupModal, setShowOAuthSetupModal] = useState(false);
+  const [showClassPPView, setShowClassPPView] = useState<string | null>(null);
 
   // Fetch classrooms and students
   useEffect(() => {
@@ -133,31 +136,80 @@ const ClassroomManagement: React.FC = () => {
         } as Classroom));
         setClassrooms(classroomsData);
 
-        // Fetch students
+        // Fetch all users (same logic as AdminPanel)
         const usersSnapshot = await getDocs(collection(db, 'users'));
         const studentsSnapshot = await getDocs(collection(db, 'students'));
         
-        const studentsMap = new Map();
-        studentsSnapshot.docs.forEach(doc => {
-          studentsMap.set(doc.id, doc.data());
+        console.log('ClassroomManagement: Users collection size:', usersSnapshot.docs.length);
+        console.log('ClassroomManagement: Students collection size:', studentsSnapshot.docs.length);
+        
+        // Create a map of user data from the 'users' collection
+        const usersMap = new Map();
+        usersSnapshot.docs.forEach(doc => {
+          const userData = doc.data();
+          usersMap.set(doc.id, {
+            id: doc.id,
+            displayName: userData.displayName || 'Unnamed Student',
+            email: userData.email || 'No email',
+            photoURL: userData.photoURL,
+            createdAt: userData.createdAt,
+            lastLogin: userData.lastLogin,
+            ...userData
+          });
         });
         
-        const studentsData: Student[] = usersSnapshot.docs.map(doc => {
-          const userData = doc.data();
-          const studentData = studentsMap.get(doc.id) || {};
+        // Merge with student data from 'students' collection
+        const studentsMap = new Map();
+        studentsSnapshot.docs.forEach(doc => {
+          const studentData = doc.data();
+          const userId = doc.id;
+          const userData = usersMap.get(userId) || {};
           
-          const xp = studentData.xp || 0;
-          const calculatedLevel = getLevelFromXP(xp);
+          const mergedData = {
+            id: userId,
+            ...userData,
+            ...studentData,
+            displayName: studentData.displayName || userData.displayName || 'Unnamed Student',
+            email: studentData.email || userData.email || 'No email',
+            photoURL: studentData.photoURL || userData.photoURL,
+            xp: studentData.xp || 0,
+            powerPoints: studentData.powerPoints || 0,
+            challenges: studentData.challenges || {},
+          };
+          
+          studentsMap.set(userId, mergedData);
+        });
+        
+        // Add any users that don't have student records yet
+        usersMap.forEach((userData, userId) => {
+          if (!studentsMap.has(userId)) {
+            console.log('ClassroomManagement: Adding user without student record:', userId, userData);
+            studentsMap.set(userId, {
+              ...userData,
+              xp: 0,
+              powerPoints: 0,
+              challenges: {}
+            });
+          }
+        });
+        
+        const studentsData: Student[] = Array.from(studentsMap.values()).map(user => {
+          const calculatedLevel = getLevelFromXP(user.xp || 0);
           
           return {
-            id: doc.id,
-            displayName: studentData.displayName || userData.displayName || userData.email?.split('@')[0] || 'Unknown',
-            email: userData.email || '',
-            photoURL: userData.photoURL,
+            id: user.id,
+            displayName: user.displayName || user.email?.split('@')[0] || 'Unknown',
+            email: user.email || '',
+            photoURL: user.photoURL,
             level: calculatedLevel,
-            xp: xp
+            xp: user.xp || 0,
+            powerPoints: user.powerPoints || 0
           };
         });
+        
+        console.log('ClassroomManagement: Fetched students:', studentsData.length);
+        console.log('ClassroomManagement: Sample students:', studentsData.slice(0, 5));
+        
         setStudents(studentsData);
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -257,9 +309,17 @@ const ClassroomManagement: React.FC = () => {
 
   const getAvailableStudents = (classroomId: string) => {
     const classroom = classrooms.find(c => c.id === classroomId);
-    if (!classroom) return students;
+    if (!classroom) {
+      console.log('ClassroomManagement: No classroom found, returning all students:', students.length);
+      return students;
+    }
     
-    return students.filter(student => !classroom.students.includes(student.id));
+    const availableStudents = students.filter(student => !classroom.students.includes(student.id));
+    console.log('ClassroomManagement: Available students for classroom', classroomId, ':', availableStudents.length);
+    console.log('ClassroomManagement: Classroom students:', classroom.students.length);
+    console.log('ClassroomManagement: Total students:', students.length);
+    
+    return availableStudents;
   };
 
   const clearOAuthCache = () => {
@@ -267,6 +327,40 @@ const ClassroomManagement: React.FC = () => {
     localStorage.removeItem('google_oauth_token_expiry');
     setGoogleAuthToken('');
     console.log('OAuth cache cleared');
+  };
+
+  // Add/subtract Power Points
+  const adjustPowerPoints = async (studentId: string, delta: number) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+    const newPP = Math.max(0, (student.powerPoints || 0) + delta);
+    const studentRef = doc(db, 'students', studentId);
+    await updateDoc(studentRef, { powerPoints: newPP });
+    setStudents(prev =>
+      prev.map(s =>
+        s.id === studentId ? { ...s, powerPoints: newPP } : s
+      )
+    );
+  };
+
+  // Set Power Points to absolute value
+  const setPowerPoints = async (studentId: string, amount: number) => {
+    console.log('Setting PP for student:', studentId, 'to amount:', amount);
+    const student = students.find(s => s.id === studentId);
+    if (!student) {
+      console.log('Student not found:', studentId);
+      return;
+    }
+    const newPP = Math.max(0, amount);
+    console.log('New PP value:', newPP);
+    const studentRef = doc(db, 'students', studentId);
+    await updateDoc(studentRef, { powerPoints: newPP });
+    setStudents(prev =>
+      prev.map(s =>
+        s.id === studentId ? { ...s, powerPoints: newPP } : s
+      )
+    );
+    console.log('PP updated successfully');
   };
 
   // Google Classroom API functions
@@ -727,6 +821,21 @@ const ClassroomManagement: React.FC = () => {
                   👥 Add Students
                 </button>
                 <button
+                  onClick={() => setShowClassPPView(classroom.id)}
+                  style={{
+                    backgroundColor: '#8b5cf6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  ⚡ View PP
+                </button>
+                <button
                   onClick={() => {
                     setGoogleImportTargetClassroom(classroom.id);
                     setShowGoogleImportModal(true);
@@ -830,8 +939,93 @@ const ClassroomManagement: React.FC = () => {
                           <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937' }}>
                             {student.displayName}
                           </div>
-                          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                          <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
                             Level {student.level} • {student.xp} XP
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#1f2937' }}>
+                              {student.powerPoints || 0} PP
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.25rem' }}>
+                              <button
+                                onClick={() => adjustPowerPoints(student.id, 1)}
+                                style={{
+                                  backgroundColor: '#10b981',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.125rem 0.375rem',
+                                  cursor: 'pointer',
+                                  fontSize: '0.625rem',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                +
+                              </button>
+                              <button
+                                onClick={() => adjustPowerPoints(student.id, -1)}
+                                style={{
+                                  backgroundColor: '#dc2626',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.125rem 0.375rem',
+                                  cursor: 'pointer',
+                                  fontSize: '0.625rem',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                -
+                              </button>
+                            </div>
+                            <input
+                              type="number"
+                              value={ppAmount[student.id] || ''}
+                              onChange={(e) => setPPAmount(prev => ({ 
+                                ...prev, 
+                                [student.id]: e.target.value ? parseInt(e.target.value) : undefined 
+                              }))}
+                              onKeyPress={(e) => {
+                                if (e.key === 'Enter') {
+                                  const amount = ppAmount[student.id];
+                                  if (amount !== undefined && amount !== 0) {
+                                    setPowerPoints(student.id, amount);
+                                    setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                  }
+                                }
+                              }}
+                              style={{
+                                width: '50px',
+                                padding: '0.125rem 0.25rem',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.625rem',
+                                textAlign: 'center'
+                              }}
+                              placeholder="Set"
+                            />
+                            <button
+                              onClick={() => {
+                                const amount = ppAmount[student.id];
+                                if (amount !== undefined && amount !== 0) {
+                                  setPowerPoints(student.id, amount);
+                                  setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                }
+                              }}
+                              disabled={!ppAmount[student.id] || ppAmount[student.id] === 0}
+                              style={{
+                                backgroundColor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? '#3b82f6' : '#9ca3af',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.25rem',
+                                padding: '0.125rem 0.375rem',
+                                cursor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? 'pointer' : 'not-allowed',
+                                fontSize: '0.625rem',
+                                fontWeight: '500'
+                              }}
+                            >
+                              Set
+                            </button>
                           </div>
                         </div>
                         <button
@@ -1013,28 +1207,145 @@ const ClassroomManagement: React.FC = () => {
             padding: '2rem',
             maxWidth: '700px',
             width: '100%',
-            maxHeight: '85vh',
+            height: '80vh',
+            maxHeight: '600px',
+            minHeight: '500px',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
           }}>
             <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1f2937' }}>
-                Add Students to Classroom
-              </h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0, color: '#1f2937' }}>
+                  Add Students to Classroom
+                </h3>
+                <button
+                  onClick={() => {
+                    // Refresh students data (same logic as main fetch)
+                    const fetchData = async () => {
+                      try {
+                        const usersSnapshot = await getDocs(collection(db, 'users'));
+                        const studentsSnapshot = await getDocs(collection(db, 'students'));
+                        
+                        // Create a map of user data from the 'users' collection
+                        const usersMap = new Map();
+                        usersSnapshot.docs.forEach(doc => {
+                          const userData = doc.data();
+                          usersMap.set(doc.id, {
+                            id: doc.id,
+                            displayName: userData.displayName || 'Unnamed Student',
+                            email: userData.email || 'No email',
+                            photoURL: userData.photoURL,
+                            createdAt: userData.createdAt,
+                            lastLogin: userData.lastLogin,
+                            ...userData
+                          });
+                        });
+                        
+                        // Merge with student data from 'students' collection
+                        const studentsMap = new Map();
+                        studentsSnapshot.docs.forEach(doc => {
+                          const studentData = doc.data();
+                          const userId = doc.id;
+                          const userData = usersMap.get(userId) || {};
+                          
+                          const mergedData = {
+                            id: userId,
+                            ...userData,
+                            ...studentData,
+                            displayName: studentData.displayName || userData.displayName || 'Unnamed Student',
+                            email: studentData.email || userData.email || 'No email',
+                            photoURL: studentData.photoURL || userData.photoURL,
+                            xp: studentData.xp || 0,
+                            powerPoints: studentData.powerPoints || 0,
+                            challenges: studentData.challenges || {},
+                          };
+                          
+                          studentsMap.set(userId, mergedData);
+                        });
+                        
+                        // Add any users that don't have student records yet
+                        usersMap.forEach((userData, userId) => {
+                          if (!studentsMap.has(userId)) {
+                            studentsMap.set(userId, {
+                              ...userData,
+                              xp: 0,
+                              powerPoints: 0,
+                              challenges: {}
+                            });
+                          }
+                        });
+                        
+                        const studentsData: Student[] = Array.from(studentsMap.values()).map(user => {
+                          const calculatedLevel = getLevelFromXP(user.xp || 0);
+                          
+                          return {
+                            id: user.id,
+                            displayName: user.displayName || user.email?.split('@')[0] || 'Unknown',
+                            email: user.email || '',
+                            photoURL: user.photoURL,
+                            level: calculatedLevel,
+                            xp: user.xp || 0,
+                            powerPoints: user.powerPoints || 0
+                          };
+                        });
+                        
+                        console.log('ClassroomManagement: Refreshed students:', studentsData.length);
+                        setStudents(studentsData);
+                      } catch (error) {
+                        console.error('Error refreshing students:', error);
+                      }
+                    };
+                    fetchData();
+                  }}
+                  style={{
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    fontWeight: '500',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem'
+                  }}
+                >
+                  🔄 Refresh
+                </button>
+              </div>
               <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
                 Select students to add to this classroom. You can scroll to see all available students.
               </p>
+              {getAvailableStudents(showAddStudentsModal).length > 5 && (
+                <div style={{ 
+                  fontSize: '0.75rem', 
+                  color: '#9ca3af', 
+                  marginTop: '0.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}>
+                  <span>📜</span>
+                  <span>Scroll down to see more students</span>
+                </div>
+              )}
             </div>
             
             <div style={{ 
               flex: 1, 
-              overflow: 'auto', 
+              overflowY: 'auto', 
+              overflowX: 'hidden',
               marginBottom: '1.5rem',
               border: '1px solid #e5e7eb',
               borderRadius: '0.5rem',
-              backgroundColor: '#f9fafb'
+              backgroundColor: '#f9fafb',
+              minHeight: '300px',
+              maxHeight: '400px',
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e1 #f1f5f9'
             }}>
               {getAvailableStudents(showAddStudentsModal).length === 0 ? (
                 <div style={{ 
@@ -1130,6 +1441,8 @@ const ClassroomManagement: React.FC = () => {
                           <span>Level {student.level}</span>
                           <span>•</span>
                           <span>{student.xp} XP</span>
+                          <span>•</span>
+                          <span>{student.powerPoints || 0} PP</span>
                         </div>
                       </div>
                       {selectedStudents.includes(student.id) && (
@@ -1633,6 +1946,342 @@ const ClassroomManagement: React.FC = () => {
                   Import {googleStudents.length} Students
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Class Power Points View Modal */}
+      {showClassPPView && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '0.5rem'
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            width: '95vw',
+            height: '95vh',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0, color: '#1f2937' }}>
+                  ⚡ Class Power Points Overview
+                </h3>
+                <button
+                  onClick={() => setShowClassPPView(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '1.5rem',
+                    cursor: 'pointer',
+                    color: '#6b7280',
+                    padding: '0.25rem'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
+                {classrooms.find(c => c.id === showClassPPView)?.name} - Manage Power Points for all students
+              </p>
+            </div>
+            
+            <div style={{ 
+              flex: 1, 
+              overflowY: 'auto', 
+              overflowX: 'hidden',
+              marginBottom: '1.5rem',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.5rem',
+              backgroundColor: '#f9fafb'
+            }}>
+              {(() => {
+                const classroom = classrooms.find(c => c.id === showClassPPView);
+                if (!classroom) return null;
+                
+                const classStudents = classroom.students.map(studentId => 
+                  students.find(s => s.id === studentId)
+                ).filter(Boolean) as Student[];
+                
+                if (classStudents.length === 0) {
+                  return (
+                    <div style={{ 
+                      color: '#9ca3af', 
+                      textAlign: 'center', 
+                      padding: '3rem 2rem',
+                      backgroundColor: 'white',
+                      margin: '1rem',
+                      borderRadius: '0.5rem',
+                      border: '1px solid #e5e7eb'
+                    }}>
+                      <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>👥</div>
+                      <p style={{ fontSize: '1rem', fontWeight: '500', marginBottom: '0.5rem' }}>
+                        No students in this class
+                      </p>
+                      <p style={{ fontSize: '0.875rem', margin: 0 }}>
+                        Add students to this classroom to manage their Power Points.
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Sort students by PP (highest first)
+                const sortedStudents = [...classStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
+                const totalPP = classStudents.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
+                const averagePP = classStudents.length > 0 ? Math.round(totalPP / classStudents.length) : 0;
+                
+                return (
+                  <div style={{ padding: '1rem' }}>
+                    {/* Class Statistics */}
+                    <div style={{
+                      backgroundColor: 'white',
+                      borderRadius: '0.5rem',
+                      padding: '1rem',
+                      marginBottom: '1rem',
+                      border: '1px solid #e5e7eb',
+                      display: 'flex',
+                      justifyContent: 'space-around',
+                      alignItems: 'center',
+                      minHeight: '80px'
+                    }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
+                          {classStudents.length}
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          Total Students
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+                          {totalPP}
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          Total PP
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#10b981' }}>
+                          {averagePP}
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          Average PP
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Students List */}
+                    <div style={{ 
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                      gap: '1rem',
+                      maxHeight: 'calc(95vh - 200px)',
+                      overflowY: 'auto',
+                      paddingRight: '0.5rem'
+                    }}>
+                      {sortedStudents.map((student, index) => (
+                        <div key={student.id} style={{
+                          backgroundColor: 'white',
+                          borderRadius: '0.5rem',
+                          padding: '0.75rem',
+                          border: '1px solid #e5e7eb',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          position: 'relative',
+                          minHeight: '120px'
+                        }}>
+                          {/* Rank Badge */}
+                          <div style={{
+                            position: 'absolute',
+                            top: '0.5rem',
+                            right: '0.5rem',
+                            backgroundColor: index === 0 ? '#fbbf24' : index === 1 ? '#9ca3af' : index === 2 ? '#f59e0b' : '#e5e7eb',
+                            color: index < 3 ? 'white' : '#6b7280',
+                            borderRadius: '50%',
+                            width: '24px',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            {index + 1}
+                          </div>
+                          
+                          <img
+                            src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName)}&background=4f46e5&color=fff&size=40`}
+                            alt={student.displayName}
+                            style={{
+                              width: '40px',
+                              height: '40px',
+                              borderRadius: '50%',
+                              objectFit: 'cover',
+                              border: '2px solid #e5e7eb'
+                            }}
+                          />
+                          
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '1rem', fontWeight: '600', color: '#1f2937', marginBottom: '0.25rem' }}>
+                              {student.displayName}
+                            </div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                              {student.email}
+                            </div>
+                            <div style={{ 
+                              display: 'flex', 
+                              gap: '1rem',
+                              fontSize: '0.75rem',
+                              color: '#9ca3af',
+                              marginBottom: '0.5rem'
+                            }}>
+                              <span>Level {student.level}</span>
+                              <span>•</span>
+                              <span>{student.xp} XP</span>
+                            </div>
+                            
+                            {/* PP Management */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ 
+                                fontSize: '1rem', 
+                                fontWeight: 'bold', 
+                                color: '#8b5cf6',
+                                minWidth: '60px'
+                              }}>
+                                {student.powerPoints || 0} PP
+                              </span>
+                              <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                <button
+                                  onClick={() => adjustPowerPoints(student.id, 1)}
+                                  style={{
+                                    backgroundColor: '#10b981',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '500'
+                                  }}
+                                >
+                                  +
+                                </button>
+                                <button
+                                  onClick={() => adjustPowerPoints(student.id, -1)}
+                                  style={{
+                                    backgroundColor: '#dc2626',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '500'
+                                  }}
+                                >
+                                  -
+                                </button>
+                              </div>
+                              <input
+                                type="number"
+                                value={ppAmount[student.id] || ''}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  const numValue = value === '' ? undefined : parseInt(value);
+                                  setPPAmount(prev => ({ 
+                                    ...prev, 
+                                    [student.id]: numValue
+                                  }));
+                                }}
+                                onKeyPress={(e) => {
+                                  if (e.key === 'Enter') {
+                                    const amount = ppAmount[student.id];
+                                    if (amount !== undefined && amount >= 0) {
+                                      setPowerPoints(student.id, amount);
+                                      setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                    }
+                                  }
+                                }}
+                                style={{
+                                  width: '60px',
+                                  padding: '0.25rem 0.5rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.75rem',
+                                  textAlign: 'center'
+                                }}
+                                placeholder="Set"
+                              />
+                              <button
+                                onClick={() => {
+                                  const amount = ppAmount[student.id];
+                                  if (amount !== undefined && amount >= 0) {
+                                    setPowerPoints(student.id, amount);
+                                    setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
+                                  }
+                                }}
+                                disabled={ppAmount[student.id] === undefined}
+                                style={{
+                                  backgroundColor: ppAmount[student.id] !== undefined ? '#3b82f6' : '#9ca3af',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.25rem 0.5rem',
+                                  cursor: ppAmount[student.id] !== undefined ? 'pointer' : 'not-allowed',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                Set
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            
+            <div style={{ 
+              display: 'flex', 
+              gap: '1rem', 
+              justifyContent: 'flex-end',
+              paddingTop: '1rem',
+              borderTop: '1px solid #e5e7eb'
+            }}>
+              <button
+                onClick={() => setShowClassPPView(null)}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '600'
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
