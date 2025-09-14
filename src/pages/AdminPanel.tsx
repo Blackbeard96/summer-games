@@ -13,6 +13,10 @@ import { CHAPTERS } from '../types/chapters';
 import { useLevelUp } from '../context/LevelUpContext';
 import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
+import ManifestDiagnostic from '../components/ManifestDiagnostic';
+import TestAccountManager from '../components/TestAccountManager';
+import TestAccountLogin from '../components/TestAccountLogin';
+import FirebaseRulesChecker from '../components/FirebaseRulesChecker';
 
 interface ChallengeData {
   completed?: boolean;
@@ -52,6 +56,10 @@ const AdminPanel: React.FC = () => {
   const [selected, setSelected] = useState<string[]>([]);
   const [batchPP, setBatchPP] = useState(1);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [showManifestDiagnostic, setShowManifestDiagnostic] = useState(false);
+  const [showTestAccountManager, setShowTestAccountManager] = useState(false);
+  const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
+  const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
@@ -1305,6 +1313,66 @@ const AdminPanel: React.FC = () => {
             }}
           >
             Refresh Data
+          </button>
+          <button
+            onClick={() => setShowManifestDiagnostic(true)}
+            style={{
+              backgroundColor: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            🔍 Manifest Diagnostic
+          </button>
+          <button
+            onClick={() => setShowTestAccountManager(true)}
+            style={{
+              backgroundColor: '#8b5cf6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            🧪 Test Account Manager
+          </button>
+          <button
+            onClick={() => setShowTestAccountLogin(true)}
+            style={{
+              backgroundColor: '#f59e0b',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            🎮 Test Account Login
+          </button>
+          <button
+            onClick={() => setShowFirebaseRulesChecker(true)}
+            style={{
+              backgroundColor: '#dc2626',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem'
+            }}
+          >
+            🔐 Firebase Rules Checker
           </button>
           <button
             onClick={migrateUserNames}
@@ -2964,6 +3032,30 @@ const AdminPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Manifest Diagnostic Modal */}
+      <ManifestDiagnostic
+        isOpen={showManifestDiagnostic}
+        onClose={() => setShowManifestDiagnostic(false)}
+      />
+
+      {/* Test Account Manager Modal */}
+      <TestAccountManager
+        isOpen={showTestAccountManager}
+        onClose={() => setShowTestAccountManager(false)}
+      />
+
+      {/* Test Account Login Modal */}
+      <TestAccountLogin
+        isOpen={showTestAccountLogin}
+        onClose={() => setShowTestAccountLogin(false)}
+      />
+
+      {/* Firebase Rules Checker Modal */}
+      <FirebaseRulesChecker
+        isOpen={showFirebaseRulesChecker}
+        onClose={() => setShowFirebaseRulesChecker(false)}
+      />
     </div>
   );
 };

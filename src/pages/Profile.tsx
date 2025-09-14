@@ -299,6 +299,7 @@ const Profile = () => {
               moves={moves}
               badges={badges}
               xp={userData?.xp || 0}
+              onManifestReselect={() => setShowManifestSelection(true)}
             />
           </div>
           
@@ -393,6 +394,28 @@ const Profile = () => {
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
                     </div>
+                    {currentManifest !== 'None' && (
+                      <div style={{ margin: '0.5rem 0' }}>
+                        <button
+                          onClick={() => setShowManifestSelection(true)}
+                          style={{
+                            backgroundColor: '#8b5cf6',
+                            color: 'white',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.375rem',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '0.875rem',
+                            fontWeight: '500',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                          }}
+                        >
+                          🔄 Re-select Manifest
+                        </button>
+                      </div>
+                    )}
                     {userData?.rival && (
                       <div style={{ 
                         margin: '0.5rem 0', 

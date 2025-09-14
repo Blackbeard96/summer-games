@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import StoryChallenges from '../components/StoryChallenges';
 import ManifestChallenges from '../components/ManifestChallenges';
 import RecentCompletions from '../components/RecentCompletions';
 import ManifestSelection from '../components/ManifestSelection';
+import ManifestDiagnostic from '../components/ManifestDiagnostic';
 
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
@@ -14,6 +15,7 @@ const Dashboard = () => {
   const { currentUser } = useAuth();
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
+  const [showManifestDiagnostic, setShowManifestDiagnostic] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -114,8 +116,15 @@ const Dashboard = () => {
         }
       } catch (error) {
         console.error('Dashboard: Error fetching manifest:', error);
-        // Even if there's an error, don't leave the user in loading state
-        setShowManifestSelection(true);
+        // Check if it's a permission error
+        if (error instanceof Error && error.message.includes('permission')) {
+          console.log('Dashboard: Permission error detected, showing manifest selection');
+          // For permission errors, show manifest selection to allow user to proceed
+          setShowManifestSelection(true);
+        } else {
+          // For other errors, still show manifest selection as fallback
+          setShowManifestSelection(true);
+        }
       } finally {
         console.log('Dashboard: Setting loading to false');
         clearTimeout(timeoutId);
@@ -144,24 +153,27 @@ const Dashboard = () => {
     };
 
     try {
-      // Save to students collection (primary)
+      // Save to students collection (primary) using setDoc with merge to handle missing documents
       const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, { manifest: newPlayerManifest });
+      await setDoc(studentRef, { manifest: newPlayerManifest }, { merge: true });
       
       // Also save to users collection for consistency with challenge system
       const userRef = doc(db, 'users', currentUser.uid);
-      await updateDoc(userRef, { manifest: newPlayerManifest });
+      await setDoc(userRef, { manifest: newPlayerManifest }, { merge: true });
       
       setPlayerManifest(newPlayerManifest);
       setShowManifestSelection(false);
     } catch (error) {
       console.error('Error setting manifest:', error);
-      alert('Failed to set manifest. Please try again.');
+      if (error instanceof Error && error.message.includes('permission')) {
+        alert('Permission error: Please check your Firebase security rules. Contact admin if this persists.');
+      } else {
+        alert('Failed to set manifest. Please try again.');
+      }
     }
   };
 
   if (loading) {
-    console.log('Dashboard: Rendering loading screen');
     return (
       <div style={{ 
         padding: isMobile ? '1rem' : '1.5rem', 
@@ -171,34 +183,100 @@ const Dashboard = () => {
         alignItems: 'center',
         justifyContent: 'center'
       }}>
-        <div>
-          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⚡</div>
-          <p style={{ fontSize: isMobile ? '1rem' : '1.1rem' }}>Loading your manifestation journey...</p>
-          <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
-            User: {currentUser ? currentUser.uid : 'Not authenticated'}
+        <div style={{ maxWidth: '400px' }}>
+          <div style={{ 
+            fontSize: '3rem', 
+            marginBottom: '1.5rem',
+            animation: 'pulse 2s infinite'
+          }}>
+            ⚡
+          </div>
+          <h2 style={{ 
+            fontSize: isMobile ? '1.25rem' : '1.5rem',
+            fontWeight: 'bold',
+            marginBottom: '1rem',
+            color: '#1f2937'
+          }}>
+            Loading Your Manifestation Journey
+          </h2>
+          <p style={{ 
+            fontSize: isMobile ? '1rem' : '1.1rem',
+            color: '#6b7280',
+            marginBottom: '1.5rem',
+            lineHeight: '1.6'
+          }}>
+            Connecting to Xiotein School and preparing your training grounds...
           </p>
+          
+          {/* Loading animation */}
+          <div style={{
+            width: '100%',
+            height: '4px',
+            backgroundColor: '#e5e7eb',
+            borderRadius: '2px',
+            marginBottom: '1.5rem',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              width: '100%',
+              height: '100%',
+              backgroundColor: '#4f46e5',
+              borderRadius: '2px',
+              animation: 'loading 2s ease-in-out infinite'
+            }}></div>
+          </div>
+          
           {currentUser && (
-            <button 
-              onClick={() => {
-                console.log('Dashboard: Force loading completion');
-                setLoading(false);
-                setShowManifestSelection(true);
-              }}
-              style={{
-                marginTop: '1rem',
-                padding: '0.5rem 1rem',
-                backgroundColor: '#4f46e5',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.375rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem'
-              }}
-            >
-              Continue Anyway
-            </button>
+            <div style={{ marginTop: '1.5rem' }}>
+              <p style={{ 
+                fontSize: '0.875rem', 
+                color: '#9ca3af', 
+                marginBottom: '1rem' 
+              }}>
+                Taking longer than expected?
+              </p>
+              <button 
+                onClick={() => {
+                  setLoading(false);
+                  setShowManifestSelection(true);
+                }}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  backgroundColor: '#4f46e5',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#4338ca';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = '#4f46e5';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }}
+              >
+                Continue to Manifest Selection
+              </button>
+            </div>
           )}
         </div>
+        
+        <style>{`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+          }
+          @keyframes loading {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(0%); }
+            100% { transform: translateX(100%); }
+          }
+        `}</style>
       </div>
     );
   }
@@ -214,18 +292,35 @@ const Dashboard = () => {
         textAlign: 'center', 
         marginBottom: isMobile ? '1.5rem' : '2rem' 
       }}>
-        <h1 style={{ 
-          fontSize: isMobile ? '1.875rem' : '2.5rem', 
-          fontWeight: 'bold', 
-          marginBottom: isMobile ? '0.75rem' : '1rem',
-          background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 50%, #34d399 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          lineHeight: 1.2
-        }}>
-          Welcome to Xiotein School
-        </h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isMobile ? '0.75rem' : '1rem' }}>
+          <h1 style={{ 
+            fontSize: isMobile ? '1.875rem' : '2.5rem', 
+            fontWeight: 'bold', 
+            margin: 0,
+            background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 50%, #34d399 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+            lineHeight: 1.2
+          }}>
+            Welcome to Xiotein School
+          </h1>
+          <button
+            onClick={() => setShowManifestDiagnostic(true)}
+            style={{
+              backgroundColor: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: isMobile ? '0.5rem 1rem' : '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: isMobile ? '0.75rem' : '0.875rem'
+            }}
+          >
+            🔍 Diagnostic
+          </button>
+        </div>
         <p style={{ 
           fontSize: isMobile ? '1rem' : '1.1rem', 
           color: '#6b7280', 
@@ -237,6 +332,57 @@ const Dashboard = () => {
           You have been chosen to manifest your truth. Complete challenges to unlock your potential and advance through the chapters of your story.
         </p>
       </div>
+      
+      {/* Current Manifest Info */}
+      {playerManifest && (
+        <div style={{ 
+          backgroundColor: 'white', 
+          borderRadius: '0.75rem', 
+          padding: isMobile ? '1rem' : '1.5rem', 
+          marginBottom: isMobile ? '1.5rem' : '2rem', 
+          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
+          border: '1px solid #e5e7eb',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div>
+            <h3 style={{ 
+              fontSize: isMobile ? '1.125rem' : '1.25rem', 
+              fontWeight: 'bold', 
+              marginBottom: '0.5rem', 
+              color: '#4f46e5' 
+            }}>
+              Current Manifest: {MANIFESTS.find(m => m.id === playerManifest.manifestId)?.name || 'Unknown'}
+            </h3>
+            <p style={{ 
+              color: '#6b7280', 
+              fontSize: isMobile ? '0.875rem' : '1rem',
+              margin: 0
+            }}>
+              Level {playerManifest.currentLevel} • {playerManifest.xp} XP
+            </p>
+          </div>
+          <button
+            onClick={() => setShowManifestSelection(true)}
+            style={{
+              backgroundColor: '#8b5cf6',
+              color: 'white',
+              padding: '0.5rem 1rem',
+              borderRadius: '0.375rem',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            🔄 Re-select
+          </button>
+        </div>
+      )}
       
       {/* Manifest Selection Prompt */}
       {!playerManifest && (
@@ -319,6 +465,12 @@ const Dashboard = () => {
           onClose={() => setShowManifestSelection(false)}
         />
       )}
+
+      {/* Manifest Diagnostic Modal */}
+      <ManifestDiagnostic
+        isOpen={showManifestDiagnostic}
+        onClose={() => setShowManifestDiagnostic(false)}
+      />
     </div>
   );
 };

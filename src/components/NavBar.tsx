@@ -45,7 +45,7 @@ interface Notification {
 }
 
 const NavBar = () => {
-  const { currentUser, logout } = useAuth();
+  const { currentUser, logout, currentRole } = useAuth();
   const navigate = useNavigate();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -79,6 +79,8 @@ const NavBar = () => {
   };
 
   const displayName = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student';
+  const roleIndicator = currentRole === 'admin' ? '👑' : currentRole === 'test' ? '🧪' : '';
+  const displayNameWithRole = roleIndicator ? `${roleIndicator} ${displayName}` : displayName;
 
   // Fetch notifications
   useEffect(() => {
@@ -527,7 +529,7 @@ const NavBar = () => {
                 fontWeight: '500',
                 color: 'white'
               }}>
-                {isMobile ? displayName.substring(0, 8) + '...' : displayName}
+                {isMobile ? displayNameWithRole.substring(0, 8) + '...' : displayNameWithRole}
               </span>
               <button
                 onClick={handleLogout}

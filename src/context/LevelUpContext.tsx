@@ -56,7 +56,7 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
     });
 
     return () => unsubscribe();
-  }, [currentUser, currentXP]);
+  }, [currentUser]); // Removed currentXP to prevent infinite loops
 
   const handleCloseNotification = () => {
     setShowNotification(false);

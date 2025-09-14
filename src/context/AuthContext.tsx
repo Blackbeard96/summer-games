@@ -33,6 +33,8 @@ interface AuthContextType {
   currentUser: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  currentRole: 'admin' | 'test' | 'user';
+  testAccountData: any | null;
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -42,12 +44,17 @@ interface AuthContextType {
   updateUserPassword: (newPassword: string) => Promise<void>;
   updateUserEmail: (newEmail: string) => Promise<void>;
   deleteUserAccount: () => Promise<void>;
+  switchToTestAccount: (testAccountId: string) => Promise<void>;
+  switchToAdmin: () => void;
+  isAdmin: () => boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
   currentUser: null, 
   userProfile: null,
   loading: true,
+  currentRole: 'user',
+  testAccountData: null,
   signup: async () => {},
   login: async () => {},
   loginWithGoogle: async () => {},
@@ -56,7 +63,10 @@ const AuthContext = createContext<AuthContextType>({
   updateUserProfile: async () => {},
   updateUserPassword: async () => {},
   updateUserEmail: async () => {},
-  deleteUserAccount: async () => {}
+  deleteUserAccount: async () => {},
+  switchToTestAccount: async () => {},
+  switchToAdmin: () => {},
+  isAdmin: () => false
 });
 
 export function useAuth() {
@@ -67,6 +77,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [currentRole, setCurrentRole] = useState<'admin' | 'test' | 'user'>('user');
+  const [testAccountData, setTestAccountData] = useState<any | null>(null);
+  const [originalUser, setOriginalUser] = useState<User | null>(null);
+  const [originalProfile, setOriginalProfile] = useState<UserProfile | null>(null);
 
   // Fetch user profile from Firestore
   const fetchUserProfile = async (user: User) => {
@@ -265,10 +279,95 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await deleteUser(currentUser);
   };
 
+  // Check if current user is admin
+  const isAdmin = (): boolean => {
+    if (!currentUser) return false;
+    return currentUser.email === 'eddymosley@compscihigh.org' || 
+           currentUser.email === 'admin@mstgames.net' ||
+           currentUser.email === 'edm21179@gmail.com' ||
+           (currentUser.email?.includes('eddymosley') ?? false) ||
+           (currentUser.email?.includes('admin') ?? false) ||
+           (currentUser.email?.includes('mstgames') ?? false);
+  };
+
+  // Switch to test account
+  const switchToTestAccount = async (testAccountId: string) => {
+    if (!isAdmin()) {
+      throw new Error('Only admins can switch to test accounts');
+    }
+
+    try {
+      // Store original user data
+      setOriginalUser(currentUser);
+      setOriginalProfile(userProfile);
+
+      // Fetch test account data
+      const testUserRef = doc(db, 'users', testAccountId);
+      const testStudentRef = doc(db, 'students', testAccountId);
+      
+      const [testUserDoc, testStudentDoc] = await Promise.all([
+        getDoc(testUserRef),
+        getDoc(testStudentRef)
+      ]);
+
+      const testUserData = testUserDoc.exists() ? testUserDoc.data() : null;
+      const testStudentData = testStudentDoc.exists() ? testStudentDoc.data() : null;
+
+      // Create a mock user object for the test account
+      const mockTestUser = {
+        uid: testAccountId,
+        email: testUserData?.email || 'test@mstgames.net',
+        displayName: testUserData?.displayName || 'Test Student',
+        photoURL: testUserData?.photoURL || null,
+        emailVerified: true,
+        isAnonymous: false,
+        metadata: {},
+        providerData: [],
+        refreshToken: '',
+        tenantId: null,
+        phoneNumber: null,
+        providerId: 'firebase',
+        delete: async () => {},
+        getIdToken: async () => '',
+        getIdTokenResult: async () => ({} as any),
+        reload: async () => {},
+        toJSON: () => ({})
+      } as unknown as User;
+
+      // Set test account as current user
+      setCurrentUser(mockTestUser);
+      setUserProfile(testUserData as UserProfile);
+      setTestAccountData(testStudentData);
+      setCurrentRole('test');
+
+      console.log('Switched to test account:', testAccountId);
+    } catch (error) {
+      console.error('Error switching to test account:', error);
+      throw error;
+    }
+  };
+
+  // Switch back to admin
+  const switchToAdmin = () => {
+    if (!originalUser) {
+      throw new Error('No original user data found');
+    }
+
+    // Restore original user data
+    setCurrentUser(originalUser);
+    setUserProfile(originalProfile);
+    setTestAccountData(null);
+    setCurrentRole('admin');
+
+    console.log('Switched back to admin account');
+  };
+
   const value = {
     currentUser,
     userProfile,
     loading,
+    currentRole,
+    testAccountData,
     signup,
     login,
     loginWithGoogle,
@@ -277,7 +376,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateUserProfile,
     updateUserPassword,
     updateUserEmail,
-    deleteUserAccount
+    deleteUserAccount,
+    switchToTestAccount,
+    switchToAdmin,
+    isAdmin
   };
 
   return (

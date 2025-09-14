@@ -1,129 +1,103 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow authenticated users to read and write all user data (for admin panel)
-    match /users/{document} {
-      allow read, write: if request.auth != null;
+    // Users collection - allow users to read/write their own documents
+    match /users/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write all student data (for admin panel and vault siege)
-    match /students/{document} {
-      allow read, write: if request.auth != null;
+    // Students collection - allow users to read/write their own documents
+    match /students/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write their own subcollections
-    match /students/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // Test account access - allow admin access to test accounts
+    match /users/test-account-001 {
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write battle lobbies
-    match /battleLobbies/{document} {
-      allow read, write: if request.auth != null;
+    match /students/test-account-001 {
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write their own battle moves
-    match /battleMoves/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // Challenge submissions - allow users to read/write their own submissions
+    match /challengeSubmissions/{submissionId} {
+      allow read, write: if request.auth != null && 
+        (resource.data.userId == request.auth.uid || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      
+      // Allow creation of new submissions
+      allow create: if request.auth != null && 
+        (request.auth.uid != null ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write their own battle action cards
-    match /battleActionCards/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Allow authenticated users to read and write their own manifest progress
-match /manifestProgress/{userId} {
-  allow read, write: if request.auth != null && request.auth.uid == userId;
-}
-
-// Allow authenticated users to read and write their own elemental progress
-match /elementalProgress/{userId} {
-  allow read, write: if request.auth != null && request.auth.uid == userId;
-}
-    
-    // Allow authenticated users to read and write their own vaults
-    match /vaults/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Allow authenticated users to read all vaults for vault siege functionality
-    match /vaults/{document} {
+    // Chapter classroom mappings - allow admins to manage
+    match /chapterClassroomMap/{mappingId} {
       allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to write to target vaults for vault siege attacks
-    match /vaults/{document} {
-      allow write: if request.auth != null;
+    // Notifications - allow users to read their own notifications
+    match /notifications/{notificationId} {
+      allow read, write: if request.auth != null && 
+        (resource.data.userId == request.auth.uid || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      
+      // Allow creation of new notifications
+      allow create: if request.auth != null && 
+        (request.auth.uid != null ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write their own offline moves
-    match /offlineMoves/{document} {
-      allow read, write: if request.auth != null;
+    // Student notifications subcollection - allow users to read their own notifications
+    match /students/{userId}/notifications/{notificationId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      
+      // Allow creation of new notifications
+      allow create: if request.auth != null && 
+        (request.auth.uid == userId ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Allow authenticated users to read and write vault siege attacks
-    match /vaultSiegeAttacks/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write battle states
-    match /battleStates/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write challenge submissions
-    match /challengeSubmissions/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write squads
-    match /squads/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write squad members
-    match /squadMembers/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write invitations
-    match /invitations/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write tutorials
-    match /tutorials/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write notifications
-    match /notifications/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write badges
-    match /badges/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write classrooms
-    match /classrooms/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write challenge completions
-    match /challengeCompletions/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write chapter classroom mappings
-    match /chapterClassroomMap/{document} {
-      allow read, write: if request.auth != null;
-    }
-    
-    // Allow authenticated users to read and write squad invitations
-    match /squadInvitations/{document} {
-      allow read, write: if request.auth != null;
+    // Badges collection - allow admins to manage badges
+    match /badges/{badgeId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
     // Default rule - deny all other access
@@ -131,4 +105,4 @@ match /elementalProgress/{userId} {
       allow read, write: if false;
     }
   }
-} 
+}

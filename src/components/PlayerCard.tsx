@@ -14,6 +14,7 @@ interface PlayerCardProps {
   moves?: Array<{ name: string; description: string; icon: string }>;
   badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
   xp?: number; // <-- Add xp prop
+  onManifestReselect?: () => void; // <-- Add manifest re-selection callback
 }
 
 const styleIcons: Record<string, string> = {
@@ -72,6 +73,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
   moves = [],
   badges = [],
   xp = 0, // <-- Default to 0
+  onManifestReselect,
 }) => {
   const [flipped, setFlipped] = useState(false);
 
@@ -171,6 +173,30 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
               <span style={{ fontWeight: 'bold', color: '#10b981', fontSize: 14 }}>Element: {style}</span>
             </div>
           </div>
+          {/* Re-select Manifest Button */}
+          {onManifestReselect && manifest !== 'None' && (
+            <div style={{ marginBottom: 12, textAlign: 'center' }}>
+              <button
+                onClick={onManifestReselect}
+                style={{
+                  backgroundColor: '#8b5cf6',
+                  color: 'white',
+                  padding: '0.375rem 0.75rem',
+                  borderRadius: '0.25rem',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  margin: '0 auto'
+                }}
+              >
+                🔄 Re-select
+              </button>
+            </div>
+          )}
           {/* Divider */}
           <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
           {/* Moves Section */}

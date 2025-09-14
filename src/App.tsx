@@ -14,6 +14,7 @@ import NavBar from './components/NavBar';
 import FirebaseStatus from './components/FirebaseStatus';
 import TutorialManager from './components/TutorialManager';
 import InvitationManager from './components/InvitationManager';
+import NavigationDebugger from './components/NavigationDebugger';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LevelUpProvider } from './context/LevelUpContext';
 import { BattleProvider } from './context/BattleContext';
@@ -28,7 +29,15 @@ import Battle from './pages/Battle';
 const ProtectedAdminRoute = () => {
   const { currentUser } = useAuth();
   
-  if (!currentUser || currentUser.email !== 'edm21179@gmail.com') {
+  // Check if current user is admin (same logic as other components)
+  const isAdmin = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                  currentUser?.email === 'admin@mstgames.net' ||
+                  currentUser?.email === 'edm21179@gmail.com' ||
+                  currentUser?.email?.includes('eddymosley') ||
+                  currentUser?.email?.includes('admin') ||
+                  currentUser?.email?.includes('mstgames');
+  
+  if (!currentUser || !isAdmin) {
     return <Navigate to="/" replace />;
   }
   
@@ -58,6 +67,7 @@ function App() {
             <TutorialManager />
             <InvitationManager />
             {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
+            <NavigationDebugger />
           </Router>
           </StoryProvider>
         </BattleProvider>
