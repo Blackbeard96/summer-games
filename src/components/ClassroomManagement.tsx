@@ -1004,40 +1004,87 @@ const ClassroomManagement: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          padding: '1rem'
         }}>
           <div style={{
             backgroundColor: 'white',
             borderRadius: '0.75rem',
             padding: '2rem',
-            maxWidth: '600px',
-            width: '90%',
-            maxHeight: '80vh',
+            maxWidth: '700px',
+            width: '100%',
+            maxHeight: '85vh',
             overflow: 'hidden',
             display: 'flex',
-            flexDirection: 'column'
+            flexDirection: 'column',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
           }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem' }}>
-              Add Students to Classroom
-            </h3>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1f2937' }}>
+                Add Students to Classroom
+              </h3>
+              <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
+                Select students to add to this classroom. You can scroll to see all available students.
+              </p>
+            </div>
             
-            <div style={{ flex: 1, overflow: 'auto', marginBottom: '1rem' }}>
+            <div style={{ 
+              flex: 1, 
+              overflow: 'auto', 
+              marginBottom: '1.5rem',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.5rem',
+              backgroundColor: '#f9fafb'
+            }}>
               {getAvailableStudents(showAddStudentsModal).length === 0 ? (
-                <p style={{ color: '#9ca3af', textAlign: 'center', padding: '2rem' }}>
-                  All students are already enrolled in this classroom.
-                </p>
+                <div style={{ 
+                  color: '#9ca3af', 
+                  textAlign: 'center', 
+                  padding: '3rem 2rem',
+                  backgroundColor: 'white',
+                  margin: '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #e5e7eb'
+                }}>
+                  <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>👥</div>
+                  <p style={{ fontSize: '1rem', fontWeight: '500', marginBottom: '0.5rem' }}>
+                    All students are already enrolled
+                  </p>
+                  <p style={{ fontSize: '0.875rem', margin: 0 }}>
+                    There are no available students to add to this classroom.
+                  </p>
+                </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '0.5rem',
+                  padding: '1rem'
+                }}>
                   {getAvailableStudents(showAddStudentsModal).map((student) => (
                     <label key={student.id} style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: '0.75rem',
-                      padding: '0.75rem',
+                      padding: '1rem',
                       border: '1px solid #e5e7eb',
-                      borderRadius: '0.375rem',
+                      borderRadius: '0.5rem',
                       cursor: 'pointer',
-                      backgroundColor: selectedStudents.includes(student.id) ? '#f0f9ff' : 'white'
+                      backgroundColor: selectedStudents.includes(student.id) ? '#eff6ff' : 'white',
+                      transition: 'all 0.2s ease',
+                      boxShadow: selectedStudents.includes(student.id) ? '0 2px 4px rgba(59, 130, 246, 0.1)' : '0 1px 2px rgba(0, 0, 0, 0.05)'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selectedStudents.includes(student.id)) {
+                        e.currentTarget.style.backgroundColor = '#f8fafc';
+                        e.currentTarget.style.borderColor = '#d1d5db';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!selectedStudents.includes(student.id)) {
+                        e.currentTarget.style.backgroundColor = 'white';
+                        e.currentTarget.style.borderColor = '#e5e7eb';
+                      }
                     }}>
                       <input
                         type="checkbox"
@@ -1049,67 +1096,127 @@ const ClassroomManagement: React.FC = () => {
                             setSelectedStudents(selectedStudents.filter(id => id !== student.id));
                           }
                         }}
-                        style={{ margin: 0 }}
-                      />
-                      <img
-                        src={student.photoURL || '/default-avatar.png'}
-                        alt={student.displayName}
-                        style={{
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
+                        style={{ 
+                          margin: 0,
+                          width: '18px',
+                          height: '18px',
+                          accentColor: '#3b82f6'
                         }}
                       />
-                      <div>
-                        <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937' }}>
+                      <img
+                        src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName)}&background=4f46e5&color=fff&size=40`}
+                        alt={student.displayName}
+                        style={{
+                          width: '40px',
+                          height: '40px',
+                          borderRadius: '50%',
+                          objectFit: 'cover',
+                          border: '2px solid #e5e7eb'
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '1rem', fontWeight: '600', color: '#1f2937', marginBottom: '0.25rem' }}>
                           {student.displayName}
                         </div>
-                        <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                          Level {student.level} • {student.xp} XP
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                          {student.email}
+                        </div>
+                        <div style={{ 
+                          display: 'flex', 
+                          gap: '1rem',
+                          fontSize: '0.75rem',
+                          color: '#9ca3af'
+                        }}>
+                          <span>Level {student.level}</span>
+                          <span>•</span>
+                          <span>{student.xp} XP</span>
                         </div>
                       </div>
+                      {selectedStudents.includes(student.id) && (
+                        <div style={{
+                          color: '#3b82f6',
+                          fontSize: '1.25rem',
+                          fontWeight: 'bold'
+                        }}>
+                          ✓
+                        </div>
+                      )}
                     </label>
                   ))}
                 </div>
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => {
-                  setShowAddStudentsModal(null);
-                  setSelectedStudents([]);
-                }}
-                style={{
-                  backgroundColor: '#6b7280',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  fontWeight: '600'
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => addStudentsToClassroom(showAddStudentsModal)}
-                disabled={selectedStudents.length === 0}
-                style={{
-                  backgroundColor: selectedStudents.length > 0 ? '#3b82f6' : '#9ca3af',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  cursor: selectedStudents.length > 0 ? 'pointer' : 'not-allowed',
-                  fontSize: '0.875rem',
-                  fontWeight: '600'
-                }}
-              >
-                Add {selectedStudents.length} Student{selectedStudents.length !== 1 ? 's' : ''}
-              </button>
+            <div style={{ 
+              display: 'flex', 
+              gap: '1rem', 
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              paddingTop: '1rem',
+              borderTop: '1px solid #e5e7eb'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                {selectedStudents.length > 0 && (
+                  <span>
+                    {selectedStudents.length} student{selectedStudents.length !== 1 ? 's' : ''} selected
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button
+                  onClick={() => {
+                    setShowAddStudentsModal(null);
+                    setSelectedStudents([]);
+                  }}
+                  style={{
+                    backgroundColor: '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#4b5563';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#6b7280';
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => addStudentsToClassroom(showAddStudentsModal)}
+                  disabled={selectedStudents.length === 0}
+                  style={{
+                    backgroundColor: selectedStudents.length > 0 ? '#3b82f6' : '#9ca3af',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '0.5rem',
+                    cursor: selectedStudents.length > 0 ? 'pointer' : 'not-allowed',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    transition: 'all 0.2s ease',
+                    opacity: selectedStudents.length > 0 ? 1 : 0.6
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedStudents.length > 0) {
+                      e.currentTarget.style.backgroundColor = '#2563eb';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (selectedStudents.length > 0) {
+                      e.currentTarget.style.backgroundColor = '#3b82f6';
+                    }
+                  }}
+                >
+                  Add {selectedStudents.length} Student{selectedStudents.length !== 1 ? 's' : ''}
+                </button>
+              </div>
             </div>
           </div>
         </div>
