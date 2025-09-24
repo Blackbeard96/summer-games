@@ -290,8 +290,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       let totalShieldDamage = 0;
       let allMessages: string[] = [];
       let usedMoves: string[] = [];
+      let overshieldBlocked = false;
 
       console.log('⚔️ Executing moves:', selectedMoves);
+      console.log('🚨 VAULT SIEGE ATTACK STARTING - This should appear in console!');
       // Execute each selected move
       for (const moveId of selectedMoves) {
         console.log('🔥 About to call executeVaultSiegeAttack with:', { moveId, selectedTarget });
@@ -301,6 +303,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           totalPPStolen += result.ppStolen || 0;
           totalXP += result.xpGained || 0;
           totalShieldDamage += result.shieldDamage || 0;
+          if (result.overshieldAbsorbed) {
+            overshieldBlocked = true;
+          }
           if (result.message) {
             allMessages.push(result.message);
             // Extract move name from the message (format: "Used MoveName - ...")
@@ -319,6 +324,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           totalPPStolen += result.ppStolen || 0;
           totalXP += result.xpGained || 0;
           totalShieldDamage += result.shieldDamage || 0;
+          if (result.overshieldAbsorbed) {
+            overshieldBlocked = true;
+          }
           if (result.message) {
             allMessages.push(result.message);
             // Extract action card name from the message (format: "Used CardName - ...")
@@ -356,15 +364,30 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         targetName: targetName
       });
       
-      if (totalPPStolen > 0 || totalXP > 0) {
+      if (overshieldBlocked) {
+        // Show overshield blocking message
+        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
+        alert(`✨ Attack blocked by overshield!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen}\n⚡ XP Earned: ${totalXP}\n🎯 Target: ${targetName}${movesUsedText}`);
+      } else if (totalPPStolen > 0 || totalXP > 0) {
         // Show detailed results with move names
         const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
         const resultMessage = `🎉 Attack Results:\n\n💰 PP Stolen: ${totalPPStolen}\n⚡ XP Earned: ${totalXP}\n🛡️ Shield Damage: ${totalShieldDamage}\n🎯 Target: ${targetName}${movesUsedText}`;
         alert(resultMessage);
       } else {
-        console.log('⚠️ Vault Siege completed but no gains - this might be because target has no PP to steal');
+        console.log('⚠️ Vault Siege completed but no gains - this might be because target has no PP to steal or attack was blocked');
         const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
-        alert(`⚠️ Attack completed against ${targetName}!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen} (target had no PP)\n⚡ XP Earned: ${totalXP}${movesUsedText}`);
+        
+        // Determine the reason for no gains
+        let reasonText = '';
+        if (overshieldBlocked) {
+          reasonText = '(blocked by overshield)';
+        } else if (totalPPStolen === 0) {
+          reasonText = '(target had no PP)';
+        } else {
+          reasonText = '(no damage dealt)';
+        }
+        
+        alert(`⚠️ Attack completed against ${targetName}!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen} ${reasonText}\n⚡ XP Earned: ${totalXP}${movesUsedText}`);
       }
 
       // Refresh vault data to show updated PP and XP
@@ -480,21 +503,6 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         color: 'black', // Ensure text is visible
         fontSize: '16px', // Ensure text size is readable
       }}>
-        {/* TEST ELEMENT - THIS SHOULD BE VERY VISIBLE */}
-        <div style={{
-          position: 'fixed',
-          top: '50px',
-          left: '50px',
-          background: 'purple',
-          color: 'white',
-          padding: '20px',
-          fontSize: '24px',
-          fontWeight: 'bold',
-          zIndex: 1000001,
-          border: '5px solid orange',
-        }}>
-          🚨 MODAL IS RENDERED! 🚨
-        </div>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
           <div>

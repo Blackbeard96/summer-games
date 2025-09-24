@@ -80,7 +80,7 @@ interface BattleContextType {
   joinBattle: (battleId: string) => Promise<void>;
   leaveBattle: (battleId: string) => Promise<void>;
   submitMove: (moveId: string, targetUserId?: string, actionCardId?: string) => Promise<void>;
-  executeVaultSiegeAttack: (moveId: string | null, targetUserId: string, actionCardId?: string) => Promise<{ success: boolean; message: string; ppStolen?: number; xpGained?: number; shieldDamage?: number } | undefined>;
+  executeVaultSiegeAttack: (moveId: string | null, targetUserId: string, actionCardId?: string) => Promise<{ success: boolean; message: string; ppStolen?: number; xpGained?: number; shieldDamage?: number; overshieldAbsorbed?: boolean } | undefined>;
   executePPRestore: () => Promise<{ success: boolean; restored?: number; totalStolen?: number; message?: string }>;
   
   // Offline Moves
@@ -146,6 +146,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             currentPP: playerPP,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+            overshield: 0,
             firewall: 10,
             lastUpgrade: new Date(),
             debtStatus: false,
@@ -308,6 +309,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             currentPP: 0,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+            overshield: 0,
             firewall: 10,
             lastUpgrade: new Date(),
             debtStatus: false,
@@ -332,6 +334,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           currentPP: 0,
           shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
           maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+          overshield: 0,
           firewall: 10,
           lastUpgrade: new Date(),
           debtStatus: false,
@@ -1570,8 +1573,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const executeVaultSiegeAttack = async (moveId: string | null, targetUserId: string, actionCardId?: string) => {
+    console.log('🚨🚨🚨 EXECUTE VAULT SIEGE ATTACK CALLED - THIS MUST APPEAR! 🚨🚨🚨');
     console.log('🔥 NEW CODE - executeVaultSiegeAttack called!');
     console.log('🔥 Early validation check:', { currentUser: !!currentUser, vault: !!vault });
+    console.log('🔥 Attack parameters:', { moveId, targetUserId, actionCardId });
     if (!currentUser || !vault) {
       console.log('🔥 Early return: No user or vault found');
       return { success: false, message: 'No user or vault found' };
@@ -1601,6 +1606,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       const targetVaultData = targetVaultDoc.data() as Vault;
+      console.log('🔥 Target vault data:', { 
+        overshield: targetVaultData.overshield, 
+        shieldStrength: targetVaultData.shieldStrength,
+        currentPP: targetVaultData.currentPP 
+      });
       
       // Also get target student data to compare
       const targetStudentRef = doc(db, 'students', targetUserId);
@@ -1773,9 +1783,47 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       console.log(`🔍 Shield damage after move and card processing: ${shieldDamage}`);
       
+      // Get player names for notifications and attack records
+      const attackerName = currentUser.displayName || 'Unknown';
+      const targetStudentDoc = await getDoc(doc(db, 'students', targetUserId));
+      const targetName = targetStudentDoc.exists() ? targetStudentDoc.data().displayName || 'Unknown' : 'Unknown';
+      
       // Apply damage to target vault
       const updates: Partial<Vault> = {};
       let shieldsCracked = false;
+      
+      // Check for overshield first
+      let overshieldAbsorbed = false;
+      if (targetVaultData.overshield > 0) {
+        // Overshield absorbs the entire attack
+        overshieldAbsorbed = true;
+        shieldDamage = 0; // No shield damage
+        ppStolen = 0; // No PP stolen
+        
+        // Reduce overshield by 1
+        const newOvershield = Math.max(0, targetVaultData.overshield - 1);
+        updates.overshield = newOvershield;
+        
+        console.log(`✨ Overshield absorbed attack! Original overshield: ${targetVaultData.overshield}, New overshield: ${newOvershield}`);
+        console.log(`🔍 Updates object:`, updates);
+        message = `Attack absorbed by overshield! (${newOvershield} overshield${newOvershield !== 1 ? 's' : ''} remaining)`;
+        
+        // Create notification for the target player about overshield usage
+        try {
+          await addDoc(collection(db, 'students', targetUserId, 'notifications'), {
+            type: 'overshield_used',
+            title: '🛡️ Overshield Activated!',
+            message: `Your overshield blocked an attack from ${attackerName}! (${newOvershield} overshield${newOvershield !== 1 ? 's' : ''} remaining)`,
+            attackerName: attackerName,
+            attackerId: currentUser.uid,
+            overshieldRemaining: newOvershield,
+            timestamp: serverTimestamp()
+          });
+          console.log(`📢 Created overshield notification for ${targetName}`);
+        } catch (notificationError) {
+          console.error('❌ Error creating overshield notification:', notificationError);
+        }
+      }
       
       if (shieldDamage > 0) {
         const originalShieldStrength = targetVaultData.shieldStrength;
@@ -1889,13 +1937,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (updatedVaultDoc.exists()) {
           const updatedVaultData = updatedVaultDoc.data() as Vault;
           console.log('Verified vault update - new shield strength:', updatedVaultData.shieldStrength);
+          console.log('Verified vault update - new overshield:', updatedVaultData.overshield);
         }
       }
       
-      // Get player names for the attack record
-      const attackerName = currentUser.displayName || 'Unknown';
-      const targetStudentDoc = await getDoc(doc(db, 'students', targetUserId));
-      const targetName = targetStudentDoc.exists() ? targetStudentDoc.data().displayName || 'Unknown' : 'Unknown';
+      // Player names already retrieved above for notifications
       
       // Log PP transfer details if PP was stolen
       if (ppStolen > 0) {
@@ -1928,10 +1974,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Award XP for shield damage (even if no PP was stolen)
       console.log(`🔍 Final shield damage value before XP check: ${shieldDamage}`);
-      if (shieldDamage > 0) {
+      if (shieldDamage > 0 && !overshieldAbsorbed) {
         const shieldXpReward = Math.min(shieldDamage, 3); // 1-3 XP for shield damage
         console.log(`🛡️ Awarding ${shieldXpReward} XP for shield damage: ${shieldDamage}`);
         await awardBattleXp(shieldXpReward, `Dealt ${shieldDamage} shield damage to ${targetName}`);
+      } else if (overshieldAbsorbed) {
+        console.log('✨ Attack absorbed by overshield, no XP awarded');
       } else {
         console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
       }
@@ -1954,14 +2002,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ppStolen,
         shieldDamage,
         message,
+        overshieldAbsorbed,
         timestamp: serverTimestamp(),
         targetVaultBefore: {
           currentPP: targetVaultData.currentPP,
           shieldStrength: targetVaultData.shieldStrength,
+          overshield: targetVaultData.overshield,
         },
         targetVaultAfter: {
           currentPP: updates.currentPP !== undefined ? updates.currentPP : targetVaultData.currentPP,
           shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
+          overshield: updates.overshield !== undefined ? updates.overshield : targetVaultData.overshield,
         },
         ppStolenFromTarget: ppStolen,
         ppStolenDate: serverTimestamp(),
@@ -1989,7 +2040,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         message: message,
         ppStolen: ppStolen,
         xpGained: (ppStolen > 0 ? calculateXpReward(ppStolen) : 0) + (shieldDamage > 0 ? Math.min(shieldDamage, 3) : 0) + (shieldsCracked ? 2 : 0),
-        shieldDamage: shieldDamage
+        shieldDamage: shieldDamage,
+        overshieldAbsorbed: overshieldAbsorbed
       };
       
     } catch (err) {

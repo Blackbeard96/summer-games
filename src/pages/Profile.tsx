@@ -6,14 +6,59 @@ import { db, storage } from '../firebase';
 import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile } from 'firebase/auth';
-import ChallengeTracker from '../components/ChallengeTracker';
 import PlayerCard from '../components/PlayerCard';
 import ManifestProgress from '../components/ManifestProgress';
-import ManifestChallenges from '../components/ManifestChallenges';
 import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
+
+// Import marketplace items to match legacy items
+const marketplaceItems = [
+  { 
+    id: 'checkin-free',
+    name: 'Get Out of Check-in Free', 
+    description: 'Skip the next check-in requirement', 
+    price: 50, 
+    icon: '🎫', 
+    image: '/images/Get-Out-of-Check-in-Free.png',
+    category: 'protection',
+    rarity: 'common'
+  },
+  { 
+    id: 'shield',
+    name: 'Shield', 
+    description: 'Block the next incoming attack on your vault', 
+    price: 25, 
+    icon: '🛡️', 
+    image: '/images/Shield Item.jpeg',
+    category: 'protection',
+    rarity: 'common'
+  }
+  // Add more items as needed
+];
+
+// Function to enhance legacy items with marketplace data
+const enhanceLegacyItem = (item: any) => {
+  if (typeof item === 'string') {
+    const marketplaceItem = marketplaceItems.find(mi => mi.name === item);
+    if (marketplaceItem) {
+      return {
+        id: marketplaceItem.id,
+        name: marketplaceItem.name,
+        description: marketplaceItem.description,
+        icon: marketplaceItem.icon,
+        image: marketplaceItem.image,
+        category: marketplaceItem.category,
+        rarity: marketplaceItem.rarity,
+        purchasedAt: null,
+        used: false,
+        isLegacy: true
+      };
+    }
+  }
+  return item;
+};
 
 
 
@@ -303,13 +348,6 @@ const Profile = () => {
             />
           </div>
           
-          {/* Player's Journey below */}
-          <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
-              🎮 Player's Journey
-            </h2>
-            <ChallengeTracker />
-          </div>
         </div>
 
         {/* Right Column - Profile Settings + Manifest Progress */}
@@ -517,46 +555,321 @@ const Profile = () => {
             )}
           </div>
 
-          {/* Battle Manifest Progress */}
-          <div style={{ marginTop: '1rem' }}>
-            <ManifestChallenges 
-              playerManifest={playerManifest} 
-            />
-          </div>
         </div>
       </div>
-      {/* Purchased Items Section */}
+      {/* Purchased Artifacts Section */}
       <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>🛒 Purchased Items</h2>
-        {userData?.inventory && userData.inventory.length > 0 ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1.5rem' }}>
-            {userData.inventory.map((itemName: string) => {
-              const item = items.find(i => i.name === itemName);
-              return (
-                <div key={itemName} style={{ background: '#f3f4f6', borderRadius: '0.5rem', padding: '1rem', textAlign: 'center', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
-                  {item?.image && (
-                    <img src={item.image} alt={itemName} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: '0.5rem', marginBottom: 12 }} />
-                  )}
-                  <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#1f2937' }}>{itemName}</div>
-                  <button style={{ marginTop: 12, backgroundColor: '#4f46e5', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.5rem 1rem', cursor: 'pointer', fontWeight: 'bold' }} onClick={async () => {
-                    if (!currentUser) return;
-                    await addDoc(collection(db, 'usedItems'), {
-                      userId: currentUser.uid,
-                      userEmail: currentUser.email,
-                      itemName,
-                      timestamp: serverTimestamp()
-                    });
-                    alert('Your request to use this item has been sent to the admin!');
-                  }}>
-                    Use
-                  </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5', margin: 0 }}>🛒 Purchased Artifacts</h2>
+          {userData?.artifacts && userData.artifacts.length > 0 && (
+            <div style={{ 
+              background: '#f3f4f6', 
+              padding: '0.5rem 1rem', 
+              borderRadius: '1rem', 
+              fontSize: '0.875rem',
+              color: '#6b7280'
+            }}>
+              {userData.artifacts.filter((a: any) => !a.used).length} Available • {userData.artifacts.filter((a: any) => a.used).length} Used
+            </div>
+          )}
+        </div>
+        
+        {userData?.artifacts && userData.artifacts.length > 0 ? (
+          <div>
+            {/* Available Artifacts */}
+            {userData.artifacts.filter((artifact: any) => !artifact.used).length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
+                  Available Artifacts ({userData.artifacts.filter((a: any) => !a.used).length})
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                  {userData.artifacts.filter((artifact: any) => !artifact.used).map((artifact: any) => {
+                    const enhancedArtifact = enhanceLegacyItem(artifact);
+                    const getRarityColor = (rarity: string) => {
+                      switch (rarity) {
+                        case 'common': return '#6b7280';
+                        case 'rare': return '#3b82f6';
+                        case 'epic': return '#8b5cf6';
+                        case 'legendary': return '#f59e0b';
+                        default: return '#6b7280';
+                      }
+                    };
+
+                    return (
+                      <div key={enhancedArtifact.id || artifact} style={{ 
+                        background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', 
+                        borderRadius: '0.75rem', 
+                        padding: '1rem', 
+                        textAlign: 'center', 
+                        boxShadow: '0 2px 4px 0 rgba(0,0,0,0.1)', 
+                        border: `2px solid ${getRarityColor(enhancedArtifact.rarity || 'common')}`,
+                        transition: 'all 0.2s ease',
+                        cursor: 'pointer'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 4px 8px 0 rgba(0,0,0,0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 2px 4px 0 rgba(0,0,0,0.1)';
+                      }}>
+                        <div style={{ position: 'relative', marginBottom: '0.75rem' }}>
+                          {enhancedArtifact.image ? (
+                            <img 
+                              src={enhancedArtifact.image} 
+                              alt={enhancedArtifact.name || 'Artifact'} 
+                              style={{ 
+                                width: '100%', 
+                                height: '100px', 
+                                objectFit: 'cover', 
+                                borderRadius: '0.5rem',
+                                border: `1px solid ${getRarityColor(enhancedArtifact.rarity || 'common')}20`
+                              }} 
+                            />
+                          ) : (
+                            <div style={{ 
+                              width: '100%', 
+                              height: '100px', 
+                              background: '#f3f4f6', 
+                              borderRadius: '0.5rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '2rem',
+                              color: '#9ca3af'
+                            }}>
+                              {enhancedArtifact.icon || '📦'}
+                            </div>
+                          )}
+                          {enhancedArtifact.rarity && (
+                            <div style={{ 
+                              position: 'absolute',
+                              top: '0.5rem',
+                              right: '0.5rem',
+                              background: getRarityColor(enhancedArtifact.rarity),
+                              color: 'white',
+                              padding: '0.25rem 0.5rem',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.7rem',
+                              fontWeight: 'bold',
+                              textTransform: 'uppercase'
+                            }}>
+                              {enhancedArtifact.rarity}
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#1f2937', marginBottom: '0.25rem', lineHeight: '1.2' }}>
+                          {enhancedArtifact.name || 'Unknown Item'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.75rem', lineHeight: '1.3' }}>
+                          {enhancedArtifact.description || 'No description available'}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginBottom: '0.75rem' }}>
+                          {enhancedArtifact.purchasedAt ? new Date(enhancedArtifact.purchasedAt.seconds * 1000).toLocaleDateString() : (enhancedArtifact.isLegacy ? 'Legacy Item' : 'Unknown')}
+                        </div>
+                        
+                        <button 
+                          style={{ 
+                            backgroundColor: '#4f46e5', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '0.375rem', 
+                            padding: '0.5rem 0.75rem', 
+                            cursor: 'pointer', 
+                            fontWeight: 'bold',
+                            fontSize: '0.8rem',
+                            width: '100%',
+                            transition: 'background-color 0.2s ease'
+                          }} 
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = '#3730a3';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = '#4f46e5';
+                          }}
+                          onClick={async () => {
+                            if (!currentUser) return;
+                            
+                            // Handle Shield artifact specifically
+                            if (enhancedArtifact.name === 'Shield') {
+                              try {
+                                // Get current vault data
+                                const vaultRef = doc(db, 'vaults', currentUser.uid);
+                                const vaultSnap = await getDoc(vaultRef);
+                                
+                                if (vaultSnap.exists()) {
+                                  const vaultData = vaultSnap.data();
+                                  
+                                  // Add overshield (absorbs next attack)
+                                  await updateDoc(vaultRef, {
+                                    overshield: (vaultData.overshield || 0) + 1
+                                  });
+                                  
+                                  // Mark artifact as used
+                                  const userRef = doc(db, 'users', currentUser.uid);
+                                  const userSnap = await getDoc(userRef);
+                                  if (userSnap.exists()) {
+                                    const userData = userSnap.data();
+                                    const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                      // Handle both legacy artifacts (strings) and new artifacts (objects)
+                                      if (typeof artifact === 'string') {
+                                        // Legacy artifact stored as string - match by name
+                                        return artifact === enhancedArtifact.name ? { 
+                                          id: enhancedArtifact.id,
+                                          name: enhancedArtifact.name,
+                                          description: enhancedArtifact.description,
+                                          icon: enhancedArtifact.icon,
+                                          image: enhancedArtifact.image,
+                                          category: enhancedArtifact.category,
+                                          rarity: enhancedArtifact.rarity,
+                                          purchasedAt: null,
+                                          used: true,
+                                          isLegacy: true
+                                        } : artifact;
+                                      } else {
+                                        // New artifact stored as object - match by ID or name
+                                        return (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) 
+                                          ? { ...artifact, used: true } 
+                                          : artifact;
+                                      }
+                                    }) || [];
+                                    
+                                    await updateDoc(userRef, {
+                                      artifacts: updatedArtifacts
+                                    });
+                                    
+                                    console.log('✅ Shield artifact marked as used:', updatedArtifacts);
+                                  }
+                                  
+                                  // Force a refresh of the user data to update the UI
+                                  // Trigger a re-fetch of user data
+                                  const updatedUserSnap = await getDoc(userRef);
+                                  if (updatedUserSnap.exists()) {
+                                    const updatedUserData = updatedUserSnap.data();
+                                    setUserData(updatedUserData);
+                                  }
+                                  
+                                  alert('🛡️ Shield artifact activated! Your vault now has an overshield that will absorb the next attack.');
+                                } else {
+                                  alert('Error: Vault not found. Please try again.');
+                                }
+                              } catch (error) {
+                                console.error('Error using Shield artifact:', error);
+                                alert('Error using Shield artifact. Please try again.');
+                              }
+                            } else {
+                              // Handle other artifacts (send to admin)
+                              await addDoc(collection(db, 'usedItems'), {
+                                userId: currentUser.uid,
+                                userEmail: currentUser.email,
+                                itemName: enhancedArtifact.name,
+                                artifactId: enhancedArtifact.id,
+                                timestamp: serverTimestamp()
+                              });
+                              alert('Your request to use this artifact has been sent to the admin!');
+                            }
+                          }}
+                        >
+                          Use Artifact
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            )}
+
+            {/* Used Artifacts */}
+            {userData.artifacts.filter((artifact: any) => artifact.used).length > 0 && (
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
+                  Used Artifacts ({userData.artifacts.filter((a: any) => a.used).length})
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem' }}>
+                  {userData.artifacts.filter((artifact: any) => artifact.used).map((artifact: any) => {
+                    const getRarityColor = (rarity: string) => {
+                      switch (rarity) {
+                        case 'common': return '#6b7280';
+                        case 'rare': return '#3b82f6';
+                        case 'epic': return '#8b5cf6';
+                        case 'legendary': return '#f59e0b';
+                        default: return '#6b7280';
+                      }
+                    };
+
+                    return (
+                      <div key={artifact.id} style={{ 
+                        background: '#f9fafb', 
+                        borderRadius: '0.5rem', 
+                        padding: '0.75rem', 
+                        textAlign: 'center', 
+                        border: '1px solid #e5e7eb',
+                        opacity: 0.7
+                      }}>
+                        <div style={{ marginBottom: '0.5rem' }}>
+                          {typeof artifact === 'object' && artifact.image ? (
+                            <img 
+                              src={artifact.image} 
+                              alt={artifact.name || 'Artifact'} 
+                              style={{ 
+                                width: '100%', 
+                                height: '60px', 
+                                objectFit: 'cover', 
+                                borderRadius: '0.25rem',
+                                filter: 'grayscale(100%)'
+                              }} 
+                            />
+                          ) : (
+                            <div style={{ 
+                              width: '100%', 
+                              height: '60px', 
+                              background: '#e5e7eb', 
+                              borderRadius: '0.25rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.5rem',
+                              color: '#9ca3af'
+                            }}>
+                              {typeof artifact === 'object' ? (artifact.icon || '📦') : '📦'}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                          {typeof artifact === 'string' ? artifact : artifact.name || 'Unknown Item'}
+                        </div>
+                        {typeof artifact === 'object' && artifact.rarity && (
+                          <div style={{ 
+                            fontSize: '0.7rem', 
+                            color: getRarityColor(artifact.rarity), 
+                            fontWeight: 'bold',
+                            textTransform: 'uppercase'
+                          }}>
+                            {artifact.rarity}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
-          <div style={{ color: '#6b7280', fontStyle: 'italic' }}>
-            You haven&apos;t purchased any items yet.
+          <div style={{ 
+            textAlign: 'center', 
+            padding: '3rem 1rem',
+            color: '#6b7280'
+          }}>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🛒</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+              No Artifacts Yet
+            </div>
+            <div style={{ fontSize: '0.9rem' }}>
+              Visit the MST MKT to purchase your first artifact!
+            </div>
           </div>
         )}
       </div>

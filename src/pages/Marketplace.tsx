@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 
 interface Artifact {
@@ -18,32 +18,22 @@ interface Artifact {
 
 const artifacts: Artifact[] = [
   { 
-    id: 'work-extension',
-    name: 'Work Extension', 
-    description: 'Extend work time by 30 minutes', 
-    price: 30, 
-    icon: '⏰', 
-    image: '/sleep-in-30.png',
-    category: 'time',
-    rarity: 'common'
-  },
-  { 
     id: 'checkin-free',
     name: 'Get Out of Check-in Free', 
     description: 'Skip the next check-in requirement', 
     price: 50, 
     icon: '🎫', 
-    image: '/sleep-in-1hr.png',
+    image: '/images/Get-Out-of-Check-in-Free.png',
     category: 'protection',
     rarity: 'common'
   },
   { 
     id: 'shield',
     name: 'Shield', 
-    description: 'Avoid next penalty for incomplete work', 
+    description: 'Block the next incoming attack on your vault', 
     price: 25, 
     icon: '🛡️', 
-    image: 'https://images.unsplash.com/photo-1465101046530-73398c7f28ca?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    image: '/images/Shield Item.jpeg',
     category: 'protection',
     rarity: 'common'
   },
@@ -125,6 +115,19 @@ const Marketplace = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Function to create admin notifications
+  const createAdminNotification = async (notification: any) => {
+    try {
+      await addDoc(collection(db, 'adminNotifications'), {
+        ...notification,
+        createdAt: new Date(),
+        read: false
+      });
+    } catch (error) {
+      console.error('Error creating admin notification:', error);
+    }
+  };
+
   // Check if device is mobile
   useEffect(() => {
     const checkMobile = () => {
@@ -168,9 +171,45 @@ const Marketplace = () => {
 
     try {
       const userRef = doc(db, 'students', currentUser.uid);
+      
+      // Create detailed artifact purchase record
+      const purchasedArtifact = {
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        price: item.price,
+        icon: item.icon,
+        image: item.image,
+        category: item.category,
+        rarity: item.rarity,
+        purchasedAt: new Date(),
+        used: false
+      };
+      
+      // Get current user data to access existing artifacts
+      const userSnap = await getDoc(userRef);
+      const currentUserData = userSnap.exists() ? userSnap.data() : {};
+      
+      // Update user's power points and add artifact to inventory
       await updateDoc(userRef, {
         powerPoints: powerPoints - item.price,
-        inventory: [...inventory, item.name]
+        inventory: [...inventory, item.name],
+        artifacts: [...(currentUserData.artifacts || []), purchasedArtifact]
+      });
+      
+      // Create admin notification
+      await createAdminNotification({
+        type: 'artifact_purchase',
+        title: 'Artifact Purchase',
+        message: `${currentUser.displayName || currentUser.email} purchased ${item.name} for ${item.price} PP`,
+        data: {
+          userId: currentUser.uid,
+          userName: currentUser.displayName || currentUser.email,
+          artifactName: item.name,
+          artifactPrice: item.price,
+          artifactRarity: item.rarity,
+          purchaseTime: new Date()
+        }
       });
       
       setPowerPoints(prev => prev - item.price);

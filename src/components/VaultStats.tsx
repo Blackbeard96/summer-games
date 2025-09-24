@@ -528,6 +528,29 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <span>{getStatusIcon(shieldPercentage)} {shieldPercentage.toFixed(1)}% Active</span>
             <span>Max: {vault.maxShieldStrength}</span>
           </div>
+          
+          {/* Overshield Display */}
+          {vault.overshield > 0 && (
+            <div style={{ 
+              marginTop: '1rem', 
+              padding: '0.75rem', 
+              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+              border: '2px solid #f59e0b',
+              borderRadius: '0.5rem',
+              textAlign: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>✨</span>
+                <span style={{ fontWeight: 'bold', color: '#92400e' }}>Overshield Active</span>
+              </div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
+                {vault.overshield} Attack{vault.overshield > 1 ? 's' : ''} Absorbed
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#92400e' }}>
+                Next incoming attack will be completely blocked
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Firewall */}

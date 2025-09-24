@@ -89,20 +89,16 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Student notifications subcollection - allow users to read their own notifications
+    // Student notifications subcollection - allow users to read their own notifications, anyone to create
     match /students/{userId}/notifications/{notificationId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
       
-      // Allow creation of new notifications
-      allow create: if request.auth != null && 
-        (request.auth.uid == userId ||
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      // Allow any authenticated user to create notifications (for battle notifications, etc.)
+      allow create: if request.auth != null;
     }
     
     // User roles collection - allow users to read their own role, admins to manage all roles
@@ -212,6 +208,40 @@ service cloud.firestore {
     // Elemental Milestones collection - allow authenticated users to read
     match /elementalMilestones/{elementalType} {
       allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Admin Notifications collection - allow authenticated users to create, admins to read/write
+    match /adminNotifications/{notificationId} {
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Offline Moves collection - allow authenticated users to create, users to read/write their own moves
+    match /offlineMoves/{moveId} {
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == resource.data.userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Vault Siege Attacks collection - allow authenticated users to create, users to read their own attacks
+    match /vaultSiegeAttacks/{attackId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.attackerId || 
+         request.auth.uid == resource.data.targetId ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
       allow write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||

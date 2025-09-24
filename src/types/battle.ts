@@ -7,6 +7,7 @@ export interface Vault {
   currentPP: number;
   shieldStrength: number;
   maxShieldStrength: number;
+  overshield: number; // Additional shield from Shield artifact that absorbs next attack
   firewall: number; // 0-100, chance to nullify vault attacks
   lastUpgrade: Date;
   debtStatus: boolean;
