@@ -383,77 +383,238 @@ const Battle: React.FC = () => {
         ))}
       </div>
 
-      {/* Enhanced Vault Stats */}
-      <VaultStats
-        vault={vault}
-        moves={moves}
-        actionCards={actionCards}
-        remainingOfflineMoves={remainingOfflineMoves}
-        maxOfflineMoves={BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES}
-        onSyncPP={syncVaultPP}
-        onRestoreShields={handleRestoreShields}
-        onCreateBattle={handleCreateBattle}
-      />
+      {/* Battle Arena Instructions */}
+      <div style={{ 
+        background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+        border: '2px solid #3b82f6',
+        borderRadius: '0.75rem',
+        padding: '1.5rem',
+        marginBottom: '2rem'
+      }}>
+        <h3 style={{ 
+          fontSize: '1.25rem', 
+          fontWeight: 'bold', 
+          marginBottom: '1rem',
+          color: '#1e40af',
+          textAlign: 'center'
+        }}>
+          🎯 Battle Arena Instructions
+        </h3>
+        
+        {activeTab === 'moves' ? (
+          // Moves & Mastery Instructions
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.7)',
+            padding: '1.5rem',
+            borderRadius: '0.5rem',
+            border: '1px solid #93c5fd'
+          }}>
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '0.5rem',
+              marginBottom: '1rem'
+            }}>
+              <span style={{ fontSize: '1.5rem' }}>🎯</span>
+              <strong style={{ color: '#1e40af', fontSize: '1.1rem' }}>Moves & Mastery</strong>
+            </div>
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+              gap: '1rem',
+              marginBottom: '1rem'
+            }}>
+              <div style={{ 
+                background: 'rgba(255, 255, 255, 0.5)',
+                padding: '1rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #bfdbfe'
+              }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '1.2rem' }}>⚡</span>
+                  <strong style={{ color: '#1e40af' }}>Manage Moves</strong>
+                </div>
+                <p style={{ 
+                  fontSize: '0.875rem', 
+                  color: '#1e40af',
+                  margin: 0,
+                  lineHeight: '1.4'
+                }}>
+                  In this section, players can manage and upgrade their Manifest and Elemental Moves.
+                </p>
+              </div>
+              
+              <div style={{ 
+                background: 'rgba(255, 255, 255, 0.5)',
+                padding: '1rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #bfdbfe'
+              }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '1.2rem' }}>📈</span>
+                  <strong style={{ color: '#1e40af' }}>Level Up</strong>
+                </div>
+                <p style={{ 
+                  fontSize: '0.875rem', 
+                  color: '#1e40af',
+                  margin: 0,
+                  lineHeight: '1.4'
+                }}>
+                  Use PP to level up your moves and increase their power and effectiveness.
+                </p>
+              </div>
+              
+              <div style={{ 
+                background: 'rgba(255, 255, 255, 0.5)',
+                padding: '1rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #bfdbfe'
+              }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '1.2rem' }}>🛒</span>
+                  <strong style={{ color: '#1e40af' }}>Purchase New</strong>
+                </div>
+                <p style={{ 
+                  fontSize: '0.875rem', 
+                  color: '#1e40af',
+                  margin: 0,
+                  lineHeight: '1.4'
+                }}>
+                  Use PP to also purchase new moves and expand your combat arsenal.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          // Default Battle Mode Instructions
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
+            gap: '1rem' 
+          }}>
+            <div style={{ 
+              background: 'rgba(255, 255, 255, 0.7)',
+              padding: '1rem',
+              borderRadius: '0.5rem',
+              border: '1px solid #93c5fd'
+            }}>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.5rem',
+                marginBottom: '0.5rem'
+              }}>
+                <span style={{ fontSize: '1.2rem' }}>🚀</span>
+                <strong style={{ color: '#1e40af' }}>Live Battles</strong>
+              </div>
+              <p style={{ 
+                fontSize: '0.875rem', 
+                color: '#1e40af',
+                margin: 0,
+                lineHeight: '1.4'
+              }}>
+                In-class contests for big prizes. Compete with classmates in real-time battles for exclusive rewards and recognition.
+              </p>
+              <div style={{ 
+                fontSize: '0.75rem', 
+                color: '#6b7280',
+                fontStyle: 'italic',
+                marginTop: '0.5rem'
+              }}>
+                ⚠️ Currently under construction
+              </div>
+            </div>
+            
+            <div style={{ 
+              background: 'rgba(255, 255, 255, 0.7)',
+              padding: '1rem',
+              borderRadius: '0.5rem',
+              border: '1px solid #93c5fd'
+            }}>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.5rem',
+                marginBottom: '0.5rem'
+              }}>
+                <span style={{ fontSize: '1.2rem' }}>🏰</span>
+                <strong style={{ color: '#1e40af' }}>Vault Sieges</strong>
+              </div>
+              <p style={{ 
+                fontSize: '0.875rem', 
+                color: '#1e40af',
+                margin: 0,
+                lineHeight: '1.4'
+              }}>
+                Offline mode to attack rival vaults and take some of their PP. Players may make 3 moves per day from their Manifest Abilities, Action Cards, or System Skills.
+              </p>
+            </div>
+          </div>
+        )}
+        
+        <div style={{ 
+          marginTop: '1rem',
+          padding: '0.75rem',
+          background: 'rgba(255, 255, 255, 0.5)',
+          borderRadius: '0.5rem',
+          border: '1px solid #93c5fd'
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.5rem',
+            marginBottom: '0.5rem'
+          }}>
+            <span style={{ fontSize: '1rem' }}>💡</span>
+            <strong style={{ color: '#1e40af', fontSize: '0.875rem' }}>Tip:</strong>
+          </div>
+          <p style={{ 
+            fontSize: '0.8rem', 
+            color: '#1e40af',
+            margin: 0,
+            lineHeight: '1.4'
+          }}>
+            {activeTab === 'moves' 
+              ? 'Focus on upgrading your most powerful moves first, then expand your move collection to have more strategic options in battle!'
+              : 'Use your daily offline moves strategically to maximize PP gains. Each successful vault siege can earn you Power Points from defeated rivals!'
+            }
+          </p>
+        </div>
+      </div>
 
       {/* Tab Content */}
       <div style={{ minHeight: '400px' }}>
         {activeTab === 'lobby' && (
           <div>
-
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Available Battles</h3>
-            {battleLobbies.length === 0 ? (
-              <div style={{ 
-                textAlign: 'center', 
-                padding: '3rem', 
-                color: '#6b7280',
-                background: '#f9fafb',
-                borderRadius: '0.5rem'
-              }}>
-                No battles available. Create one to get started!
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: '1rem' }}>
-                {battleLobbies.map(lobby => (
-                  <div key={lobby.id} style={{ 
-                    background: 'white',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '0.5rem',
-                    padding: '1.5rem'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <h4 style={{ fontSize: '1.1rem', marginBottom: '0.5rem', color: '#1f2937' }}>
-                          {lobby.name}
-                        </h4>
-                        <p style={{ color: '#6b7280', marginBottom: '0.5rem' }}>
-                          Host: {lobby.hostName} • Type: {lobby.type === 'live' ? 'Live Battle' : 'Vault Siege'}
-                        </p>
-                        <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>
-                          Participants: {lobby.participants.length}/{lobby.maxParticipants}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => handleJoinBattle(lobby.id)}
-                        disabled={lobby.participants.includes(currentUser.uid)}
-                        style={{
-                          background: lobby.participants.includes(currentUser.uid) ? '#9ca3af' : '#4f46e5',
-                          color: 'white',
-                          border: 'none',
-                          padding: '0.75rem 1.5rem',
-                          borderRadius: '0.375rem',
-                          cursor: lobby.participants.includes(currentUser.uid) ? 'not-allowed' : 'pointer'
-                        }}
-                      >
-                        {lobby.participants.includes(currentUser.uid) ? 'Joined' : 'Join Battle'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* Enhanced Vault Stats - Only in Battle Lobby */}
+            <VaultStats
+              vault={vault}
+              moves={moves}
+              actionCards={actionCards}
+              remainingOfflineMoves={remainingOfflineMoves}
+              maxOfflineMoves={BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES}
+              onSyncPP={syncVaultPP}
+              onRestoreShields={handleRestoreShields}
+              onCreateBattle={handleCreateBattle}
+            />
 
             {/* Battle History Section */}
-            <div style={{ marginTop: '3rem' }}>
+            <div style={{ marginTop: '2rem' }}>
               <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Recent Battle History</h3>
               <AttackHistory attacks={attackHistory} />
             </div>
@@ -819,7 +980,7 @@ const Battle: React.FC = () => {
                     fontWeight: 'bold'
                   }}
                 >
-                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>Full Restore</div>
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
                   <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 30 PP</div>
                 </button>
               </div>
@@ -829,8 +990,18 @@ const Battle: React.FC = () => {
 
         {activeTab === 'moves' && (
           <>
-                    {console.log('Battle page: vault?.movesRemaining:', vault?.movesRemaining, 'remainingOfflineMoves:', remainingOfflineMoves)}
-        <MovesDisplay
+            {/* Battle Arsenal Section */}
+            <div style={{ marginBottom: '2rem' }}>
+              <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#1f2937', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                ⚔️ Battle Arsenal
+              </h3>
+              <p style={{ color: '#6b7280', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+                Manage your combat moves and abilities. Upgrade existing moves or unlock new ones to strengthen your battle capabilities.
+              </p>
+            </div>
+
+            {console.log('Battle page: vault?.movesRemaining:', vault?.movesRemaining, 'remainingOfflineMoves:', remainingOfflineMoves)}
+            <MovesDisplay
           moves={moves}
           movesRemaining={vault?.movesRemaining ?? 1}
           offlineMovesRemaining={remainingOfflineMoves}

@@ -249,32 +249,35 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           {onCreateBattle && (
             <>
               <button
-                onClick={() => onCreateBattle('live')}
+                onClick={() => {}} // Disabled - no action
+                title="Under Construction"
                 style={{
-                  background: '#059669',
+                  background: '#9ca3af',
                   color: 'white',
                   border: 'none',
                   padding: '0.75rem 1.5rem',
                   borderRadius: '0.5rem',
                   fontSize: '0.875rem',
                   fontWeight: 'bold',
-                  cursor: 'pointer',
+                  cursor: 'not-allowed',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.5rem',
-                  transition: 'all 0.2s'
+                  transition: 'all 0.2s',
+                  opacity: 0.6
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.opacity = '0.8';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.opacity = '0.6';
                 }}
               >
                 🚀 Live Battle
               </button>
               <button
                 onClick={() => onCreateBattle('vault_siege')}
+                title="Attack a rival's vault to break their shields and take their PP"
                 style={{
                   background: '#dc2626',
                   color: 'white',
@@ -414,7 +417,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            Full Restore (30 PP)
+            +50 Shields (30 PP)
           </button>
         </div>
       </div>

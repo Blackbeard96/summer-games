@@ -157,6 +157,67 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
+    // PP Change Sessions collection - allow scorekeepers to create, admins to manage
+    match /ppChangeSessions/{sessionId} {
+      allow create: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Vaults collection - allow users to read/write their own vault
+    match /vaults/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Battle Moves collection - allow users to read/write their own moves
+    match /battleMoves/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Battle Action Cards collection - allow users to read/write their own cards
+    match /battleActionCards/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Battle Lobbies collection - allow authenticated users to read/write
+    match /battleLobbies/{lobbyId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Manifest Milestones collection - allow authenticated users to read
+    match /manifestMilestones/{manifestType} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Elemental Milestones collection - allow authenticated users to read
+    match /elementalMilestones/{elementalType} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
     // Default rule - deny all other access
     match /{document=**} {
       allow read, write: if false;
