@@ -372,6 +372,114 @@ const ScorekeeperInterface: React.FC = () => {
         </p>
       </div>
 
+      {/* Instructions Section */}
+      <div style={{
+        backgroundColor: '#f0f9ff',
+        border: '1px solid #0ea5e9',
+        borderRadius: '0.75rem',
+        padding: '1.5rem',
+        marginBottom: '2rem'
+      }}>
+        <h2 style={{ 
+          fontSize: '1.25rem', 
+          fontWeight: '600', 
+          color: '#0c4a6e',
+          margin: 0,
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
+        }}>
+          📋 Scorekeeper Instructions
+        </h2>
+        <div style={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          gap: '0.75rem'
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem',
+            fontSize: '0.95rem',
+            color: '#0c4a6e'
+          }}>
+            <span style={{ 
+              backgroundColor: '#10b981', 
+              color: 'white', 
+              borderRadius: '50%', 
+              width: '24px', 
+              height: '24px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center',
+              fontSize: '0.875rem',
+              fontWeight: 'bold'
+            }}>+</span>
+            <span><strong>Add points</strong> each time a student earns them</span>
+          </div>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem',
+            fontSize: '0.95rem',
+            color: '#0c4a6e'
+          }}>
+            <span style={{ 
+              backgroundColor: '#ef4444', 
+              color: 'white', 
+              borderRadius: '50%', 
+              width: '24px', 
+              height: '24px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center',
+              fontSize: '0.875rem',
+              fontWeight: 'bold'
+            }}>-</span>
+            <span><strong>Subtract points</strong> as directed</span>
+          </div>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem',
+            fontSize: '0.95rem',
+            color: '#0c4a6e'
+          }}>
+            <span style={{ 
+              backgroundColor: '#8b5cf6', 
+              color: 'white', 
+              borderRadius: '50%', 
+              width: '24px', 
+              height: '24px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center',
+              fontSize: '0.875rem',
+              fontWeight: 'bold'
+            }}>✓</span>
+            <span><strong>At end of class</strong>, Submit your totals for approval</span>
+          </div>
+        </div>
+        <div style={{ 
+          marginTop: '1rem',
+          padding: '0.75rem',
+          backgroundColor: '#e0f2fe',
+          borderRadius: '0.5rem',
+          border: '1px solid #0284c7'
+        }}>
+          <p style={{ 
+            fontSize: '0.875rem', 
+            color: '#0c4a6e',
+            margin: 0,
+            fontStyle: 'italic'
+          }}>
+            💡 <strong>Tip:</strong> Use the +1/-1 buttons for quick adjustments, or enter custom amounts in the "Amount" field. 
+            All changes will be submitted together for admin approval at the end of class.
+          </p>
+        </div>
+      </div>
+
       {/* Class Statistics */}
       <div style={{ 
         backgroundColor: 'white',
