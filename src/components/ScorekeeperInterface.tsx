@@ -437,7 +437,7 @@ const ScorekeeperInterface: React.FC = () => {
               fontSize: '0.875rem',
               fontWeight: 'bold'
             }}>-</span>
-            <span><strong>Subtract points</strong> as directed</span>
+            <span><strong>Subtract points</strong> as directed (Add a '-' sign and click add. Ex: "-10", then add)</span>
           </div>
           <div style={{ 
             display: 'flex', 
