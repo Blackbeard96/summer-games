@@ -166,81 +166,119 @@ export const CHAPTERS: Chapter[] = [
     rewards: [
       { type: 'level', value: 1, description: 'Unlock Level 1' },
       { type: 'artifact', value: 'personal', description: 'Personal Artifact' },
-      { type: 'artifact', value: 'starter_artifact', description: 'Starter Artifact' },
-      { type: 'ability', value: 'shield_restoration', description: 'System Move: Shield Restoration' }
+      { type: 'artifact', value: 'starter_artifact', description: 'Starter Artifact' }
     ],
     challenges: [
       {
-        id: 'ch1-update-profile',
-        title: 'Update Your Profile',
-        description: 'Complete your profile with your display name and basic information',
+        id: 'ep1-get-letter',
+        title: 'Get Letter',
+        description: 'Describe your Ordinary World and receive the mysterious Xiotein letter that will change your life forever',
         type: 'personal',
         requirements: [],
         rewards: [
-          { type: 'xp', value: 15, description: 'Profile completion XP' },
-          { type: 'pp', value: 5, description: 'Profile completion PP' }
+          { type: 'xp', value: 10, description: 'Letter received XP' },
+          { type: 'pp', value: 5, description: 'Letter received PP' }
         ],
         isCompleted: false
       },
       {
-        id: 'ch1-declare-manifest',
-        title: 'Declare Your Manifest',
-        description: 'Choose your manifestation type and declare your path',
+        id: 'ep1-truth-metal-choice',
+        title: 'The Truth Metal Choice',
+        description: 'Choose whether to touch the Truth Metal (and change your life forever) or ignore it and forget it ever happened',
         type: 'personal',
-        requirements: [],
+        requirements: [{ type: 'artifact', value: 'letter_received', description: 'Must have received the letter' }],
         rewards: [
-          { type: 'xp', value: 20, description: 'Manifest declaration XP' },
-          { type: 'pp', value: 8, description: 'Manifest declaration PP' },
+          { type: 'xp', value: 15, description: 'Choice made XP' },
+          { type: 'pp', value: 8, description: 'Choice made PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-touch-truth-metal',
+        title: 'Touch Truth Metal',
+        description: 'Touch the Truth Metal to reveal core truths and unlock important in-game currency',
+        type: 'personal',
+        requirements: [{ type: 'artifact', value: 'chose_truth_metal', description: 'Must have chosen to touch Truth Metal' }],
+        rewards: [
+          { type: 'xp', value: 25, description: 'Truth Metal touched XP' },
+          { type: 'pp', value: 15, description: 'Truth Metal touched PP' },
+          { type: 'artifact', value: 'truth_metal_currency', description: 'Truth Metal currency unlocked' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-view-mst-ui',
+        title: 'View MST UI',
+        description: 'Explore and familiarize yourself with the MST (Mystical System Technology) user interface',
+        type: 'personal',
+        requirements: [{ type: 'artifact', value: 'truth_metal_currency', description: 'Must have touched Truth Metal' }],
+        rewards: [
+          { type: 'xp', value: 10, description: 'UI exploration XP' },
+          { type: 'pp', value: 5, description: 'UI exploration PP' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-choose-manifests',
+        title: 'Choose Manifests',
+        description: 'Select your manifestation type and declare your path in the mystical arts',
+        type: 'personal',
+        requirements: [{ type: 'artifact', value: 'ui_explored', description: 'Must have explored MST UI' }],
+        rewards: [
+          { type: 'xp', value: 20, description: 'Manifest chosen XP' },
+          { type: 'pp', value: 10, description: 'Manifest chosen PP' },
           { type: 'manifest', value: 'chosen', description: 'Manifest chosen' }
         ],
         isCompleted: false
       },
       {
-        id: 'ep1-portal-sequence',
-        title: 'Navigate the Portal',
-        description: 'Navigate the portal to Xiotein',
-        type: 'personal',
-        requirements: [],
-        rewards: [
-          { type: 'xp', value: 25, description: 'Portal navigation XP' },
-          { type: 'pp', value: 10, description: 'Portal navigation PP' }
-        ],
-        isCompleted: false
-      },
-      {
-        id: 'ch1-artifact-identification',
-        title: 'Identify Your Artifact',
-        description: 'Discover the artifact linked to your inner truth',
+        id: 'ep1-update-profile',
+        title: 'Update Player Profile',
+        description: 'Complete your player profile with your display name, avatar, and basic information',
         type: 'personal',
         requirements: [{ type: 'manifest', value: 'chosen', description: 'Must have chosen a manifest' }],
         rewards: [
-          { type: 'xp', value: 25, description: 'Artifact identification XP' },
-          { type: 'pp', value: 10, description: 'Artifact identification PP' },
-          { type: 'artifact', value: 'identified', description: 'Artifact identified' }
+          { type: 'xp', value: 15, description: 'Profile completion XP' },
+          { type: 'pp', value: 8, description: 'Profile completion PP' }
         ],
         isCompleted: false
       },
       {
-        id: 'ch1-artifact-challenge',
-        title: 'Complete Artifact Challenge',
-        description: 'Complete a personal mission related to your artifact',
+        id: 'ep1-view-power-card',
+        title: 'View Player Power Card',
+        description: 'Examine your personalized Power Card based on your profile and manifest choices',
         type: 'personal',
-        requirements: [{ type: 'artifact', value: 'identified', description: 'Must have identified artifact' }],
+        requirements: [{ type: 'profile', value: 'completed', description: 'Must have completed profile' }],
         rewards: [
-          { type: 'xp', value: 50, description: 'Artifact challenge completion XP' },
-          { type: 'pp', value: 20, description: 'Artifact challenge completion PP' }
+          { type: 'xp', value: 12, description: 'Power card viewed XP' },
+          { type: 'pp', value: 6, description: 'Power card viewed PP' }
         ],
         isCompleted: false
       },
       {
-        id: 'ep1-manifest-test',
-        title: 'Test Awakened Abilities',
-        description: 'Test your awakened abilities against a training dummy',
+        id: 'ep1-combat-drill',
+        title: '1st Combat Drill',
+        description: 'Complete your first combat training drill to test your awakened abilities',
         type: 'personal',
-        requirements: [],
+        requirements: [{ type: 'profile', value: 'power_card_viewed', description: 'Must have viewed power card' }],
         rewards: [
-          { type: 'xp', value: 25, description: 'Ability test XP' },
-          { type: 'pp', value: 15, description: 'Ability test PP' }
+          { type: 'xp', value: 30, description: 'Combat drill XP' },
+          { type: 'pp', value: 20, description: 'Combat drill PP' },
+          { type: 'ability', value: 'first_combat', description: 'First combat ability unlocked' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-enter-xiotein',
+        title: 'Enter Xiotein School',
+        description: 'Cross the threshold and officially enter Xiotein School to begin your mystical education',
+        type: 'personal',
+        requirements: [{ type: 'artifact', value: 'first_combat', description: 'Must have completed first combat drill' }],
+        rewards: [
+          { type: 'xp', value: 50, description: 'School entry XP' },
+          { type: 'pp', value: 25, description: 'School entry PP' },
+          { type: 'level', value: 1, description: 'Unlock Level 1' },
+          { type: 'artifact', value: 'school_access', description: 'Xiotein School access granted' }
         ],
         isCompleted: false
       }
@@ -263,7 +301,8 @@ export const CHAPTERS: Chapter[] = [
       { type: 'team', value: 'formed', description: 'Team formation' },
       { type: 'rival', value: 'chosen', description: 'Rival identified' },
       { type: 'ability', value: 'action_card_slot', description: 'Action Card Slot' },
-      { type: 'artifact', value: 'countermeasure_card', description: 'Starter Card: Countermeasure' }
+      { type: 'artifact', value: 'countermeasure_card', description: 'Starter Card: Countermeasure' },
+      { type: 'ability', value: 'shield_restoration', description: 'System Move: Shield Restoration' }
     ],
     challenges: [
       {

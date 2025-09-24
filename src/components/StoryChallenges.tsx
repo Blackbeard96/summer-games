@@ -9,6 +9,7 @@ import ModelPreview from './ModelPreview';
 import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
+import LetterModal from './LetterModal';
 
 interface GoogleClassroomAssignment {
   id: string;
@@ -31,6 +32,7 @@ const StoryChallenges = () => {
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
+  const [showLetterModal, setShowLetterModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -913,6 +915,83 @@ const ensureChaptersInitialized = async () => {
     }
   };
 
+  const handleLetterNameSubmit = async (name: string) => {
+    if (!currentUser) return;
+
+    try {
+      // Update user's display name
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        displayName: name,
+        lastUpdated: serverTimestamp()
+      });
+
+      // Complete the Get Letter challenge
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      const currentChapter = getCurrentChapter();
+      
+      if (currentChapter) {
+        const updatedChapters = {
+          ...currentData.chapters,
+          [currentChapter.id]: {
+            ...currentData.chapters?.[currentChapter.id],
+            challenges: {
+              ...currentData.chapters?.[currentChapter.id]?.challenges,
+              ['ep1-get-letter']: {
+                isCompleted: true,
+                playerName: name,
+                letterReceived: true,
+                completedAt: serverTimestamp()
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Add to challenge submissions
+        await addDoc(collection(db, 'challengeSubmissions'), {
+          userId: currentUser.uid,
+          displayName: name,
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || '',
+          challengeId: 'ep1-get-letter',
+          challengeName: 'Get Letter',
+          submissionType: 'interactive',
+          timestamp: serverTimestamp(),
+          status: 'approved',
+          xpReward: 10,
+          ppReward: 5,
+          manifestationType: 'Chapter Challenge',
+          character: 'Xiotein Letter',
+          autoCompleted: true,
+          playerName: name
+        });
+
+        // Create notification for challenge completion
+        await createChallengeNotification('Get Letter', 10, 5, true);
+        
+        // Check if current chapter is now complete and progress to next chapter
+        await checkAndProgressChapter(currentChapter.id);
+        
+        // Force refresh user progress
+        const userDocRefresh = await getDoc(userRef);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+      }
+
+      console.log('Letter challenge completed with name:', name);
+      alert(`🎉 Welcome to Xiotein, ${name}! Your journey as a Manifester begins now!`);
+    } catch (error) {
+      console.error('Error completing letter challenge:', error);
+      alert('Failed to complete the letter challenge. Please try again.');
+    }
+  };
+
   const handleTutorialComplete = async () => {
     if (!currentUser) return;
 
@@ -1571,8 +1650,31 @@ const ensureChaptersInitialized = async () => {
                       </div>
                     )}
 
-                    {/* File upload section - EXCLUDES profile, manifest, rival selection, tutorial, and CPU battle challenges */}
-                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && (
+                    {/* Special case for Get Letter challenge */}
+                    {!isCompleted && challenge.id === 'ep1-get-letter' && (
+                      <div style={{ marginTop: '1rem' }}>
+                        <button
+                          onClick={() => setShowLetterModal(true)}
+                          style={{
+                            padding: '0.75rem 1.5rem',
+                            backgroundColor: '#8b5cf6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.5rem',
+                            cursor: 'pointer',
+                            fontSize: '1rem',
+                            fontWeight: 'bold',
+                            width: '100%',
+                            transition: 'background-color 0.2s ease'
+                          }}
+                        >
+                          📬 Open the Letter
+                        </button>
+                      </div>
+                    )}
+
+                    {/* File upload section - EXCLUDES profile, manifest, rival selection, tutorial, CPU battle, and letter challenges */}
+                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -2008,6 +2110,13 @@ const ensureChaptersInitialized = async () => {
         isOpen={showPortalTutorial}
         onComplete={handleTutorialComplete}
         onClose={() => setShowPortalTutorial(false)}
+      />
+
+      {/* Letter Modal */}
+      <LetterModal
+        isOpen={showLetterModal}
+        onClose={() => setShowLetterModal(false)}
+        onNameSubmit={handleLetterNameSubmit}
       />
     </div>
   );

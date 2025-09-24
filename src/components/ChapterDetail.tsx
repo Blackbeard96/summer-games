@@ -6,6 +6,7 @@ import { Chapter, ChapterChallenge } from '../types/chapters';
 import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
+import LetterModal from './LetterModal';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -22,6 +23,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
+  const [showLetterModal, setShowLetterModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -477,6 +479,89 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     } catch (error) {
       console.error('Error handling tutorial completion:', error);
       alert('Failed to process tutorial completion. Please try again.');
+    }
+  };
+
+  const handleLetterNameSubmit = async (name: string) => {
+    if (!currentUser) return;
+
+    try {
+      // Update user's display name
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        displayName: name,
+        lastUpdated: serverTimestamp()
+      });
+
+      // Complete the Get Letter challenge
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapter.id]: {
+          ...currentData.chapters?.[chapter.id],
+          challenges: {
+            ...currentData.chapters?.[chapter.id]?.challenges,
+            ['ep1-get-letter']: {
+              isCompleted: true,
+              playerName: name,
+              letterReceived: true,
+              completedAt: serverTimestamp()
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Add to challenge submissions
+      await addDoc(collection(db, 'challengeSubmissions'), {
+        userId: currentUser.uid,
+        displayName: name,
+        email: currentUser.email || '',
+        photoURL: currentUser.photoURL || '',
+        challengeId: 'ep1-get-letter',
+        challengeName: 'Get Letter',
+        submissionType: 'interactive',
+        timestamp: serverTimestamp(),
+        status: 'approved',
+        xpReward: 10,
+        ppReward: 5,
+        manifestationType: 'Chapter Challenge',
+        character: 'Xiotein Letter',
+        autoCompleted: true,
+        playerName: name
+      });
+
+      // Create notification for challenge completion
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 Welcome to Xiotein, ${name}! Your journey as a Manifester begins now! You earned +10 XP and +5 PP!`,
+        challengeId: 'ep1-get-letter',
+        challengeName: 'Get Letter',
+        xpReward: 10,
+        ppReward: 5,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      
+      // Close the letter modal
+      setShowLetterModal(false);
+      
+      // Refresh user progress
+      const userDocRefresh = await getDoc(userRef);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+      }
+
+      console.log('Letter challenge completed with name:', name);
+      alert(`🎉 Welcome to Xiotein, ${name}! Your journey as a Manifester begins now!`);
+    } catch (error) {
+      console.error('Error completing letter challenge:', error);
+      alert('Failed to complete the letter challenge. Please try again.');
     }
   };
 
@@ -966,8 +1051,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </div>
                           )}
 
+                          {/* Special case for Get Letter challenge */}
+                          {status === 'available' && challenge.id === 'ep1-get-letter' && (
+                            <button
+                              onClick={() => setShowLetterModal(true)}
+                              style={{
+                                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                                color: 'white',
+                                padding: '0.75rem 1.5rem',
+                                borderRadius: '0.5rem',
+                                border: 'none',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>📬</span>
+                              View Letter
+                            </button>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1050,7 +1168,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                   fontSize: '0.875rem',
                   fontWeight: 'bold'
                 }}>
-                  ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completionDate?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
+                  ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
                 </div>
               )}
             </div>
@@ -1371,6 +1489,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         isOpen={showPortalTutorial}
         onComplete={handleTutorialComplete}
         onClose={() => setShowPortalTutorial(false)}
+      />
+
+      {/* Letter Modal */}
+      <LetterModal
+        isOpen={showLetterModal}
+        onClose={() => setShowLetterModal(false)}
+        onNameSubmit={handleLetterNameSubmit}
       />
     </div>
   );
