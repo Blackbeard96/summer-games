@@ -64,7 +64,7 @@ const awardBadgeForChallenge = async (userId: string, challengeName: string) => 
               badges: [...currentBadges, newBadgeEntry]
             });
             
-            console.log(`Awarded badge "${badge.name}" for completing challenge "${challengeName}"`);
+            // Badge awarded successfully
           }
         }
       }
@@ -140,14 +140,8 @@ const ChallengeTracker = () => {
   // One-time sync function to fix existing submissions
   const syncExistingSubmissions = async () => {
     if (!currentUser || !userProgress) {
-      console.log('Sync skipped: no currentUser or userProgress');
       return;
     }
-    
-    console.log('Running sync check...');
-    console.log('User progress:', userProgress);
-    console.log('Legacy challenges:', userProgress.challenges);
-    console.log('New chapters:', userProgress.chapters);
     
     // Check if ch1-artifact-challenge is submitted in legacy but not in new system
     const legacyChallenge = userProgress.challenges?.['ch1-artifact-challenge'];
@@ -166,19 +160,16 @@ const ChallengeTracker = () => {
 
   // Function to check and auto-complete challenges
   const checkAndAutoCompleteChallenges = async () => {
-    console.log('ChallengeTracker: checkAndAutoCompleteChallenges called', {
-      currentUser: !!currentUser,
-      userProgress: !!userProgress
-    });
+    // Auto-complete challenges based on user progress
     
     if (!currentUser || !userProgress) {
-      console.log('ChallengeTracker: Missing currentUser or userProgress, returning');
+      // Missing required data
       return;
     }
 
     const currentChapter = getCurrentChapter();
     if (!currentChapter) {
-      console.log('ChallengeTracker: No current chapter found');
+      // No current chapter
       return;
     }
 

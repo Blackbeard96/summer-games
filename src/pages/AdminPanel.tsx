@@ -17,6 +17,10 @@ import ManifestDiagnostic from '../components/ManifestDiagnostic';
 import TestAccountManager from '../components/TestAccountManager';
 import TestAccountLogin from '../components/TestAccountLogin';
 import FirebaseRulesChecker from '../components/FirebaseRulesChecker';
+import RoleManager from '../components/RoleManager';
+import ScorekeeperInterface from '../components/ScorekeeperInterface';
+import PPChangeApproval from '../components/PPChangeApproval';
+import RoleSystemSetup from '../components/RoleSystemSetup';
 
 interface ChallengeData {
   completed?: boolean;
@@ -60,7 +64,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountManager, setShowTestAccountManager] = useState(false);
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -708,40 +712,83 @@ const AdminPanel: React.FC = () => {
   };
 
   // Batch Power Points adjustment
-  const adjustBatchPowerPoints = async (delta: number) => {
-    if (selected.length === 0) return;
+  const adjustBatchPowerPoints = async (multiplier: number) => {
+    if (selected.length === 0) {
+      alert('Please select at least one student first.');
+      return;
+    }
+    
+    const actualDelta = batchPP * multiplier; // Use batchPP value with multiplier
+    console.log(`Batch PP Update: ${actualDelta} PP to ${selected.length} students`);
     
     try {
-      const updates = selected.map(async studentId => {
-        const student = students.find(s => s.id === studentId);
-        if (!student) return;
-        const newPP = Math.max(0, (student.powerPoints || 0) + delta);
-        const studentRef = doc(db, 'students', studentId);
-        await updateDoc(studentRef, { powerPoints: newPP });
-        return { id: studentId, newPP };
-      });
+      // Use writeBatch for atomic updates
+      const batch = writeBatch(db);
+      const updatedStudents: { id: string; newPP: number; oldPP: number }[] = [];
       
-      const results = await Promise.all(updates);
+      for (const studentId of selected) {
+        const student = students.find(s => s.id === studentId);
+        if (!student) {
+          console.warn(`Student ${studentId} not found in local data`);
+          continue;
+        }
+        
+        const oldPP = student.powerPoints || 0;
+        const newPP = oldPP + actualDelta; // Allow negative values
+        
+        console.log(`Updating ${student.displayName}: ${oldPP} → ${newPP} PP`);
+        
+        const studentRef = doc(db, 'students', studentId);
+        batch.update(studentRef, { powerPoints: newPP });
+        
+        updatedStudents.push({ id: studentId, newPP, oldPP });
+      }
+      
+      if (updatedStudents.length === 0) {
+        alert('No valid students found to update.');
+        return;
+      }
+      
+      console.log('Committing batch update...');
+      await batch.commit();
+      console.log('Batch update successful!');
+      
+      // Update local state
       setStudents(prev =>
         prev.map(s => {
-          const found = results.find(r => r && r.id === s.id);
+          const found = updatedStudents.find(u => u.id === s.id);
           return found ? { ...s, powerPoints: found.newPP } : s;
         })
       );
       
       // Show success message
-      const action = delta > 0 ? 'added' : 'removed';
-      const absDelta = Math.abs(delta);
-      setBatchMessage(`Successfully ${action} ${absDelta} Power Points to ${selected.length} student${selected.length !== 1 ? 's' : ''}!`);
+      const action = actualDelta > 0 ? 'added' : 'removed';
+      const absDelta = Math.abs(actualDelta);
+      setBatchMessage(`Successfully ${action} ${absDelta} Power Points to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}!`);
       setShowBatchSuccess(true);
       
       // Auto-hide after 3 seconds
       setTimeout(() => setShowBatchSuccess(false), 3000);
       
       setSelected([]);
-    } catch (error) {
+      
+      // Log final results
+      console.log('PP Update Results:', updatedStudents.map(u => 
+        `${students.find(s => s.id === u.id)?.displayName}: ${u.oldPP} → ${u.newPP}`
+      ));
+      
+    } catch (error: any) {
       console.error('Error updating batch power points:', error);
-      alert('Failed to update power points. Please try again.');
+      console.error('Error details:', error);
+      
+      // More specific error message
+      if (error?.code === 'permission-denied') {
+        alert('Permission denied. Please check Firestore security rules.');
+      } else if (error?.code === 'not-found') {
+        alert('Some student records were not found. Please refresh and try again.');
+      } else {
+        alert(`Failed to update power points: ${error?.message || error}`);
+      }
     }
   };
 
@@ -1586,6 +1633,66 @@ const AdminPanel: React.FC = () => {
         >
           📖 Story Progress
         </button>
+        <button
+          onClick={() => setActiveTab('roles')}
+          style={{
+            backgroundColor: activeTab === 'roles' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'roles' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          👥 Role Manager
+        </button>
+        <button
+          onClick={() => setActiveTab('scorekeeper')}
+          style={{
+            backgroundColor: activeTab === 'scorekeeper' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'scorekeeper' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          📊 Scorekeeper
+        </button>
+        <button
+          onClick={() => setActiveTab('pp-approval')}
+          style={{
+            backgroundColor: activeTab === 'pp-approval' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'pp-approval' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          🔍 PP Approval
+        </button>
+        <button
+          onClick={() => setActiveTab('role-setup')}
+          style={{
+            backgroundColor: activeTab === 'role-setup' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'role-setup' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          🚀 Role Setup
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -1598,6 +1705,14 @@ const AdminPanel: React.FC = () => {
         <GoogleClassroomIntegration />
       ) : activeTab === 'classroom-management' ? (
         <ClassroomManagement />
+      ) : activeTab === 'roles' ? (
+        <RoleManager />
+      ) : activeTab === 'scorekeeper' ? (
+        <ScorekeeperInterface />
+      ) : activeTab === 'pp-approval' ? (
+        <PPChangeApproval />
+      ) : activeTab === 'role-setup' ? (
+        <RoleSystemSetup />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',
@@ -2201,7 +2316,7 @@ const AdminPanel: React.FC = () => {
                         border: '1px solid #d1d5db',
                         borderRadius: '0.375rem'
                       }}
-                      min="1"
+                      placeholder="Amount"
                     />
                     <button
                       onClick={() => adjustBatchPowerPoints(1)}
@@ -2232,6 +2347,52 @@ const AdminPanel: React.FC = () => {
                       }}
                     >
                       Remove {batchPP} PP
+                    </button>
+                    <button
+                      onClick={async () => {
+                        console.log('=== DEBUG: Testing single student update ===');
+                        if (selected.length > 0) {
+                          const testStudentId = selected[0];
+                          const testStudent = students.find(s => s.id === testStudentId);
+                          console.log('Test student:', testStudent);
+                          
+                          try {
+                            const studentRef = doc(db, 'students', testStudentId);
+                            const testPP = (testStudent?.powerPoints || 0) - 1;
+                            console.log(`Testing update: ${testStudent?.powerPoints || 0} → ${testPP}`);
+                            
+                            await updateDoc(studentRef, { powerPoints: testPP });
+                            console.log('✅ Single update successful!');
+                            alert('✅ Single update test passed! Batch should work now.');
+                            
+                            // Refresh students data
+                            const studentsSnapshot = await getDocs(collection(db, 'students'));
+                            const updatedStudents = studentsSnapshot.docs.map(doc => ({
+                              id: doc.id,
+                              ...doc.data()
+                            })) as Student[];
+                            setStudents(updatedStudents);
+                            
+                          } catch (testError: any) {
+                            console.error('❌ Single update failed:', testError);
+                            alert(`❌ Test failed: ${testError?.message || testError}`);
+                          }
+                        } else {
+                          alert('Please select at least one student to test.');
+                        }
+                      }}
+                      style={{
+                        backgroundColor: '#f59e0b',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        padding: '0.5rem 1rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500'
+                      }}
+                    >
+                      🔍 Test Update
                     </button>
                     <button
                       onClick={() => setShowBulkDeleteConfirm(true)}

@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { CHAPTERS } from '../types/chapters';
 import OAuthSetupModal from './OAuthSetupModal';
+import ErrorBoundary from './ErrorBoundary';
 
 const classroomScopes = [
   'openid',
@@ -26,6 +27,7 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
   const [selectedChallenge, setSelectedChallenge] = useState('');
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   // Get all challenges from all chapters
   const challenges = CHAPTERS.flatMap(chapter => 
@@ -40,69 +42,117 @@ const ChallengeMappingDropdown = ({ assignmentId, courseId, assignments, courses
   const handleMap = async () => {
     if (!selectedChallenge) return;
     setSaving(true);
+    setError(null);
+    
     try {
       // Find the assignment details from the assignments list
       const assignment = assignments.find(a => a.id === assignmentId);
       const course = courses.find(c => c.id === courseId);
       
-      console.log('Mapping assignment:', assignment);
-      console.log('Assignment title:', assignment?.title);
-      console.log('Assignment ID:', assignmentId);
-      console.log('All assignments:', assignments);
-      console.log('Course:', course);
+      if (!assignment) {
+        throw new Error('Assignment not found');
+      }
+      
+      if (!course) {
+        throw new Error('Course not found');
+      }
       
       const selectedChallengeData = challenges.find(c => c.id === selectedChallenge);
+      if (!selectedChallengeData) {
+        throw new Error('Challenge not found');
+      }
       
       const mappingData = {
         challengeId: selectedChallenge,
         courseId: courseId,
-        title: assignment?.title || '',
-        description: assignment?.description || '',
-        dueDate: assignment?.dueDate || null,
-        courseName: course?.name || '',
-        chapterId: selectedChallengeData?.chapterId || null,
-        chapterTitle: selectedChallengeData?.chapterTitle || '',
+        title: assignment.title || '',
+        description: assignment.description || '',
+        dueDate: assignment.dueDate || null,
+        courseName: course.name || '',
+        chapterId: selectedChallengeData.chapterId || null,
+        chapterTitle: selectedChallengeData.chapterTitle || '',
         mappedAt: new Date()
       };
       
-      console.log('Saving mapping data:', mappingData);
-      
       await setDoc(doc(db, 'chapterClassroomMap', assignmentId), mappingData);
       setSuccess(true);
-      console.log('Successfully saved mapping for assignment:', assignmentId);
-      setTimeout(() => setSuccess(false), 2000);
+      setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      alert('Failed to map assignment.');
+      console.error('Error mapping assignment:', err);
+      setError(err instanceof Error ? err.message : 'Failed to map assignment. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <select
-        value={selectedChallenge}
-        onChange={e => setSelectedChallenge(e.target.value)}
-        style={{ marginRight: 8, minWidth: '250px' }}
-      >
-        <option value="">Select Chapter Challenge</option>
-        {CHAPTERS.map(chapter => (
-          <optgroup key={chapter.id} label={`Chapter ${chapter.id}: ${chapter.title}`}>
-            {chapter.challenges.map(challenge => (
-              <option key={challenge.id} value={challenge.id}>
-                {challenge.title}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      <button onClick={handleMap} disabled={!selectedChallenge || saving}>
-        {saving ? 'Saving...' : 'Attach to Challenge'}
-      </button>
-      {success && <span style={{ color: 'green', marginLeft: 8 }}>✓ Mapped!</span>}
+    <div className="mt-2">
+      <div className="flex items-center gap-2 mb-1">
+        <select
+          value={selectedChallenge}
+          onChange={e => setSelectedChallenge(e.target.value)}
+          className="min-w-64 px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={saving}
+          aria-label="Select a chapter challenge to map to this assignment"
+          aria-describedby="challenge-selection-help"
+        >
+          <option value="">Select Chapter Challenge</option>
+          {CHAPTERS.map(chapter => (
+            <optgroup key={chapter.id} label={`Chapter ${chapter.id}: ${chapter.title}`}>
+              {chapter.challenges.map(challenge => (
+                <option key={challenge.id} value={challenge.id}>
+                  {challenge.title}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <button 
+          onClick={handleMap} 
+          disabled={!selectedChallenge || saving}
+          className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
+            !selectedChallenge || saving 
+              ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
+              : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer'
+          }`}
+          aria-label={saving ? 'Saving assignment mapping' : 'Map assignment to selected challenge'}
+          aria-disabled={!selectedChallenge || saving}
+        >
+          {saving ? 'Saving...' : 'Attach to Challenge'}
+        </button>
+      </div>
+      <div id="challenge-selection-help" className="text-xs text-gray-500 mt-1">
+        Choose a chapter challenge to link with this Google Classroom assignment
+      </div>
+      {success && (
+        <div 
+          role="status" 
+          aria-live="polite"
+          className="text-green-600 text-sm font-medium mt-1"
+        >
+          ✓ Successfully mapped to challenge!
+        </div>
+      )}
+      {error && (
+        <div 
+          role="alert" 
+          aria-live="assertive"
+          className="text-red-600 text-sm font-medium mt-1"
+        >
+          ⚠ {error}
+        </div>
+      )}
     </div>
   );
 };
+
+// Add CSS for loading spinner animation
+const spinnerStyle = `
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+`;
 
 const GoogleClassroomIntegration: React.FC = () => {
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -125,79 +175,192 @@ const GoogleClassroomIntegration: React.FC = () => {
             Authorization: `Bearer ${tokenResponse.access_token}`,
           },
         });
+        
+        if (!res.ok) {
+          throw new Error(`Failed to fetch courses: ${res.status} ${res.statusText}`);
+        }
+        
         const data = await res.json();
         setCourses(data.courses || []);
+        
+        if (!data.courses || data.courses.length === 0) {
+          setError('No courses found. Make sure you have access to Google Classroom courses.');
+        }
       } catch (err) {
-        setError('Failed to fetch courses.');
+        console.error('Error fetching courses:', err);
+        setError(err instanceof Error ? err.message : 'Failed to fetch courses. Please try again.');
       } finally {
         setLoading(false);
       }
     },
-    onError: () => {
-      setError('Login Failed');
+    onError: (errorResponse) => {
+      console.error('Google login error:', errorResponse);
+      setError('Google login failed. Please check your OAuth setup and try again.');
       setShowOAuthSetupModal(true);
     },
     flow: 'implicit',
   });
 
   const fetchAssignments = async (courseId: string) => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setError('No access token available. Please sign in again.');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setSelectedCourse(courseId);
+    
     try {
       const res = await fetch(`https://classroom.googleapis.com/v1/courses/${courseId}/courseWork`, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
       });
+      
+      if (!res.ok) {
+        throw new Error(`Failed to fetch assignments: ${res.status} ${res.statusText}`);
+      }
+      
       const data = await res.json();
-      setAssignments(data.courseWork || []);
+      const assignments = data.courseWork || [];
+      setAssignments(assignments);
+      
+      if (assignments.length === 0) {
+        setError('No assignments found for this course.');
+      }
     } catch (err) {
-      setError('Failed to fetch assignments.');
+      console.error('Error fetching assignments:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch assignments. Please try again.');
+      setAssignments([]);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: 800, margin: '2rem auto', padding: 24, background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.07)' }}>
-      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 16 }}>Chapter Assignment Integration</h2>
+    <ErrorBoundary
+      fallback={
+        <div style={{ 
+          maxWidth: 800, 
+          margin: '2rem auto', 
+          padding: 24, 
+          background: '#fff', 
+          borderRadius: 12, 
+          boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+          textAlign: 'center' 
+        }}>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 16, color: '#dc2626' }}>
+            Google Classroom Integration Error
+          </h2>
+          <p style={{ color: '#6b7280', marginBottom: 16 }}>
+            There was an error loading the Google Classroom integration. Please refresh the page or try again later.
+          </p>
+          <button 
+            onClick={() => window.location.reload()}
+            style={{
+              backgroundColor: '#4285F4',
+              color: 'white',
+              border: 'none',
+              borderRadius: 4,
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              fontSize: '1rem',
+              cursor: 'pointer'
+            }}
+          >
+            Refresh Page
+          </button>
+        </div>
+      }
+    >
+      <style>{spinnerStyle}</style>
+      <div className="max-w-4xl mx-auto my-8 p-6 bg-white rounded-xl shadow-lg border border-gray-100">
+        <h2 className="text-2xl font-bold mb-6 text-gray-900">Chapter Assignment Integration</h2>
       {!accessToken ? (
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <button onClick={() => login()} style={{ background: '#4285F4', color: 'white', border: 'none', borderRadius: 4, padding: '0.75rem 1.5rem', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
+        <div className="flex gap-3 items-center">
+          <button 
+            onClick={() => login()} 
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-md hover:shadow-lg"
+            aria-label="Sign in with Google to access your classroom data"
+          >
             Sign in with Google
           </button>
           <button 
             onClick={() => setShowOAuthSetupModal(true)} 
-            style={{ 
-              background: 'transparent', 
-              color: '#6b7280', 
-              border: '1px solid #d1d5db', 
-              borderRadius: 4, 
-              padding: '0.75rem 1.5rem', 
-              fontSize: '0.875rem', 
-              cursor: 'pointer' 
-            }}
+            className="bg-transparent text-gray-500 hover:text-gray-700 border border-gray-300 hover:border-gray-400 font-medium py-3 px-6 rounded-lg transition-colors duration-200"
           >
             OAuth Setup Help
           </button>
         </div>
       ) : (
         <div>
-          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Your Courses</h3>
-          {loading && <div>Loading...</div>}
-          {error && <div style={{ color: 'red' }}>{error}</div>}
+          <div className="flex justify-between items-center mt-6 mb-4">
+            <h3 className="text-xl font-semibold text-gray-900">Your Courses</h3>
+            <button
+              onClick={() => {
+                setAccessToken(null);
+                setCourses([]);
+                setAssignments([]);
+                setSelectedCourse(null);
+                setError(null);
+              }}
+              className="px-3 py-2 bg-transparent text-gray-500 hover:text-gray-700 border border-gray-300 hover:border-gray-400 rounded-md text-sm font-medium transition-colors duration-200"
+            >
+              Sign Out
+            </button>
+          </div>
+          
+          {loading && (
+            <div 
+              role="status" 
+              aria-live="polite"
+              className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg mb-4"
+            >
+              <div 
+                aria-hidden="true"
+                className="w-4 h-4 border-2 border-gray-200 border-t-blue-600 rounded-full animate-spin"
+              ></div>
+              <span className="text-gray-600">Loading...</span>
+            </div>
+          )}
+          
+          {error && (
+            <div 
+              role="alert"
+              aria-live="assertive"
+              className="text-red-600 bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm"
+            >
+              ⚠ {error}
+            </div>
+          )}
+          
           <ul style={{ listStyle: 'none', padding: 0 }}>
             {courses.map((course: any) => (
               <li key={course.id} style={{ marginBottom: 8 }}>
                 <button
                   onClick={() => fetchAssignments(course.id)}
-                  style={{ background: selectedCourse === course.id ? '#4f46e5' : '#e5e7eb', color: selectedCourse === course.id ? 'white' : '#1f2937', border: 'none', borderRadius: 4, padding: '0.5rem 1rem', fontWeight: 'bold', cursor: 'pointer', marginRight: 8 }}
+                  disabled={loading}
+                  style={{ 
+                    background: selectedCourse === course.id ? '#4f46e5' : '#f9fafb', 
+                    color: selectedCourse === course.id ? 'white' : '#1f2937', 
+                    border: selectedCourse === course.id ? 'none' : '1px solid #e5e7eb',
+                    borderRadius: 6, 
+                    padding: '12px 16px', 
+                    fontWeight: '500', 
+                    cursor: loading ? 'not-allowed' : 'pointer', 
+                    marginRight: 8,
+                    transition: 'all 0.2s',
+                    opacity: loading ? 0.6 : 1
+                  }}
+                  aria-label={`Load assignments for ${course.name}${course.section ? `, Section: ${course.section}` : ''}`}
+                  aria-pressed={selectedCourse === course.id}
                 >
                   {course.name}
                 </button>
-                <span style={{ color: '#6b7280', fontSize: 14 }}>{course.section ? `Section: ${course.section}` : ''}</span>
+                <span style={{ color: '#6b7280', fontSize: 14 }}>
+                  {course.section ? `Section: ${course.section}` : ''}
+                </span>
               </li>
             ))}
           </ul>
@@ -222,13 +385,14 @@ const GoogleClassroomIntegration: React.FC = () => {
         </div>
       )}
 
-      {/* OAuth Setup Modal */}
-      <OAuthSetupModal
-        isOpen={showOAuthSetupModal}
-        onClose={() => setShowOAuthSetupModal(false)}
-        clientId="281092791460-085tqid3jq8e9llqdmlps0f5d6c835n5.apps.googleusercontent.com"
-      />
-    </div>
+        {/* OAuth Setup Modal */}
+        <OAuthSetupModal
+          isOpen={showOAuthSetupModal}
+          onClose={() => setShowOAuthSetupModal(false)}
+          clientId="281092791460-085tqid3jq8e9llqdmlps0f5d6c835n5.apps.googleusercontent.com"
+        />
+      </div>
+    </ErrorBoundary>
   );
 };
 

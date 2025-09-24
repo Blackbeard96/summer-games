@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
+import StudentListItem from './StudentListItem';
 import { useGoogleLogin } from '@react-oauth/google';
 
 // Google Classroom API types
@@ -917,132 +918,40 @@ const ClassroomManagement: React.FC = () => {
                     if (!student) return null;
 
                     return (
-                      <div key={studentId} style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        padding: '0.5rem',
-                        backgroundColor: '#f9fafb',
-                        borderRadius: '0.375rem'
-                      }}>
-                        <img
-                          src={student.photoURL || '/default-avatar.png'}
-                          alt={student.displayName}
-                          style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '50%',
-                            objectFit: 'cover'
-                          }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937' }}>
-                            {student.displayName}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                            Level {student.level} • {student.xp} XP
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#1f2937' }}>
-                              {student.powerPoints || 0} PP
-                            </span>
-                            <div style={{ display: 'flex', gap: '0.25rem' }}>
-                              <button
-                                onClick={() => adjustPowerPoints(student.id, 1)}
-                                style={{
-                                  backgroundColor: '#10b981',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '0.25rem',
-                                  padding: '0.125rem 0.375rem',
-                                  cursor: 'pointer',
-                                  fontSize: '0.625rem',
-                                  fontWeight: '500'
-                                }}
-                              >
-                                +
-                              </button>
-                              <button
-                                onClick={() => adjustPowerPoints(student.id, -1)}
-                                style={{
-                                  backgroundColor: '#dc2626',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '0.25rem',
-                                  padding: '0.125rem 0.375rem',
-                                  cursor: 'pointer',
-                                  fontSize: '0.625rem',
-                                  fontWeight: '500'
-                                }}
-                              >
-                                -
-                              </button>
-                            </div>
-                            <input
-                              type="number"
-                              value={ppAmount[student.id] || ''}
-                              onChange={(e) => setPPAmount(prev => ({ 
-                                ...prev, 
-                                [student.id]: e.target.value ? parseInt(e.target.value) : undefined 
-                              }))}
-                              onKeyPress={(e) => {
-                                if (e.key === 'Enter') {
-                                  const amount = ppAmount[student.id];
-                                  if (amount !== undefined && amount !== 0) {
-                                    setPowerPoints(student.id, amount);
-                                    setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
-                                  }
-                                }
-                              }}
-                              style={{
-                                width: '50px',
-                                padding: '0.125rem 0.25rem',
-                                border: '1px solid #d1d5db',
-                                borderRadius: '0.25rem',
-                                fontSize: '0.625rem',
-                                textAlign: 'center'
-                              }}
-                              placeholder="Set"
-                            />
-                            <button
-                              onClick={() => {
-                                const amount = ppAmount[student.id];
-                                if (amount !== undefined && amount !== 0) {
-                                  setPowerPoints(student.id, amount);
-                                  setPPAmount(prev => ({ ...prev, [student.id]: undefined }));
-                                }
-                              }}
-                              disabled={!ppAmount[student.id] || ppAmount[student.id] === 0}
-                              style={{
-                                backgroundColor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? '#3b82f6' : '#9ca3af',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '0.25rem',
-                                padding: '0.125rem 0.375rem',
-                                cursor: ppAmount[student.id] && ppAmount[student.id] !== 0 ? 'pointer' : 'not-allowed',
-                                fontSize: '0.625rem',
-                                fontWeight: '500'
-                              }}
-                            >
-                              Set
-                            </button>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => removeStudentFromClassroom(classroom.id, studentId)}
-                          style={{
-                            backgroundColor: '#fef2f2',
-                            color: '#dc2626',
-                            border: '1px solid #fecaca',
-                            borderRadius: '0.25rem',
-                            padding: '0.25rem 0.5rem',
-                            fontSize: '0.75rem',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Remove
-                        </button>
-                      </div>
+                      <StudentListItem
+                        key={studentId}
+                        student={student}
+                        showPowerPoints={true}
+                        showLevel={true}
+                        onAdjustPowerPoints={adjustPowerPoints}
+                        onSetPowerPoints={(studentId, amount) => {
+                          setPowerPoints(studentId, amount);
+                          setPPAmount(prev => ({ ...prev, [studentId]: undefined }));
+                        }}
+                        ppInputValue={ppAmount[student.id]}
+                        onPPInputChange={(studentId, value) => setPPAmount(prev => ({ 
+                          ...prev, 
+                          [studentId]: value 
+                        }))}
+                        compact={true}
+                        additionalContent={
+                          <button
+                            onClick={() => removeStudentFromClassroom(classroom.id, studentId)}
+                            style={{
+                              backgroundColor: '#fef2f2',
+                              color: '#dc2626',
+                              border: '1px solid #fecaca',
+                              borderRadius: '0.25rem',
+                              padding: '0.25rem 0.5rem',
+                              fontSize: '0.75rem',
+                              cursor: 'pointer'
+                            }}
+                            aria-label={`Remove ${student.displayName} from classroom`}
+                          >
+                            Remove
+                          </button>
+                        }
+                      />
                     );
                   })}
                 </div>

@@ -2,7 +2,9 @@ import React, { useState, useEffect, CSSProperties, MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, getDocs, updateDoc, DocumentReference, DocumentData } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc } from 'firebase/firestore';
+import { UserRole } from '../types/roles';
+import { logger } from '../utils/debugLogger';
 
 const tooltipStyle: CSSProperties = {
   position: 'absolute',
@@ -53,6 +55,7 @@ const NavBar = () => {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [userRole, setUserRole] = useState<UserRole>('student');
 
   // Check if device is mobile
   useEffect(() => {
@@ -105,6 +108,40 @@ const NavBar = () => {
     };
 
     fetchNotifications();
+  }, [currentUser]);
+
+  // Check user role for scorekeeper navigation
+  useEffect(() => {
+    const checkUserRole = async () => {
+      if (!currentUser) {
+        setUserRole('student');
+        return;
+      }
+      
+      try {
+        logger.roles.debug('NavBar: Checking user role for:', currentUser.uid);
+        const roleDoc = await getDoc(doc(db, 'userRoles', currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          const detectedRole = roleData.role || 'student';
+          logger.roles.info('NavBar: User role detected:', { 
+            userId: currentUser.uid, 
+            email: currentUser.email,
+            role: detectedRole,
+            classId: roleData.classId 
+          });
+          setUserRole(detectedRole);
+        } else {
+          logger.roles.warn('NavBar: No role document found for user:', currentUser.uid);
+          setUserRole('student');
+        }
+      } catch (error) {
+        logger.roles.error('NavBar: Error checking user role:', error);
+        setUserRole('student');
+      }
+    };
+
+    checkUserRole();
   }, [currentUser]);
 
   // Close notifications dropdown when clicking outside
@@ -201,14 +238,58 @@ const NavBar = () => {
     { to: '#', label: '📚 Review Tutorials', tooltip: 'Review Tutorials', isButton: true, onClick: () => (window as any).tutorialTriggers?.showReviewModal?.() },
   ] : [];
 
+  // Scorekeeper navigation items (only for scorekeepers)
+  // Temporary: Also show for Blackbeard for testing
+  const isScorekeeper = userRole === 'scorekeeper' || 
+    (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development');
+  
+  const scorekeeperNavItems = (currentUser && isScorekeeper) ? [
+    { to: '/scorekeeper', label: '📊 Scorekeeper', tooltip: 'Manage Class Power Points', isScorekeeper: true }
+  ] : [];
+
   const adminNavItems = currentUser?.email === 'edm21179@gmail.com' ? [
     { to: '/admin', label: "Sage's Chamber", tooltip: 'Admin Panel', isAdmin: true }
   ] : [];
 
+  // Debug navigation items generation
+  logger.roles.debug('NavBar: Navigation items generated:', {
+    currentUser: !!currentUser,
+    userEmail: currentUser?.email,
+    userRole,
+    scorekeeperNavItems: scorekeeperNavItems.length,
+    userNavItems: userNavItems.length,
+    adminNavItems: adminNavItems.length
+  });
+
+  // Temporary debug indicator for role detection
+  if (currentUser && process.env.NODE_ENV === 'development') {
+    console.log(`🎯 NavBar Debug - User: ${currentUser.email}, Role: ${userRole}, Scorekeeper items: ${scorekeeperNavItems.length}`);
+  }
+
   return (
-    <nav className="nav" style={{
-      backgroundColor: '#1f2937',
-      padding: isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
+    <>
+      {/* Temporary debug badge for development */}
+      {currentUser && process.env.NODE_ENV === 'development' && (
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          backgroundColor: userRole === 'scorekeeper' ? '#059669' : '#ef4444',
+          color: 'white',
+          padding: '4px 8px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          zIndex: 9999,
+          fontFamily: 'monospace',
+          minWidth: '80px',
+          textAlign: 'center'
+        }}>
+          Role: {userRole || 'loading...'}
+        </div>
+      )}
+      <nav className="nav" style={{
+        backgroundColor: '#1f2937',
+        padding: isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
       boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
       position: 'sticky',
       top: 0,
@@ -280,6 +361,13 @@ const NavBar = () => {
                 ) : (
                   <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
                 )}
+                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+              </div>
+            ))}
+
+            {scorekeeperNavItems.map((item) => (
+              <div key={item.to} style={{ ...navItemStyle, backgroundColor: '#059669' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
               </div>
             ))}
@@ -678,6 +766,51 @@ const NavBar = () => {
               </div>
             )}
 
+            {/* Scorekeeper Navigation Items */}
+            {scorekeeperNavItems.length > 0 && (
+              <div style={{ 
+                borderTop: '1px solid #374151', 
+                paddingTop: '1.5rem',
+                marginBottom: '1.5rem'
+              }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  color: '#9ca3af',
+                  fontWeight: '600',
+                  marginBottom: '0.75rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Scorekeeper Tools
+                </div>
+                {scorekeeperNavItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={closeMobileMenu}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      color: 'white',
+                      textDecoration: 'none',
+                      padding: '0.875rem 1rem',
+                      borderRadius: '0.5rem',
+                      marginBottom: '0.25rem',
+                      transition: 'all 0.2s ease',
+                      fontSize: '1rem',
+                      fontWeight: '500',
+                      minHeight: '48px',
+                      backgroundColor: '#059669'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = '#047857'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = '#059669'}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            )}
+
             {/* Admin Navigation Items */}
             {adminNavItems.length > 0 && (
               <div style={{ 
@@ -766,6 +899,7 @@ const NavBar = () => {
         </div>
       )}
     </nav>
+    </>
   );
 };
 

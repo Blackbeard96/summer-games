@@ -5,18 +5,32 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Users collection - allow scorekeepers to read all users
+    match /users/{userId} {
+      allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
     }
     
     // Students collection - allow users to read/write their own documents
     match /students/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Students collection - allow scorekeepers to read all students
+    match /students/{userId} {
+      allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
     }
     
     // Test account access - allow admin access to test accounts
@@ -91,11 +105,54 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
+    // User roles collection - allow users to read their own role, admins to manage all roles
+    match /userRoles/{userId} {
+      allow read: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Classrooms collection - allow admins to manage classrooms
+    match /classrooms/{classroomId} {
+      allow read: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Classrooms collection - allow scorekeepers to read classrooms
+    match /classrooms/{classroomId} {
+      allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+    }
+    
     // Badges collection - allow admins to manage badges
     match /badges/{badgeId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // PP Change Requests collection - allow scorekeepers to create, admins to manage
+    match /ppChangeRequests/{requestId} {
+      allow create: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }

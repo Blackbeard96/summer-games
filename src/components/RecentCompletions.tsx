@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { db } from '../firebase';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 
@@ -13,50 +13,52 @@ interface Completion {
   timestamp: any;
 }
 
-const RecentCompletions = () => {
+const RecentCompletions = React.memo(() => {
   const [completions, setCompletions] = useState<Completion[]>([]);
 
-  useEffect(() => {
-    const fetchCompletions = async () => {
-      const q = query(
-        collection(db, 'challengeCompletions'),
-        orderBy('timestamp', 'desc'),
-        limit(5)
-      );
-      const snapshot = await getDocs(q);
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Completion[];
-      setCompletions(list);
-    };
-
-    fetchCompletions();
+  const fetchCompletions = useCallback(async () => {
+    const q = query(
+      collection(db, 'challengeCompletions'),
+      orderBy('timestamp', 'desc'),
+      limit(5)
+    );
+    const snapshot = await getDocs(q);
+    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Completion[];
+    setCompletions(list);
   }, []);
 
-  const getCharacterIcon = (character: string) => {
-    const icons: {[key: string]: string} = {
-      'Sage': '🧙‍♂️',
-      'Alejandra': '🌟',
-      'Greg': '💪',
-      'Allen': '🔥',
-      'Khalil': '🐍'
-    };
-    return icons[character] || '✨';
-  };
+  useEffect(() => {
+    fetchCompletions();
+  }, [fetchCompletions]);
 
-  const getManifestationColor = (type: string) => {
-    const colors: {[key: string]: string} = {
-      'Fire': '#dc2626',
-      'Water': '#2563eb',
-      'Earth': '#16a34a',
-      'Air': '#7c3aed',
-      'Imposition': '#fbbf24',
-      'Memory': '#a78bfa',
-      'Intelligence': '#34d399',
-      'Dimensional': '#60a5fa',
-      'Truth': '#f87171',
-      'Creation': '#f59e0b'
-    };
-    return colors[type] || '#6b7280';
-  };
+  const characterIcons = useMemo((): Record<string, string> => ({
+    'Sage': '🧙‍♂️',
+    'Alejandra': '🌟',
+    'Greg': '💪',
+    'Allen': '🔥',
+    'Khalil': '🐍'
+  }), []);
+
+  const manifestationColors = useMemo((): Record<string, string> => ({
+    'Fire': '#dc2626',
+    'Water': '#2563eb',
+    'Earth': '#16a34a',
+    'Air': '#7c3aed',
+    'Imposition': '#fbbf24',
+    'Memory': '#a78bfa',
+    'Intelligence': '#34d399',
+    'Dimensional': '#60a5fa',
+    'Truth': '#f87171',
+    'Creation': '#f59e0b'
+  }), []);
+
+  const getCharacterIcon = useCallback((character: string) => {
+    return characterIcons[character as keyof typeof characterIcons] || '✨';
+  }, [characterIcons]);
+
+  const getManifestationColor = useCallback((type: string) => {
+    return manifestationColors[type as keyof typeof manifestationColors] || '#6b7280';
+  }, [manifestationColors]);
 
   return (
     <div style={{ 
@@ -158,6 +160,8 @@ const RecentCompletions = () => {
       )}
     </div>
   );
-};
+});
+
+RecentCompletions.displayName = 'RecentCompletions';
 
 export default RecentCompletions; 

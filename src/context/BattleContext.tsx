@@ -15,6 +15,7 @@ import {
   orderBy,
   serverTimestamp 
 } from 'firebase/firestore';
+import { logger } from '../utils/debugLogger';
 import { 
   Vault, 
   Move, 
@@ -104,7 +105,7 @@ export const useBattle = () => {
 };
 
 export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  console.log('🔥 NEW CODE LOADED - BattleProvider initialized!');
+  // logger.battle.debug('BattleProvider initialized!');
   const { currentUser } = useAuth();
   const [vault, setVault] = useState<Vault | null>(null);
   const [moves, setMoves] = useState<Move[]>([]);
@@ -129,8 +130,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
         const userManifest = studentDoc.exists() ? (studentDoc.data().manifest?.manifestId || studentDoc.data().manifestationType || 'reading') : 'reading';
         
-        console.log('BattleContext: Player PP from student data:', playerPP);
-        console.log('BattleContext: User manifest for move filtering:', userManifest);
+        logger.battle.debug('Player PP from student data:', playerPP);
+        logger.battle.debug('User manifest for move filtering:', userManifest);
         
         // Initialize or fetch vault
         const vaultRef = doc(db, 'vaults', currentUser.uid);
@@ -154,7 +155,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             maxMovesPerDay: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             lastMoveReset: new Date(),
           };
-          console.log('BattleContext: Creating new vault with PP:', playerPP);
+          logger.battle.debug('Creating new vault with PP:', playerPP);
           await setDoc(vaultRef, newVault);
           setVault(newVault);
         } else {
@@ -294,6 +295,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       } catch (err) {
         console.error('Error initializing battle data:', err);
+        
+        // TEMPORARY FIX: Don't show error to user for Firestore assertion errors
+        // These are internal Firebase issues, not user-facing problems
+        if (err instanceof Error && err.message.includes('INTERNAL ASSERTION FAILED')) {
+          console.warn('BattleContext: Firestore internal assertion error - using defaults');
+          // Set default values silently
+          const defaultVault: Vault = {
+            id: currentUser.uid,
+            ownerId: currentUser.uid,
+            capacity: 1000,
+            currentPP: 0,
+            shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+            maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+            firewall: 10,
+            lastUpgrade: new Date(),
+            debtStatus: false,
+            debtAmount: 0,
+            lastDuesPaid: new Date(),
+            movesRemaining: 10,
+            maxMovesPerDay: 10,
+            lastMoveReset: new Date()
+          };
+          setVault(defaultVault);
+          setActionCards([]);
+          return; // Don't set error state
+        }
+        
         setError('Failed to initialize battle data. Please refresh the page or try again later.');
         
         // Set default values to prevent complete failure
@@ -353,11 +381,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (studentDoc.exists()) {
         // Just log the student data for debugging, don't sync
         const studentData = studentDoc.data();
-        console.log('BattleContext: Student data updated:', {
-          powerPoints: studentData.powerPoints,
-          xp: studentData.xp,
-          timestamp: new Date().toISOString()
-        });
+        // logger.battle.debug('Student data updated:', {
+        //   powerPoints: studentData.powerPoints,
+        //   xp: studentData.xp,
+        //   timestamp: new Date().toISOString()
+        // });
       }
     });
 
@@ -365,7 +393,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       unsubscribeVault();
       unsubscribeStudent();
     };
-  }, [currentUser, vault]);
+  }, [currentUser]);
 
   // Listen for battle lobbies - simplified to avoid index requirements
   useEffect(() => {
@@ -378,44 +406,44 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       where('status', 'in', ['waiting', 'starting'])
     );
     
-    const unsubscribe = onSnapshot(lobbiesQuery, (snapshot) => {
+    const unsubscribeLobbies = onSnapshot(lobbiesQuery, (snapshot) => {
       const lobbies: BattleLobby[] = [];
       snapshot.forEach((doc) => {
         const lobbyData = { id: doc.id, ...doc.data() } as BattleLobby;
-        console.log('BattleContext: Found battle lobby:', lobbyData);
+        logger.battle.debug('Found battle lobby:', lobbyData);
         lobbies.push(lobbyData);
       });
-      console.log('BattleContext: Setting battle lobbies:', lobbies);
+      logger.battle.debug('Setting battle lobbies:', lobbies);
       setBattleLobbies(lobbies);
     }, (error) => {
-      console.error('BattleContext: Error listening to battle lobbies:', error);
+      logger.battle.error('Error listening to battle lobbies:', error);
     });
 
-    return () => unsubscribe();
+    return () => unsubscribeLobbies();
   }, [currentUser]);
 
   // Listen for offline moves - simplified to avoid index requirements
   useEffect(() => {
     if (!currentUser) return;
 
-    console.log('BattleContext: Setting up offline moves listener');
+    // logger.battle.debug('Setting up offline moves listener');
     
     const movesQuery = query(
       collection(db, 'offlineMoves'),
       where('userId', '==', currentUser.uid)
     );
     
-    const unsubscribe = onSnapshot(movesQuery, (snapshot) => {
+    const unsubscribeMoves = onSnapshot(movesQuery, (snapshot) => {
       const moves: OfflineMove[] = [];
       snapshot.forEach((doc) => {
         const moveData = { id: doc.id, ...doc.data() } as OfflineMove;
-        console.log('BattleContext: Found offline move:', moveData);
+        // logger.battle.debug('Found offline move:', moveData);
         moves.push(moveData);
       });
-      console.log('BattleContext: Setting offline moves:', moves);
-      console.log('BattleContext: Total offline moves count:', moves.length);
-      console.log('BattleContext: Vault attack moves count:', moves.filter(m => m.type === 'vault_attack').length);
-      console.log('BattleContext: Move restore moves count:', moves.filter(m => m.type === 'move_restore').length);
+      // logger.battle.debug('Setting offline moves:', moves);
+      // logger.battle.debug('Total offline moves count:', moves.length);
+      // logger.battle.debug('Vault attack moves count:', moves.filter(m => m.type === 'vault_attack').length);
+      // logger.battle.debug('Move restore moves count:', moves.filter(m => m.type === 'move_restore').length);
       
       // Check if this is a new vault_attack record (indicating a move was just consumed)
       const newVaultAttacks = moves.filter(m => m.type === 'vault_attack');
@@ -426,33 +454,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Trigger a recalculation of remaining offline moves
       const remainingMoves = getRemainingOfflineMoves();
-      console.log('BattleContext: Offline moves updated, remaining moves:', remainingMoves);
+      // logger.battle.debug('Offline moves updated, remaining moves:', remainingMoves);
       
       // If a new vault_attack was added, this means a move was consumed
       if (hasNewVaultAttack) {
-        console.log('BattleContext: New vault_attack detected - move was consumed!');
-        console.log('BattleContext: Previous vault attacks:', previousVaultAttacks.length);
-        console.log('BattleContext: New vault attacks:', newVaultAttacks.length);
-        console.log('BattleContext: Remaining moves after consumption:', remainingMoves);
+        logger.battle.info('New vault_attack detected - move was consumed!');
+        logger.battle.debug('Previous vault attacks:', previousVaultAttacks.length);
+        logger.battle.debug('New vault attacks:', newVaultAttacks.length);
+        logger.battle.debug('Remaining moves after consumption:', remainingMoves);
       }
       
       // Automatically trigger debug update to ensure UI consistency
-      console.log('BattleContext: Auto-triggering debug update after offline moves change');
-      console.log('BattleContext: Current offline moves count:', moves.length);
-      console.log('BattleContext: Current attack history count:', attackHistory.length);
-      console.log('BattleContext: Calculated remaining moves:', remainingMoves);
+      // logger.battle.debug('Auto-triggering debug update after offline moves change');
+      // logger.battle.debug('Current offline moves count:', moves.length);
+      // logger.battle.debug('Current attack history count:', attackHistory.length);
+      // logger.battle.debug('Calculated remaining moves:', remainingMoves);
     }, (error) => {
-      console.error('BattleContext: Error listening to offline moves:', error);
+      logger.battle.error('Error listening to offline moves:', error);
     });
 
-    return () => unsubscribe();
-  }, [currentUser, offlineMoves]); // Added offlineMoves to dependencies to detect changes
+    return () => unsubscribeMoves();
+  }, [currentUser]); // Removed offlineMoves from dependencies to prevent listener recreation
 
   // Listen for attack history (attacks by or against current user)
   useEffect(() => {
     if (!currentUser) return;
 
-    console.log('BattleContext: Setting up attack history listener');
+    logger.battle.debug('Setting up attack history listener');
     
     // Get all attacks where user is attacker or target
     const attacksQuery = query(
@@ -460,27 +488,27 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       where('attackerId', '==', currentUser.uid)
     );
     
-    const unsubscribe = onSnapshot(attacksQuery, (snapshot) => {
+    const unsubscribeAttacks = onSnapshot(attacksQuery, (snapshot) => {
       const attacks: VaultSiegeAttack[] = [];
       snapshot.forEach((doc) => {
         const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
-        console.log('BattleContext: Found attack by user:', attackData);
+        logger.battle.debug('Found attack by user:', attackData);
         attacks.push(attackData);
       });
-      console.log('BattleContext: Setting attack history:', attacks);
+      logger.battle.debug('Setting attack history:', attacks);
       setAttackHistory(attacks);
       
       // Automatically trigger debug update to ensure UI consistency
       const remainingMoves = getRemainingOfflineMoves();
-      console.log('BattleContext: Auto-triggering debug update after attack history change');
-      console.log('BattleContext: Current offline moves count:', offlineMoves.length);
-      console.log('BattleContext: Current attack history count:', attacks.length);
-      console.log('BattleContext: Calculated remaining moves:', remainingMoves);
+      // logger.battle.debug('Auto-triggering debug update after attack history change');
+      // logger.battle.debug('Current offline moves count:', offlineMoves.length);
+      // logger.battle.debug('Current attack history count:', attacks.length);
+      // logger.battle.debug('Calculated remaining moves:', remainingMoves);
     }, (error) => {
-      console.error('BattleContext: Error listening to attack history:', error);
+      logger.battle.error('Error listening to attack history:', error);
     });
 
-    return () => unsubscribe();
+    return () => unsubscribeAttacks();
   }, [currentUser]);
 
   // Vault Management
@@ -2103,16 +2131,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const isVaultAttack = move.type === 'vault_attack';
         const isCurrentUser = move.userId === currentUser.uid;
         
-        console.log('🔥 OfflineMoves Filter Debug:', {
-          moveId: move.id,
-          moveType: move.type,
-          moveDate: moveDate.toISOString(),
-          today: today.toISOString(),
-          isToday,
-          isVaultAttack,
-          isCurrentUser,
-          shouldInclude: isToday && isVaultAttack && isCurrentUser
-        });
+        // Debug logging commented out to reduce console noise
+        // logger.battle.debug('OfflineMoves Filter Debug:', {
+        //   moveId: move.id,
+        //   moveType: move.type,
+        //   moveDate: moveDate.toISOString(),
+        //   today: today.toISOString(),
+        //   isToday,
+        //   isVaultAttack,
+        //   isCurrentUser,
+        //   shouldInclude: isToday && isVaultAttack && isCurrentUser
+        // });
         
         return isToday && isVaultAttack && isCurrentUser;
       } catch (error) {
@@ -2161,16 +2190,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const isToday = moveDate.getTime() === today.getTime();
         const isMoveRestore = move.type === 'move_restore';
         
-        console.log('🔥 Move Filter Debug:', {
-          moveId: move.id,
-          moveType: move.type,
-          moveCreatedAt: move.createdAt,
-          moveDate: moveDate.toISOString(),
-          today: today.toISOString(),
-          isToday,
-          isMoveRestore,
-          shouldInclude: isToday && isMoveRestore
-        });
+        // Debug logging commented out to reduce console noise
+        // logger.battle.debug('Move Filter Debug:', {
+        //   moveId: move.id,
+        //   moveType: move.type,
+        //   moveCreatedAt: move.createdAt,
+        //   moveDate: moveDate.toISOString(),
+        //   today: today.toISOString(),
+        //   isToday,
+        //   isMoveRestore,
+        //   shouldInclude: isToday && isMoveRestore
+        // });
         
         return isToday && isMoveRestore;
       } catch (error) {
@@ -2193,36 +2223,36 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       Math.max(0, baseMoves - movesUsed + movesRestored) // Don't go below 0
     );
     
-    console.log('🔥 Offline Moves Calculation:', {
-      totalOfflineMoves: offlineMoves.length,
-      baseMoves,
-      todayVaultSiegeAttacks: todayVaultSiegeAttacks.length,
-      todayOfflineMovesAttacks: todayOfflineMovesAttacks.length,
-      todayMoveRestores: todayMoveRestores.length,
-      movesUsed,
-      movesRestored,
-      dailyLimit: BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES,
-      remainingMoves,
-      todayDate: today.toISOString(),
-      attackDetails: todayVaultSiegeAttacks.map(attack => ({
-        id: attack.id,
-        timestamp: attack.timestamp,
-        attackerId: attack.attackerId,
-        targetId: attack.targetId
-      })),
-      offlineMovesAttackDetails: todayOfflineMovesAttacks.map(move => ({
-        id: move.id,
-        createdAt: move.createdAt,
-        type: move.type,
-        userId: move.userId
-      })),
-      restoreDetails: todayMoveRestores.map(move => ({
-        id: move.id,
-        createdAt: move.createdAt,
-        status: move.status,
-        type: move.type
-      }))
-    });
+    // logger.battle.debug('Offline Moves Calculation:', {
+    //   totalOfflineMoves: offlineMoves.length,
+    //   baseMoves,
+    //   todayVaultSiegeAttacks: todayVaultSiegeAttacks.length,
+    //   todayOfflineMovesAttacks: todayOfflineMovesAttacks.length,
+    //   todayMoveRestores: todayMoveRestores.length,
+    //   movesUsed,
+    //   movesRestored,
+    //   dailyLimit: BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES,
+    //   remainingMoves,
+    //   todayDate: today.toISOString(),
+    //   attackDetails: todayVaultSiegeAttacks.map(attack => ({
+    //     id: attack.id,
+    //     timestamp: attack.timestamp,
+    //     attackerId: attack.attackerId,
+    //     targetId: attack.targetId
+    //   })),
+    //   offlineMovesAttackDetails: todayOfflineMovesAttacks.map(move => ({
+    //     id: move.id,
+    //     createdAt: move.createdAt,
+    //     type: move.type,
+    //     userId: move.userId
+    //   })),
+    //   restoreDetails: todayMoveRestores.map(move => ({
+    //     id: move.id,
+    //     createdAt: move.createdAt,
+    //     status: move.status,
+    //     type: move.type
+    //   }))
+    // });
     
     return remainingMoves;
   };
@@ -2299,7 +2329,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     })));
     
     const remainingMoves = getRemainingOfflineMoves();
-    console.log('🔥 Debug: Calculated remaining moves:', remainingMoves);
+    // logger.battle.debug('Debug: Calculated remaining moves:', remainingMoves);
   };
 
   const value: BattleContextType = {

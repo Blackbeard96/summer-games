@@ -22,6 +22,22 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 
+// Firefox-specific Firestore configuration
+if (typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox')) {
+  console.log('🦊 Firefox detected - applying Firefox-specific Firestore settings');
+  
+  // Firefox sometimes has issues with Firestore persistence
+  // We'll handle this gracefully by catching any persistence errors
+  import('firebase/firestore').then(({ enableNetwork, disableNetwork }) => {
+    // Ensure network is enabled for Firefox
+    enableNetwork(db).catch((error) => {
+      console.warn('Firefox: Could not enable Firestore network, continuing without persistence:', error);
+    });
+  }).catch((error) => {
+    console.warn('Firefox: Could not import Firestore network functions:', error);
+  });
+}
+
 // Initialize Analytics conditionally to avoid Firefox issues
 let analytics: any = null;
 isSupported().then(yes => yes ? analytics = getAnalytics(app) : null).catch(() => {

@@ -85,22 +85,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Fetch user profile from Firestore
   const fetchUserProfile = async (user: User) => {
     try {
-      console.log('AuthContext: Starting fetchUserProfile for user:', user.uid);
       const userDoc = await getDoc(doc(db, 'users', user.uid));
-      console.log('AuthContext: User document exists:', userDoc.exists());
       
       if (userDoc.exists()) {
         const userData = userDoc.data() as UserProfile;
-        console.log('AuthContext: Setting existing user profile');
         setUserProfile(userData);
         
         // Migrate existing user to chapter system if needed
-        console.log('AuthContext: Migrating user to chapter system...');
         await migrateExistingUserToChapters(user.uid);
-        console.log('AuthContext: Migration completed');
       } else {
         // Create new user profile
-        console.log('AuthContext: Creating new user profile');
         const newProfile: UserProfile = {
           displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Student'),
           email: user.email || '',
@@ -116,9 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUserProfile(newProfile);
         
         // Initialize chapter progress for new user
-        console.log('AuthContext: Initializing chapter progress...');
         await initializeChapterProgress(user.uid);
-        console.log('AuthContext: Chapter progress initialized');
       }
     } catch (error) {
       console.error('AuthContext: Error fetching user profile:', error);
@@ -126,19 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    console.log('AuthContext: Setting up auth state listener...');
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      console.log('AuthContext: Auth state changed:', { user: user ? user.uid : 'null' });
       setCurrentUser(user);
       if (user) {
-        console.log('AuthContext: Fetching user profile...');
         await fetchUserProfile(user);
-        console.log('AuthContext: User profile fetched');
       } else {
-        console.log('AuthContext: No user, setting profile to null');
         setUserProfile(null);
       }
-      console.log('AuthContext: Setting loading to false');
       setLoading(false);
     });
 
@@ -160,18 +146,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signup = async (email: string, password: string, displayName?: string) => {
     try {
-      console.log('Attempting to sign up user with email:', email);
-      
       // Check if domain is allowed
       if (!isAllowedDomain(email)) {
         throw new Error('This email domain is not currently supported. Please use a different email address or contact support.');
       }
       
       const result = await createUserWithEmailAndPassword(auth, email, password);
-      console.log('User created successfully:', result.user.uid);
       if (displayName && result.user) {
         await updateProfile(result.user, { displayName });
-        console.log('Profile updated with display name:', displayName);
       }
       
       // Also create a record in the 'students' collection for admin panel consistency
@@ -185,7 +167,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       
       await setDoc(doc(db, 'students', result.user.uid), studentData);
-      console.log('Student record created in students collection');
       
     } catch (error: any) {
       console.error('Signup error details:', {
@@ -339,8 +320,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUserProfile(testUserData as UserProfile);
       setTestAccountData(testStudentData);
       setCurrentRole('test');
-
-      console.log('Switched to test account:', testAccountId);
     } catch (error) {
       console.error('Error switching to test account:', error);
       throw error;
@@ -358,8 +337,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserProfile(originalProfile);
     setTestAccountData(null);
     setCurrentRole('admin');
-
-    console.log('Switched back to admin account');
   };
 
   const value = {

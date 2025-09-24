@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 
 
 interface PlayerCardProps {
@@ -60,7 +60,7 @@ function getXPProgress(xp: number) {
   return { currentLevelXP, nextLevelXP, percent: Math.min(100, (currentLevelXP / nextLevelXP) * 100) };
 }
 
-const PlayerCard: React.FC<PlayerCardProps> = ({
+const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   name,
   photoURL,
   powerPoints,
@@ -72,13 +72,30 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
   cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
   moves = [],
   badges = [],
-  xp = 0, // <-- Default to 0
+  xp = 0,
   onManifestReselect,
 }) => {
   const [flipped, setFlipped] = useState(false);
 
-  // Use cardBgColor as background if it's a color, else use default gradient
-  const background = cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
+  const background = useMemo(() => {
+    return cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
+  }, [cardBgColor]);
+
+  const xpProgress = useMemo(() => {
+    if (typeof xp === 'number') {
+      return getXPProgress(xp);
+    }
+    return null;
+  }, [xp]);
+
+  const handleFlip = useCallback(() => {
+    setFlipped(f => !f);
+  }, []);
+
+  const handleManifestReselect = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onManifestReselect?.();
+  }, [onManifestReselect]);
 
   return (
     <div
@@ -89,8 +106,17 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
         margin: '0 auto',
         cursor: 'pointer',
       }}
-      onClick={() => setFlipped(f => !f)}
-      title="Click to flip"
+      onClick={handleFlip}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleFlip();
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`Player card for ${name}. Press Enter or Space to flip and view ${flipped ? 'front' : 'back'}.`}
+      aria-pressed={flipped}
     >
       <div
         style={{
@@ -133,24 +159,21 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
             </div>
           </div>
           {/* Level Progress Bar */}
-          {typeof xp === 'number' && (
-            (() => {
-              const { currentLevelXP, nextLevelXP, percent } = getXPProgress(xp);
-              return (
-                <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
-                  <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>Level Progress: {currentLevelXP} / {Math.round(nextLevelXP)} XP</div>
-                  <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
-                    <div style={{ width: `${percent}%`, background: '#4f46e5', height: '100%', borderRadius: 8, transition: 'width 0.3s' }} />
-                  </div>
-                </div>
-              );
-            })()
+          {xpProgress && (
+            <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>
+                Level Progress: {xpProgress.currentLevelXP} / {Math.round(xpProgress.nextLevelXP)} XP
+              </div>
+              <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
+                <div style={{ width: `${xpProgress.percent}%`, background: '#4f46e5', height: '100%', borderRadius: 8, transition: 'width 0.3s' }} />
+              </div>
+            </div>
           )}
           {/* Profile Image */}
           <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
             <img
               src={photoURL}
-              alt={name}
+              alt={`Profile picture of ${name}`}
               style={{
                 width: 120,
                 height: 120,
@@ -177,7 +200,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
           {onManifestReselect && manifest !== 'None' && (
             <div style={{ marginBottom: 12, textAlign: 'center' }}>
               <button
-                onClick={onManifestReselect}
+                onClick={handleManifestReselect}
                 style={{
                   backgroundColor: '#8b5cf6',
                   color: 'white',
@@ -264,7 +287,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
                   >
                     <img
                       src={badge.imageUrl}
-                      alt={badge.name}
+                      alt={`${badge.name} badge: ${badge.description}`}
                       style={{
                         width: 48,
                         height: 48,
@@ -285,6 +308,8 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
       </div>
     </div>
   );
-};
+});
+
+PlayerCard.displayName = 'PlayerCard';
 
 export default PlayerCard; 

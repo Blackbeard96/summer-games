@@ -10,6 +10,7 @@ import ManifestSelection from '../components/ManifestSelection';
 import ManifestDiagnostic from '../components/ManifestDiagnostic';
 
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
+import { logger } from '../utils/debugLogger';
 
 const Dashboard = () => {
   const { currentUser } = useAuth();
@@ -18,6 +19,9 @@ const Dashboard = () => {
   const [showManifestDiagnostic, setShowManifestDiagnostic] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Firefox detection for compatibility measures
+  const isFirefox = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox');
 
   // Check if device is mobile
   useEffect(() => {
@@ -34,19 +38,27 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchManifest = async () => {
       if (!currentUser) {
-        console.log('Dashboard: No current user, setting loading to false');
+        logger.debug('No current user, setting loading to false');
         setLoading(false);
         return;
       }
 
-      console.log('Dashboard: Fetching manifest for user:', currentUser.uid);
+      logger.info('Fetching manifest for user:', currentUser.uid);
+      if (isFirefox) {
+        logger.debug('🦊 Firefox detected - applying compatibility measures for Dashboard');
+      }
       
-      // Add a timeout to prevent infinite loading
+      // Add a timeout to prevent infinite loading (longer for Firefox)
+      const timeoutMs = isFirefox ? 15000 : 10000;
       const timeoutId = setTimeout(() => {
-        console.log('Dashboard: Loading timeout reached, forcing completion');
+        logger.warn('Loading timeout reached, forcing completion', { 
+          timeoutMs, 
+          isFirefox, 
+          currentUser: currentUser?.uid 
+        });
         setLoading(false);
         setShowManifestSelection(true);
-      }, 10000); // 10 second timeout
+      }, timeoutMs);
       
       try {
         // Try to get manifest from students collection first
