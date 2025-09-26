@@ -11,6 +11,7 @@ import {
   where
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
+import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 interface PPChangeRequest {
   id: string;
@@ -94,8 +95,26 @@ const PPChangeApproval: React.FC = () => {
 
       // Update student PP values in database
       for (const change of request.changes) {
+        // Apply PP boost if student has one active
+        let finalPP = change.newPP;
+        try {
+          const activeBoost = await getActivePPBoost(change.studentId);
+          if (activeBoost && change.changeAmount > 0) {
+            const boostedAmount = applyPPBoost(change.changeAmount, change.studentId, activeBoost);
+            finalPP = change.currentPP + boostedAmount;
+            logger.roster.info('PPChangeApproval: PP boost applied:', {
+              studentId: change.studentId,
+              originalChange: change.changeAmount,
+              boostedAmount,
+              finalPP
+            });
+          }
+        } catch (error) {
+          logger.roster.error('PPChangeApproval: Error applying PP boost:', error);
+        }
+        
         await updateDoc(doc(db, 'students', change.studentId), {
-          powerPoints: change.newPP,
+          powerPoints: finalPP,
           lastUpdated: serverTimestamp()
         });
       }

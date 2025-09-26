@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 interface Student {
   id: string;
@@ -33,21 +34,55 @@ const StudentListItem: React.FC<StudentListItemProps> = ({
   additionalContent,
   compact = false
 }) => {
+  const [ppBoostStatus, setPPBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
+    isActive: false,
+    timeRemaining: '',
+    multiplier: 1
+  });
+
+  // Check for active PP boost
+  useEffect(() => {
+    const checkPPBoost = async () => {
+      try {
+        const activeBoost = await getActivePPBoost(student.id);
+        const status = getPPBoostStatus(activeBoost);
+        setPPBoostStatus(status);
+      } catch (error) {
+        console.error('Error checking PP boost:', error);
+      }
+    };
+    
+    checkPPBoost();
+    
+    // Check every minute for updates
+    const interval = setInterval(checkPPBoost, 60000);
+    return () => clearInterval(interval);
+  }, [student.id]);
+
   const imageSize = compact ? '32px' : '48px';
   const padding = compact ? '0.5rem' : '1rem';
   const fontSize = compact ? '0.875rem' : '1rem';
   const detailFontSize = compact ? '0.75rem' : '0.875rem';
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.75rem',
-      padding: padding,
-      backgroundColor: '#f9fafb',
-      borderRadius: '0.375rem',
-      border: compact ? 'none' : '1px solid #e5e7eb'
-    }}>
+    <>
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+          }
+        `}
+      </style>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.75rem',
+        padding: padding,
+        backgroundColor: '#f9fafb',
+        borderRadius: '0.375rem',
+        border: compact ? 'none' : '1px solid #e5e7eb'
+      }}>
       <img
         src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName)}&background=4f46e5&color=fff&size=64`}
         alt={student.displayName}
@@ -63,9 +98,26 @@ const StudentListItem: React.FC<StudentListItemProps> = ({
           fontSize: fontSize, 
           fontWeight: '600', 
           color: '#1f2937',
-          marginBottom: compact ? '0.125rem' : '0.25rem'
+          marginBottom: compact ? '0.125rem' : '0.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
         }}>
           {student.displayName}
+          {ppBoostStatus.isActive && (
+            <span 
+              style={{ 
+                fontSize: compact ? '12px' : '14px',
+                color: '#f59e0b',
+                fontWeight: 'bold',
+                textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                animation: 'pulse 2s infinite'
+              }}
+              title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+            >
+              ⚡
+            </span>
+          )}
         </div>
         {showLevel && (
           <div style={{ 
@@ -178,6 +230,7 @@ const StudentListItem: React.FC<StudentListItemProps> = ({
         </div>
       )}
     </div>
+    </>
   );
 };
 

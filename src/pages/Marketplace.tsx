@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { activatePPBoost } from '../utils/ppBoost';
 
 interface Artifact {
   id: string;
@@ -58,9 +59,9 @@ const artifacts: Artifact[] = [
     rarity: 'common'
   },
   { 
-    id: 'double-xp',
-    name: 'Double XP Boost', 
-    description: 'Gain double XP for the next 3 challenges', 
+    id: 'double-pp',
+    name: 'Double PP Boost', 
+    description: 'Double any PP you receive for the next 4 hours', 
     price: 75, 
     icon: '⚡', 
     image: 'https://images.unsplash.com/photo-1559757148-5c350d0d3c56?auto=format&fit=facearea&w=256&h=256&facepad=2',
@@ -68,40 +69,6 @@ const artifacts: Artifact[] = [
     rarity: 'epic',
     originalPrice: 100,
     discount: 25
-  },
-  { 
-    id: 'time-freeze',
-    name: 'Time Freeze', 
-    description: 'Pause time for 1 hour during work', 
-    price: 120, 
-    icon: '⏰', 
-    image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'time',
-    rarity: 'legendary',
-    originalPrice: 150,
-    discount: 20
-  },
-  { 
-    id: 'invisibility',
-    name: 'Invisibility Cloak', 
-    description: 'Become invisible for 30 minutes', 
-    price: 90, 
-    icon: '👻', 
-    image: 'https://images.unsplash.com/photo-1518709268805-4e9042af2176?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'epic'
-  },
-  { 
-    id: 'teleport',
-    name: 'Teleport Scroll', 
-    description: 'Instantly teleport to any location', 
-    price: 200, 
-    icon: '🌀', 
-    image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'legendary',
-    originalPrice: 250,
-    discount: 20
   },
 ];
 
@@ -161,11 +128,87 @@ const Marketplace = () => {
     fetchData();
   }, [currentUser]);
 
+  // Function to count specific artifacts in inventory
+  const getArtifactCount = (artifactName: string) => {
+    return inventory.filter(item => item === artifactName).length;
+  };
+
+  // Function to handle using an artifact
+  const handleUseArtifact = async (artifactName: string) => {
+    if (!currentUser) return;
+
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      
+      // Get current user data
+      const userSnap = await getDoc(userRef);
+      const currentUserData = userSnap.exists() ? userSnap.data() : {};
+      
+      // Remove one instance of the artifact from inventory
+      const updatedInventory = [...inventory];
+      const artifactIndex = updatedInventory.indexOf(artifactName);
+      if (artifactIndex > -1) {
+        updatedInventory.splice(artifactIndex, 1);
+      }
+      
+      // Handle special artifacts
+      if (artifactName === 'Double PP Boost') {
+        // Activate PP boost immediately
+        const success = await activatePPBoost(currentUser.uid, artifactName);
+        if (success) {
+          alert(`⚡ Double PP Boost activated! You'll receive double PP for the next 4 hours!`);
+        } else {
+          alert('Failed to activate PP boost. Please try again.');
+          return;
+        }
+      } else {
+        // Create admin notification for other artifacts
+        await createAdminNotification({
+          type: 'artifact_usage',
+          title: 'Artifact Used',
+          message: `${currentUser.displayName || currentUser.email} used ${artifactName}`,
+          data: {
+            userId: currentUser.uid,
+            userName: currentUser.displayName || currentUser.email,
+            artifactName: artifactName,
+            usageTime: new Date(),
+            location: 'Marketplace'
+          }
+        });
+      }
+      
+      // Update user's inventory
+      await updateDoc(userRef, {
+        inventory: updatedInventory
+      });
+
+      setInventory(updatedInventory);
+      
+      if (artifactName !== 'Double PP Boost') {
+        alert(`Used ${artifactName}!`);
+      }
+    } catch (error) {
+      console.error('Error using artifact:', error);
+      alert('Failed to use artifact. Please try again.');
+    }
+  };
+
   const handlePurchase = async (item: Artifact) => {
     if (!currentUser) return;
     
     if (powerPoints < item.price) {
       alert('Insufficient Power Points!');
+      return;
+    }
+
+    // Check for artifact limits
+    if (item.name === '+2 UXP Credit' && getArtifactCount(item.name) >= 2) {
+      alert('You can only own a maximum of 2 +2 UXP Credit artifacts at a time!');
+      return;
+    }
+    
+    if (item.name === 'Get Out of Check-in Free' && getArtifactCount(item.name) >= 2) {
+      alert('You can only own a maximum of 2 Get Out of Check-in Free artifacts at a time!');
       return;
     }
 
@@ -268,12 +311,30 @@ const Marketplace = () => {
   ];
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
+    <div style={{ 
+      minHeight: '100vh', 
+      background: 'linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%)',
+      position: 'relative'
+    }}>
+      {/* Mystical background pattern */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'url("data:image/svg+xml,%3Csvg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="%23e0e7ff" fill-opacity="0.3"%3E%3Cpath d="M50 0L60 40L100 50L60 60L50 100L40 60L0 50L40 40Z"/%3E%3C/g%3E%3C/svg%3E")',
+        opacity: 0.1,
+        pointerEvents: 'none'
+      }} />
       {/* Header */}
       <div className="marketplace-header" style={{ 
-        backgroundColor: 'white', 
-        borderBottom: '1px solid #e5e7eb',
-        padding: isMobile ? '0.75rem 0' : '1rem 0'
+        background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', 
+        borderBottom: '2px solid #e0e7ff',
+        padding: isMobile ? '0.75rem 0' : '1rem 0',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        position: 'relative',
+        zIndex: 10
       }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem' }}>
           <div style={{ 
@@ -289,14 +350,24 @@ const Marketplace = () => {
               alignItems: isMobile ? 'stretch' : 'center', 
               gap: isMobile ? '1rem' : '2rem'
             }}>
-              <h1 style={{ 
-                fontSize: isMobile ? '1.5rem' : '1.875rem', 
-                fontWeight: 'bold', 
-                color: '#1f2937',
-                margin: 0
-              }}>
-                Artifact Shop
-              </h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: isMobile ? '1.5rem' : '1.875rem' }}>🔮</span>
+                <h1 style={{ 
+                  fontSize: isMobile ? '1.5rem' : '1.875rem', 
+                  fontWeight: 'bold', 
+                  color: '#1f2937',
+                  margin: 0
+                }}>
+                  MST MKT
+                </h1>
+                <span style={{ 
+                  fontSize: isMobile ? '0.75rem' : '0.875rem', 
+                  color: '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  Mystical System Technology
+                </span>
+              </div>
               <div style={{ position: 'relative', width: isMobile ? '100%' : '300px' }}>
                 <input
                   type="text"
@@ -341,14 +412,25 @@ const Marketplace = () => {
 
       {/* Banner */}
       <div style={{ 
-        backgroundColor: '#ec4899', 
+        background: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)', 
         color: 'white', 
         padding: isMobile ? '0.75rem 0' : '1rem 0',
         textAlign: 'center',
-        fontWeight: 'bold'
+        fontWeight: 'bold',
+        position: 'relative',
+        overflow: 'hidden'
       }}>
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem' }}>
-          🎯 SPECIAL OFFER - Epic and Legendary artifacts now available! Limited time only.
+        <div style={{ 
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'url("data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.1"%3E%3Ccircle cx="30" cy="30" r="2"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
+          opacity: 0.3
+        }} />
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem', position: 'relative', zIndex: 1 }}>
+          🔮 MYSTICAL SYSTEM TECHNOLOGY - Epic and Legendary artifacts now available! Limited time only.
         </div>
       </div>
 
@@ -511,31 +593,48 @@ const Marketplace = () => {
               gap: isMobile ? '1rem' : '1.5rem' 
             }}>
               {filteredArtifacts.map((artifact) => {
-                const purchased = inventory.includes(artifact.name);
+                const artifactCount = getArtifactCount(artifact.name);
+                const purchased = artifactCount > 0;
+                const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
-                    backgroundColor: 'white',
-                    borderRadius: '0.75rem',
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    borderRadius: '1rem',
                     overflow: 'hidden',
-                    boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-                    border: '1px solid #e5e7eb',
-                    transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
+                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    border: `2px solid ${getRarityColor(artifact.rarity)}20`,
+                    transition: 'all 0.3s ease-in-out',
                     cursor: purchased ? 'default' : 'pointer',
-                    opacity: purchased ? 0.7 : 1
+                    opacity: purchased ? 0.7 : 1,
+                    position: 'relative'
                   }}
                   onMouseEnter={(e) => {
                     if (!purchased && !isMobile) {
-                      e.currentTarget.style.transform = 'translateY(-2px)';
-                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
+                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)';
+                      e.currentTarget.style.boxShadow = `0 10px 25px -3px ${getRarityColor(artifact.rarity)}40, 0 4px 6px -2px rgba(0, 0, 0, 0.05)`;
+                      e.currentTarget.style.borderColor = getRarityColor(artifact.rarity);
                     }
                   }}
                   onMouseLeave={(e) => {
                     if (!isMobile) {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 1px 3px 0 rgba(0, 0, 0, 0.1)';
+                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
+                      e.currentTarget.style.borderColor = `${getRarityColor(artifact.rarity)}20`;
                     }
                   }}
                   >
+                    {/* Mystical glow effect */}
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: `radial-gradient(circle at center, ${getRarityColor(artifact.rarity)}20 0%, transparent 70%)`,
+                      opacity: 0.6,
+                      pointerEvents: 'none'
+                    }} />
+                    
                     {/* Product Image */}
                     <div style={{ position: 'relative' }}>
                       <img 
@@ -544,7 +643,8 @@ const Marketplace = () => {
                         style={{ 
                           width: '100%', 
                           height: isMobile ? '180px' : '200px', 
-                          objectFit: 'cover' 
+                          objectFit: 'cover',
+                          filter: 'brightness(1.1) contrast(1.1)'
                         }} 
                       />
                       {artifact.discount && (
@@ -630,36 +730,82 @@ const Marketplace = () => {
                           )}
                         </div>
 
-                        <button
-                          onClick={() => handlePurchase(artifact)}
-                          disabled={purchased || powerPoints < artifact.price}
-                          style={{
-                            backgroundColor: purchased ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
-                            color: 'white',
-                            border: 'none',
-                            padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
-                            borderRadius: '0.375rem',
-                            fontSize: isMobile ? '0.75rem' : '0.875rem',
-                            fontWeight: '500',
-                            cursor: purchased || powerPoints < artifact.price ? 'not-allowed' : 'pointer',
-                            opacity: purchased || powerPoints < artifact.price ? 0.6 : 1,
-                            transition: 'all 0.2s',
-                            minWidth: isMobile ? '80px' : 'auto',
-                            minHeight: isMobile ? '36px' : 'auto'
-                          }}
-                          onMouseEnter={e => {
-                            if (!purchased && powerPoints >= artifact.price && !isMobile) {
-                              e.currentTarget.style.transform = 'translateY(-1px)';
-                            }
-                          }}
-                          onMouseLeave={e => {
-                            if (!isMobile) {
-                              e.currentTarget.style.transform = 'translateY(0)';
-                            }
-                          }}
-                        >
-                          {purchased ? 'Owned' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                          {purchased && (
+                            <div style={{ 
+                              fontSize: '0.75rem', 
+                              color: '#6b7280',
+                              textAlign: 'right'
+                            }}>
+                              Owned: {artifactCount}
+                              {(artifact.name === '+2 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            {purchased && (
+                              <button
+                                onClick={() => handleUseArtifact(artifact.name)}
+                                style={{
+                                  backgroundColor: '#f59e0b',
+                                  color: 'white',
+                                  border: 'none',
+                                  padding: isMobile ? '0.375rem 0.5rem' : '0.375rem 0.75rem',
+                                  borderRadius: '0.375rem',
+                                  fontSize: isMobile ? '0.625rem' : '0.75rem',
+                                  fontWeight: '500',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s',
+                                  minWidth: isMobile ? '60px' : 'auto',
+                                  minHeight: isMobile ? '28px' : 'auto'
+                                }}
+                                onMouseEnter={e => {
+                                  if (!isMobile) {
+                                    e.currentTarget.style.transform = 'translateY(-1px)';
+                                    e.currentTarget.style.backgroundColor = '#d97706';
+                                  }
+                                }}
+                                onMouseLeave={e => {
+                                  if (!isMobile) {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.backgroundColor = '#f59e0b';
+                                  }
+                                }}
+                              >
+                                Used
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handlePurchase(artifact)}
+                              disabled={isAtLimit || powerPoints < artifact.price}
+                              style={{
+                                backgroundColor: isAtLimit ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
+                                color: 'white',
+                                border: 'none',
+                                padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
+                                borderRadius: '0.375rem',
+                                fontSize: isMobile ? '0.75rem' : '0.875rem',
+                                fontWeight: '500',
+                                cursor: isAtLimit || powerPoints < artifact.price ? 'not-allowed' : 'pointer',
+                                opacity: isAtLimit || powerPoints < artifact.price ? 0.6 : 1,
+                                transition: 'all 0.2s',
+                                minWidth: isMobile ? '80px' : 'auto',
+                                minHeight: isMobile ? '36px' : 'auto'
+                              }}
+                              onMouseEnter={e => {
+                                if (!isAtLimit && powerPoints >= artifact.price && !isMobile) {
+                                  e.currentTarget.style.transform = 'translateY(-1px)';
+                                }
+                              }}
+                              onMouseLeave={e => {
+                                if (!isMobile) {
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }
+                              }}
+                            >
+                              {isAtLimit ? 'At Limit' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

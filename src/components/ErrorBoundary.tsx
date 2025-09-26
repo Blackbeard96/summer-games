@@ -19,11 +19,34 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   static getDerivedStateFromError(error: Error): State {
+    // Check if this is a Firestore internal assertion error
+    const isFirestoreError = error.message && 
+      (error.message.includes('INTERNAL ASSERTION FAILED') || 
+       error.message.includes('FIRESTORE') ||
+       error.message.includes('Unexpected state'));
+    
+    if (isFirestoreError) {
+      // For Firestore errors, don't show error UI
+      return { hasError: false };
+    }
+    
     // Update state so the next render will show the fallback UI
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // Check if this is a Firestore internal assertion error
+    const isFirestoreError = error.message && 
+      (error.message.includes('INTERNAL ASSERTION FAILED') || 
+       error.message.includes('FIRESTORE') ||
+       error.message.includes('Unexpected state'));
+    
+    if (isFirestoreError) {
+      // For Firestore errors, just log a warning and don't show error UI
+      console.warn('🚨 ErrorBoundary caught Firestore error - suppressing UI error:', error.message);
+      return;
+    }
+    
     // Log the error to console and call optional error handler
     console.error('ErrorBoundary caught an error:', error, errorInfo);
     

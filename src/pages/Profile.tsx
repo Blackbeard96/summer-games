@@ -344,6 +344,7 @@ const Profile = () => {
               moves={moves}
               badges={badges}
               xp={userData?.xp || 0}
+              userId={currentUser?.uid}
               onManifestReselect={() => setShowManifestSelection(true)}
             />
           </div>
@@ -768,6 +769,24 @@ const Profile = () => {
                                 artifactId: enhancedArtifact.id,
                                 timestamp: serverTimestamp()
                               });
+                              
+                              // Create admin notification for artifact usage
+                              await addDoc(collection(db, 'adminNotifications'), {
+                                type: 'artifact_usage',
+                                title: 'Artifact Usage Request',
+                                message: `${currentUser.displayName || currentUser.email} wants to use ${enhancedArtifact.name}`,
+                                data: {
+                                  userId: currentUser.uid,
+                                  userName: currentUser.displayName || currentUser.email,
+                                  artifactName: enhancedArtifact.name,
+                                  artifactId: enhancedArtifact.id,
+                                  usageTime: new Date(),
+                                  location: 'Profile'
+                                },
+                                createdAt: new Date(),
+                                read: false
+                              });
+                              
                               alert('Your request to use this artifact has been sent to the admin!');
                             }
                           }}

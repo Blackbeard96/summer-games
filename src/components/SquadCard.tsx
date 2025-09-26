@@ -272,6 +272,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
                   description={member.description || `${member.role || 'Member'} of ${squad.name}`}
                   cardBgColor={member.cardBgColor}
                   xp={member.xp}
+                  userId={member.id}
                 />
               </div>
               

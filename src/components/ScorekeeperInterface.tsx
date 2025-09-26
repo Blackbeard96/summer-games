@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
+import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 // FORCE DEBUG LOG - This should appear in console when component loads
 console.log('🚨 ScorekeeperInterface.tsx: COMPONENT FILE LOADED - VERSION 2.0');
@@ -199,19 +200,37 @@ const ScorekeeperInterface: React.FC = () => {
   }, [assignedClassId, userRole]);
 
   // Handle PP adjustment (now tracks pending changes)
-  const handleAdjustPP = (studentId: string, change: number) => {
+  const handleAdjustPP = async (studentId: string, change: number) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
     const currentPP = student.powerPoints || 0;
     const currentPendingChange = pendingChanges[studentId] || 0;
     const newPendingChange = currentPendingChange + change;
+    
+    // Apply PP boost if student has one active
+    let boostedChange = change;
+    try {
+      const activeBoost = await getActivePPBoost(studentId);
+      if (activeBoost && change > 0) {
+        boostedChange = applyPPBoost(change, studentId, activeBoost);
+        logger.roster.info('ScorekeeperInterface: PP boost applied:', {
+          studentId,
+          originalChange: change,
+          boostedChange,
+          boostMultiplier: activeBoost.multiplier
+        });
+      }
+    } catch (error) {
+      logger.roster.error('ScorekeeperInterface: Error checking PP boost:', error);
+    }
+    
     const newDisplayPP = Math.max(0, currentPP + newPendingChange);
 
-    // Update pending changes
+    // Update pending changes (store the boosted amount)
     setPendingChanges(prev => ({
       ...prev,
-      [studentId]: newPendingChange
+      [studentId]: newPendingChange + (boostedChange - change)
     }));
 
     // Update local display (but not database)
@@ -223,6 +242,7 @@ const ScorekeeperInterface: React.FC = () => {
       studentId,
       studentName: student.displayName,
       change,
+      boostedChange,
       currentPP,
       pendingChange: newPendingChange,
       newDisplayPP

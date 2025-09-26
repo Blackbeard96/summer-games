@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 
 interface PlayerCardProps {
@@ -14,6 +15,7 @@ interface PlayerCardProps {
   moves?: Array<{ name: string; description: string; icon: string }>;
   badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
   xp?: number; // <-- Add xp prop
+  userId?: string; // <-- Add userId for PP boost checking
   onManifestReselect?: () => void; // <-- Add manifest re-selection callback
 }
 
@@ -73,9 +75,36 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   moves = [],
   badges = [],
   xp = 0,
+  userId,
   onManifestReselect,
 }) => {
   const [flipped, setFlipped] = useState(false);
+  const [ppBoostStatus, setPPBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
+    isActive: false,
+    timeRemaining: '',
+    multiplier: 1
+  });
+
+  // Check for active PP boost
+  useEffect(() => {
+    const checkPPBoost = async () => {
+      if (!userId) return;
+      
+      try {
+        const activeBoost = await getActivePPBoost(userId);
+        const status = getPPBoostStatus(activeBoost);
+        setPPBoostStatus(status);
+      } catch (error) {
+        console.error('Error checking PP boost:', error);
+      }
+    };
+    
+    checkPPBoost();
+    
+    // Check every minute for updates
+    const interval = setInterval(checkPPBoost, 60000);
+    return () => clearInterval(interval);
+  }, [userId]);
 
   const background = useMemo(() => {
     return cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
@@ -98,26 +127,35 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   }, [onManifestReselect]);
 
   return (
-    <div
-      style={{
-        perspective: 1200,
-        width: 320,
-        height: 480,
-        margin: '0 auto',
-        cursor: 'pointer',
-      }}
-      onClick={handleFlip}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          handleFlip();
-        }
-      }}
-      tabIndex={0}
-      role="button"
-      aria-label={`Player card for ${name}. Press Enter or Space to flip and view ${flipped ? 'front' : 'back'}.`}
-      aria-pressed={flipped}
-    >
+    <>
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+          }
+        `}
+      </style>
+      <div
+        style={{
+          perspective: 1200,
+          width: 320,
+          height: 480,
+          margin: '0 auto',
+          cursor: 'pointer',
+        }}
+        onClick={handleFlip}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleFlip();
+          }
+        }}
+        tabIndex={0}
+        role="button"
+        aria-label={`Player card for ${name}. Press Enter or Space to flip and view ${flipped ? 'front' : 'back'}.`}
+        aria-pressed={flipped}
+      >
       <div
         style={{
           width: '100%',
@@ -148,7 +186,23 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
           {/* Top Row: Name (left), Level/PP/Stars (right) */}
           <div style={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: 8 }}>
             {/* Name top left */}
-            <div style={{ flex: 1, fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.1 }}>{name}</div>
+            <div style={{ flex: 1, fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {name}
+              {ppBoostStatus.isActive && (
+                <span 
+                  style={{ 
+                    fontSize: '16px',
+                    color: '#f59e0b',
+                    fontWeight: 'bold',
+                    textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                    animation: 'pulse 2s infinite'
+                  }}
+                  title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                >
+                  ⚡
+                </span>
+              )}
+            </div>
             {/* Level, PP, Stars top right */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14 }}>Lv. {level}</span>
@@ -307,6 +361,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
         </div>
       </div>
     </div>
+    </>
   );
 });
 

@@ -28,8 +28,11 @@ import Battle from './pages/Battle';
 
 // Global error handler for Firestore assertion errors
 window.addEventListener('error', (event) => {
-  if (event.error && event.error.message && event.error.message.includes('INTERNAL ASSERTION FAILED')) {
-    console.warn('🚨 Caught Firestore Internal Assertion Error - preventing crash:', event.error.message);
+  if (event.error && event.error.message && 
+      (event.error.message.includes('INTERNAL ASSERTION FAILED') || 
+       event.error.message.includes('FIRESTORE') ||
+       event.error.message.includes('Unexpected state'))) {
+    console.warn('🚨 Caught Firestore Error - preventing crash:', event.error.message);
     event.preventDefault(); // Prevent the error from crashing the app
     return false;
   }
@@ -37,12 +40,28 @@ window.addEventListener('error', (event) => {
 
 // Global unhandled promise rejection handler
 window.addEventListener('unhandledrejection', (event) => {
-  if (event.reason && event.reason.message && event.reason.message.includes('INTERNAL ASSERTION FAILED')) {
-    console.warn('🚨 Caught Firestore Internal Assertion Error in Promise - preventing crash:', event.reason.message);
+  if (event.reason && event.reason.message && 
+      (event.reason.message.includes('INTERNAL ASSERTION FAILED') || 
+       event.reason.message.includes('FIRESTORE') ||
+       event.reason.message.includes('Unexpected state'))) {
+    console.warn('🚨 Caught Firestore Error in Promise - preventing crash:', event.reason.message);
     event.preventDefault(); // Prevent the error from crashing the app
     return false;
   }
 });
+
+// Additional error handler for console errors
+const originalConsoleError = console.error;
+console.error = function(...args) {
+  const message = args.join(' ');
+  if (message.includes('INTERNAL ASSERTION FAILED') || 
+      message.includes('FIRESTORE') ||
+      message.includes('Unexpected state')) {
+    console.warn('🚨 Caught Firestore Error in Console - preventing crash:', message);
+    return;
+  }
+  originalConsoleError.apply(console, args);
+};
 
 // Protected Admin Route Component
 const ProtectedAdminRoute = () => {

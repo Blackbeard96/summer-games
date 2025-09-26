@@ -2,7 +2,7 @@ import React, { useState, useEffect, CSSProperties, MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc, addDoc } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
 
@@ -42,8 +42,10 @@ interface Notification {
   challengeId?: string;
   challengeName?: string;
   timestamp?: any;
+  createdAt?: any;
   read?: boolean;
   deleted?: boolean;
+  data?: any;
 }
 
 const NavBar = () => {
@@ -92,14 +94,50 @@ const NavBar = () => {
       
       setNotificationsLoading(true);
       try {
+        // Fetch student notifications
         const notifSnap = await getDocs(collection(db, 'students', currentUser.uid, 'notifications'));
-        const notifList: Notification[] = notifSnap.docs
+        const studentNotifList: Notification[] = notifSnap.docs
           .map(docSnap => {
             const data = docSnap.data() as Notification;
             return { ...data, id: docSnap.id, _ref: docSnap.ref };
           })
           .filter(notif => !notif.deleted); // Filter out deleted notifications
-        setNotifications(notifList.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
+
+        // If user is admin, also fetch admin notifications
+        let adminNotifList: Notification[] = [];
+        const isAdmin = currentUser.email === 'eddymosley@compscihigh.org' || 
+                       currentUser.email === 'admin@mstgames.net' ||
+                       currentUser.email === 'edm21179@gmail.com' ||
+                       currentUser.email?.includes('eddymosley') ||
+                       currentUser.email?.includes('admin') ||
+                       currentUser.email?.includes('mstgames');
+
+        if (isAdmin) {
+          try {
+            const adminNotifSnap = await getDocs(collection(db, 'adminNotifications'));
+            adminNotifList = adminNotifSnap.docs
+              .map(docSnap => {
+                const data = docSnap.data() as any;
+                return { 
+                  ...data, 
+                  id: docSnap.id, 
+                  _ref: docSnap.ref,
+                  timestamp: data.createdAt || data.timestamp // Handle different timestamp field names
+                };
+              })
+              .filter(notif => !notif.read); // Filter out read admin notifications
+          } catch (adminErr) {
+            console.error('Error fetching admin notifications:', adminErr);
+          }
+        }
+
+        // Combine and sort all notifications
+        const allNotifications = [...studentNotifList, ...adminNotifList];
+        setNotifications(allNotifications.sort((a, b) => {
+          const aTime = a.timestamp?.seconds || (a.createdAt?.getTime ? a.createdAt.getTime() / 1000 : 0);
+          const bTime = b.timestamp?.seconds || (b.createdAt?.getTime ? b.createdAt.getTime() / 1000 : 0);
+          return bTime - aTime;
+        }));
       } catch (err) {
         setNotifications([]);
       } finally {
@@ -202,6 +240,100 @@ const NavBar = () => {
       setShowNotifications(false);
     } catch (err) {
       console.error('Failed to clear all notifications:', err);
+    }
+  };
+
+  const handleApproveArtifactUsage = async (notif: Notification) => {
+    try {
+      // Mark notification as read and approved
+      await updateDoc(notif._ref, { 
+        read: true, 
+        status: 'approved',
+        approvedAt: new Date()
+      });
+      
+      // Remove from notifications list
+      setNotifications(prev => prev.filter(n => n.id !== notif.id));
+      
+      // Remove the artifact from student's inventory
+      if (notif.data?.userId && notif.data?.artifactName) {
+        const studentRef = doc(db, 'students', notif.data.userId);
+        const studentSnap = await getDoc(studentRef);
+        
+        if (studentSnap.exists()) {
+          const studentData = studentSnap.data();
+          const currentInventory = studentData.inventory || [];
+          
+          // Remove one instance of the artifact from inventory
+          const updatedInventory = [...currentInventory];
+          const artifactIndex = updatedInventory.indexOf(notif.data.artifactName);
+          if (artifactIndex > -1) {
+            updatedInventory.splice(artifactIndex, 1);
+          }
+          
+          // Update student's inventory
+          await updateDoc(studentRef, {
+            inventory: updatedInventory
+          });
+          
+          // Also remove from artifacts array if it exists
+          if (studentData.artifacts) {
+            const updatedArtifacts = studentData.artifacts.filter((artifact: any) => {
+              // Handle both legacy artifacts (strings) and new artifacts (objects)
+              if (typeof artifact === 'string') {
+                return artifact !== notif.data.artifactName;
+              } else {
+                return artifact.name !== notif.data.artifactName;
+              }
+            });
+            await updateDoc(studentRef, {
+              artifacts: updatedArtifacts
+            });
+          }
+        }
+        
+        // Create a success notification for the student
+        await addDoc(collection(db, 'students', notif.data.userId, 'notifications'), {
+          type: 'artifact_approved',
+          message: `Your request to use ${notif.data.artifactName} has been approved! The artifact has been removed from your inventory.`,
+          timestamp: new Date(),
+          read: false
+        });
+      }
+      
+      alert(`Approved ${notif.data?.artifactName} usage for ${notif.data?.userName}. Artifact removed from inventory.`);
+    } catch (err) {
+      console.error('Failed to approve artifact usage:', err);
+      alert('Failed to approve artifact usage. Please try again.');
+    }
+  };
+
+  const handleDenyArtifactUsage = async (notif: Notification) => {
+    try {
+      // Mark notification as read and denied
+      await updateDoc(notif._ref, { 
+        read: true, 
+        status: 'denied',
+        deniedAt: new Date()
+      });
+      
+      // Remove from notifications list
+      setNotifications(prev => prev.filter(n => n.id !== notif.id));
+      
+      // Create a denial notification for the student
+      if (notif.data?.userId) {
+        await addDoc(collection(db, 'students', notif.data.userId, 'notifications'), {
+          type: 'artifact_denied',
+          message: `Your request to use ${notif.data.artifactName} has been denied.`,
+          timestamp: new Date(),
+          read: false
+        });
+      }
+      
+      alert(`Denied ${notif.data?.artifactName} usage for ${notif.data?.userName}`);
+    } catch (err) {
+      console.error('Failed to deny artifact usage:', err);
+      alert('Failed to deny artifact usage. Please try again.');
     }
   };
 
@@ -512,6 +644,18 @@ const NavBar = () => {
                                 return { backgroundColor: '#fef3c7', borderColor: '#fbbf24' };
                               case 'artifact_purchase':
                                 return { backgroundColor: '#e0e7ff', borderColor: '#6366f1' };
+                              case 'artifact_usage':
+                                return { backgroundColor: '#fce7f3', borderColor: '#ec4899' };
+                              case 'artifact_approved':
+                                return { backgroundColor: '#dcfce7', borderColor: '#22c55e' };
+                              case 'artifact_denied':
+                                return { backgroundColor: '#fee2e2', borderColor: '#ef4444' };
+                              case 'challenge_approved':
+                                return { backgroundColor: '#dcfce7', borderColor: '#22c55e' };
+                              case 'challenge_denied':
+                                return { backgroundColor: '#fee2e2', borderColor: '#ef4444' };
+                              case 'chapter_unlocked':
+                                return { backgroundColor: '#e0e7ff', borderColor: '#6366f1' };
                               default:
                                 return { backgroundColor: '#f3f4f6', borderColor: '#9ca3af' };
                             }
@@ -525,12 +669,12 @@ const NavBar = () => {
                               borderBottom: '1px solid #e5e7eb',
                               borderLeft: `3px solid ${style.borderColor}`,
                               backgroundColor: style.backgroundColor,
-                              cursor: 'pointer',
+                              cursor: notif.type === 'artifact_usage' ? 'default' : 'pointer',
                               transition: 'background-color 0.2s'
                             }}
-                            onClick={() => handleNotificationClick(notif)}
-                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                            onMouseLeave={e => e.currentTarget.style.backgroundColor = style.backgroundColor}
+                            onClick={notif.type === 'artifact_usage' ? undefined : () => handleNotificationClick(notif)}
+                            onMouseEnter={e => notif.type !== 'artifact_usage' && (e.currentTarget.style.backgroundColor = '#f9fafb')}
+                            onMouseLeave={e => notif.type !== 'artifact_usage' && (e.currentTarget.style.backgroundColor = style.backgroundColor)}
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <div style={{ flex: 1 }}>
@@ -548,9 +692,63 @@ const NavBar = () => {
                                   }}>
                                     {notif.timestamp?.toDate ? 
                                       notif.timestamp.toDate().toLocaleDateString() : 
-                                      'Recently'
+                                      notif.createdAt?.toDate ? 
+                                        notif.createdAt.toDate().toLocaleDateString() :
+                                        'Recently'
                                     }
                                   </span>
+                                  
+                                  {/* Action buttons for artifact usage notifications */}
+                                  {notif.type === 'artifact_usage' && (
+                                    <div style={{ 
+                                      display: 'flex', 
+                                      gap: '0.5rem', 
+                                      marginTop: '0.75rem' 
+                                    }}>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleApproveArtifactUsage(notif);
+                                        }}
+                                        style={{
+                                          backgroundColor: '#22c55e',
+                                          color: 'white',
+                                          border: 'none',
+                                          padding: '0.375rem 0.75rem',
+                                          borderRadius: '0.375rem',
+                                          fontSize: '0.75rem',
+                                          fontWeight: '500',
+                                          cursor: 'pointer',
+                                          transition: 'background-color 0.2s'
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.backgroundColor = '#16a34a'}
+                                        onMouseLeave={e => e.currentTarget.style.backgroundColor = '#22c55e'}
+                                      >
+                                        ✓ Approve
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleDenyArtifactUsage(notif);
+                                        }}
+                                        style={{
+                                          backgroundColor: '#ef4444',
+                                          color: 'white',
+                                          border: 'none',
+                                          padding: '0.375rem 0.75rem',
+                                          borderRadius: '0.375rem',
+                                          fontSize: '0.75rem',
+                                          fontWeight: '500',
+                                          cursor: 'pointer',
+                                          transition: 'background-color 0.2s'
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.backgroundColor = '#dc2626'}
+                                        onMouseLeave={e => e.currentTarget.style.backgroundColor = '#ef4444'}
+                                      >
+                                        ✗ Deny
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                                 <button
                                   onClick={(e) => {
