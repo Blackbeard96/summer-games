@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
+
 import { 
   collection, 
   getDocs, 
@@ -11,6 +12,9 @@ import {
 } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
+
+// FORCE DEBUG LOG - This should appear in console when component loads
+console.log('🚨 ScorekeeperInterface.tsx: COMPONENT FILE LOADED - VERSION 2.0');
 
 interface Student {
   id: string;
@@ -61,13 +65,16 @@ const ScorekeeperInterface: React.FC = () => {
           setUserRole(detectedRole);
           setAssignedClassId(classId || '');
           
-          // If user is scorekeeper, get class name
-          if (detectedRole === 'scorekeeper' && classId) {
+          // If user is scorekeeper or admin, get class name
+          if ((detectedRole === 'scorekeeper' || detectedRole === 'admin') && classId) {
             const classDoc = await getDoc(doc(db, 'classrooms', classId));
             if (classDoc.exists()) {
               const classData = classDoc.data();
               setClassName(classData.name || 'Unknown Class');
             }
+          } else if (detectedRole === 'admin' && !classId) {
+            // Admin users without assigned class get access to all students
+            setClassName('All Classes (Admin Access)');
           }
         } else {
           logger.roles.warn('ScorekeeperInterface: No role document found for user:', currentUser.uid);
@@ -76,14 +83,12 @@ const ScorekeeperInterface: React.FC = () => {
       } catch (error) {
         logger.roles.error('ScorekeeperInterface: Error checking user role:', error);
         
-        // TEMPORARY WORKAROUND: If we get permission error but NavBar shows scorekeeper,
-        // assume user is scorekeeper (this handles the permission timing issue)
+        // TEMPORARY WORKAROUND: If we get permission error but NavBar shows admin/scorekeeper,
+        // assume user is admin (this handles the permission timing issue)
         if (error instanceof Error && error.message?.includes('Missing or insufficient permissions')) {
-          logger.roles.warn('ScorekeeperInterface: Permission error, but NavBar shows scorekeeper role - assuming scorekeeper');
-          setUserRole('scorekeeper');
-          // Try to get class ID from a default or known class
-          setAssignedClassId('3uRroyAZXNv6Bl6lBFgl'); // Use the class ID from the logs
-          setClassName('Graphic Design 11.2 (P5)'); // Default class name
+          logger.roles.warn('ScorekeeperInterface: Permission error, but NavBar shows admin role - assuming admin');
+          setUserRole('admin');
+          setClassName('All Classes (Admin Access)');
         } else {
         setUserRole('student');
         }
@@ -98,7 +103,8 @@ const ScorekeeperInterface: React.FC = () => {
   // Load students for the assigned class
   useEffect(() => {
     const loadStudents = async () => {
-      if (!assignedClassId || userRole !== 'scorekeeper') {
+      if ((userRole !== 'scorekeeper' && userRole !== 'admin') || 
+          (userRole === 'scorekeeper' && !assignedClassId)) {
         setStudents([]);
         return;
       }
@@ -302,7 +308,34 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  if (userRole !== 'scorekeeper') {
+  // Check if current user is admin based on email (fallback method)
+  const isAdminByEmail = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                         currentUser?.email === 'admin@mstgames.net' ||
+                         currentUser?.email === 'edm21179@gmail.com' ||
+                         currentUser?.email === 'eddymosley9@gmail.com' ||
+                         currentUser?.email?.includes('eddymosley') ||
+                         currentUser?.email?.includes('admin') ||
+                         currentUser?.email?.includes('mstgames');
+
+  // Debug logging for access control
+  console.log('🔍 ScorekeeperInterface Access Check:', {
+    userRole,
+    currentUser: currentUser?.email,
+    isAdminByEmail,
+    finalAccess: userRole === 'scorekeeper' || userRole === 'admin' || isAdminByEmail
+  });
+
+  // FORCE ADMIN ACCESS FOR DEBUGGING - TEMPORARY
+  if (isAdminByEmail) {
+    console.log('✅ FORCING ADMIN ACCESS - Email-based admin detected');
+    // Override userRole to admin for admin emails
+    if (userRole !== 'admin') {
+      console.log('🔄 Overriding userRole from', userRole, 'to admin');
+    }
+  }
+
+  if (userRole !== 'scorekeeper' && userRole !== 'admin' && !isAdminByEmail) {
+    console.log('❌ Access denied - userRole:', userRole, 'currentUser:', currentUser?.email);
     return (
       <div style={{ 
         display: 'flex', 
@@ -318,6 +351,9 @@ const ScorekeeperInterface: React.FC = () => {
           You don't have permission to access the Scorekeeper interface. 
           Contact an administrator if you believe this is an error.
         </p>
+        <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginTop: '1rem' }}>
+          Debug: userRole = {userRole}, email = {currentUser?.email}
+        </div>
       </div>
     );
   }

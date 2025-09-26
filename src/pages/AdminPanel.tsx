@@ -1477,7 +1477,15 @@ const AdminPanel: React.FC = () => {
       </div>
 
       {/* Tab Navigation */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem' }}>
+      <div style={{ 
+        display: 'flex', 
+        gap: '0.5rem', 
+        marginBottom: '2rem',
+        overflowX: 'auto',
+        paddingBottom: '0.5rem',
+        scrollbarWidth: 'thin',
+        scrollbarColor: '#cbd5e1 #f1f5f9'
+      }}>
         <button
           onClick={() => setActiveTab('students')}
           style={{
@@ -1488,7 +1496,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Student Management
@@ -1503,7 +1513,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Badge Manager
@@ -1518,7 +1530,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Badge Setup
@@ -1534,7 +1548,9 @@ const AdminPanel: React.FC = () => {
             fontWeight: 'bold',
             cursor: 'pointer',
             fontSize: '0.875rem',
-            position: 'relative'
+            position: 'relative',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Submissions
@@ -1568,7 +1584,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Chapter Assignments
@@ -1583,7 +1601,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Google Classroom
@@ -1598,7 +1618,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Classroom Management
@@ -1613,7 +1635,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           Manifests
@@ -1628,7 +1652,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           📖 Story Progress
@@ -1643,13 +1669,18 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           👥 Role Manager
         </button>
         <button
-          onClick={() => setActiveTab('scorekeeper')}
+          onClick={() => {
+            console.log('🔍 AdminPanel: Scorekeeper button clicked, setting activeTab to scorekeeper');
+            setActiveTab('scorekeeper');
+          }}
           style={{
             backgroundColor: activeTab === 'scorekeeper' ? '#4f46e5' : '#e5e7eb',
             color: activeTab === 'scorekeeper' ? 'white' : '#374151',
@@ -1658,7 +1689,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           📊 Scorekeeper
@@ -1673,7 +1706,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           🔍 PP Approval
@@ -1688,7 +1723,9 @@ const AdminPanel: React.FC = () => {
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
           }}
         >
           🚀 Role Setup
@@ -1708,7 +1745,10 @@ const AdminPanel: React.FC = () => {
       ) : activeTab === 'roles' ? (
         <RoleManager />
       ) : activeTab === 'scorekeeper' ? (
-        <ScorekeeperInterface />
+        <>
+          {console.log('🔍 AdminPanel: Rendering ScorekeeperInterface, activeTab:', activeTab)}
+          <ScorekeeperInterface />
+        </>
       ) : activeTab === 'pp-approval' ? (
         <PPChangeApproval />
       ) : activeTab === 'role-setup' ? (
