@@ -262,6 +262,32 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
+    // Practice Battles collection - allow authenticated users to create, users to read their own battles, admins to manage all
+    match /practiceBattles/{battleId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      allow write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Active PP Boosts collection - allow users to read/write their own boosts
+    match /activePPBoosts/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Battle Rooms collection - allow authenticated users to create, participants to read/write
+    match /battleRooms/{roomId} {
+      allow read: if request.auth != null && (resource.data.hostId == request.auth.uid || request.auth.uid in resource.data.participants);
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && (resource.data.hostId == request.auth.uid || request.auth.uid in resource.data.participants);
+    }
+    
     // Default rule - deny all other access
     match /{document=**} {
       allow read, write: if false;

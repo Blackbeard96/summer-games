@@ -114,6 +114,12 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
         });
 
         if (result === 'victory') {
+          console.log('Practice Mode Victory:', {
+            opponent: selectedOpponent.name,
+            rewards: selectedOpponent.rewards,
+            currentUser: currentUser?.uid
+          });
+          
           // Award rewards
           if (currentUser) {
             const userRef = doc(db, 'students', currentUser.uid);
@@ -124,11 +130,24 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
               const newPP = (userData.powerPoints || 0) + selectedOpponent.rewards.pp;
               const newXP = (userData.xp || 0) + selectedOpponent.rewards.xp;
               
+              console.log('Updating user stats:', {
+                oldPP: userData.powerPoints,
+                oldXP: userData.xp,
+                rewardPP: selectedOpponent.rewards.pp,
+                rewardXP: selectedOpponent.rewards.xp,
+                newPP,
+                newXP
+              });
+              
               await updateDoc(userRef, {
                 powerPoints: newPP,
                 xp: newXP,
                 lastUpdated: serverTimestamp()
               });
+              
+              console.log('✅ User stats updated successfully');
+            } else {
+              console.error('❌ User document not found');
             }
           }
           
