@@ -344,12 +344,21 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 </div>
                 {(() => {
                   const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  console.log('BattleArena: Move:', move.name, 'Damage lookup:', moveDamage);
+                  console.log('BattleArena: Move:', move.name, 'Damage lookup:', moveDamage, 'Move object:', move);
                   
                   // Show damage for offensive moves
                   if (moveDamage && moveDamage.damage > 0) {
+                    console.log('BattleArena: Rendering damage for', move.name, ':', moveDamage.damage);
                     return (
-                      <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
+                      <div style={{ 
+                        fontSize: '0.625rem', 
+                        color: '#ef4444', 
+                        fontWeight: 'bold',
+                        backgroundColor: 'rgba(255,255,255,0.8)',
+                        padding: '2px 4px',
+                        borderRadius: '4px',
+                        marginTop: '2px'
+                      }}>
                         Damage: {moveDamage.damage}
                       </div>
                     );
@@ -357,8 +366,17 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   
                   // Show shield boost for defensive moves
                   if (move.shieldBoost && move.shieldBoost > 0) {
+                    console.log('BattleArena: Rendering shield boost for', move.name, ':', move.shieldBoost);
                     return (
-                      <div style={{ fontSize: '0.625rem', color: '#3b82f6', fontWeight: 'bold' }}>
+                      <div style={{ 
+                        fontSize: '0.625rem', 
+                        color: '#3b82f6', 
+                        fontWeight: 'bold',
+                        backgroundColor: 'rgba(255,255,255,0.8)',
+                        padding: '2px 4px',
+                        borderRadius: '4px',
+                        marginTop: '2px'
+                      }}>
                         Shield: +{move.shieldBoost}
                       </div>
                     );
@@ -366,13 +384,23 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   
                   // Show healing for support moves
                   if (move.healing && move.healing > 0) {
+                    console.log('BattleArena: Rendering healing for', move.name, ':', move.healing);
                     return (
-                      <div style={{ fontSize: '0.625rem', color: '#10b981', fontWeight: 'bold' }}>
+                      <div style={{ 
+                        fontSize: '0.625rem', 
+                        color: '#10b981', 
+                        fontWeight: 'bold',
+                        backgroundColor: 'rgba(255,255,255,0.8)',
+                        padding: '2px 4px',
+                        borderRadius: '4px',
+                        marginTop: '2px'
+                      }}>
                         Heal: +{move.healing}
                       </div>
                     );
                   }
                   
+                  console.log('BattleArena: No effect to render for', move.name);
                   return null;
                 })()}
               </button>

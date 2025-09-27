@@ -183,33 +183,34 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     newLog.push(`${opponent.name} used ${opponentMove.name}!`);
     
-    // Calculate opponent move effects
-    let damage = 0;
-    let ppStolen = 0;
+    // Calculate opponent move effects using combined damage
+    const totalDamage = opponentMove.damage + opponentMove.ppSteal;
     let shieldDamage = 0;
+    let ppStolen = 0;
     
-    if (opponentMove.damage) {
-      damage = opponentMove.damage;
-      shieldDamage = Math.min(damage, vault.shieldStrength);
-      const remainingDamage = Math.max(0, damage - vault.shieldStrength);
+    if (totalDamage > 0) {
+      // Apply damage to shields first, then PP
+      shieldDamage = Math.min(totalDamage, vault.shieldStrength);
+      const remainingDamage = totalDamage - shieldDamage;
       
-      if (shieldDamage > 0) {
-        newLog.push(`Your shield took ${shieldDamage} damage!`);
-      }
       if (remainingDamage > 0) {
-        newLog.push(`You took ${remainingDamage} damage!`);
+        ppStolen = Math.min(remainingDamage, vault.currentPP);
       }
-    }
-    
-    if (opponentMove.ppSteal) {
-      ppStolen = opponentMove.ppSteal;
-      newLog.push(`${ppStolen} PP was stolen from you!`);
+      
+      // Log the damage breakdown
+      if (shieldDamage > 0 && ppStolen > 0) {
+        newLog.push(`Dealt ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)!`);
+      } else if (shieldDamage > 0) {
+        newLog.push(`Dealt ${shieldDamage} damage to shields!`);
+      } else if (ppStolen > 0) {
+        newLog.push(`Dealt ${ppStolen} damage to PP!`);
+      }
     }
     
     // Update player vault
     const newVault = { ...vault };
     newVault.shieldStrength = Math.max(0, vault.shieldStrength - shieldDamage);
-    newVault.currentPP = Math.max(0, vault.currentPP - (damage - shieldDamage) - ppStolen);
+    newVault.currentPP = Math.max(0, vault.currentPP - ppStolen);
     
     // Check for defeat
     if (newVault.currentPP <= 0) {
