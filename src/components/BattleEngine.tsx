@@ -200,14 +200,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     // Start opponent turn after a delay
     setTimeout(() => {
-      executeOpponentTurn();
+      executeOpponentTurn(newLog, newOpponent);
     }, 2000);
   };
 
-  const executeOpponentTurn = async () => {
+  const executeOpponentTurn = async (currentLog: string[], currentOpponent: any) => {
     if (!vault) return;
     
-    const newLog = [...battleState.battleLog];
+    const newLog = [...currentLog];
     // Simple opponent AI - random move selection
     const opponentMoves = [
       { name: 'Vault Breach', damage: 25, ppSteal: 0 },
@@ -286,6 +286,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }
     
     newLog.push(`🔄 Turn ${battleState.turnCount + 1} begins!`);
+    
+    // Update opponent state to reflect any damage from player's previous turn
+    setOpponent(currentOpponent);
     
     setBattleState(prev => ({
       ...prev,
