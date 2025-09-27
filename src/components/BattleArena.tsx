@@ -342,9 +342,6 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
                 </div>
-                <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
-                  Cost: {move.cost} PP
-                </div>
                 {move.damage && (
                   <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
                     Shield DMG: {move.damage}

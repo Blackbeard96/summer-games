@@ -65,6 +65,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
   }, [propOpponent]);
 
   const availableMoves = moves.filter(move => move.unlocked && move.currentCooldown === 0);
+  
+  // Debug log to check move damage values
+  console.log('🔍 BattleEngine availableMoves:', availableMoves.map(m => ({ 
+    name: m.name, 
+    damage: m.damage, 
+    ppSteal: m.ppSteal,
+    unlocked: m.unlocked,
+    cooldown: m.currentCooldown
+  })));
   const availableTargets = [
     {
       id: opponent.id,
