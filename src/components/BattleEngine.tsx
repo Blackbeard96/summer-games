@@ -34,7 +34,7 @@ interface BattleState {
 
 const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: propOpponent }) => {
   const { currentUser } = useAuth();
-  const { vault, moves } = useBattle();
+  const { vault, moves, updateVault } = useBattle();
   
   const [battleState, setBattleState] = useState<BattleState>({
     phase: 'selection',
@@ -167,7 +167,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }, 2000);
   };
 
-  const executeOpponentTurn = () => {
+  const executeOpponentTurn = async () => {
     if (!vault) return;
     
     const newLog = [...battleState.battleLog];
@@ -208,12 +208,33 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }
     
     // Update player vault
-    const newVault = { ...vault };
-    newVault.shieldStrength = Math.max(0, vault.shieldStrength - shieldDamage);
-    newVault.currentPP = Math.max(0, vault.currentPP - ppStolen);
+    const newShieldStrength = Math.max(0, vault.shieldStrength - shieldDamage);
+    const newCurrentPP = Math.max(0, vault.currentPP - ppStolen);
+    
+    console.log('CPU Attack Debug:', {
+      opponentMove: opponentMove.name,
+      totalDamage,
+      shieldDamage,
+      ppStolen,
+      oldShield: vault.shieldStrength,
+      newShield: newShieldStrength,
+      oldPP: vault.currentPP,
+      newPP: newCurrentPP
+    });
+    
+    // Update vault in context
+    try {
+      await updateVault({
+        shieldStrength: newShieldStrength,
+        currentPP: newCurrentPP
+      });
+      console.log('✅ Vault updated successfully after CPU attack');
+    } catch (error) {
+      console.error('❌ Failed to update vault after CPU attack:', error);
+    }
     
     // Check for defeat
-    if (newVault.currentPP <= 0) {
+    if (newCurrentPP <= 0) {
       newLog.push('Your vault has been completely drained!');
       newLog.push('Defeat! Your vault has been raided!');
       setBattleState(prev => ({
@@ -225,7 +246,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       return;
     }
     
-    // Update vault in context (this would need to be implemented)
     newLog.push(`Turn ${battleState.turnCount + 1} begins!`);
     
     setBattleState(prev => ({
