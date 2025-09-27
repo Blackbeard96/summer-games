@@ -90,7 +90,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }));
   }, [battleState.selectedMove, battleState.selectedTarget, vault]);
 
-  const handleAnimationComplete = () => {
+  const handleAnimationComplete = async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
 
     const move = battleState.selectedMove;
@@ -103,7 +103,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     let damage = 0;
     let ppStolen = 0;
     let shieldDamage = 0;
+    let playerShieldBoost = 0;
+    let playerHealing = 0;
     
+    // Offensive moves
     if (move.damage) {
       damage = move.damage + (move.masteryLevel - 1) * 5; // Mastery bonus
       shieldDamage = Math.min(damage, opponent.shieldStrength);
@@ -122,15 +125,45 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       newLog.push(`${ppStolen} PP was stolen from ${opponent.name}!`);
     }
     
+    // Defensive moves (shield boost)
+    if (move.shieldBoost) {
+      playerShieldBoost = move.shieldBoost + (move.masteryLevel - 1) * 3; // Mastery bonus
+      newLog.push(`Your shields were boosted by ${playerShieldBoost}!`);
+    }
+    
+    // Support moves (healing)
+    if (move.healing) {
+      playerHealing = move.healing + (move.masteryLevel - 1) * 2; // Mastery bonus
+      newLog.push(`You healed for ${playerHealing} PP!`);
+    }
+    
     // Update opponent stats
     const newOpponent = { ...opponent };
     newOpponent.shieldStrength = Math.max(0, opponent.shieldStrength - shieldDamage);
     newOpponent.currentPP = Math.max(0, opponent.currentPP - (damage - shieldDamage) - ppStolen);
     
-    // Update player vault (add stolen PP)
+    // Update player vault
+    const newVault = { ...vault };
     if (ppStolen > 0) {
-      // This would need to be implemented in the battle context
+      newVault.currentPP = Math.min(1000, vault.currentPP + ppStolen);
       newLog.push(`You gained ${ppStolen} PP!`);
+    }
+    if (playerShieldBoost > 0) {
+      newVault.shieldStrength = Math.min(50, vault.shieldStrength + playerShieldBoost);
+    }
+    if (playerHealing > 0) {
+      newVault.currentPP = Math.min(1000, vault.currentPP + playerHealing);
+    }
+    
+    // Update vault in context
+    try {
+      await updateVault({
+        currentPP: newVault.currentPP,
+        shieldStrength: newVault.shieldStrength
+      });
+      console.log('✅ Vault updated successfully after player move');
+    } catch (error) {
+      console.error('❌ Failed to update vault after player move:', error);
     }
     
     // Check for victory
