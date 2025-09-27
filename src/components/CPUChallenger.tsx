@@ -532,8 +532,12 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
                 >
                   <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>{move.name}</div>
                   <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>{move.description}</div>
-                  {move.damage && <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>Damage: {move.damage}</div>}
-                  {move.ppSteal && <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>PP Steal: {move.ppSteal}</div>}
+                  {(() => {
+                    const totalDamage = (move.damage || 0) + (move.ppSteal || 0);
+                    return totalDamage > 0 && (
+                      <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>Damage: {totalDamage}</div>
+                    );
+                  })()}
                 </button>
               ))}
             </div>

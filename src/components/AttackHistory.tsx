@@ -267,47 +267,25 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
               {/* Attack Stats Grid */}
               <div style={{ 
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: '1fr',
                 gap: '0.5rem',
                 marginBottom: '0.75rem'
               }}>
-                {attack.ppStolen > 0 && (
-                  <div style={{
-                    background: 'rgba(255,255,255,0.9)',
-                    padding: '0.5rem',
-                    borderRadius: '0.5rem',
-                    textAlign: 'center',
-                    backdropFilter: 'blur(10px)'
-                  }}>
-                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>PP STOLEN</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#f59e0b' }}>{attack.ppStolen}</div>
-                  </div>
-                )}
-                {attack.shieldDamage > 0 && (
-                  <div style={{
-                    background: 'rgba(255,255,255,0.9)',
-                    padding: '0.5rem',
-                    borderRadius: '0.5rem',
-                    textAlign: 'center',
-                    backdropFilter: 'blur(10px)'
-                  }}>
-                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD DMG</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#dc2626' }}>{attack.shieldDamage}</div>
-                  </div>
-                )}
-                {attack.damage > 0 && (
-                  <div style={{
-                    background: 'rgba(255,255,255,0.9)',
-                    padding: '0.5rem',
-                    borderRadius: '0.5rem',
-                    textAlign: 'center',
-                    backdropFilter: 'blur(10px)',
-                    gridColumn: 'span 2'
-                  }}>
-                    <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#991b1b' }}>{attack.damage}</div>
-                  </div>
-                )}
+                {(() => {
+                  const totalDamage = (attack.shieldDamage || 0) + (attack.ppStolen || 0);
+                  return totalDamage > 0 && (
+                    <div style={{
+                      background: 'rgba(255,255,255,0.9)',
+                      padding: '0.5rem',
+                      borderRadius: '0.5rem',
+                      textAlign: 'center',
+                      backdropFilter: 'blur(10px)'
+                    }}>
+                      <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                      <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#dc2626' }}>{totalDamage}</div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Weapons Used */}

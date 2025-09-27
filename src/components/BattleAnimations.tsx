@@ -211,22 +211,25 @@ const BattleAnimations: React.FC<BattleAnimationsProps> = ({
         </div>
       )}
 
-      {/* PP Steal Effect */}
-      {move.ppSteal && (
-        <div style={{
-          position: 'absolute',
-          top: isPlayerMove ? '40%' : '50%',
-          left: isPlayerMove ? '70%' : '30%',
-          fontSize: '1.5rem',
-          fontWeight: 'bold',
-          color: '#fbbf24',
-          fontFamily: 'monospace',
-          animation: 'ppSteal 1.5s ease-out',
-          textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8)'
-        }}>
-          +{move.ppSteal} PP
-        </div>
-      )}
+      {/* Combined Damage Effect */}
+      {(() => {
+        const totalDamage = (move.damage || 0) + (move.ppSteal || 0);
+        return totalDamage > 0 && (
+          <div style={{
+            position: 'absolute',
+            top: isPlayerMove ? '40%' : '50%',
+            left: isPlayerMove ? '70%' : '30%',
+            fontSize: '1.5rem',
+            fontWeight: 'bold',
+            color: '#dc2626',
+            fontFamily: 'monospace',
+            animation: 'damage 1.5s ease-out',
+            textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8)'
+          }}>
+            -{totalDamage}
+          </div>
+        );
+      })()}
 
       {/* CSS Animations */}
       <style>
@@ -286,7 +289,7 @@ const BattleAnimations: React.FC<BattleAnimationsProps> = ({
             100% { transform: translateY(-40px) scale(1); opacity: 0; }
           }
           
-          @keyframes ppSteal {
+          @keyframes damage {
             0% { transform: translateY(0) scale(1); opacity: 1; }
             50% { transform: translateY(-15px) scale(1.1); opacity: 1; }
             100% { transform: translateY(-30px) scale(1); opacity: 0; }

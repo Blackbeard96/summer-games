@@ -1,5 +1,5 @@
 import React from 'react';
-import { Move, MOVE_UPGRADE_TEMPLATES } from '../types/battle';
+import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -283,33 +283,23 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.cost}</div>
           </div>
 
-          {/* Shield Damage */}
-          {move.damage && (
-            <div style={{
-              background: 'rgba(255,255,255,0.9)',
-              padding: '0.75rem',
-              borderRadius: '0.75rem',
-              textAlign: 'center',
-              backdropFilter: 'blur(10px)'
-            }}>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD DMG</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{move.damage}</div>
-            </div>
-          )}
-
-          {/* PP Steal */}
-          {move.ppSteal && (
-            <div style={{
-              background: 'rgba(255,255,255,0.9)',
-              padding: '0.75rem',
-              borderRadius: '0.75rem',
-              textAlign: 'center',
-              backdropFilter: 'blur(10px)'
-            }}>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>PP STEAL</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.ppSteal}</div>
-            </div>
-          )}
+          {/* Combined Damage */}
+          {(() => {
+            const moveDamage = MOVE_DAMAGE_VALUES[move.name];
+            return moveDamage && moveDamage.damage > 0 && (
+              <div style={{
+                background: 'rgba(255,255,255,0.9)',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                textAlign: 'center',
+                backdropFilter: 'blur(10px)',
+                gridColumn: 'span 2'
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{moveDamage.damage}</div>
+              </div>
+            );
+          })()}
 
           {/* Healing */}
           {move.healing && (
@@ -409,12 +399,13 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               ⬆️ Next Level Preview
             </div>
             <div style={{ fontSize: '0.75rem', color: '#059669', lineHeight: '1.3' }}>
-              {nextLevelStats.damage !== undefined && (
-                <div>Damage: {move.damage} → {nextLevelStats.damage}</div>
-              )}
-              {nextLevelStats.ppSteal !== undefined && (
-                <div>PP Steal: {move.ppSteal || 0} → {nextLevelStats.ppSteal}</div>
-              )}
+              {(() => {
+                const currentDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || 0;
+                const nextDamage = nextLevelStats.damage !== undefined ? nextLevelStats.damage : 0;
+                return currentDamage > 0 && nextDamage > 0 && (
+                  <div>Damage: {currentDamage} → {nextDamage}</div>
+                );
+              })()}
               {nextLevelStats.debuffStrength !== undefined && (
                 <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>
               )}
