@@ -48,7 +48,7 @@ export const applyPPBoost = (basePP: number, userId: string, activeBoost: PPBoos
   if (!activeBoost) return basePP;
   
   const now = new Date();
-  const endTime = activeBoost.endTime?.toDate?.() || new Date(activeBoost.endTime);
+  const endTime = activeBoost.endTime instanceof Date ? activeBoost.endTime : new Date(activeBoost.endTime);
   
   // Check if boost is still active
   if (endTime <= now) return basePP;
@@ -147,7 +147,7 @@ export const getPPBoostStatus = (activeBoost: PPBoost | null): { isActive: boole
   }
   
   const now = new Date();
-  const endTime = activeBoost.endTime?.toDate?.() || new Date(activeBoost.endTime);
+  const endTime = activeBoost.endTime instanceof Date ? activeBoost.endTime : new Date(activeBoost.endTime);
   
   if (endTime <= now) {
     return { isActive: false, timeRemaining: '', multiplier: 1 };

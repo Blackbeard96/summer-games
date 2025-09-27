@@ -8,6 +8,7 @@ import AttackHistory from '../components/AttackHistory';
 import VaultStats from '../components/VaultStats';
 import MovesDisplay from '../components/MovesDisplay';
 import DashboardActionCards from '../components/DashboardActionCards';
+import BattleEngine from '../components/BattleEngine';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { collection, addDoc } from 'firebase/firestore';
@@ -48,10 +49,11 @@ const Battle: React.FC = () => {
   } = useBattle();
   const navigate = useNavigate();
   
-  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history'>('lobby');
+  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle'>('battle');
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
   const [userElement, setUserElement] = useState<string>('fire'); // Default to fire, will be updated
+  const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
 
   // Fetch user's element from profile
@@ -357,7 +359,8 @@ const Battle: React.FC = () => {
         marginBottom: '2rem'
       }}>
         {[
-          { id: 'lobby', label: 'Battle Lobby', icon: '⚔️' },
+          { id: 'battle', label: 'Visual Battle', icon: '⚔️' },
+          { id: 'lobby', label: 'Battle Lobby', icon: '🏟️' },
           { id: 'vault', label: 'Vault Management', icon: '🏦' },
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
@@ -599,6 +602,63 @@ const Battle: React.FC = () => {
 
       {/* Tab Content */}
       <div style={{ minHeight: '400px' }}>
+        {activeTab === 'battle' && (
+          <div>
+            <div style={{
+              background: 'linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)',
+              color: 'white',
+              padding: '1.5rem',
+              borderRadius: '0.75rem',
+              marginBottom: '2rem',
+              textAlign: 'center'
+            }}>
+              <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>🎮 Visual Battle System</h2>
+              <p style={{ fontSize: '1rem', opacity: 0.9, marginBottom: '1rem' }}>
+                Experience turn-based combat with vault-to-vault battles!
+              </p>
+              <button
+                onClick={() => setShowBattleEngine(!showBattleEngine)}
+                style={{
+                  background: showBattleEngine ? '#ef4444' : '#10b981',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                {showBattleEngine ? '🛑 Stop Battle' : '⚔️ Start Battle'}
+              </button>
+            </div>
+            
+            {showBattleEngine && (
+              <BattleEngine
+                onBattleEnd={(result) => {
+                  setShowBattleEngine(false);
+                  if (result === 'victory') {
+                    alert('🎉 Victory! You successfully raided the vault!');
+                  } else if (result === 'defeat') {
+                    alert('💀 Defeat! Your vault was raided!');
+                  } else {
+                    alert('🏃 You escaped from battle!');
+                  }
+                }}
+              />
+            )}
+          </div>
+        )}
+        
         {activeTab === 'lobby' && (
           <div>
             {/* Enhanced Vault Stats - Only in Battle Lobby */}
