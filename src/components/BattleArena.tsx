@@ -344,6 +344,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 </div>
                 {(() => {
                   const moveDamage = MOVE_DAMAGE_VALUES[move.name];
+                  console.log(`🔍 BattleArena ${move.name}:`, { moveDamage, shieldDamage: moveDamage?.shieldDamage, ppSteal: moveDamage?.ppSteal });
                   return moveDamage && moveDamage.shieldDamage > 0 && (
                     <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
                       Shield DMG: {moveDamage.shieldDamage}
