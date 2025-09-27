@@ -133,6 +133,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     if (move.shieldBoost) {
       playerShieldBoost = move.shieldBoost + (move.masteryLevel - 1) * 3; // Mastery bonus
       newLog.push(`🛡️ ${playerName} used ${move.name} to boost shields by ${playerShieldBoost}!`);
+      console.log('Shield Restoration Debug:', {
+        moveName: move.name,
+        shieldBoost: move.shieldBoost,
+        masteryLevel: move.masteryLevel,
+        calculatedBoost: playerShieldBoost,
+        currentShield: vault.shieldStrength,
+        moveObject: move
+      });
     }
     
     // Support moves (healing)
@@ -153,7 +161,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       newLog.push(`You gained ${ppStolen} PP!`);
     }
     if (playerShieldBoost > 0) {
+      const oldShield = vault.shieldStrength;
       newVault.shieldStrength = Math.min(50, vault.shieldStrength + playerShieldBoost);
+      console.log('Shield Boost Applied:', {
+        oldShield,
+        boostAmount: playerShieldBoost,
+        newShield: newVault.shieldStrength,
+        maxShield: 50
+      });
     }
     if (playerHealing > 0) {
       newVault.currentPP = Math.min(1000, vault.currentPP + playerHealing);
