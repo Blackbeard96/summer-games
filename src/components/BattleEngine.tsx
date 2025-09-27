@@ -317,33 +317,60 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       />
       
       {/* Battle Status */}
+      {/* Battle Log */}
       <div style={{
         marginTop: '1rem',
         padding: '1rem',
-        background: 'rgba(255, 255, 255, 0.9)',
+        background: 'rgba(0, 0, 0, 0.8)',
         borderRadius: '0.5rem',
-        border: '2px solid #8B4513'
+        border: '2px solid #8B4513',
+        maxHeight: '200px',
+        overflowY: 'auto',
+        fontFamily: 'monospace',
+        fontSize: '0.75rem',
+        color: '#ffffff'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <span style={{ fontWeight: 'bold' }}>Turn: {battleState.turnCount}</span>
-            <span style={{ marginLeft: '1rem', color: battleState.isPlayerTurn ? '#10b981' : '#ef4444' }}>
-              {battleState.isPlayerTurn ? 'Your Turn' : 'Opponent Turn'}
-            </span>
-          </div>
-          <div>
-            <span style={{ fontWeight: 'bold' }}>Phase: {battleState.phase.toUpperCase()}</span>
-          </div>
+        <div style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: 'bold', 
+          marginBottom: '0.5rem', 
+          textAlign: 'center',
+          color: '#fbbf24'
+        }}>
+          📜 BATTLE LOG
         </div>
-        
-        {battleState.selectedMove && (
-          <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
-            Selected Move: <span style={{ fontWeight: 'bold' }}>{battleState.selectedMove.name}</span>
-            {battleState.selectedTarget && (
-              <span> → Target: <span style={{ fontWeight: 'bold' }}>{availableTargets.find(t => t.id === battleState.selectedTarget)?.name}</span></span>
-            )}
-          </div>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          {battleState.battleLog.map((logEntry, index) => (
+            <div 
+              key={index}
+              style={{
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
+                backgroundColor: logEntry.includes('used') ? 'rgba(59, 130, 246, 0.2)' : 
+                               logEntry.includes('Dealt') ? 'rgba(239, 68, 68, 0.2)' :
+                               logEntry.includes('Turn') ? 'rgba(34, 197, 94, 0.2)' :
+                               'rgba(107, 114, 128, 0.2)',
+                borderLeft: logEntry.includes('used') ? '3px solid #3b82f6' :
+                           logEntry.includes('Dealt') ? '3px solid #ef4444' :
+                           logEntry.includes('Turn') ? '3px solid #22c55e' :
+                           '3px solid #6b7280',
+                wordWrap: 'break-word'
+              }}
+            >
+              {logEntry}
+            </div>
+          ))}
+          {battleState.battleLog.length === 0 && (
+            <div style={{ 
+              textAlign: 'center', 
+              color: '#9ca3af', 
+              fontStyle: 'italic',
+              padding: '1rem'
+            }}>
+              Battle log will appear here...
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Battle Animations */}
