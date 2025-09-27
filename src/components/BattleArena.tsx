@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { Move } from '../types/battle';
+import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move) => void;
@@ -342,16 +342,22 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
                 </div>
-                {move.damage && (
-                  <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
-                    Shield DMG: {move.damage}
-                  </div>
-                )}
-                {move.ppSteal && (
-                  <div style={{ fontSize: '0.625rem', color: '#f59e0b', fontWeight: 'bold' }}>
-                    PP Steal: {move.ppSteal}
-                  </div>
-                )}
+                {(() => {
+                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
+                  return moveDamage && moveDamage.shieldDamage > 0 && (
+                    <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
+                      Shield DMG: {moveDamage.shieldDamage}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
+                  return moveDamage && moveDamage.ppSteal > 0 && (
+                    <div style={{ fontSize: '0.625rem', color: '#f59e0b', fontWeight: 'bold' }}>
+                      PP Steal: {moveDamage.ppSteal}
+                    </div>
+                  );
+                })()}
               </button>
             ))}
           </div>
