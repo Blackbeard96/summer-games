@@ -344,11 +344,36 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 </div>
                 {(() => {
                   const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  return moveDamage && moveDamage.damage > 0 && (
-                    <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
-                      Damage: {moveDamage.damage}
-                    </div>
-                  );
+                  console.log('BattleArena: Move:', move.name, 'Damage lookup:', moveDamage);
+                  
+                  // Show damage for offensive moves
+                  if (moveDamage && moveDamage.damage > 0) {
+                    return (
+                      <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
+                        Damage: {moveDamage.damage}
+                      </div>
+                    );
+                  }
+                  
+                  // Show shield boost for defensive moves
+                  if (move.shieldBoost && move.shieldBoost > 0) {
+                    return (
+                      <div style={{ fontSize: '0.625rem', color: '#3b82f6', fontWeight: 'bold' }}>
+                        Shield: +{move.shieldBoost}
+                      </div>
+                    );
+                  }
+                  
+                  // Show healing for support moves
+                  if (move.healing && move.healing > 0) {
+                    return (
+                      <div style={{ fontSize: '0.625rem', color: '#10b981', fontWeight: 'bold' }}>
+                        Heal: +{move.healing}
+                      </div>
+                    );
+                  }
+                  
+                  return null;
                 })()}
               </button>
             ))}
