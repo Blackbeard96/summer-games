@@ -97,7 +97,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     // Add move execution to battle log
     const newLog = [...battleState.battleLog];
-    newLog.push(`${currentUser?.displayName || 'Player'} used ${move.name}!`);
+    const playerName = currentUser?.displayName || 'Player';
     
     // Calculate move effects
     let damage = 0;
@@ -112,29 +112,33 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       shieldDamage = Math.min(damage, opponent.shieldStrength);
       const remainingDamage = Math.max(0, damage - opponent.shieldStrength);
       
-      if (shieldDamage > 0) {
-        newLog.push(`${opponent.name}'s shield took ${shieldDamage} damage!`);
-      }
-      if (remainingDamage > 0) {
-        newLog.push(`${opponent.name} took ${remainingDamage} damage!`);
+      // Log attack with damage breakdown
+      if (shieldDamage > 0 && remainingDamage > 0) {
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to PP)!`);
+      } else if (shieldDamage > 0) {
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${shieldDamage} damage to shields!`);
+      } else if (remainingDamage > 0) {
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${remainingDamage} damage to PP!`);
+      } else {
+        newLog.push(`⚔️ ${playerName} used ${move.name} on ${opponent.name}!`);
       }
     }
     
     if (move.ppSteal) {
       ppStolen = move.ppSteal + (move.masteryLevel - 1) * 2; // Mastery bonus
-      newLog.push(`${ppStolen} PP was stolen from ${opponent.name}!`);
+      newLog.push(`💰 ${playerName} stole ${ppStolen} PP from ${opponent.name}!`);
     }
     
     // Defensive moves (shield boost)
     if (move.shieldBoost) {
       playerShieldBoost = move.shieldBoost + (move.masteryLevel - 1) * 3; // Mastery bonus
-      newLog.push(`Your shields were boosted by ${playerShieldBoost}!`);
+      newLog.push(`🛡️ ${playerName} used ${move.name} to boost shields by ${playerShieldBoost}!`);
     }
     
     // Support moves (healing)
     if (move.healing) {
       playerHealing = move.healing + (move.masteryLevel - 1) * 2; // Mastery bonus
-      newLog.push(`You healed for ${playerHealing} PP!`);
+      newLog.push(`💚 ${playerName} used ${move.name} to heal for ${playerHealing} PP!`);
     }
     
     // Update opponent stats
@@ -168,8 +172,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     // Check for victory
     if (newOpponent.currentPP <= 0) {
-      newLog.push(`${opponent.name} has been defeated!`);
-      newLog.push('Victory! You have successfully raided the vault!');
+      newLog.push(`💀 ${opponent.name} has been defeated!`);
+      newLog.push(`🎉 Victory! You have successfully raided ${opponent.name}'s vault!`);
       setBattleState(prev => ({
         ...prev,
         phase: 'victory',
@@ -214,8 +218,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     const opponentMove = opponentMoves[Math.floor(Math.random() * opponentMoves.length)];
     
-    newLog.push(`${opponent.name} used ${opponentMove.name}!`);
-    
     // Calculate opponent move effects using combined damage
     const totalDamage = opponentMove.damage + opponentMove.ppSteal;
     let shieldDamage = 0;
@@ -230,14 +232,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
         ppStolen = Math.min(remainingDamage, vault.currentPP);
       }
       
-      // Log the damage breakdown
+      // Log attack with damage breakdown
       if (shieldDamage > 0 && ppStolen > 0) {
-        newLog.push(`Dealt ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)!`);
+        newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)!`);
       } else if (shieldDamage > 0) {
-        newLog.push(`Dealt ${shieldDamage} damage to shields!`);
+        newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${shieldDamage} damage to shields!`);
       } else if (ppStolen > 0) {
-        newLog.push(`Dealt ${ppStolen} damage to PP!`);
+        newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${ppStolen} damage to PP!`);
+      } else {
+        newLog.push(`⚔️ ${opponent.name} used ${opponentMove.name} on you!`);
       }
+    } else {
+      newLog.push(`⚔️ ${opponent.name} used ${opponentMove.name}!`);
     }
     
     // Update player vault
@@ -268,8 +274,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     // Check for defeat
     if (newCurrentPP <= 0) {
-      newLog.push('Your vault has been completely drained!');
-      newLog.push('Defeat! Your vault has been raided!');
+      newLog.push('💀 Your vault has been completely drained!');
+      newLog.push(`💀 Defeat! ${opponent.name} has successfully raided your vault!`);
       setBattleState(prev => ({
         ...prev,
         phase: 'defeat',
@@ -279,7 +285,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       return;
     }
     
-    newLog.push(`Turn ${battleState.turnCount + 1} begins!`);
+    newLog.push(`🔄 Turn ${battleState.turnCount + 1} begins!`);
     
     setBattleState(prev => ({
       ...prev,
