@@ -577,6 +577,65 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
+      {/* Battle Log */}
+      <div style={{
+        position: 'absolute',
+        bottom: '20px',
+        left: '20px',
+        width: '300px',
+        maxHeight: '200px',
+        background: 'rgba(0, 0, 0, 0.8)',
+        border: '2px solid #8B4513',
+        borderRadius: '0.5rem',
+        padding: '0.75rem',
+        overflowY: 'auto',
+        fontFamily: 'monospace',
+        fontSize: '0.75rem',
+        color: '#ffffff'
+      }}>
+        <div style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: 'bold', 
+          marginBottom: '0.5rem', 
+          textAlign: 'center',
+          color: '#fbbf24'
+        }}>
+          📜 BATTLE LOG
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          {battleLog.map((logEntry, index) => (
+            <div 
+              key={index}
+              style={{
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
+                backgroundColor: logEntry.includes('used') ? 'rgba(59, 130, 246, 0.2)' : 
+                               logEntry.includes('Dealt') ? 'rgba(239, 68, 68, 0.2)' :
+                               logEntry.includes('Turn') ? 'rgba(34, 197, 94, 0.2)' :
+                               'rgba(107, 114, 128, 0.2)',
+                borderLeft: logEntry.includes('used') ? '3px solid #3b82f6' :
+                           logEntry.includes('Dealt') ? '3px solid #ef4444' :
+                           logEntry.includes('Turn') ? '3px solid #22c55e' :
+                           '3px solid #6b7280',
+                wordWrap: 'break-word'
+              }}
+            >
+              {logEntry}
+            </div>
+          ))}
+          {battleLog.length === 0 && (
+            <div style={{ 
+              textAlign: 'center', 
+              color: '#9ca3af', 
+              fontStyle: 'italic',
+              padding: '1rem'
+            }}>
+              Battle log will appear here...
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* CSS Animations */}
       <style>
         {`
