@@ -45,6 +45,9 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     setShowMoveMenu(false);
     if (move.targetType === 'single' || move.targetType === 'enemy') {
       setShowTargetMenu(true);
+    } else if (move.targetType === 'self') {
+      // For self-targeting moves, automatically select self as target
+      onTargetSelect('self');
     }
   };
 

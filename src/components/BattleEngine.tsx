@@ -94,6 +94,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
 
     const move = battleState.selectedMove;
+    console.log('Move Execution Debug:', {
+      moveName: move.name,
+      moveType: move.type,
+      hasShieldBoost: !!move.shieldBoost,
+      shieldBoostValue: move.shieldBoost,
+      moveObject: move
+    });
     
     // Add move execution to battle log
     const newLog = [...battleState.battleLog];
