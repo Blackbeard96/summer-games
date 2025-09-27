@@ -160,11 +160,19 @@ export class BattleEngine {
         } else {
           damage = this.calculateDamage(attacker, defender, move);
           
-          // Check for PP steal in move damage values
+          // Apply damage to shields first, then PP
           const moveDamageValues = MOVE_DAMAGE_VALUES[move.name];
-          if (moveDamageValues && moveDamageValues.ppSteal > 0) {
-            ppStolen = Math.min(defender.vault.currentPP, moveDamageValues.ppSteal);
-            message = `${attacker.displayName} used ${move.name} for ${damage} damage and stole ${ppStolen} PP!`;
+          if (moveDamageValues && moveDamageValues.damage > 0) {
+            const totalDamage = moveDamageValues.damage;
+            const shieldDamage = Math.min(totalDamage, defender.vault.shieldStrength);
+            const remainingDamage = totalDamage - shieldDamage;
+            
+            if (remainingDamage > 0) {
+              ppStolen = Math.min(remainingDamage, defender.vault.currentPP);
+              message = `${attacker.displayName} used ${move.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)!`;
+            } else {
+              message = `${attacker.displayName} used ${move.name} for ${shieldDamage} damage to shields!`;
+            }
           } else {
             message = `${attacker.displayName} used ${move.name} for ${damage} damage!`;
           }

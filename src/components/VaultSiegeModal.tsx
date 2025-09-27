@@ -937,8 +937,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           }}>
             {unlockedMoves.map(move => {
               const isSelected = selectedMoves.includes(move.id);
-              const shieldDamage = MOVE_DAMAGE_VALUES[move.name]?.shieldDamage || 0;
-              const ppSteal = MOVE_DAMAGE_VALUES[move.name]?.ppSteal || 0;
+              const totalDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || 0;
               
               // Determine card background based on move category and selection
               const getCardBackground = () => {
@@ -1062,25 +1061,21 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       {move.description}
                     </div>
                     
-                    <div style={{ 
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '0.75rem',
-                      marginBottom: '0.75rem'
-                    }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD DMG</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                          {shieldDamage}
+                    {totalDamage > 0 && (
+                      <div style={{ 
+                        display: 'grid',
+                        gridTemplateColumns: '1fr',
+                        gap: '0.75rem',
+                        marginBottom: '0.75rem'
+                      }}>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
+                            {totalDamage}
+                          </div>
                         </div>
                       </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>PP STEAL</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#f59e0b' }}>
-                          {ppSteal}
-                        </div>
-                      </div>
-                    </div>
+                    )}
 
                     {/* Move Type Badge */}
                     <div style={{ 
@@ -1127,8 +1122,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           }}>
             {unlockedCards.map(card => {
               const isSelected = selectedActionCards.includes(card.id);
-              const shieldDamage = ACTION_CARD_DAMAGE_VALUES[card.name]?.shieldDamage || 0;
-              const ppSteal = ACTION_CARD_DAMAGE_VALUES[card.name]?.ppSteal || 0;
+              const totalDamage = ACTION_CARD_DAMAGE_VALUES[card.name]?.damage || 0;
               
               // Determine card background based on selection
               const getCardBackground = () => {
@@ -1236,25 +1230,21 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       {card.description}
                     </div>
                     
-                    <div style={{ 
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '0.75rem',
-                      marginBottom: '0.75rem'
-                    }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>SHIELD DMG</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                          {shieldDamage}
+                    {totalDamage > 0 && (
+                      <div style={{ 
+                        display: 'grid',
+                        gridTemplateColumns: '1fr',
+                        gap: '0.75rem',
+                        marginBottom: '0.75rem'
+                      }}>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
+                            {totalDamage}
+                          </div>
                         </div>
                       </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>PP STEAL</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#f59e0b' }}>
-                          {ppSteal}
-                        </div>
-                      </div>
-                    </div>
+                    )}
 
                     {/* Card Info */}
                     <div style={{ 
