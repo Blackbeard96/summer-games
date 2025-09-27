@@ -148,7 +148,18 @@ const OfflineMoveBattle: React.FC<OfflineMoveBattleProps> = ({ onBack }) => {
           </button>
         </div>
         
-        <BattleEngine onBattleEnd={handleBattleEnd} />
+        <BattleEngine 
+          onBattleEnd={handleBattleEnd}
+          opponent={{
+            id: selectedTarget.id,
+            name: selectedTarget.displayName,
+            currentPP: selectedTarget.powerPoints,
+            maxPP: selectedTarget.powerPoints,
+            shieldStrength: selectedTarget.vault?.shieldStrength || 50,
+            maxShieldStrength: selectedTarget.vault?.shieldStrength || 50,
+            level: selectedTarget.level
+          }}
+        />
       </div>
     );
   }

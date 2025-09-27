@@ -9,7 +9,7 @@ interface BattleArenaProps {
   selectedMove: Move | null;
   selectedTarget: string | null;
   availableMoves: Move[];
-  availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number }>;
+  availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number; maxPP?: number; maxShieldStrength?: number }>;
   isPlayerTurn: boolean;
   battleLog: string[];
 }
@@ -186,8 +186,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       </div>
 
-      {/* Opponent Vault (Top Right) */}
-      {selectedTarget && (
+      {/* Opponent Vault (Top Right) - Always visible */}
+      {availableTargets.length > 0 && (
         <>
           <div style={{
             position: 'absolute',
@@ -221,10 +221,10 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             fontFamily: 'monospace'
           }}>
             <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>
-              {availableTargets.find(t => t.id === selectedTarget)?.name || 'OPPONENT'} VAULT
+              {availableTargets[0]?.name || 'OPPONENT'} VAULT
             </div>
             <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>
-              Lv.{Math.floor((availableTargets.find(t => t.id === selectedTarget)?.currentPP || 0) / 100) + 1}
+              Lv.{Math.floor((availableTargets[0]?.currentPP || 0) / 100) + 1}
             </div>
             <div style={{ marginBottom: '0.25rem' }}>
               <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>PP</span>
@@ -236,10 +236,14 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 overflow: 'hidden'
               }}>
                 <div style={{
-                  width: '100%', // Opponent PP is always full for display
+                  width: `${availableTargets[0] ? (availableTargets[0].currentPP / (availableTargets[0].maxPP || 1000)) * 100 : 0}%`,
                   height: '100%',
-                  background: 'linear-gradient(90deg, #dc2626 0%, #ef4444 100%)'
+                  background: 'linear-gradient(90deg, #dc2626 0%, #ef4444 100%)',
+                  transition: 'width 0.3s ease'
                 }} />
+              </div>
+              <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
+                {availableTargets[0]?.currentPP || 0}/{availableTargets[0]?.maxPP || 1000}
               </div>
             </div>
             <div>
@@ -252,10 +256,14 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 overflow: 'hidden'
               }}>
                 <div style={{
-                  width: '100%', // Opponent shield is always full for display
+                  width: `${availableTargets[0] ? (availableTargets[0].shieldStrength / (availableTargets[0].maxShieldStrength || 100)) * 100 : 0}%`,
                   height: '100%',
-                  background: 'linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)'
+                  background: 'linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)',
+                  transition: 'width 0.3s ease'
                 }} />
+              </div>
+              <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
+                {availableTargets[0]?.shieldStrength || 0}/{availableTargets[0]?.maxShieldStrength || 100}
               </div>
             </div>
           </div>

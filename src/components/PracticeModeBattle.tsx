@@ -203,7 +203,18 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
           </button>
         </div>
         
-        <BattleEngine onBattleEnd={handleBattleEnd} />
+        <BattleEngine 
+          onBattleEnd={handleBattleEnd}
+          opponent={{
+            id: selectedOpponent.id,
+            name: selectedOpponent.name,
+            currentPP: selectedOpponent.powerPoints,
+            maxPP: selectedOpponent.powerPoints,
+            shieldStrength: selectedOpponent.shieldStrength,
+            maxShieldStrength: selectedOpponent.shieldStrength,
+            level: selectedOpponent.level
+          }}
+        />
       </div>
     );
   }

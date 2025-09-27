@@ -5,8 +5,19 @@ import { Move } from '../types/battle';
 import BattleArena from './BattleArena';
 import BattleAnimations from './BattleAnimations';
 
+interface Opponent {
+  id: string;
+  name: string;
+  currentPP: number;
+  maxPP: number;
+  shieldStrength: number;
+  maxShieldStrength: number;
+  level: number;
+}
+
 interface BattleEngineProps {
   onBattleEnd: (result: 'victory' | 'defeat' | 'escape') => void;
+  opponent?: Opponent;
 }
 
 interface BattleState {
@@ -20,18 +31,8 @@ interface BattleState {
   isAnimating: boolean;
 }
 
-interface Opponent {
-  id: string;
-  name: string;
-  currentPP: number;
-  maxPP: number;
-  shieldStrength: number;
-  maxShieldStrength: number;
-  moves: Move[];
-  level: number;
-}
 
-const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd }) => {
+const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: propOpponent }) => {
   const { currentUser } = useAuth();
   const { vault, moves } = useBattle();
   
@@ -46,46 +47,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd }) => {
     isAnimating: false
   });
 
-  const [opponent, setOpponent] = useState<Opponent>({
+  const [opponent, setOpponent] = useState<Opponent>(propOpponent || {
     id: 'opponent_1',
     name: 'Rival Vault',
     currentPP: 500,
     maxPP: 500,
     shieldStrength: 100,
     maxShieldStrength: 100,
-    moves: [
-      {
-        id: 'opponent_attack_1',
-        name: 'Vault Breach',
-        description: 'A powerful attack that damages shields',
-        category: 'system',
-        type: 'attack',
-        level: 1,
-        cost: 0,
-        damage: 25,
-        cooldown: 0,
-        currentCooldown: 0,
-        unlocked: true,
-        masteryLevel: 1
-      },
-      {
-        id: 'opponent_attack_2',
-        name: 'PP Drain',
-        description: 'Steals PP from the target',
-        category: 'system',
-        type: 'attack',
-        level: 1,
-        cost: 0,
-        damage: 10,
-        ppSteal: 15,
-        cooldown: 0,
-        currentCooldown: 0,
-        unlocked: true,
-        masteryLevel: 1
-      }
-    ],
     level: 5
   });
+
+  // Update opponent when prop changes
+  useEffect(() => {
+    if (propOpponent) {
+      setOpponent(propOpponent);
+    }
+  }, [propOpponent]);
 
   const availableMoves = moves.filter(move => move.unlocked && move.currentCooldown === 0);
   const availableTargets = [
@@ -94,7 +71,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd }) => {
       name: opponent.name,
       avatar: '🏰',
       currentPP: opponent.currentPP,
-      shieldStrength: opponent.shieldStrength
+      shieldStrength: opponent.shieldStrength,
+      maxPP: opponent.maxPP,
+      maxShieldStrength: opponent.maxShieldStrength
     }
   ];
 
@@ -192,7 +171,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd }) => {
     if (!vault) return;
     
     const newLog = [...battleState.battleLog];
-    const opponentMove = opponent.moves[Math.floor(Math.random() * opponent.moves.length)];
+    // Simple opponent AI - random move selection
+    const opponentMoves = [
+      { name: 'Vault Breach', damage: 25, ppSteal: 0 },
+      { name: 'PP Drain', damage: 10, ppSteal: 15 },
+      { name: 'Shield Bash', damage: 20, ppSteal: 0 },
+      { name: 'Energy Strike', damage: 15, ppSteal: 10 }
+    ];
+    
+    const opponentMove = opponentMoves[Math.floor(Math.random() * opponentMoves.length)];
     
     newLog.push(`${opponent.name} used ${opponentMove.name}!`);
     
