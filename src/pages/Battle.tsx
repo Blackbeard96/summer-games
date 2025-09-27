@@ -1275,6 +1275,58 @@ const Battle: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* Effect Stats */}
+                    <div style={{ 
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: '0.75rem',
+                      marginBottom: '1rem'
+                    }}>
+                      {/* Shield Damage/Boost */}
+                      {(card.effect.type === 'shield_breach' || card.effect.type === 'shield_restore') && (
+                        <div style={{
+                          background: 'rgba(255,255,255,0.9)',
+                          padding: '0.75rem',
+                          borderRadius: '0.75rem',
+                          textAlign: 'center',
+                          backdropFilter: 'blur(10px)'
+                        }}>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
+                            {card.effect.type === 'shield_breach' ? 'SHIELD DMG' : 'SHIELD BOOST'}
+                          </div>
+                          <div style={{ 
+                            fontSize: '1rem', 
+                            fontWeight: 'bold', 
+                            color: card.effect.type === 'shield_breach' ? '#ef4444' : '#3b82f6'
+                          }}>
+                            {card.effect.strength}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* PP Steal/Restore */}
+                      {(card.effect.type === 'pp_restore' || card.effect.type === 'teleport_pp') && (
+                        <div style={{
+                          background: 'rgba(255,255,255,0.9)',
+                          padding: '0.75rem',
+                          borderRadius: '0.75rem',
+                          textAlign: 'center',
+                          backdropFilter: 'blur(10px)'
+                        }}>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
+                            {card.effect.type === 'pp_restore' ? 'PP RESTORE' : 'PP STEAL'}
+                          </div>
+                          <div style={{ 
+                            fontSize: '1rem', 
+                            fontWeight: 'bold', 
+                            color: '#f59e0b'
+                          }}>
+                            {card.effect.strength}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Rarity */}
                     <div style={{
                       background: 'rgba(255,255,255,0.9)',

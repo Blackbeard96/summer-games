@@ -345,6 +345,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   Cost: {move.cost} PP
                 </div>
+                {move.damage && (
+                  <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
+                    Shield DMG: {move.damage}
+                  </div>
+                )}
+                {move.ppSteal && (
+                  <div style={{ fontSize: '0.625rem', color: '#f59e0b', fontWeight: 'bold' }}>
+                    PP Steal: {move.ppSteal}
+                  </div>
+                )}
               </button>
             ))}
           </div>
