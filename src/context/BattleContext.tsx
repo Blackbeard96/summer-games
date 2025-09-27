@@ -1685,52 +1685,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // This is an offensive move
           const moveDamage = MOVE_DAMAGE_VALUES[selectedMove.name];
           if (moveDamage) {
-            shieldDamage = moveDamage.shieldDamage;
-            console.log(`⚔️ Move ${selectedMove.name} shield damage: ${shieldDamage}`);
+            const totalDamage = moveDamage.damage;
+            console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage}`);
             console.log(`📊 Move damage values:`, moveDamage);
-            console.log(`💰 Move PP steal potential: ${moveDamage.ppSteal}`);
             console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
             console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
             
-            // Check if shields are down or if this attack will break them
-            const remainingShieldAfterAttack = Math.max(0, targetVaultData.shieldStrength - shieldDamage);
-            
-            if (remainingShieldAfterAttack === 0 && targetVaultData.shieldStrength > 0) {
-              // Shields will be broken, can steal PP
-              const excessDamage = shieldDamage - targetVaultData.shieldStrength;
-              if (excessDamage > 0) {
-                // Some damage goes to PP after breaking shields
-                ppStolen = Math.min(moveDamage.ppSteal, targetVaultData.currentPP);
+            // Apply damage to shields first, then to PP
+            if (targetVaultData.shieldStrength > 0) {
+              // Damage shields first
+              shieldDamage = Math.min(totalDamage, targetVaultData.shieldStrength);
+              const remainingDamage = totalDamage - shieldDamage;
+              
+              // Remaining damage goes to PP
+              if (remainingDamage > 0) {
+                ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Dealt ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)`;
               } else {
-                // Just broke shields, can steal PP
-                ppStolen = Math.min(moveDamage.ppSteal, targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields`;
               }
-              message = `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP`;
-            } else if (targetVaultData.shieldStrength === 0) {
-              // No shields, can steal PP directly
-              console.log(`🛡️ No shields detected - targetVaultData.shieldStrength: ${targetVaultData.shieldStrength}`);
-              console.log(`💰 PP steal calculation: Math.min(${moveDamage.ppSteal}, ${targetVaultData.currentPP})`);
-              ppStolen = Math.min(moveDamage.ppSteal, targetVaultData.currentPP);
-              console.log(`💰 Final ppStolen: ${ppStolen}`);
-              message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields)`;
             } else {
-              // Shields still up, check if we'll break them
-              if (shieldDamage >= targetVaultData.shieldStrength) {
-                // Will break shields, can steal PP
-                const basePPStolen = Math.min(moveDamage.ppSteal, targetVaultData.currentPP);
-                const excessDamage = shieldDamage - targetVaultData.shieldStrength;
-                const additionalPPStolen = Math.min(excessDamage, targetVaultData.currentPP - basePPStolen);
-                ppStolen = basePPStolen + additionalPPStolen;
-                
-                if (additionalPPStolen > 0) {
-                  message = `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP (${additionalPPStolen} from excess damage)`;
-                } else {
-                  message = `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP`;
-                }
-              } else {
-                // Shields still up, only damage shields
-                message = `Used ${selectedMove.name} - Damaged shields by ${shieldDamage}`;
-              }
+              // No shields, all damage goes to PP
+              ppStolen = Math.min(totalDamage, targetVaultData.currentPP);
+              message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields)`;
             }
           } else {
             message = `Used ${selectedMove.name} against target vault`;

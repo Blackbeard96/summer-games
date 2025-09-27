@@ -1151,107 +1151,107 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
   },
 ];
 
-// Move damage and PP steal values for new elemental system
-export const MOVE_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
+// Move damage values (combined shield damage + PP steal)
+export const MOVE_DAMAGE_VALUES: Record<string, { damage: number }> = {
   // Manifest Moves (Reading)
-  'Emotional Read': { shieldDamage: 8, ppSteal: 5 },
-  'Pattern Shield': { shieldDamage: 0, ppSteal: 0 },
+  'Emotional Read': { damage: 13 }, // 8 + 5
+  'Pattern Shield': { damage: 0 },
   
   // Manifest Moves (Writing)
-  'Reality Rewrite': { shieldDamage: 12, ppSteal: 0 },
-  'Narrative Barrier': { shieldDamage: 0, ppSteal: 0 },
+  'Reality Rewrite': { damage: 12 }, // 12 + 0
+  'Narrative Barrier': { damage: 0 },
   
   // Manifest Moves (Drawing)
-  'Illusion Strike': { shieldDamage: 10, ppSteal: 0 },
-  'Mirage Shield': { shieldDamage: 0, ppSteal: 0 },
+  'Illusion Strike': { damage: 10 }, // 10 + 0
+  'Mirage Shield': { damage: 0 },
   
   // Manifest Moves (Athletics)
-  'Flow Strike': { shieldDamage: 14, ppSteal: 0 },
-  'Rhythm Guard': { shieldDamage: 0, ppSteal: 0 },
+  'Flow Strike': { damage: 14 }, // 14 + 0
+  'Rhythm Guard': { damage: 0 },
   
   // Manifest Moves (Singing)
-  'Harmonic Blast': { shieldDamage: 11, ppSteal: 0 },
-  'Melody Shield': { shieldDamage: 0, ppSteal: 0 },
+  'Harmonic Blast': { damage: 11 }, // 11 + 0
+  'Melody Shield': { damage: 0 },
   
   // Manifest Moves (Gaming)
-  'Pattern Break': { shieldDamage: 16, ppSteal: 8 },
-  'Strategy Matrix': { shieldDamage: 0, ppSteal: 0 },
+  'Pattern Break': { damage: 24 }, // 16 + 8
+  'Strategy Matrix': { damage: 0 },
   
   // Manifest Moves (Observation)
-  'Precision Strike': { shieldDamage: 13, ppSteal: 0 },
-  'Memory Shield': { shieldDamage: 0, ppSteal: 0 },
+  'Precision Strike': { damage: 13 }, // 13 + 0
+  'Memory Shield': { damage: 0 },
   
   // Manifest Moves (Empathy)
-  'Emotional Resonance': { shieldDamage: 9, ppSteal: 0 },
-  'Empathic Barrier': { shieldDamage: 0, ppSteal: 0 },
+  'Emotional Resonance': { damage: 9 }, // 9 + 0
+  'Empathic Barrier': { damage: 0 },
   
   // Manifest Moves (Creating)
-  'Tool Strike': { shieldDamage: 15, ppSteal: 0 },
-  'Construct Shield': { shieldDamage: 0, ppSteal: 0 },
+  'Tool Strike': { damage: 15 }, // 15 + 0
+  'Construct Shield': { damage: 0 },
   
   // Manifest Moves (Cooking)
-  'Energy Feast': { shieldDamage: 12, ppSteal: 0 },
-  'Nourishing Barrier': { shieldDamage: 0, ppSteal: 0 },
+  'Energy Feast': { damage: 12 }, // 12 + 0
+  'Nourishing Barrier': { damage: 0 },
   
   // Fire Elemental Moves
-  'Ember Jab': { shieldDamage: 8, ppSteal: 7 },
-  'Flame Dash': { shieldDamage: 0, ppSteal: 0 },
-  'Wildfire': { shieldDamage: 8, ppSteal: 0 },
-  'Inferno Screen': { shieldDamage: 0, ppSteal: 0 },
+  'Ember Jab': { damage: 15 }, // 8 + 7
+  'Flame Dash': { damage: 0 },
+  'Wildfire': { damage: 8 }, // 8 + 0
+  'Inferno Screen': { damage: 0 },
   
   // Water Elemental Moves
-  'Ripple': { shieldDamage: 4, ppSteal: 0 },
-  'Tide Mend': { shieldDamage: 0, ppSteal: 0 },
-  'Undertow': { shieldDamage: 0, ppSteal: 0 },
-  'Mist Veil': { shieldDamage: 0, ppSteal: 0 },
+  'Ripple': { damage: 4 }, // 4 + 0
+  'Tide Mend': { damage: 0 },
+  'Undertow': { damage: 0 },
+  'Mist Veil': { damage: 0 },
   
   // Air Elemental Moves
-  'Gust': { shieldDamage: 0, ppSteal: 0 },
-  'Quickening': { shieldDamage: 0, ppSteal: 0 },
-  'Crosswind': { shieldDamage: 0, ppSteal: 0 },
-  'Vacuum Seal': { shieldDamage: 0, ppSteal: 0 },
+  'Gust': { damage: 0 },
+  'Quickening': { damage: 0 },
+  'Crosswind': { damage: 0 },
+  'Vacuum Seal': { damage: 0 },
   
   // Earth Elemental Moves
-  'Pebbleguard': { shieldDamage: 0, ppSteal: 0 },
-  'Seismic Tap': { shieldDamage: 7, ppSteal: 0 },
-  'Bulwark': { shieldDamage: 0, ppSteal: 0 },
-  'Bedrock Lock': { shieldDamage: 0, ppSteal: 0 },
+  'Pebbleguard': { damage: 0 },
+  'Seismic Tap': { damage: 7 }, // 7 + 0
+  'Bulwark': { damage: 0 },
+  'Bedrock Lock': { damage: 0 },
   
   // Lightning Elemental Moves
-  'Spark': { shieldDamage: 5, ppSteal: 0 },
-  'Overclock': { shieldDamage: 0, ppSteal: 0 },
-  'Arc Net': { shieldDamage: 0, ppSteal: 0 },
-  'Thunderbreak': { shieldDamage: 18, ppSteal: 0 },
+  'Spark': { damage: 5 }, // 5 + 0
+  'Overclock': { damage: 0 },
+  'Arc Net': { damage: 0 },
+  'Thunderbreak': { damage: 18 }, // 18 + 0
   
   // Light Elemental Moves
-  'Glint': { shieldDamage: 0, ppSteal: 0 },
-  'Radiance': { shieldDamage: 0, ppSteal: 0 },
-  'Beacon': { shieldDamage: 0, ppSteal: 0 },
-  'Solar Aegis': { shieldDamage: 0, ppSteal: 0 },
+  'Glint': { damage: 0 },
+  'Radiance': { damage: 0 },
+  'Beacon': { damage: 0 },
+  'Solar Aegis': { damage: 0 },
   
   // Shadow Elemental Moves
-  'Veilstep': { shieldDamage: 0, ppSteal: 0 },
-  'Dread Whisper': { shieldDamage: 0, ppSteal: 0 },
-  'Umbral Chain': { shieldDamage: 0, ppSteal: 0 },
-  'Blackout': { shieldDamage: 0, ppSteal: 0 },
+  'Veilstep': { damage: 0 },
+  'Dread Whisper': { damage: 0 },
+  'Umbral Chain': { damage: 0 },
+  'Blackout': { damage: 0 },
   
   // Metal Elemental Moves
-  'Truth Edge': { shieldDamage: 8, ppSteal: 0 },
-  'Refraction': { shieldDamage: 0, ppSteal: 0 },
-  'Integrity Field': { shieldDamage: 0, ppSteal: 0 },
-  'Truth Lock': { shieldDamage: 0, ppSteal: 0 },
+  'Truth Edge': { damage: 8 }, // 8 + 0
+  'Refraction': { damage: 0 },
+  'Integrity Field': { damage: 0 },
+  'Truth Lock': { damage: 0 },
   
   // System Moves
-  'Vault Hack': { shieldDamage: 5, ppSteal: 8 },
-  'Shield Restoration': { shieldDamage: 0, ppSteal: 0 },
+  'Vault Hack': { damage: 13 }, // 5 + 8
+  'Shield Restoration': { damage: 0 },
 };
 
-// Action card damage values
-export const ACTION_CARD_DAMAGE_VALUES: Record<string, { shieldDamage: number; ppSteal: number }> = {
-  'Shield Breaker': { shieldDamage: 22, ppSteal: 0 },
-  'Shield Restore': { shieldDamage: 0, ppSteal: 0 }, // Self-heal
-  'Teleport PP': { shieldDamage: 0, ppSteal: 25 },
-  'Double XP': { shieldDamage: 0, ppSteal: 0 }, // Utility
+// Action card damage values (combined shield damage + PP steal)
+export const ACTION_CARD_DAMAGE_VALUES: Record<string, { damage: number }> = {
+  'Shield Breaker': { damage: 22 }, // 22 + 0
+  'Shield Restore': { damage: 0 }, // Self-heal
+  'Teleport PP': { damage: 25 }, // 0 + 25
+  'Double XP': { damage: 0 }, // Utility
 };
 
 // PP Range for each move (for display purposes)

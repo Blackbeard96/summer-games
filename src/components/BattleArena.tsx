@@ -344,18 +344,9 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 </div>
                 {(() => {
                   const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  console.log(`🔍 BattleArena ${move.name}:`, { moveDamage, shieldDamage: moveDamage?.shieldDamage, ppSteal: moveDamage?.ppSteal });
-                  return moveDamage && moveDamage.shieldDamage > 0 && (
+                  return moveDamage && moveDamage.damage > 0 && (
                     <div style={{ fontSize: '0.625rem', color: '#ef4444', fontWeight: 'bold' }}>
-                      Shield DMG: {moveDamage.shieldDamage}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  return moveDamage && moveDamage.ppSteal > 0 && (
-                    <div style={{ fontSize: '0.625rem', color: '#f59e0b', fontWeight: 'bold' }}>
-                      PP Steal: {moveDamage.ppSteal}
+                      Damage: {moveDamage.damage}
                     </div>
                   );
                 })()}
