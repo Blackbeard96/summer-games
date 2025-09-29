@@ -36,6 +36,10 @@ interface BattleContextType {
   // Vault Management
   vault: Vault | null;
   updateVault: (updates: Partial<Vault>) => Promise<void>;
+  upgradeVaultCapacity: () => Promise<void>;
+  upgradeVaultShields: () => Promise<void>;
+  upgradeVaultFirewall: () => Promise<void>;
+  restoreVaultShields: (amount: number, cost: number) => Promise<void>;
   payDues: () => Promise<void>;
   syncVaultPP: () => Promise<void>;
   syncStudentPP: (userId: string) => Promise<void>;
@@ -92,6 +96,9 @@ interface BattleContextType {
   // Loading States
   loading: boolean;
   error: string | null;
+  success: string | null;
+  setError: (error: string | null) => void;
+  setSuccess: (success: string | null) => void;
 }
 
 const BattleContext = createContext<BattleContextType | undefined>(undefined);
@@ -116,6 +123,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [attackHistory, setAttackHistory] = useState<VaultSiegeAttack[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Clear success message after 3 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => {
+        setSuccess(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
 
   // Initialize user's battle data
   useEffect(() => {
@@ -530,6 +548,156 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err) {
       console.error('Error updating vault:', err);
       setError('Failed to update vault');
+    }
+  };
+
+  // Vault upgrade functions
+  const upgradeVaultCapacity = async () => {
+    if (!currentUser || !vault) return;
+    
+    const upgradeCost = 200;
+    if (vault.currentPP < upgradeCost) {
+      setError('Insufficient PP for capacity upgrade');
+      return;
+    }
+    
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newCapacity = vault.capacity + 200;
+      const newPP = vault.currentPP - upgradeCost;
+      
+      await updateDoc(vaultRef, {
+        capacity: newCapacity,
+        currentPP: newPP
+      });
+      
+      // Also update student PP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, { powerPoints: newPP });
+      
+      setVault(prevVault => prevVault ? { 
+        ...prevVault, 
+        capacity: newCapacity,
+        currentPP: newPP
+      } : null);
+      
+      setSuccess('Vault capacity upgraded! +200 PP capacity');
+    } catch (error) {
+      console.error('Error upgrading vault capacity:', error);
+      setError('Failed to upgrade vault capacity');
+    }
+  };
+
+  const upgradeVaultShields = async () => {
+    if (!currentUser || !vault) return;
+    
+    const upgradeCost = 75;
+    if (vault.currentPP < upgradeCost) {
+      setError('Insufficient PP for shield upgrade');
+      return;
+    }
+    
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newMaxShields = vault.maxShieldStrength + 25;
+      const newPP = vault.currentPP - upgradeCost;
+      
+      await updateDoc(vaultRef, {
+        maxShieldStrength: newMaxShields,
+        currentPP: newPP
+      });
+      
+      // Also update student PP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, { powerPoints: newPP });
+      
+      setVault(prevVault => prevVault ? { 
+        ...prevVault, 
+        maxShieldStrength: newMaxShields,
+        currentPP: newPP
+      } : null);
+      
+      setSuccess('Vault shields upgraded! +25 max shield strength');
+    } catch (error) {
+      console.error('Error upgrading vault shields:', error);
+      setError('Failed to upgrade vault shields');
+    }
+  };
+
+  const upgradeVaultFirewall = async () => {
+    if (!currentUser || !vault) return;
+    
+    const upgradeCost = 50;
+    if (vault.currentPP < upgradeCost) {
+      setError('Insufficient PP for firewall upgrade');
+      return;
+    }
+    
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newFirewall = Math.min(100, vault.firewall + 15); // Cap at 100%
+      const newPP = vault.currentPP - upgradeCost;
+      
+      await updateDoc(vaultRef, {
+        firewall: newFirewall,
+        currentPP: newPP
+      });
+      
+      // Also update student PP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, { powerPoints: newPP });
+      
+      setVault(prevVault => prevVault ? { 
+        ...prevVault, 
+        firewall: newFirewall,
+        currentPP: newPP
+      } : null);
+      
+      setSuccess('Vault firewall upgraded! +15% attack resistance');
+    } catch (error) {
+      console.error('Error upgrading vault firewall:', error);
+      setError('Failed to upgrade vault firewall');
+    }
+  };
+
+  const restoreVaultShields = async (amount: number, cost: number) => {
+    if (!currentUser || !vault) return;
+    
+    if (vault.currentPP < cost) {
+      setError('Insufficient PP for shield restoration');
+      return;
+    }
+    
+    if (vault.shieldStrength >= vault.maxShieldStrength) {
+      setError('Your shields are already at maximum strength');
+      return;
+    }
+    
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + amount);
+      const actualRestored = newShieldStrength - vault.shieldStrength;
+      const newPP = vault.currentPP - cost;
+      
+      await updateDoc(vaultRef, {
+        shieldStrength: newShieldStrength,
+        currentPP: newPP
+      });
+      
+      // Also update student PP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, { powerPoints: newPP });
+      
+      setVault(prevVault => prevVault ? { 
+        ...prevVault, 
+        shieldStrength: newShieldStrength,
+        currentPP: newPP
+      } : null);
+      
+      setSuccess(`Shields restored! +${actualRestored} shield strength`);
+    } catch (error) {
+      console.error('Error restoring vault shields:', error);
+      setError('Failed to restore vault shields');
     }
   };
 
@@ -2364,6 +2532,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const value: BattleContextType = {
     vault,
     updateVault,
+    upgradeVaultCapacity,
+    upgradeVaultShields,
+    upgradeVaultFirewall,
+    restoreVaultShields,
     payDues,
     syncVaultPP,
     syncStudentPP,
@@ -2406,6 +2578,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     debugOfflineMoves,
     loading,
     error,
+    success,
+    setError,
+    setSuccess,
   };
 
   return (

@@ -2,6 +2,10 @@ import React from 'react';
 import { useBattle } from '../context/BattleContext';
 import { useAuth } from '../context/AuthContext';
 import { ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
+import { 
+  calculateDamageRange,
+  formatDamageRange 
+} from '../utils/damageCalculator';
 
 const DashboardActionCards: React.FC = () => {
   const { currentUser } = useAuth();
@@ -178,33 +182,38 @@ const DashboardActionCards: React.FC = () => {
               {/* Effect Stats */}
               {(() => {
                 const cardDamage = ACTION_CARD_DAMAGE_VALUES[card.name];
-                return cardDamage && cardDamage.damage > 0 && (
-                  <div style={{ 
-                    display: 'grid',
-                    gridTemplateColumns: '1fr',
-                    gap: '0.5rem',
-                    marginBottom: '1rem'
-                  }}>
-                    <div style={{
-                      background: 'rgba(255,255,255,0.9)',
-                      padding: '0.5rem',
-                      borderRadius: '0.5rem',
-                      textAlign: 'center',
-                      backdropFilter: 'blur(10px)'
+                if (cardDamage && cardDamage.damage > 0) {
+                  const damageRange = calculateDamageRange(cardDamage.damage, card.masteryLevel, card.masteryLevel);
+                  const rangeString = formatDamageRange(damageRange);
+                  return (
+                    <div style={{ 
+                      display: 'grid',
+                      gridTemplateColumns: '1fr',
+                      gap: '0.5rem',
+                      marginBottom: '1rem'
                     }}>
-                      <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
-                        DAMAGE
-                      </div>
-                      <div style={{ 
-                        fontSize: '0.875rem', 
-                        fontWeight: 'bold', 
-                        color: '#ef4444'
+                      <div style={{
+                        background: 'rgba(255,255,255,0.9)',
+                        padding: '0.5rem',
+                        borderRadius: '0.5rem',
+                        textAlign: 'center',
+                        backdropFilter: 'blur(10px)'
                       }}>
-                        {cardDamage.damage}
+                        <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
+                          DAMAGE RANGE
+                        </div>
+                        <div style={{
+                          fontSize: '0.875rem',
+                          fontWeight: 'bold',
+                          color: '#ef4444'
+                        }}>
+                          {rangeString}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
+                  );
+                }
+                return null;
               })()}
 
               {/* Next Level Preview */}

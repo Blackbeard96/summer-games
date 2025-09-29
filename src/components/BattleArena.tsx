@@ -2,6 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
+import { 
+  calculateDamageRange, 
+  calculateShieldBoostRange, 
+  calculateHealingRange,
+  formatDamageRange 
+} from '../utils/damageCalculator';
+import { getLevelFromXP } from '../utils/leveling';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move) => void;
@@ -29,6 +38,30 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [showTargetMenu, setShowTargetMenu] = useState(false);
   const [currentLogIndex, setCurrentLogIndex] = useState(0);
+  const [userLevel, setUserLevel] = useState(1);
+
+  // Fetch user level
+  useEffect(() => {
+    const fetchUserLevel = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const calculatedLevel = getLevelFromXP(userData.xp || 0);
+          console.log('BattleArena: User data from Firestore:', userData);
+          console.log('BattleArena: User XP from Firestore:', userData.xp);
+          console.log('BattleArena: Calculated level from XP:', calculatedLevel);
+          setUserLevel(calculatedLevel);
+        }
+      } catch (error) {
+        console.error('Error fetching user level:', error);
+      }
+    };
+
+    fetchUserLevel();
+  }, [currentUser]);
 
   // Auto-advance battle log
   useEffect(() => {
@@ -145,7 +178,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           {currentUser?.displayName || 'PLAYER'} VAULT
         </div>
         <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>
-          Lv.{vault?.capacity ? Math.floor(vault.capacity / 100) + 1 : 1}
+          Lv.{userLevel}
         </div>
         <div style={{ marginBottom: '0.25rem' }}>
           <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>PP</span>
@@ -346,12 +379,15 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   {move.type.toUpperCase()}
                 </div>
                 {(() => {
-                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  console.log('BattleArena: Move:', move.name, 'Damage lookup:', moveDamage, 'Move object:', move);
+                  // Use actual user level for range calculation
+                  const playerLevel = userLevel;
                   
-                  // Show damage for offensive moves
+                  // Show damage range for offensive moves
+                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
                   if (moveDamage && moveDamage.damage > 0) {
-                    console.log('BattleArena: Rendering damage for', move.name, ':', moveDamage.damage);
+                    const damageRange = calculateDamageRange(moveDamage.damage, move.level, move.masteryLevel);
+                    const rangeString = formatDamageRange(damageRange);
+                    console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString);
                     return (
                       <div style={{ 
                         fontSize: '0.625rem', 
@@ -362,14 +398,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         borderRadius: '4px',
                         marginTop: '2px'
                       }}>
-                        Damage: {moveDamage.damage}
+                        Damage: {rangeString}
                       </div>
                     );
                   }
                   
-                  // Show shield boost for defensive moves
+                  // Show shield boost range for defensive moves
                   if (move.shieldBoost && move.shieldBoost > 0) {
-                    console.log('BattleArena: Rendering shield boost for', move.name, ':', move.shieldBoost);
+                    const shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, move.masteryLevel);
+                    const rangeString = formatDamageRange(shieldRange);
+                    console.log('BattleArena: Rendering shield boost range for', move.name, ':', rangeString);
                     return (
                       <div style={{ 
                         fontSize: '0.625rem', 
@@ -380,14 +418,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         borderRadius: '4px',
                         marginTop: '2px'
                       }}>
-                        Shield: +{move.shieldBoost}
+                        Shield: +{rangeString}
                       </div>
                     );
                   }
                   
-                  // Show healing for support moves
+                  // Show healing range for support moves
                   if (move.healing && move.healing > 0) {
-                    console.log('BattleArena: Rendering healing for', move.name, ':', move.healing);
+                    const healingRange = calculateHealingRange(move.healing, move.level, move.masteryLevel);
+                    const rangeString = formatDamageRange(healingRange);
+                    console.log('BattleArena: Rendering healing range for', move.name, ':', rangeString);
                     return (
                       <div style={{ 
                         fontSize: '0.625rem', 
@@ -398,7 +438,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         borderRadius: '4px',
                         marginTop: '2px'
                       }}>
-                        Heal: +{move.healing}
+                        Heal: +{rangeString}
                       </div>
                     );
                   }

@@ -1,5 +1,11 @@
 import React from 'react';
 import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
+import { 
+  calculateDamageRange, 
+  calculateShieldBoostRange, 
+  calculateHealingRange,
+  formatDamageRange 
+} from '../utils/damageCalculator';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -283,22 +289,27 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.cost}</div>
           </div>
 
-          {/* Combined Damage */}
+          {/* Combined Damage Range */}
           {(() => {
             const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-            return moveDamage && moveDamage.damage > 0 && (
-              <div style={{
-                background: 'rgba(255,255,255,0.9)',
-                padding: '0.75rem',
-                borderRadius: '0.75rem',
-                textAlign: 'center',
-                backdropFilter: 'blur(10px)',
-                gridColumn: 'span 2'
-              }}>
-                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{moveDamage.damage}</div>
-              </div>
-            );
+            if (moveDamage && moveDamage.damage > 0) {
+              const damageRange = calculateDamageRange(moveDamage.damage, move.level, move.masteryLevel);
+              const rangeString = formatDamageRange(damageRange);
+              return (
+                <div style={{
+                  background: 'rgba(255,255,255,0.9)',
+                  padding: '0.75rem',
+                  borderRadius: '0.75rem',
+                  textAlign: 'center',
+                  backdropFilter: 'blur(10px)',
+                  gridColumn: 'span 2'
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE RANGE</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{rangeString}</div>
+                </div>
+              );
+            }
+            return null;
           })()}
 
           {/* Healing */}
@@ -402,9 +413,14 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               {(() => {
                 const currentDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || 0;
                 const nextDamage = nextLevelStats.damage !== undefined ? nextLevelStats.damage : 0;
-                return currentDamage > 0 && nextDamage > 0 && (
-                  <div>Damage: {currentDamage} → {nextDamage}</div>
-                );
+                if (currentDamage > 0 && nextDamage > 0) {
+                  const currentRange = calculateDamageRange(currentDamage, move.level, move.masteryLevel);
+                  const nextRange = calculateDamageRange(nextDamage, move.level + 1, move.masteryLevel);
+                  return (
+                    <div>Damage: {formatDamageRange(currentRange)} → {formatDamageRange(nextRange)}</div>
+                  );
+                }
+                return null;
               })()}
               {nextLevelStats.debuffStrength !== undefined && (
                 <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>

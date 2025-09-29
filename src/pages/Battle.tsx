@@ -3,6 +3,10 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
 import { BATTLE_CONSTANTS, MOVE_PP_RANGES, MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
+import { 
+  calculateDamageRange,
+  formatDamageRange 
+} from '../utils/damageCalculator';
 import VaultSiegeModal from '../components/VaultSiegeModal';
 import AttackHistory from '../components/AttackHistory';
 import VaultStats from '../components/VaultStats';
@@ -33,6 +37,10 @@ const Battle: React.FC = () => {
     submitOfflineMove,
     syncVaultPP,
     updateVault,
+    upgradeVaultCapacity,
+    upgradeVaultShields,
+    upgradeVaultFirewall,
+    restoreVaultShields,
     upgradeMove,
     upgradeActionCard,
     resetActionCards,
@@ -49,7 +57,10 @@ const Battle: React.FC = () => {
     elementalProgress,
     debugOfflineMoves,
     loading,
-    error 
+    error,
+    success,
+    setError,
+    setSuccess
   } = useBattle();
   const navigate = useNavigate();
   
@@ -354,6 +365,26 @@ const Battle: React.FC = () => {
           >
             🔧 Force Migration
           </button>
+        </div>
+      )}
+
+      {success && (
+        <div style={{ 
+          background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', 
+          border: '2px solid #10b981', 
+          color: '#047857',
+          padding: '1.5rem',
+          borderRadius: '0.75rem',
+          marginBottom: '1rem',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>✅</div>
+          <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+            Success!
+          </div>
+          <div style={{ fontSize: '0.875rem', opacity: 0.8 }}>
+            {success}
+          </div>
         </div>
       )}
 
@@ -716,26 +747,28 @@ const Battle: React.FC = () => {
                   </div>
                 </div>
                 
-                <button style={{
-                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1rem 1.5rem',
-                  borderRadius: '0.75rem',
-                  cursor: 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  width: '100%',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 8px 15px rgba(5, 150, 105, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}>
+                <button 
+                  onClick={upgradeVaultCapacity}
+                  style={{
+                    background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem 1.5rem',
+                    borderRadius: '0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    width: '100%',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(5, 150, 105, 0.3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}>
                   💰 Upgrade (200 PP)
                 </button>
               </div>
@@ -800,26 +833,28 @@ const Battle: React.FC = () => {
                   </div>
                 </div>
                 
-                <button style={{
-                  background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1rem 1.5rem',
-                  borderRadius: '0.75rem',
-                  cursor: 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  width: '100%',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 8px 15px rgba(37, 99, 235, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}>
+                <button 
+                  onClick={upgradeVaultShields}
+                  style={{
+                    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem 1.5rem',
+                    borderRadius: '0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    width: '100%',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(37, 99, 235, 0.3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}>
                   🛡️ Upgrade (75 PP)
                 </button>
               </div>
@@ -884,26 +919,28 @@ const Battle: React.FC = () => {
                   </div>
                 </div>
                 
-                <button style={{
-                  background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1rem 1.5rem',
-                  borderRadius: '0.75rem',
-                  cursor: 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  width: '100%',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 8px 15px rgba(124, 58, 237, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}>
+                <button 
+                  onClick={upgradeVaultFirewall}
+                  style={{
+                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem 1.5rem',
+                    borderRadius: '0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    width: '100%',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(124, 58, 237, 0.3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}>
                   🔥 Upgrade (50 PP)
                 </button>
               </div>
@@ -1278,33 +1315,38 @@ const Battle: React.FC = () => {
                     {/* Effect Stats */}
                     {(() => {
                       const cardDamage = ACTION_CARD_DAMAGE_VALUES[card.name];
-                      return cardDamage && cardDamage.damage > 0 && (
-                        <div style={{ 
-                          display: 'grid',
-                          gridTemplateColumns: '1fr',
-                          gap: '0.75rem',
-                          marginBottom: '1rem'
-                        }}>
-                          <div style={{
-                            background: 'rgba(255,255,255,0.9)',
-                            padding: '0.75rem',
-                            borderRadius: '0.75rem',
-                            textAlign: 'center',
-                            backdropFilter: 'blur(10px)'
+                      if (cardDamage && cardDamage.damage > 0) {
+                        const damageRange = calculateDamageRange(cardDamage.damage, card.masteryLevel, card.masteryLevel);
+                        const rangeString = formatDamageRange(damageRange);
+                        return (
+                          <div style={{ 
+                            display: 'grid',
+                            gridTemplateColumns: '1fr',
+                            gap: '0.75rem',
+                            marginBottom: '1rem'
                           }}>
-                            <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
-                              DAMAGE
-                            </div>
-                            <div style={{ 
-                              fontSize: '1rem', 
-                              fontWeight: 'bold', 
-                              color: '#ef4444'
+                            <div style={{
+                              background: 'rgba(255,255,255,0.9)',
+                              padding: '0.75rem',
+                              borderRadius: '0.75rem',
+                              textAlign: 'center',
+                              backdropFilter: 'blur(10px)'
                             }}>
-                              {cardDamage.damage}
+                              <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
+                                DAMAGE RANGE
+                              </div>
+                              <div style={{
+                                fontSize: '1rem',
+                                fontWeight: 'bold',
+                                color: '#ef4444'
+                              }}>
+                                {rangeString}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
+                        );
+                      }
+                      return null;
                     })()}
 
                     {/* Rarity */}
