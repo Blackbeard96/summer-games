@@ -54,28 +54,72 @@ const ScorekeeperInterface: React.FC = () => {
         if (roleDoc.exists()) {
           const roleData = roleDoc.data();
           const detectedRole = roleData.role || 'student';
-          const classId = roleData.classId;
+          const classId = roleData.classId; // Legacy field
+          const classIds = roleData.classIds || []; // New multi-class field
           
           logger.roles.info('ScorekeeperInterface: User role detected:', { 
             userId: currentUser.uid, 
             email: currentUser.email,
             role: detectedRole,
-            classId: classId 
+            classId: classId,
+            classIds: classIds
           });
           
           setUserRole(detectedRole);
-          setAssignedClassId(classId || '');
           
-          // If user is scorekeeper or admin, get class name
-          if ((detectedRole === 'scorekeeper' || detectedRole === 'admin') && classId) {
-            const classDoc = await getDoc(doc(db, 'classrooms', classId));
-            if (classDoc.exists()) {
-              const classData = classDoc.data();
-              setClassName(classData.name || 'Unknown Class');
+          // Handle multi-class scorekeeper assignments
+          if (detectedRole === 'scorekeeper') {
+            if (classIds.length > 0) {
+              // Multi-class scorekeeper - use first class for now (could be enhanced to show class selector)
+              setAssignedClassId(classIds[0]);
+              try {
+                const classDoc = await getDoc(doc(db, 'classrooms', classIds[0]));
+                if (classDoc.exists()) {
+                  const classData = classDoc.data();
+                  const className = classData.name || `Class ${classIds[0]}`;
+                  setClassName(`${className} (${classIds.length} classes assigned)`);
+                } else {
+                  setClassName(`Class ${classIds[0]} (${classIds.length} classes assigned)`);
+                }
+              } catch (classError) {
+                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
+                setClassName(`Class ${classIds[0]} (${classIds.length} classes assigned)`);
+              }
+            } else if (classId) {
+              // Legacy single class assignment
+              setAssignedClassId(classId);
+              try {
+                const classDoc = await getDoc(doc(db, 'classrooms', classId));
+                if (classDoc.exists()) {
+                  const classData = classDoc.data();
+                  setClassName(classData.name || `Class ${classId}`);
+                } else {
+                  setClassName(`Class ${classId}`);
+                }
+              } catch (classError) {
+                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
+                setClassName(`Class ${classId}`);
+              }
             }
-          } else if (detectedRole === 'admin' && !classId) {
-            // Admin users without assigned class get access to all students
-            setClassName('All Classes (Admin Access)');
+          } else if (detectedRole === 'admin') {
+            if (classId) {
+              setAssignedClassId(classId);
+              try {
+                const classDoc = await getDoc(doc(db, 'classrooms', classId));
+                if (classDoc.exists()) {
+                  const classData = classDoc.data();
+                  setClassName(classData.name || `Class ${classId}`);
+                } else {
+                  setClassName(`Class ${classId}`);
+                }
+              } catch (classError) {
+                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
+                setClassName(`Class ${classId}`);
+              }
+            } else {
+              // Admin users without assigned class get access to all students
+              setClassName('All Classes (Admin Access)');
+            }
           }
         } else {
           logger.roles.warn('ScorekeeperInterface: No role document found for user:', currentUser.uid);

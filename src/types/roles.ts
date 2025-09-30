@@ -15,7 +15,8 @@ export interface UserRoleData {
   role: UserRole;
   assignedBy: string;
   assignedAt: Date | any; // Can be Firestore Timestamp or Date
-  classId?: string;
+  classId?: string; // Legacy field for backward compatibility
+  classIds?: string[]; // New field for multiple class assignments
   permissions: RolePermissions;
 }
 

@@ -29,6 +29,8 @@ interface StudentWithRole extends Student {
   role: UserRole;
   assignedBy?: string;
   assignedAt?: Date;
+  assignedClasses?: string[]; // New field for multi-class scorekeeper assignments
+  allClasses?: string[]; // All classes the student is enrolled in
 }
 
 interface ClassInfo {
@@ -356,11 +358,22 @@ const RoleManager: React.FC = () => {
         // Add roles to students
         const studentsWithRoles: StudentWithRole[] = classroomStudents.map(student => {
           const roleData = rolesMap.get(student.id);
+          
+          // Find all classes this student is enrolled in
+          // For now, we'll get this from the classroom data
+          const enrolledClasses: string[] = []; // Will be populated when we have classroom data
+
+          // Get assigned scorekeeper classes (from classIds array or legacy classId)
+          const assignedClasses = roleData?.classIds || 
+            (roleData?.classId ? [roleData.classId] : []);
+
           return {
             ...student,
             role: roleData?.role || 'student',
             assignedBy: roleData?.assignedBy,
-            assignedAt: roleData?.assignedAt
+            assignedAt: roleData?.assignedAt,
+            assignedClasses: assignedClasses,
+            allClasses: enrolledClasses
           };
         });
 
@@ -382,11 +395,12 @@ const RoleManager: React.FC = () => {
     filterStudents();
   }, [selectedClass, allStudents]);
 
-  const handleAssignRole = async (studentId: string, newRole: UserRole) => {
+  const handleAssignRole = async (studentId: string, newRole: UserRole, targetClassId?: string) => {
     if (!currentUser || userRole !== 'admin') return;
 
     setAssigning(studentId);
-    logger.roles.info(`Assigning role ${newRole} to student ${studentId}`, { isFirefox });
+    const classId = targetClassId || selectedClass;
+    logger.roles.info(`Assigning role ${newRole} to student ${studentId} for class ${classId}`, { isFirefox });
 
     try {
       // Firefox-specific delay for Firestore operations
@@ -394,20 +408,97 @@ const RoleManager: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 50));
         logger.roles.debug('Firefox: Applied delay before role assignment');
       }
-      const roleData: UserRoleData = {
-        userId: studentId,
-        role: newRole,
-        assignedBy: currentUser.uid,
-        assignedAt: new Date(),
-        classId: selectedClass,
-        permissions: {
-          canModifyPP: newRole === 'admin',
-          canApproveChanges: newRole === 'admin',
-          canAssignRoles: newRole === 'admin',
-          canViewAllStudents: newRole === 'admin' || newRole === 'scorekeeper',
-          canSubmitPPChanges: newRole === 'scorekeeper'
+
+      // Get current role data to handle multi-class assignments
+      const currentRoleDoc = await getDoc(doc(db, 'userRoles', studentId));
+      let roleData: UserRoleData;
+
+      if (currentRoleDoc.exists()) {
+        const existingData = currentRoleDoc.data() as UserRoleData;
+        const currentClassIds = existingData.classIds || (existingData.classId ? [existingData.classId] : []);
+        
+        if (newRole === 'scorekeeper') {
+          // Add the class to assigned classes if not already there
+          if (!currentClassIds.includes(classId)) {
+            currentClassIds.push(classId);
+          }
+          roleData = {
+            ...existingData,
+            role: 'scorekeeper',
+            classIds: currentClassIds,
+            assignedBy: currentUser.uid,
+            assignedAt: new Date(),
+            permissions: {
+              canModifyPP: false,
+              canApproveChanges: false,
+              canAssignRoles: false,
+              canViewAllStudents: true,
+              canSubmitPPChanges: true
+            }
+          };
+        } else if (newRole === 'student') {
+          // Remove the class from assigned classes
+          const updatedClassIds = currentClassIds.filter(id => id !== classId);
+          if (updatedClassIds.length === 0) {
+            // If no classes left, set role to student
+            roleData = {
+              ...existingData,
+              role: 'student',
+              classIds: [],
+              assignedBy: currentUser.uid,
+              assignedAt: new Date(),
+              permissions: {
+                canModifyPP: false,
+                canApproveChanges: false,
+                canAssignRoles: false,
+                canViewAllStudents: false,
+                canSubmitPPChanges: false
+              }
+            };
+          } else {
+            // Update with remaining classes
+            roleData = {
+              ...existingData,
+              classIds: updatedClassIds,
+              assignedBy: currentUser.uid,
+              assignedAt: new Date()
+            };
+          }
+        } else {
+          // Admin role - single class assignment
+          roleData = {
+            ...existingData,
+            role: newRole,
+            classId: classId,
+            assignedBy: currentUser.uid,
+            assignedAt: new Date(),
+            permissions: {
+              canModifyPP: newRole === 'admin',
+              canApproveChanges: newRole === 'admin',
+              canAssignRoles: newRole === 'admin',
+              canViewAllStudents: newRole === 'admin' || newRole === 'scorekeeper',
+              canSubmitPPChanges: newRole === 'scorekeeper' as UserRole as UserRole
+            }
+          };
         }
-      };
+      } else {
+        // Create new role document
+        roleData = {
+          userId: studentId,
+          role: newRole,
+          assignedBy: currentUser.uid,
+          assignedAt: new Date(),
+          classId: newRole === 'admin' ? classId : undefined,
+          classIds: newRole === 'scorekeeper' ? [classId] : undefined,
+          permissions: {
+            canModifyPP: newRole === 'admin',
+            canApproveChanges: newRole === 'admin',
+            canAssignRoles: newRole === 'admin',
+            canViewAllStudents: newRole === 'admin' || newRole === 'scorekeeper',
+            canSubmitPPChanges: newRole === 'scorekeeper' as UserRole
+          }
+        };
+      }
 
       await setDoc(doc(db, 'userRoles', studentId), {
         ...roleData,
@@ -419,9 +510,10 @@ const RoleManager: React.FC = () => {
         student.id === studentId 
           ? { 
               ...student, 
-              role: newRole, 
+              role: roleData.role, 
               assignedBy: currentUser.uid,
-              assignedAt: new Date()
+              assignedAt: new Date(),
+              assignedClasses: roleData.classIds || []
             }
           : student
       ));
@@ -733,48 +825,75 @@ const RoleManager: React.FC = () => {
                       
                       {/* Role Assignment Buttons */}
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        {student.role !== 'student' && (
-                          <button
-                            onClick={() => handleAssignRole(student.id, 'student')}
-                            disabled={assigning === student.id}
-                            style={{
-                              backgroundColor: '#3b82f6',
-                              color: 'white',
-                              border: 'none',
-                              padding: '0.5rem 0.75rem',
-                              borderRadius: '0.5rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold',
-                              cursor: assigning === student.id ? 'not-allowed' : 'pointer',
-                              opacity: assigning === student.id ? 0.5 : 1
-                            }}
-                            aria-label={`Assign ${student.displayName} as student`}
-                          >
-                            {assigning === student.id ? '⏳' : '👨‍🎓'} Student
-                          </button>
-                        )}
+                        {(() => {
+                          // Show Student button if:
+                          // 1. Student is a scorekeeper in the current class (to remove from this class), OR
+                          // 2. Student is an admin (to demote to student)
+                          const isScorekeeperInCurrentClass = student.assignedClasses && student.assignedClasses.includes(selectedClass);
+                          const shouldShowStudentButton = (student.role === 'scorekeeper' && isScorekeeperInCurrentClass) || student.role === 'admin';
+                          
+                          return shouldShowStudentButton && (
+                            <button
+                              onClick={() => handleAssignRole(student.id, 'student')}
+                              disabled={assigning === student.id}
+                              style={{
+                                backgroundColor: '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: '0.5rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                cursor: assigning === student.id ? 'not-allowed' : 'pointer',
+                                opacity: assigning === student.id ? 0.5 : 1
+                              }}
+                              aria-label={`Remove ${student.displayName} from scorekeeper role in this class`}
+                            >
+                              {assigning === student.id ? '⏳' : '👨‍🎓'} Student
+                            </button>
+                          );
+                        })()}
                         
-                        {student.role !== 'scorekeeper' && (
-                          <button
-                            onClick={() => handleAssignRole(student.id, 'scorekeeper')}
-                            disabled={assigning === student.id}
-                            style={{
-                              backgroundColor: '#059669',
-                              color: 'white',
-                              border: 'none',
-                              padding: '0.5rem 0.75rem',
-                              borderRadius: '0.5rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold',
-                              cursor: assigning === student.id ? 'not-allowed' : 'pointer',
-                              opacity: assigning === student.id ? 0.5 : 1
-                            }}
-                            aria-label={`Assign ${student.displayName} as scorekeeper`}
-                          >
-                            {assigning === student.id ? '⏳' : '📊'} Scorekeeper
-                          </button>
-                        )}
+                        {(() => {
+                          // Show Scorekeeper button if:
+                          // 1. Student is not a scorekeeper at all, OR
+                          // 2. Student is a scorekeeper but not assigned to the current class
+                          const isScorekeeperInCurrentClass = student.assignedClasses && student.assignedClasses.includes(selectedClass);
+                          const shouldShowScorekeeperButton = student.role !== 'scorekeeper' || !isScorekeeperInCurrentClass;
+                          
+                          return shouldShowScorekeeperButton && (
+                            <button
+                              onClick={() => handleAssignRole(student.id, 'scorekeeper')}
+                              disabled={assigning === student.id}
+                              style={{
+                                backgroundColor: '#059669',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: '0.5rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                cursor: assigning === student.id ? 'not-allowed' : 'pointer',
+                                opacity: assigning === student.id ? 0.5 : 1
+                              }}
+                              aria-label={`Assign ${student.displayName} as scorekeeper`}
+                            >
+                              {assigning === student.id ? '⏳' : '📊'} Scorekeeper
+                            </button>
+                          );
+                        })()}
                       </div>
+                      
+                      {/* Multi-Class Scorekeeper Info */}
+                      {student.role === 'scorekeeper' && student.assignedClasses && student.assignedClasses.length > 0 && (
+                        <div style={{ 
+                          fontSize: '0.75rem', 
+                          color: '#059669',
+                          fontWeight: '500'
+                        }}>
+                          Scorekeeper in {student.assignedClasses.length} class{student.assignedClasses.length > 1 ? 'es' : ''}
+                        </div>
+                      )}
                       
                       {student.assignedAt && student.assignedBy && (
                         <div style={{ 

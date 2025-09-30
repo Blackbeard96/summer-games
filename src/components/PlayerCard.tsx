@@ -296,6 +296,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
         <div
           style={{
             position: 'absolute',
+            top: 0,
+            left: 0,
             width: '100%',
             height: '100%',
             backfaceVisibility: 'hidden',
@@ -309,9 +311,18 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             padding: 24,
             transform: 'rotateY(180deg)',
             zIndex: 1,
+            overflowY: 'auto',
           }}
         >
-          <div style={{ fontSize: 22, fontWeight: 'bold', color: '#1f2937', marginBottom: 16 }}>Description</div>
+          <div style={{ 
+            fontSize: 22, 
+            fontWeight: 'bold', 
+            color: '#1f2937', 
+            marginBottom: 16,
+            textAlign: 'center'
+          }}>
+            Description
+          </div>
           <div style={{
             background: '#fff',
             color: '#1f2937',
@@ -324,6 +335,266 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             textAlign: 'center',
             marginBottom: 16,
           }}>{description || 'No description provided.'}</div>
+          
+          {/* Player's Journey Section */}
+          <div style={{ 
+            fontSize: 22, 
+            fontWeight: 'bold', 
+            color: '#1f2937', 
+            marginBottom: 16,
+            textAlign: 'center'
+          }}>
+            {name}'s Journey
+          </div>
+          
+          {/* Scrollable Journey Content */}
+          <div style={{
+            background: '#fff',
+            borderRadius: 12,
+            padding: 16,
+            boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+            width: '100%',
+            maxHeight: 200,
+            overflowY: 'auto',
+            marginBottom: 16,
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Hero's Journey Stages */}
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>1</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Ordinary World
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>2</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Call to Adventure
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>3</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Meeting the Mentor
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>4</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Tests, Allies, Enemies
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>5</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Approaching the Inmost Cave
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>6</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  The Ordeal
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>7</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  The Reward
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>8</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Resurrection / Apotheosis
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '8px 12px',
+                background: '#f3f4f6',
+                borderRadius: 8,
+                border: '2px solid #e5e7eb'
+              }}>
+                <div style={{ 
+                  width: 20, 
+                  height: 20, 
+                  borderRadius: '50%', 
+                  background: '#6b7280',
+                  marginRight: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 'bold'
+                }}>9</div>
+                <div style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>
+                  Return w/ the Elixir
+                </div>
+              </div>
+            </div>
+          </div>
           
           {/* Badges Section */}
           {badges && badges.length > 0 && (
