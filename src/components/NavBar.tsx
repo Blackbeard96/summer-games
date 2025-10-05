@@ -1,10 +1,11 @@
-import React, { useState, useEffect, CSSProperties, MouseEvent } from 'react';
+import React, { useState, useEffect, CSSProperties, MouseEvent, memo, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc, addDoc } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
+import { useAriaLive, ariaUtils, generateId } from '../utils/accessibility';
 
 const tooltipStyle: CSSProperties = {
   position: 'absolute',
@@ -48,7 +49,7 @@ interface Notification {
   data?: any;
 }
 
-const NavBar = () => {
+const NavBar = memo(() => {
   const { currentUser, logout, currentRole } = useAuth();
   const navigate = useNavigate();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -58,20 +59,35 @@ const NavBar = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [userRole, setUserRole] = useState<UserRole>('student');
+  
+  // Accessibility features
+  const { announce } = useAriaLive();
+  const notificationsId = generateId('notifications');
+  const mobileMenuId = generateId('mobile-menu');
 
-  // Check if device is mobile
+  // Check if device is mobile with throttled resize handler
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    
     const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 768);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        setIsMobile(window.innerWidth <= 768);
+      }, 100);
     };
     
-    checkMobile();
+    // Initial check
+    setIsMobile(window.innerWidth <= 768);
+    
     window.addEventListener('resize', checkMobile);
     
-    return () => window.removeEventListener('resize', checkMobile);
+    return () => {
+      window.removeEventListener('resize', checkMobile);
+      clearTimeout(timeoutId);
+    };
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     setIsLoggingOut(true);
     try {
       await logout();
@@ -81,11 +97,23 @@ const NavBar = () => {
     } finally {
       setIsLoggingOut(false);
     }
-  };
+  }, [logout, navigate]);
 
-  const displayName = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student';
-  const roleIndicator = currentRole === 'admin' ? '👑' : currentRole === 'test' ? '🧪' : '';
-  const displayNameWithRole = roleIndicator ? `${roleIndicator} ${displayName}` : displayName;
+  // Memoize expensive computations
+  const displayName = useMemo(() => 
+    currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student',
+    [currentUser?.displayName, currentUser?.email]
+  );
+  
+  const roleIndicator = useMemo(() => 
+    currentRole === 'admin' ? '👑' : currentRole === 'test' ? '🧪' : '',
+    [currentRole]
+  );
+  
+  const displayNameWithRole = useMemo(() => 
+    roleIndicator ? `${roleIndicator} ${displayName}` : displayName,
+    [roleIndicator, displayName]
+  );
 
   // Fetch notifications
   useEffect(() => {
@@ -197,7 +225,7 @@ const NavBar = () => {
     }
   }, [showNotifications]);
 
-  const handleNotificationClick = async (notif: Notification) => {
+  const handleNotificationClick = useCallback(async (notif: Notification) => {
     if (notif.challengeId) {
       navigate(`/chapters?challenge=${notif.challengeId}`);
     }
@@ -215,18 +243,18 @@ const NavBar = () => {
     }
     
     setShowNotifications(false);
-  };
+  }, [navigate]);
 
-  const handleDeleteNotification = async (notifId: string, notifRef: DocumentReference<DocumentData, DocumentData>) => {
+  const handleDeleteNotification = useCallback(async (notifId: string, notifRef: DocumentReference<DocumentData, DocumentData>) => {
     try {
       await updateDoc(notifRef, { deleted: true });
       setNotifications(prev => prev.filter(n => n.id !== notifId));
     } catch (err) {
       console.error('Failed to delete notification:', err);
     }
-  };
+  }, []);
 
-  const handleClearAllNotifications = async () => {
+  const handleClearAllNotifications = useCallback(async () => {
     if (!currentUser || notifications.length === 0) return;
     
     try {
@@ -241,7 +269,7 @@ const NavBar = () => {
     } catch (err) {
       console.error('Failed to clear all notifications:', err);
     }
-  };
+  }, [currentUser, notifications]);
 
   const handleApproveArtifactUsage = async (notif: Notification) => {
     try {
@@ -337,51 +365,59 @@ const NavBar = () => {
     }
   };
 
-  const showTooltip = (e: MouseEvent<HTMLDivElement>) => {
+  const showTooltip = useCallback((e: MouseEvent<HTMLDivElement>) => {
     const tooltip = e.currentTarget.querySelector('.tooltip') as HTMLElement;
     if (tooltip) tooltip.style.opacity = '1';
-  };
+  }, []);
 
-  const hideTooltip = (e: MouseEvent<HTMLDivElement>) => {
+  const hideTooltip = useCallback((e: MouseEvent<HTMLDivElement>) => {
     const tooltip = e.currentTarget.querySelector('.tooltip') as HTMLElement;
     if (tooltip) tooltip.style.opacity = '0';
-  };
+  }, []);
 
-  const toggleMobileMenu = () => {
-    setIsMobileMenuOpen(!isMobileMenuOpen);
-  };
+  const toggleMobileMenu = useCallback(() => {
+    setIsMobileMenuOpen(prev => {
+      const newState = !prev;
+      announce(newState ? 'Mobile menu opened' : 'Mobile menu closed');
+      return newState;
+    });
+  }, [announce]);
 
-  const closeMobileMenu = () => {
+  const closeMobileMenu = useCallback(() => {
     setIsMobileMenuOpen(false);
-  };
+    announce('Mobile menu closed');
+  }, [announce]);
 
-  // Navigation items
-  const navItems = [
+  // Memoize navigation items to prevent unnecessary re-renders
+  const navItems = useMemo(() => [
     { to: '/', label: 'Training Grounds', tooltip: 'Dashboard' },
     { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System & Story Mode' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
-  ];
+  ], []);
 
-  const userNavItems = currentUser ? [
+  const userNavItems = useMemo(() => currentUser ? [
     { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation' },
     { to: '/squads', label: 'Squads', tooltip: 'Team Management' },
     { to: '/marketplace', label: 'MST MKT', tooltip: 'Artifact Marketplace' },
     { to: '#', label: '📚 Review Tutorials', tooltip: 'Review Tutorials', isButton: true, onClick: () => (window as any).tutorialTriggers?.showReviewModal?.() },
-  ] : [];
+  ] : [], [currentUser]);
 
   // Scorekeeper navigation items (only for scorekeepers)
   // Temporary: Also show for Blackbeard for testing
-  const isScorekeeper = userRole === 'scorekeeper' || 
-    (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development');
+  const isScorekeeper = useMemo(() => 
+    userRole === 'scorekeeper' || 
+    (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development'),
+    [userRole, currentUser?.email]
+  );
   
-  const scorekeeperNavItems = (currentUser && isScorekeeper) ? [
+  const scorekeeperNavItems = useMemo(() => (currentUser && isScorekeeper) ? [
     { to: '/scorekeeper', label: '📊 Scorekeeper', tooltip: 'Manage Class Power Points', isScorekeeper: true }
-  ] : [];
+  ] : [], [currentUser, isScorekeeper]);
 
-  const adminNavItems = currentUser?.email === 'edm21179@gmail.com' ? [
+  const adminNavItems = useMemo(() => currentUser?.email === 'edm21179@gmail.com' ? [
     { to: '/admin', label: "Sage's Chamber", tooltip: 'Admin Panel', isAdmin: true }
-  ] : [];
+  ] : [], [currentUser?.email]);
 
   // Debug navigation items generation
   logger.roles.debug('NavBar: Navigation items generated:', {
@@ -400,8 +436,8 @@ const NavBar = () => {
 
   return (
     <>
-      {/* Temporary debug badge for development */}
-      {currentUser && process.env.NODE_ENV === 'development' && (
+      {/* Temporary debug badge for development (disabled to prevent interference with constellation tree) */}
+      {false && currentUser && process.env.NODE_ENV === 'development' && (
         <div style={{
           position: 'fixed',
           top: '10px',
@@ -524,7 +560,16 @@ const NavBar = () => {
               {/* Notifications Bell */}
               <div style={{ position: 'relative' }} data-notifications onMouseEnter={!isMobile ? showTooltip : undefined} onMouseLeave={!isMobile ? hideTooltip : undefined}>
                 <button
-                  onClick={() => setShowNotifications(!showNotifications)}
+                  onClick={() => {
+                    const newState = !showNotifications;
+                    setShowNotifications(newState);
+                    announce(newState ? 'Notifications opened' : 'Notifications closed');
+                  }}
+                  {...ariaUtils.button({
+                    expanded: showNotifications,
+                    controls: notificationsId,
+                    label: `Notifications${notifications.filter(n => !n.read).length > 0 ? `, ${notifications.filter(n => !n.read).length} unread` : ''}`
+                  })}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -543,21 +588,24 @@ const NavBar = () => {
                 >
                   🔔
                   {notifications.filter(n => !n.read).length > 0 && (
-                    <span style={{
-                      position: 'absolute',
-                      top: '0',
-                      right: '0',
-                      background: '#ef4444',
-                      color: 'white',
-                      borderRadius: '50%',
-                      width: isMobile ? '20px' : '18px',
-                      height: isMobile ? '20px' : '18px',
-                      fontSize: isMobile ? '0.875rem' : '0.75rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 'bold'
-                    }}>
+                    <span 
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        top: '0',
+                        right: '0',
+                        background: '#ef4444',
+                        color: 'white',
+                        borderRadius: '50%',
+                        width: isMobile ? '20px' : '18px',
+                        height: isMobile ? '20px' : '18px',
+                        fontSize: isMobile ? '0.875rem' : '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 'bold'
+                      }}
+                    >
                       {notifications.filter(n => !n.read).length}
                     </span>
                   )}
@@ -566,22 +614,27 @@ const NavBar = () => {
 
                 {/* Notifications Dropdown */}
                 {showNotifications && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '100%',
-                    right: '0',
-                    width: isMobile ? '280px' : '350px',
-                    maxHeight: '400px',
-                    backgroundColor: 'white',
-                    borderRadius: '0.5rem',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
-                    border: '1px solid #e5e7eb',
-                    zIndex: 1000,
-                    overflow: 'hidden'
-                  }}>
+                  <div 
+                    id={notificationsId}
+                    role="region"
+                    aria-label="Notifications"
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      right: '0',
+                      width: isMobile ? '280px' : '350px',
+                      maxHeight: '400px',
+                      backgroundColor: 'white',
+                      borderRadius: '0.5rem',
+                      boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
+                      border: '1px solid #e5e7eb',
+                      zIndex: 1000,
+                      overflow: 'hidden'
+                    }}
+                  >
                     <div style={{
                       padding: '1rem',
-                      borderBottom: '1px solid #e5e7eb',
+                      borderBottom: 'none',
                       backgroundColor: '#f8fafc',
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -666,7 +719,7 @@ const NavBar = () => {
                           return (
                             <div key={notif.id} style={{
                               padding: '1rem',
-                              borderBottom: '1px solid #e5e7eb',
+                              borderBottom: 'none',
                               borderLeft: `3px solid ${style.borderColor}`,
                               backgroundColor: style.backgroundColor,
                               cursor: notif.type === 'artifact_usage' ? 'default' : 'pointer',
@@ -784,6 +837,11 @@ const NavBar = () => {
           {isMobile && (
             <button
               onClick={toggleMobileMenu}
+              {...ariaUtils.button({
+                expanded: isMobileMenuOpen,
+                controls: mobileMenuId,
+                label: isMobileMenuOpen ? 'Close mobile menu' : 'Open mobile menu'
+              })}
               style={{
                 background: 'none',
                 border: 'none',
@@ -799,7 +857,7 @@ const NavBar = () => {
                 justifyContent: 'center'
               }}
             >
-              {isMobileMenuOpen ? '✕' : '☰'}
+              <span aria-hidden="true">{isMobileMenuOpen ? '✕' : '☰'}</span>
             </button>
           )}
 
@@ -871,16 +929,21 @@ const NavBar = () => {
 
       {/* Mobile Menu */}
       {isMobile && isMobileMenuOpen && (
-        <div style={{
-          position: 'absolute',
-          top: '100%',
-          left: '0',
-          right: '0',
-          backgroundColor: '#1e293b',
-          borderTop: '1px solid #334155',
-          zIndex: 1000,
-          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-        }}>
+        <div 
+          id={mobileMenuId}
+          role="navigation"
+          aria-label="Mobile navigation menu"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: '0',
+            right: '0',
+            backgroundColor: '#1e293b',
+            borderTop: 'none',
+            zIndex: 1000,
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}
+        >
           <div style={{ padding: '1rem' }}>
             {/* Navigation Items */}
             <div style={{ marginBottom: '1.5rem' }}>
@@ -924,7 +987,7 @@ const NavBar = () => {
             {userNavItems.length > 0 && (
               <div style={{ 
                 marginBottom: '1.5rem', 
-                borderTop: '1px solid #374151', 
+                borderTop: 'none', 
                 paddingTop: '1.5rem' 
               }}>
                 <div style={{
@@ -967,7 +1030,7 @@ const NavBar = () => {
             {/* Scorekeeper Navigation Items */}
             {scorekeeperNavItems.length > 0 && (
               <div style={{ 
-                borderTop: '1px solid #374151', 
+                borderTop: 'none', 
                 paddingTop: '1.5rem',
                 marginBottom: '1.5rem'
               }}>
@@ -1012,7 +1075,7 @@ const NavBar = () => {
             {/* Admin Navigation Items */}
             {adminNavItems.length > 0 && (
               <div style={{ 
-                borderTop: '1px solid #374151', 
+                borderTop: 'none', 
                 paddingTop: '1.5rem' 
               }}>
                 <div style={{
@@ -1056,7 +1119,7 @@ const NavBar = () => {
             {/* Login Section for Unauthenticated Users */}
             {!currentUser && (
               <div style={{ 
-                borderTop: '1px solid #374151', 
+                borderTop: 'none', 
                 paddingTop: '1.5rem' 
               }}>
                 <div style={{
@@ -1099,6 +1162,8 @@ const NavBar = () => {
     </nav>
     </>
   );
-};
+});
+
+NavBar.displayName = 'NavBar';
 
 export default NavBar; 

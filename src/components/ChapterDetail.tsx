@@ -7,6 +7,8 @@ import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
 import LetterModal from './LetterModal';
+import TruthMetalChoiceModal from './TruthMetalChoiceModal';
+import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -24,6 +26,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
   const [showLetterModal, setShowLetterModal] = useState(false);
+  const [showTruthMetalModal, setShowTruthMetalModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -66,18 +69,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     
     switch (requirement.type) {
       case 'manifest':
-        // Check multiple possible manifest data locations
-        const hasManifest = studentData?.manifest?.manifestId || 
-                          studentData?.manifestationType || 
-                          studentData?.manifest ||
-                          userProgress?.manifest ||
-                          userProgress?.manifestationType;
-        console.log('ChapterDetail: Manifest check result:', hasManifest, {
-          studentDataManifest: studentData?.manifest,
-          studentDataManifestationType: studentData?.manifestationType,
-          userProgressManifest: userProgress?.manifest,
-          userProgressManifestationType: userProgress?.manifestationType
-        });
+        // Use standardized manifest detection utility
+        const manifestData = { studentData, userProgress };
+        const hasManifest = detectManifest(manifestData);
+        logManifestDetection(manifestData, 'ChapterDetail');
         return hasManifest;
       case 'artifact':
         return userProgress?.artifact?.identified;
@@ -482,18 +477,122 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  const handleTruthMetalChoice = async (choice: 'touch' | 'ignore', ordinaryWorld: string) => {
+    if (!currentUser) return;
+
+    try {
+      // Update user's ordinary world description in both collections
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Update users collection
+      await updateDoc(userRef, {
+        ordinaryWorld: ordinaryWorld,
+        truthMetalChoice: choice,
+        lastUpdated: serverTimestamp()
+      });
+
+      // Update students collection (for profile display)
+      await updateDoc(studentRef, {
+        ordinaryWorld: ordinaryWorld,
+        truthMetalChoice: choice,
+        lastUpdated: serverTimestamp()
+      });
+
+      // Complete the Truth Metal Choice challenge
+      const currentData = userProgress || {};
+      
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapter.id]: {
+          ...currentData.chapters?.[chapter.id],
+          challenges: {
+            ...currentData.chapters?.[chapter.id]?.challenges,
+            ['ep1-truth-metal-choice']: {
+              isCompleted: true,
+              choice: choice,
+              ordinaryWorld: ordinaryWorld,
+              completedAt: serverTimestamp()
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Add to challenge submissions
+      await addDoc(collection(db, 'challengeSubmissions'), {
+        userId: currentUser.uid,
+        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        email: currentUser.email || '',
+        photoURL: currentUser.photoURL || '',
+        challengeId: 'ep1-truth-metal-choice',
+        challengeName: 'The Truth Metal Choice',
+        submissionType: 'interactive',
+        timestamp: serverTimestamp(),
+        status: 'approved',
+        xpReward: 15,
+        ppReward: 8,
+        manifestationType: 'Chapter Challenge',
+        character: 'Truth Metal',
+        autoCompleted: true,
+        choice: choice,
+        ordinaryWorld: ordinaryWorld
+      });
+
+      // Create notification for challenge completion
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 Truth Metal Choice completed! You chose to ${choice === 'touch' ? 'embrace change' : 'remain in your ordinary world'}. Your ordinary world description has been saved to your profile! You earned +15 XP and +8 PP!`,
+        challengeId: 'ep1-truth-metal-choice',
+        challengeName: 'The Truth Metal Choice',
+        xpReward: 15,
+        ppReward: 8,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      
+      // Close the modal
+      setShowTruthMetalModal(false);
+      
+      // Refresh user progress
+      const userDocRefresh = await getDoc(userRef);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+      }
+
+      console.log('Truth Metal Choice completed:', { choice, ordinaryWorld });
+      alert(`🎉 Truth Metal Choice completed! You chose to ${choice === 'touch' ? 'embrace change and unlock your potential' : 'return to your ordinary world'}. Your ordinary world description has been saved to your profile!`);
+    } catch (error) {
+      console.error('Error completing Truth Metal Choice:', error);
+      alert('Failed to complete the Truth Metal Choice. Please try again.');
+    }
+  };
+
   const handleLetterNameSubmit = async (name: string) => {
     if (!currentUser) return;
 
     try {
-      // Update user's display name
-      await updateDoc(doc(db, 'users', currentUser.uid), {
+      // Update user's display name in both collections
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Update users collection
+      await updateDoc(userRef, {
+        displayName: name,
+        lastUpdated: serverTimestamp()
+      });
+
+      // Update students collection (for profile display)
+      await updateDoc(studentRef, {
         displayName: name,
         lastUpdated: serverTimestamp()
       });
 
       // Complete the Get Letter challenge
-      const userRef = doc(db, 'users', currentUser.uid);
       const currentData = userProgress || {};
       
       const updatedChapters = {
@@ -558,7 +657,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }
 
       console.log('Letter challenge completed with name:', name);
-      alert(`🎉 Welcome to Xiotein, ${name}! Your journey as a Manifester begins now!`);
+      alert(`🎉 Welcome to Xiotein, ${name}! Your name has been updated in your profile and your journey as a Manifester begins now!`);
     } catch (error) {
       console.error('Error completing letter challenge:', error);
       alert('Failed to complete the letter challenge. Please try again.');
@@ -600,6 +699,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     // Special handling for rival selection challenge
     if (challenge.id === 'ch2-rival-selection') {
       setShowRivalSelectionModal(true);
+      setCompletingChallenge(null);
+      return;
+    }
+
+    // Special handling for Truth Metal Choice challenge
+    if (challenge.id === 'ep1-truth-metal-choice') {
+      setShowTruthMetalModal(true);
       setCompletingChallenge(null);
       return;
     }
@@ -929,14 +1035,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                   <h4 style={{ 
                     fontSize: '1.125rem', 
                     fontWeight: 'bold', 
-                    color: '#374151',
+                    color: '#000000',
                     marginBottom: '0.5rem'
                   }}>
                     {challenge.title}
                   </h4>
                   <p style={{ 
                     fontSize: '0.875rem', 
-                    color: '#6b7280',
+                    color: '#374151',
                     lineHeight: '1.5'
                   }}>
                     {challenge.description}
@@ -1084,8 +1190,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </button>
                           )}
 
+                          {/* Truth Metal Choice special button */}
+                          {status === 'available' && challenge.id === 'ep1-truth-metal-choice' && (
+                            <button
+                              onClick={() => setShowTruthMetalModal(true)}
+                              style={{
+                                background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                                color: 'white',
+                                padding: '0.75rem 1.5rem',
+                                borderRadius: '0.5rem',
+                                border: 'none',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>⚡</span>
+                              Face the Truth Metal Choice
+                            </button>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1180,7 +1319,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
   const renderTeamSection = () => (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800 mb-4">Team Formation</h3>
+      <h3 className="text-lg font-semibold text-white mb-4">Team Formation</h3>
       {chapter.teamSize > 1 ? (
         <div className="bg-white p-4 rounded-lg border">
           <p className="text-gray-700 mb-4">
@@ -1212,7 +1351,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     
     return (
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Rival Selection</h3>
+        <h3 className="text-lg font-semibold text-white mb-4">Rival Selection</h3>
         {!rival ? (
           <div className="bg-white p-4 rounded-lg border">
             <p className="text-gray-700 mb-4">
@@ -1250,7 +1389,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
   const renderVeilSection = () => (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800 mb-4">The Veil</h3>
+      <h3 className="text-lg font-semibold text-white mb-4">The Veil</h3>
       {!userProgress?.veil ? (
         <div className="bg-white p-4 rounded-lg border">
           <p className="text-gray-700 mb-4">
@@ -1278,7 +1417,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
   const renderEthicsSection = () => (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800 mb-4">The Ethics of Life</h3>
+      <h3 className="text-lg font-semibold text-white mb-4">The Ethics of Life</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {['Believe', 'Listen', 'Speak', 'Grow', 'Let Go', 'Give'].map((ethic) => (
           <div key={ethic} className="bg-white p-4 rounded-lg border">
@@ -1496,6 +1635,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         isOpen={showLetterModal}
         onClose={() => setShowLetterModal(false)}
         onNameSubmit={handleLetterNameSubmit}
+      />
+
+      {/* Truth Metal Choice Modal */}
+      <TruthMetalChoiceModal
+        isOpen={showTruthMetalModal}
+        onClose={() => setShowTruthMetalModal(false)}
+        onChoiceSubmit={handleTruthMetalChoice}
       />
     </div>
   );

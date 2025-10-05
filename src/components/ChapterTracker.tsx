@@ -3,6 +3,7 @@ import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { CHAPTERS, Chapter } from '../types/chapters';
+import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterTrackerProps {
   onChapterSelect?: (chapter: Chapter) => void;
@@ -57,18 +58,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     
     switch (requirement.type) {
       case 'manifest':
-        // Check multiple possible manifest data locations
-        const hasManifest = studentData?.manifest?.manifestId || 
-                          studentData?.manifestationType || 
-                          studentData?.manifest ||
-                          userProgress?.manifest ||
-                          userProgress?.manifestationType;
-        console.log('ChapterTracker: Manifest check result:', hasManifest, {
-          studentDataManifest: studentData?.manifest,
-          studentDataManifestationType: studentData?.manifestationType,
-          userProgressManifest: userProgress?.manifest,
-          userProgressManifestationType: userProgress?.manifestationType
-        });
+        // Use standardized manifest detection utility
+        const manifestData = { studentData, userProgress };
+        const hasManifest = detectManifest(manifestData);
+        logManifestDetection(manifestData, 'ChapterTracker');
         return hasManifest;
       case 'artifact':
         return userProgress?.artifact?.identified;
@@ -675,4 +668,4 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   );
 };
 
-export default ChapterTracker; 
+export default ChapterTracker;

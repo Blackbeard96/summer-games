@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
 
 interface LetterModalProps {
   isOpen: boolean;
@@ -7,8 +8,16 @@ interface LetterModalProps {
 }
 
 const LetterModal: React.FC<LetterModalProps> = ({ isOpen, onClose, onNameSubmit }) => {
+  const { currentUser } = useAuth();
   const [view, setView] = useState<'room' | 'letter' | 'name'>('room');
   const [playerName, setPlayerName] = useState('');
+
+  // Pre-fill the name field with current user's display name
+  useEffect(() => {
+    if (isOpen && currentUser?.displayName) {
+      setPlayerName(currentUser.displayName);
+    }
+  }, [isOpen, currentUser?.displayName]);
 
   if (!isOpen) return null;
 

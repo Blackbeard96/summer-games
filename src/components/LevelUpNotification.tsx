@@ -58,7 +58,10 @@ const LevelUpNotification: React.FC<LevelUpNotificationProps> = ({
                 background: ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff'][i % 7],
                 left: `${Math.random() * 100}%`,
                 top: '-10px',
-                animation: `fall ${2 + Math.random() * 3}s linear forwards`,
+                animationName: 'fall',
+                animationDuration: `${2 + Math.random() * 3}s`,
+                animationTimingFunction: 'linear',
+                animationFillMode: 'forwards',
                 animationDelay: `${Math.random() * 2}s`
               }}
             />

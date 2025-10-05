@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import { auth, db } from '../firebase';
 import { 
   User, 
@@ -144,7 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return allowedDomains.includes(domain || '');
   };
 
-  const signup = async (email: string, password: string, displayName?: string) => {
+  const signup = useCallback(async (email: string, password: string, displayName?: string) => {
     try {
       // Check if domain is allowed
       if (!isAllowedDomain(email)) {
@@ -191,9 +191,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       throw new Error(userFriendlyMessage);
     }
-  };
+  }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     const result = await signInWithEmailAndPassword(auth, email, password);
     // Update last login time - use setDoc with merge to create if doesn't exist
     if (result.user) {
@@ -201,9 +201,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         lastLogin: new Date()
       }, { merge: true });
     }
-  };
+  }, []);
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = useCallback(async () => {
     const provider = new GoogleAuthProvider();
     const result = await signInWithPopup(auth, provider);
     // Update last login time - use setDoc with merge to create if doesn't exist
@@ -212,17 +212,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         lastLogin: new Date()
       }, { merge: true });
     }
-  };
+  }, []);
 
-  const resetPassword = async (email: string) => {
+  const resetPassword = useCallback(async (email: string) => {
     await sendPasswordResetEmail(auth, email);
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await signOut(auth);
-  };
+  }, []);
 
-  const updateUserProfile = async (updates: Partial<UserProfile>) => {
+  const updateUserProfile = useCallback(async (updates: Partial<UserProfile>) => {
     if (!currentUser) throw new Error('No user logged in');
     
     // Update Firebase Auth profile if displayName or photoURL changed
@@ -238,30 +238,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     // Update local state
     setUserProfile(prev => prev ? { ...prev, ...updates } : null);
-  };
+  }, [currentUser]);
 
-  const updateUserPassword = async (newPassword: string) => {
+  const updateUserPassword = useCallback(async (newPassword: string) => {
     if (!currentUser) throw new Error('No user logged in');
     await updatePassword(currentUser, newPassword);
-  };
+  }, [currentUser]);
 
-  const updateUserEmail = async (newEmail: string) => {
+  const updateUserEmail = useCallback(async (newEmail: string) => {
     if (!currentUser) throw new Error('No user logged in');
     await updateEmail(currentUser, newEmail);
     // Update profile in Firestore
     await updateUserProfile({ email: newEmail });
-  };
+  }, [currentUser, updateUserProfile]);
 
-  const deleteUserAccount = async () => {
+  const deleteUserAccount = useCallback(async () => {
     if (!currentUser) throw new Error('No user logged in');
     // Delete user document from Firestore
     await setDoc(doc(db, 'users', currentUser.uid), { deleted: true });
     // Delete Firebase Auth account
     await deleteUser(currentUser);
-  };
+  }, [currentUser]);
 
   // Check if current user is admin
-  const isAdmin = (): boolean => {
+  const isAdmin = useCallback((): boolean => {
     if (!currentUser) return false;
     return currentUser.email === 'eddymosley@compscihigh.org' || 
            currentUser.email === 'admin@mstgames.net' ||
@@ -269,10 +269,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
            (currentUser.email?.includes('eddymosley') ?? false) ||
            (currentUser.email?.includes('admin') ?? false) ||
            (currentUser.email?.includes('mstgames') ?? false);
-  };
+  }, [currentUser]);
 
   // Switch to test account
-  const switchToTestAccount = async (testAccountId: string) => {
+  const switchToTestAccount = useCallback(async (testAccountId: string) => {
     if (!isAdmin()) {
       throw new Error('Only admins can switch to test accounts');
     }
@@ -324,10 +324,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Error switching to test account:', error);
       throw error;
     }
-  };
+  }, [isAdmin, currentUser, userProfile]);
 
   // Switch back to admin
-  const switchToAdmin = () => {
+  const switchToAdmin = useCallback(() => {
     if (!originalUser) {
       throw new Error('No original user data found');
     }
@@ -337,9 +337,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserProfile(originalProfile);
     setTestAccountData(null);
     setCurrentRole('admin');
-  };
+  }, [originalUser, originalProfile]);
 
-  const value = {
+  // Memoize the context value to prevent unnecessary re-renders
+  const value = useMemo(() => ({
     currentUser,
     userProfile,
     loading,
@@ -357,7 +358,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     switchToTestAccount,
     switchToAdmin,
     isAdmin
-  };
+  }), [
+    currentUser,
+    userProfile,
+    loading,
+    currentRole,
+    testAccountData,
+    signup,
+    login,
+    loginWithGoogle,
+    resetPassword,
+    logout,
+    updateUserProfile,
+    updateUserPassword,
+    updateUserEmail,
+    deleteUserAccount,
+    switchToTestAccount,
+    switchToAdmin,
+    isAdmin
+  ]);
 
   return (
     <AuthContext.Provider value={value}>

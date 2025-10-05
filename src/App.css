@@ -5,9 +5,86 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f5f5f5;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background-attachment: fixed;
   /* Prevent horizontal scrolling on mobile */
   overflow-x: hidden;
+  transition: all 0.3s ease;
+}
+
+/* Modern glassmorphism effect for main content */
+.App {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  margin: 1rem;
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+  border: none;
+  min-height: calc(100vh - 2rem);
+}
+
+/* Smooth page transitions */
+.page-transition {
+  animation: fadeInUp 0.5s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Enhanced loading animations */
+.loading-spinner {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.05);
+  }
+}
+
+/* Modern button hover effects */
+button {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+button:hover::before {
+  left: 100%;
+}
+
+/* Enhanced focus states */
+button:focus,
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
 }
 
 /* Ensure proper margins for the Player's Journey page */
@@ -50,20 +127,63 @@ body {
   }
 }
 
+/* Enhanced button styles with modern effects */
 button {
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   /* Ensure touch-friendly minimum size on mobile */
   min-height: 44px;
   min-width: 44px;
+  border-radius: 8px;
+  font-weight: 500;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  color: white;
+  box-shadow: 0 4px 15px 0 rgba(31, 38, 135, 0.2);
 }
 
 button:hover:not(:disabled) {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px 0 rgba(31, 38, 135, 0.3);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 10px 0 rgba(31, 38, 135, 0.2);
 }
 
 button:disabled {
   cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Primary button variant */
+button.primary {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+}
+
+/* Secondary button variant */
+button.secondary {
+  background: linear-gradient(135deg, #6b7280 0%, #9ca3af 100%);
+}
+
+/* Success button variant */
+button.success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+/* Danger button variant */
+button.danger {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+/* Warning button variant */
+button.warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
 }
 
 /* Mobile-specific button improvements */
@@ -257,7 +377,7 @@ button:disabled {
 /* Mobile-friendly borders */
 @media (max-width: 768px) {
   .mobile-border {
-    border: 1px solid #e5e7eb !important;
+    border: none !important;
   }
 }
 
@@ -303,4 +423,726 @@ button:disabled {
   .mobile-leading-relaxed {
     line-height: 1.6 !important;
   }
+}
+
+/* Modern card styles */
+.card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+  border: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Disabled card::before to prevent horizontal lines over constellation tree */
+.card::before {
+  display: none;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.25);
+}
+
+/* Glassmorphism input styles */
+input, textarea, select {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border: none;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  transition: all 0.3s ease;
+  font-size: 1rem;
+}
+
+input:focus, textarea:focus, select:focus {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+  outline: none;
+}
+
+/* Modern notification styles */
+.notification {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 1rem;
+  margin: 0.5rem 0;
+  box-shadow: 0 4px 20px 0 rgba(31, 38, 135, 0.1);
+  border-left: 4px solid #4f46e5;
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Success notification */
+.notification.success {
+  border-left-color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+/* Error notification */
+.notification.error {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* Warning notification */
+.notification.warning {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+/* Info notification */
+.notification.info {
+  border-left-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Modern progress bar */
+.progress-bar {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  height: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.3s ease;
+  position: relative;
+}
+
+/* Disabled progress-bar-fill::after to prevent horizontal lines over constellation tree */
+.progress-bar-fill::after {
+  display: none;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Modern badge styles */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(79, 70, 229, 0.1);
+  color: #4f46e5;
+  border: none;
+}
+
+.badge.success {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.2);
+}
+
+.badge.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.badge.warning {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+/* Floating action button */
+.fab {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  border: none;
+  color: white;
+  font-size: 1.5rem;
+  box-shadow: 0 8px 25px 0 rgba(79, 70, 229, 0.3);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 1000;
+}
+
+.fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 12px 35px 0 rgba(79, 70, 229, 0.4);
+}
+
+/* Enhanced mobile experience */
+@media (max-width: 768px) {
+  .App {
+    margin: 0.5rem;
+    border-radius: 16px;
+    min-height: calc(100vh - 1rem);
+  }
+  
+  .card {
+    padding: 1rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+  }
+  
+  .fab {
+    bottom: 1rem;
+    right: 1rem;
+    width: 48px;
+    height: 48px;
+    font-size: 1.25rem;
+  }
+
+  /* Enhanced touch targets */
+  button, a, input, select, textarea {
+    min-height: 48px;
+    min-width: 48px;
+    touch-action: manipulation;
+  }
+
+  /* Improved mobile navigation */
+  .mobile-nav-item {
+    padding: 1rem;
+    margin: 0.25rem 0;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .mobile-nav-item:active {
+    transform: scale(0.98);
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Mobile-friendly modals */
+  .mobile-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    z-index: 1000;
+  }
+
+  .mobile-modal-content {
+    background: white;
+    border-radius: 16px;
+    padding: 1.5rem;
+    max-width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    width: 100%;
+  }
+
+  /* Mobile-friendly forms */
+  .mobile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .mobile-form input,
+  .mobile-form textarea,
+  .mobile-form select {
+    padding: 1rem;
+    border-radius: 12px;
+    border: none;
+    font-size: 16px; /* Prevent zoom on iOS */
+    transition: border-color 0.2s ease;
+  }
+
+  .mobile-form input:focus,
+  .mobile-form textarea:focus,
+  .mobile-form select:focus {
+    border-color: #4f46e5;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+  }
+
+  /* Mobile-friendly cards */
+  .mobile-card {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    border: none;
+    transition: all 0.3s ease;
+  }
+
+  .mobile-card:active {
+    transform: scale(0.98);
+  }
+
+  /* Mobile-friendly lists */
+  .mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .mobile-list-item {
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 12px;
+    border: none;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .mobile-list-item:active {
+    transform: scale(0.98);
+    background: rgba(255, 255, 255, 0.95);
+  }
+
+  /* Mobile-friendly buttons */
+  .mobile-button {
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+    touch-action: manipulation;
+  }
+
+  .mobile-button:active {
+    transform: scale(0.98);
+  }
+
+  /* Mobile-friendly spacing */
+  .mobile-spacing {
+    padding: 1rem;
+  }
+
+  .mobile-spacing-lg {
+    padding: 1.5rem;
+  }
+
+  .mobile-spacing-xl {
+    padding: 2rem;
+  }
+
+  /* Mobile-friendly text */
+  .mobile-text-sm {
+    font-size: 0.875rem;
+  }
+
+  .mobile-text-base {
+    font-size: 1rem;
+  }
+
+  .mobile-text-lg {
+    font-size: 1.125rem;
+  }
+
+  .mobile-text-xl {
+    font-size: 1.25rem;
+  }
+
+  /* Mobile-friendly grid */
+  .mobile-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .mobile-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  /* Mobile-friendly flex */
+  .mobile-flex {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .mobile-flex-row {
+    display: flex;
+    flex-direction: row;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  /* Mobile-friendly scroll */
+  .mobile-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    overflow-y: auto;
+  }
+
+  /* Mobile-friendly animations */
+  @media (prefers-reduced-motion: no-preference) {
+    .mobile-animate {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mobile-animate {
+      transition: none;
+    }
+  }
+
+  /* Mobile-friendly focus indicators */
+  .mobile-focus:focus {
+    outline: 2px solid #4f46e5;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+  }
+
+  /* Mobile-friendly loading states */
+  .mobile-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    gap: 1rem;
+  }
+
+  .mobile-loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  /* Mobile-friendly error states */
+  .mobile-error {
+    background: rgba(239, 68, 68, 0.1);
+    border: none;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 1rem 0;
+    color: #dc2626;
+  }
+
+  /* Mobile-friendly success states */
+  .mobile-success {
+    background: rgba(16, 185, 129, 0.1);
+    border: none;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 1rem 0;
+    color: #059669;
+  }
+
+  /* Mobile-friendly warning states */
+  .mobile-warning {
+    background: rgba(245, 158, 11, 0.1);
+    border: none;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 1rem 0;
+    color: #d97706;
+  }
+
+  /* Mobile-friendly info states */
+  .mobile-info {
+    background: rgba(59, 130, 246, 0.1);
+    border: none;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 1rem 0;
+    color: #2563eb;
+  }
+}
+
+/* Constellation Tree Animations */
+@keyframes twinkle {
+  0%, 100% { 
+    opacity: 0.6; 
+  }
+  50% { 
+    opacity: 1; 
+  }
+}
+
+@keyframes tooltipFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) translateY(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Hide any horizontal lines that might be appearing over the constellation tree */
+hr {
+  display: none !important;
+}
+
+/* Hide any pseudo-elements that might be creating horizontal lines */
+.constellation-container *::before,
+.constellation-container *::after {
+  display: none !important;
+}
+
+/* Remove horizontal lines from specific elements that might be causing issues */
+button::before,
+button::after {
+  display: none !important;
+}
+
+/* Remove any horizontal lines from the left panel */
+.absolute.top-4.left-4 * {
+  border-top: none !important;
+  border-bottom: none !important;
+}
+
+/* Remove horizontal lines from the constellation tree area */
+.constellation-container {
+  border-top: none !important;
+  border-bottom: none !important;
+}
+
+/* AGGRESSIVE: Remove any horizontal lines from ALL elements on the page */
+* {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove any horizontal lines from pseudo-elements */
+*::before,
+*::after {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  display: none !important;
+}
+
+/* Remove any horizontal lines from specific elements that might be creating them */
+div[style*="border"],
+span[style*="border"],
+p[style*="border"],
+button[style*="border"],
+nav[style*="border"] {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Force remove any elements that might be creating horizontal lines */
+hr,
+.hr,
+.horizontal-line,
+.horizontal-bar,
+.border-line,
+.separator {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+
+/* Remove any background elements that might be creating lines */
+*[style*="background"] {
+  background: none !important;
+}
+
+/* Remove any elements with specific classes that might be creating lines */
+.navbar,
+.nav-bar,
+.mobile-menu,
+.dropdown-menu,
+.menu-item {
+  border-top: none !important;
+  border-bottom: none !important;
+}
+
+/* SPECIFIC: Force remove horizontal lines from constellation tree area */
+.constellation-container,
+.constellation-container *,
+.min-h-screen,
+.min-h-screen * {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Force remove any pseudo-elements in constellation area */
+.constellation-container *::before,
+.constellation-container *::after,
+.min-h-screen *::before,
+.min-h-screen *::after {
+  display: none !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove any background gradients that might be creating lines */
+.constellation-container,
+.min-h-screen {
+  background: none !important;
+}
+
+/* Force remove any elements that might be creating horizontal lines in the constellation area */
+.constellation-container hr,
+.constellation-container .hr,
+.constellation-container .horizontal-line,
+.constellation-container .horizontal-bar,
+.constellation-container .border-line,
+.constellation-container .separator {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+
+/* NUCLEAR OPTION: Remove ALL horizontal lines from the entire page */
+body,
+html,
+#root,
+.App,
+* {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove ALL pseudo-elements that might be creating lines */
+*::before,
+*::after {
+  display: none !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: none !important;
+}
+
+/* Force remove any elements with specific inline styles that might be creating lines */
+*[style*="border-top"],
+*[style*="border-bottom"],
+*[style*="border: 1px"],
+*[style*="border:1px"] {
+  border: none !important;
+  border-top: none !important;
+  border-bottom: none !important;
+}
+
+/* Remove any elements that might be creating horizontal lines */
+hr,
+.hr,
+.horizontal-line,
+.horizontal-bar,
+.border-line,
+.separator,
+.divider,
+.line {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+  border: none !important;
+}
+
+/* FORCE REMOVE ALL HORIZONTAL LINES - NUCLEAR OPTION */
+* {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  background: none !important;
+}
+
+/* Remove ALL pseudo-elements */
+*::before,
+*::after {
+  display: none !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: none !important;
+  background-image: none !important;
+}
+
+/* Remove any elements with specific classes that might be creating lines */
+.border,
+.border-t,
+.border-b,
+.border-top,
+.border-bottom,
+.shadow,
+.shadow-lg,
+.shadow-xl {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove any elements that might be creating horizontal lines in the constellation area */
+.constellation-container *,
+.min-h-screen *,
+#root *,
+.App * {
+  border-top: none !important;
+  border-bottom: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-image: none !important;
 }

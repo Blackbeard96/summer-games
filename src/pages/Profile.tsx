@@ -346,6 +346,18 @@ const Profile = () => {
               xp={userData?.xp || 0}
               userId={currentUser?.uid}
               onManifestReselect={() => setShowManifestSelection(true)}
+              ordinaryWorld={userData?.ordinaryWorld}
+              journeyData={{
+                ordinaryWorld: userData?.ordinaryWorld,
+                callToAdventure: userData?.callToAdventure,
+                meetingMentor: userData?.meetingMentor,
+                testsAlliesEnemies: userData?.testsAlliesEnemies,
+                approachingCave: userData?.approachingCave,
+                ordeal: userData?.ordeal,
+                roadBack: userData?.roadBack,
+                resurrection: userData?.resurrection,
+                returnWithElixir: userData?.returnWithElixir,
+              }}
             />
           </div>
           

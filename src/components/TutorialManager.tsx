@@ -274,8 +274,8 @@ const TutorialManager: React.FC = () => {
         tutorialState={tutorialState}
       />
 
-      {/* Tutorial Progress Indicator (for debugging) */}
-      {process.env.NODE_ENV === 'development' && (
+      {/* Tutorial Progress Indicator (disabled to prevent interference with constellation tree) */}
+      {false && process.env.NODE_ENV === 'development' && (
         <div style={{
           position: 'fixed',
           bottom: '1rem',

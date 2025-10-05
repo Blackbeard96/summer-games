@@ -30,4 +30,4 @@ const Chapters: React.FC = () => {
   );
 };
 
-export default Chapters; 
+export default Chapters;

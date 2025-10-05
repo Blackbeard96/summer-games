@@ -28,9 +28,8 @@ const NavigationDebugger: React.FC = () => {
     }
   };
 
-  if (process.env.NODE_ENV !== 'development') {
-    return null;
-  }
+  // Disabled debug panel to prevent interference with constellation tree
+  return null;
 
   return (
     <div style={{
