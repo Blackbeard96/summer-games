@@ -8,6 +8,9 @@ import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
 import LetterModal from './LetterModal';
 import TruthMetalChoiceModal from './TruthMetalChoiceModal';
+import TruthMetalTouchModal from './TruthMetalTouchModal';
+import TruthBattle from './TruthBattle';
+import TruthRevelationModal from './TruthRevelationModal';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -27,6 +30,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
   const [showLetterModal, setShowLetterModal] = useState(false);
   const [showTruthMetalModal, setShowTruthMetalModal] = useState(false);
+  const [showTruthMetalTouchModal, setShowTruthMetalTouchModal] = useState(false);
+  const [showTruthBattle, setShowTruthBattle] = useState(false);
+  const [showTruthRevelation, setShowTruthRevelation] = useState(false);
+  const [truthRevealed, setTruthRevealed] = useState('');
+  const [isReplayMode, setIsReplayMode] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -379,70 +387,77 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       console.log('CPU Battle completed:', { victory, xpGained, ppGained });
       
       if (victory) {
-        // Update user progress to mark the challenge as completed
-        const userRef = doc(db, 'users', currentUser.uid);
-        const currentData = userProgress || {};
-        
-        const updatedChapters = {
-          ...currentData.chapters,
-          [chapter.id]: {
-            ...currentData.chapters?.[chapter.id],
-            challenges: {
-              ...currentData.chapters?.[chapter.id]?.challenges,
-              'ep1-manifest-test': {
-                isCompleted: true,
-                completedAt: serverTimestamp(),
-                autoCompleted: true,
-                battleVictory: true,
-                xpGained: xpGained,
-                ppGained: ppGained
+        if (!isReplayMode) {
+          // Update user progress to mark the challenge as completed (only if not in replay mode)
+          const userRef = doc(db, 'users', currentUser.uid);
+          const currentData = userProgress || {};
+          
+          const updatedChapters = {
+            ...currentData.chapters,
+            [chapter.id]: {
+              ...currentData.chapters?.[chapter.id],
+              challenges: {
+                ...currentData.chapters?.[chapter.id]?.challenges,
+                'ep1-manifest-test': {
+                  isCompleted: true,
+                  completedAt: serverTimestamp(),
+                  autoCompleted: true,
+                  battleVictory: true,
+                  xpGained: xpGained,
+                  ppGained: ppGained
+                }
               }
             }
-          }
-        };
+          };
 
-        await updateDoc(userRef, {
-          chapters: updatedChapters
-        });
+          await updateDoc(userRef, {
+            chapters: updatedChapters
+          });
 
-        // Add to challenge submissions for tracking (auto-completed)
-        await addDoc(collection(db, 'challengeSubmissions'), {
-          userId: currentUser.uid,
-          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
-          email: currentUser.email || '',
-          photoURL: currentUser.photoURL || '',
-          challengeId: 'ep1-manifest-test',
-          challengeName: 'Test Awakened Abilities',
-          submissionType: 'auto_completed',
-          status: 'approved',
-          timestamp: serverTimestamp(),
-          xpReward: xpGained,
-          ppReward: ppGained,
-          manifestationType: 'Chapter Challenge',
-          character: 'CPU Challenger',
-          autoCompleted: true,
-          battleVictory: true
-        });
+          // Add to challenge submissions for tracking (auto-completed)
+          await addDoc(collection(db, 'challengeSubmissions'), {
+            userId: currentUser.uid,
+            displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+            email: currentUser.email || '',
+            photoURL: currentUser.photoURL || '',
+            challengeId: 'ep1-manifest-test',
+            challengeName: 'Test Awakened Abilities',
+            submissionType: 'auto_completed',
+            status: 'approved',
+            timestamp: serverTimestamp(),
+            xpReward: xpGained,
+            ppReward: ppGained,
+            manifestationType: 'Chapter Challenge',
+            character: 'CPU Challenger',
+            autoCompleted: true,
+            battleVictory: true
+          });
 
-        // Create notification for challenge completion
-        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-          type: 'challenge_completed',
-          message: `🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`,
-          challengeId: 'ep1-manifest-test',
-          challengeName: 'Test Awakened Abilities',
-          xpReward: xpGained,
-          ppReward: ppGained,
-          timestamp: serverTimestamp(),
-          read: false
-        });
+          // Create notification for challenge completion
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'challenge_completed',
+            message: `🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`,
+            challengeId: 'ep1-manifest-test',
+            challengeName: 'Test Awakened Abilities',
+            xpReward: xpGained,
+            ppReward: ppGained,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+        }
         
-        alert(`🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
+        if (isReplayMode) {
+          alert(`🎉 Battle completed! You defeated the CPU challenger again! This was a replay - no rewards earned.`);
+        } else {
+          alert(`🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
+        }
       } else {
         alert('💪 The CPU challenger proved too strong this time. Try again to test your awakened abilities!');
       }
       
-      // Close the battle modal
+      // Close the battle modal and reset replay mode
       setShowCPUBattleModal(false);
+      setIsReplayMode(false);
       
     } catch (error) {
       console.error('Error handling CPU battle completion:', error);
@@ -569,6 +584,113 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     } catch (error) {
       console.error('Error completing Truth Metal Choice:', error);
       alert('Failed to complete the Truth Metal Choice. Please try again.');
+    }
+  };
+
+  const handleTouchTruthMetal = () => {
+    setShowTruthMetalTouchModal(false);
+    setShowTruthBattle(true);
+  };
+
+  const handleTruthVictory = async (truthRevealed: string) => {
+    if (!currentUser) return;
+
+    try {
+      if (!isReplayMode) {
+        // Complete the Touch Truth Metal challenge (only if not in replay mode)
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        const currentData = userProgress || {};
+        
+        const updatedChapters = {
+          ...currentData.chapters,
+          [chapter.id]: {
+            ...currentData.chapters?.[chapter.id],
+            challenges: {
+              ...currentData.chapters?.[chapter.id]?.challenges,
+              ['ep1-touch-truth-metal']: {
+                isCompleted: true,
+                truthRevealed: truthRevealed,
+                completedAt: serverTimestamp()
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Add to challenge submissions
+        await addDoc(collection(db, 'challengeSubmissions'), {
+          userId: currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || '',
+          challengeId: 'ep1-touch-truth-metal',
+          challengeName: 'Touch Truth Metal',
+          submissionType: 'battle',
+          timestamp: serverTimestamp(),
+          status: 'approved',
+          xpReward: 25,
+          ppReward: 15,
+          manifestationType: 'Chapter Challenge',
+          character: 'Truth',
+          autoCompleted: true,
+          truthRevealed: truthRevealed
+        });
+
+        // Create notification for challenge completion
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Truth Metal challenge completed! You defeated Truth and discovered: "${truthRevealed}". You earned +25 XP and +15 PP!`,
+          challengeId: 'ep1-touch-truth-metal',
+          challengeName: 'Touch Truth Metal',
+          xpReward: 25,
+          ppReward: 15,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+
+        // Update student data with truth revelation
+        await updateDoc(studentRef, {
+          truthRevelation: truthRevealed,
+          lastUpdated: serverTimestamp()
+        });
+        
+        // Refresh user progress
+        const userDocRefresh = await getDoc(userRef);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+
+        console.log('Touch Truth Metal completed:', { truthRevealed });
+      }
+      
+      setTruthRevealed(truthRevealed);
+      setShowTruthBattle(false);
+      setShowTruthRevelation(true);
+      
+    } catch (error) {
+      console.error('Error completing Touch Truth Metal:', error);
+      alert('Failed to complete the Truth Metal challenge. Please try again.');
+    }
+  };
+
+  const handleTruthDefeat = () => {
+    setShowTruthBattle(false);
+    alert('You were defeated by Truth, but this is just the beginning of your journey. Try again when you feel stronger!');
+  };
+
+  const handleTruthRevelationComplete = () => {
+    setShowTruthRevelation(false);
+    setIsReplayMode(false);
+    if (isReplayMode) {
+      alert('🎉 Battle completed! You have faced Truth again and discovered new insights about yourself!');
+    } else {
+      alert('🎉 Truth Metal challenge completed! You have discovered a profound truth about yourself and earned valuable rewards!');
     }
   };
 
@@ -1223,8 +1345,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </button>
                           )}
 
+                          {/* Touch Truth Metal Challenge Button */}
+                          {status === 'available' && challenge.id === 'ep1-touch-truth-metal' && (
+                            <button
+                              onClick={() => setShowTruthMetalTouchModal(true)}
+                              style={{
+                                background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+                                color: 'white',
+                                padding: '0.75rem 1.5rem',
+                                borderRadius: '0.5rem',
+                                border: 'none',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>⚡</span>
+                              Face Your Truth
+                            </button>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1298,16 +1453,61 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             )}
 
               {status === 'completed' && (
-                <div style={{
-                  background: 'rgba(34, 197, 94, 0.1)',
-                  border: '1px solid #22c55e',
-                  borderRadius: '0.5rem',
-                  padding: '0.75rem',
-                  color: '#166534',
-                  fontSize: '0.875rem',
-                  fontWeight: 'bold'
-                }}>
-                  ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
+                <div>
+                  <div style={{
+                    background: 'rgba(34, 197, 94, 0.1)',
+                    border: '1px solid #22c55e',
+                    borderRadius: '0.5rem',
+                    padding: '0.75rem',
+                    color: '#166534',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    marginBottom: '0.5rem'
+                  }}>
+                    ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
+                  </div>
+                  
+                  {/* Replay Button for Battle Challenges */}
+                  {(challenge.id === 'ep1-touch-truth-metal' || challenge.id === 'ep1-manifest-test') && (
+                    <button
+                      onClick={() => {
+                        setIsReplayMode(true);
+                        if (challenge.id === 'ep1-touch-truth-metal') {
+                          setShowTruthMetalTouchModal(true);
+                        } else if (challenge.id === 'ep1-manifest-test') {
+                          setShowCPUBattleModal(true);
+                        }
+                      }}
+                      style={{
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+                        color: 'white',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.5rem',
+                        border: 'none',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                        fontSize: '0.875rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                        width: '100%'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                      }}
+                    >
+                      <span>🔄</span>
+                      Replay Battle
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1637,14 +1837,43 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         onNameSubmit={handleLetterNameSubmit}
       />
 
-      {/* Truth Metal Choice Modal */}
-      <TruthMetalChoiceModal
-        isOpen={showTruthMetalModal}
-        onClose={() => setShowTruthMetalModal(false)}
-        onChoiceSubmit={handleTruthMetalChoice}
-      />
-    </div>
-  );
-};
+          {/* Truth Metal Choice Modal */}
+          <TruthMetalChoiceModal
+            isOpen={showTruthMetalModal}
+            onClose={() => setShowTruthMetalModal(false)}
+            onChoiceSubmit={handleTruthMetalChoice}
+          />
+
+          {/* Truth Metal Touch Modal */}
+          <TruthMetalTouchModal
+            isOpen={showTruthMetalTouchModal}
+            onClose={() => {
+              setShowTruthMetalTouchModal(false);
+              setIsReplayMode(false);
+            }}
+            onTouchTruthMetal={handleTouchTruthMetal}
+          />
+
+          {/* Truth Battle */}
+          <TruthBattle
+            isOpen={showTruthBattle}
+            onVictory={handleTruthVictory}
+            onDefeat={handleTruthDefeat}
+            onClose={() => {
+              setShowTruthBattle(false);
+              setIsReplayMode(false);
+            }}
+          />
+
+          {/* Truth Revelation Modal */}
+          <TruthRevelationModal
+            isOpen={showTruthRevelation}
+            onClose={() => setShowTruthRevelation(false)}
+            truthRevealed={truthRevealed}
+            onComplete={handleTruthRevelationComplete}
+          />
+        </div>
+      );
+    };
 
 export default ChapterDetail; 
