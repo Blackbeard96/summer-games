@@ -82,66 +82,89 @@ const Profile = () => {
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
 
+  // Function to get manifest color
+  const getManifestColor = (manifestName: string) => {
+    const manifest = MANIFESTS.find(m => m.name === manifestName);
+    return manifest ? manifest.color : '#6b7280'; // Default gray if not found
+  };
+
+  // Function to get element color
+  const getElementColor = (elementName: string) => {
+    const elementColors: { [key: string]: string } = {
+      'Fire': '#EF4444',
+      'Water': '#3B82F6', 
+      'Air': '#10B981',
+      'Earth': '#F59E0B',
+      'Lightning': '#8B5CF6',
+      'Light': '#FBBF24',
+      'Shadow': '#6B7280',
+      'Metal': '#9CA3AF'
+    };
+    return elementColors[elementName] || '#6b7280'; // Default gray if not found
+  };
+
+  const fetchUserData = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const userRef = doc(db, 'students', currentUser.uid);
+      const docSnap = await getDoc(userRef);
+      
+      if (docSnap.exists()) {
+        const userDataFromDB = docSnap.data();
+        
+        // Migrate rarity from old default (3) to new default (1)
+        let rarityValue = userDataFromDB.rarity;
+        if (rarityValue === 3 || rarityValue === undefined) {
+          rarityValue = 1;
+          // Update the database with the new rarity value
+          const userRef = doc(db, 'students', currentUser.uid);
+          updateDoc(userRef, { rarity: 1 }).catch(error => {
+            console.error('Error updating rarity:', error);
+          });
+        }
+        
+        setUserData(userDataFromDB);
+        setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
+        setBio(userDataFromDB.bio || '');
+        setManifest(userDataFromDB.manifest || 'None');
+        setStyle(userDataFromDB.manifestationType || 'Fire');
+        setRarity(rarityValue);
+        setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
+        setMoves(userDataFromDB.moves || []);
+        setBadges(userDataFromDB.badges || []);
+        
+        // Load manifest data
+        const manifestData = docSnap.data().manifest;
+        if (manifestData) {
+          // Convert Firestore timestamp to Date if needed
+          const processedManifest = {
+            ...manifestData,
+            lastAscension: manifestData.lastAscension?.toDate ? 
+              manifestData.lastAscension.toDate() : 
+              new Date(manifestData.lastAscension)
+          };
+          setPlayerManifest(processedManifest);
+        } else {
+          // No manifest found - automatically show selection
+          setShowManifestSelection(true);
+        }
+      } else {
+        // Create user document if it doesn't exist
+        setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1 });
+      }
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!currentUser) {
       navigate('/login');
       return;
     }
-
-    const fetchUserData = async () => {
-      try {
-        const userRef = doc(db, 'students', currentUser.uid);
-        const docSnap = await getDoc(userRef);
-        
-        if (docSnap.exists()) {
-          const userDataFromDB = docSnap.data();
-          
-          // Migrate rarity from old default (3) to new default (1)
-          let rarityValue = userDataFromDB.rarity;
-          if (rarityValue === 3 || rarityValue === undefined) {
-            rarityValue = 1;
-            // Update the database with the new rarity value
-            const userRef = doc(db, 'students', currentUser.uid);
-            updateDoc(userRef, { rarity: 1 }).catch(error => {
-              console.error('Error updating rarity:', error);
-            });
-          }
-          
-          setUserData(userDataFromDB);
-          setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
-          setBio(userDataFromDB.bio || '');
-          setManifest(userDataFromDB.manifest || 'None');
-          setStyle(userDataFromDB.manifestationType || 'Fire');
-          setRarity(rarityValue);
-          setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
-          setMoves(userDataFromDB.moves || []);
-          setBadges(userDataFromDB.badges || []);
-          
-          // Load manifest data
-          const manifestData = docSnap.data().manifest;
-          if (manifestData) {
-            // Convert Firestore timestamp to Date if needed
-            const processedManifest = {
-              ...manifestData,
-              lastAscension: manifestData.lastAscension?.toDate ? 
-                manifestData.lastAscension.toDate() : 
-                new Date(manifestData.lastAscension)
-            };
-            setPlayerManifest(processedManifest);
-          } else {
-            // No manifest found - automatically show selection
-            setShowManifestSelection(true);
-          }
-        } else {
-          // Create user document if it doesn't exist
-          setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1 });
-        }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
 
     fetchUserData();
   }, [currentUser, navigate]);
@@ -324,7 +347,7 @@ const Profile = () => {
         Your Profile
       </h1>
       
-      {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings + Manifests) */}
+      {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
         {/* Left Column - Player Card + Player's Journey */}
         <div>
@@ -363,9 +386,9 @@ const Profile = () => {
           
         </div>
 
-        {/* Right Column - Profile Settings + Manifest Progress */}
+        {/* Right Column - Profile Settings only */}
         <div>
-          {/* Profile Settings on top */}
+          {/* Profile Settings */}
           <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
               👤 Profile Settings
@@ -391,8 +414,8 @@ const Profile = () => {
                     <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={{ fontSize: '1.5rem', fontWeight: 'bold', border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', marginBottom: '0.5rem', width: '100%' }} placeholder="Display Name" />
                     <textarea value={bio} onChange={e => setBio(e.target.value)} style={{ border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', width: '100%', minHeight: '80px', resize: 'vertical' }} placeholder="Tell us about yourself..." />
                     <div style={{ margin: '0.5rem 0' }}>
-                      <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
-                      <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
+                      <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
@@ -439,8 +462,8 @@ const Profile = () => {
                     <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
                     <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{bio || 'No bio yet. Click edit to add one!'}</p>
                     <div style={{ margin: '0.5rem 0' }}>
-                      <span style={{ marginRight: 16 }}><b>Manifest:</b> {currentManifest}</span>
-                      <span style={{ marginRight: 16 }}><b>Element:</b> {style || 'None'}</span>
+                      <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
@@ -525,51 +548,60 @@ const Profile = () => {
             </div>
           </div>
 
-          {/* Manifest Progress below */}
-          <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
-              ⚡ Manifest Progress
-            </h2>
-            {playerManifest ? (
-              <ManifestProgress 
-                playerManifest={playerManifest} 
-                onVeilBreak={handleVeilBreak}
-              />
-            ) : (
-              <div style={{ 
-                padding: '2rem', 
-                textAlign: 'center',
-                backgroundColor: '#f8fafc',
-                borderRadius: '0.5rem',
-                border: '1px solid #e2e8f0'
-              }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
-                  Choose Your Manifest
-                </h3>
-                <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
-                  In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
-                </p>
-                <button
-                  onClick={() => setShowManifestSelection(true)}
-                  style={{
-                    backgroundColor: '#4f46e5',
-                    color: 'white',
-                    padding: '0.75rem 1.5rem',
-                    borderRadius: '0.5rem',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: '1rem',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  Select Your Manifest
-                </button>
-              </div>
-            )}
-          </div>
 
         </div>
       </div>
+      
+      {/* Manifest Progress Section - Aligned to left edge of Power Card */}
+      <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+          ⚡ Manifest Progress
+        </h2>
+        {playerManifest ? (
+          <ManifestProgress 
+            playerManifest={playerManifest} 
+            onVeilBreak={handleVeilBreak}
+            userId={currentUser?.uid}
+            onAbilityUsed={() => {
+              // Refresh user data to show updated usage counts
+              if (currentUser?.uid) {
+                fetchUserData();
+              }
+            }}
+          />
+        ) : (
+          <div style={{ 
+            padding: '2rem', 
+            textAlign: 'center',
+            backgroundColor: '#f8fafc',
+            borderRadius: '0.5rem',
+            border: '1px solid #e2e8f0'
+          }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
+              Choose Your Manifest
+            </h3>
+            <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+              In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
+            </p>
+            <button
+              onClick={() => setShowManifestSelection(true)}
+              style={{
+                backgroundColor: '#4f46e5',
+                color: 'white',
+                padding: '0.75rem 1.5rem',
+                borderRadius: '0.5rem',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '1rem',
+                fontWeight: 'bold'
+              }}
+            >
+              Select Your Manifest
+            </button>
+          </div>
+        )}
+      </div>
+      
       {/* Purchased Artifacts Section */}
       <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>

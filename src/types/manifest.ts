@@ -27,6 +27,7 @@ export interface PlayerManifest {
   signatureMove: string;
   unlockedLevels: number[];
   lastAscension: Date | any; // Firestore timestamp or Date
+  abilityUsage?: { [level: number]: number }; // Track usage count for each level
 }
 
 export interface Veil {

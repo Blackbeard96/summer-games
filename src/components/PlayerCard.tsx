@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import { MANIFESTS } from '../types/manifest';
 
 
 interface PlayerCardProps {
@@ -93,11 +94,32 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   journeyData,
 }) => {
   const [flipped, setFlipped] = useState(false);
+  const [showBadges, setShowBadges] = useState(false);
+
+  // Function to get manifest color
+  const getManifestColor = (manifestName: string) => {
+    const manifestObj = MANIFESTS.find(m => m.name === manifestName);
+    return manifestObj ? manifestObj.color : '#6b7280'; // Default gray if not found
+  };
+
+  // Function to get element color
+  const getElementColor = (elementName: string) => {
+    const elementColors: { [key: string]: string } = {
+      'Fire': '#EF4444',
+      'Water': '#3B82F6', 
+      'Air': '#10B981',
+      'Earth': '#F59E0B',
+      'Lightning': '#8B5CF6',
+      'Light': '#FBBF24',
+      'Shadow': '#6B7280',
+      'Metal': '#9CA3AF'
+    };
+    return elementColors[elementName] || '#6b7280'; // Default gray if not found
+  };
   const [showOrdinaryWorldModal, setShowOrdinaryWorldModal] = useState(false);
   const [showJourneyModal, setShowJourneyModal] = useState(false);
   const [selectedJourneyStage, setSelectedJourneyStage] = useState<{ title: string; content: string; stage: string } | null>(null);
   const [activeJourneyTab, setActiveJourneyTab] = useState<string | null>(null);
-  const [showBadges, setShowBadges] = useState(false);
   const [ppBoostStatus, setPPBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
     isActive: false,
     timeRemaining: '',
@@ -137,7 +159,6 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   }, [xp]);
 
   const handleFlip = useCallback(() => {
-    // Don't flip if showing badges - only flip back when closing badges
     if (showBadges) {
       setShowBadges(false);
       setFlipped(false);
@@ -272,11 +293,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 20 }}>{manifestIcons[manifest] || '✨'}</span>
-              <span style={{ fontWeight: 'bold', color: '#4f46e5', fontSize: 14 }}>Manifest: {manifest}</span>
+              <span style={{ fontWeight: 'bold', color: getManifestColor(manifest), fontSize: 14 }}>Manifest: {manifest}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 20 }}>{styleIcons[style] || '🔮'}</span>
-              <span style={{ fontWeight: 'bold', color: '#10b981', fontSize: 14 }}>Element: {style}</span>
+              <span style={{ fontWeight: 'bold', color: getElementColor(style), fontSize: 14 }}>Element: {style}</span>
             </div>
           </div>
           {/* Divider */}
@@ -362,21 +383,20 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             overflowY: 'auto',
           }}
         >
-          {/* Badges Page */}
+          {/* Badges View */}
           {showBadges ? (
             <>
               <div style={{ 
-                fontSize: 24, 
+                fontSize: 22, 
                 fontWeight: 'bold', 
                 color: '#1f2937', 
-                marginBottom: 20,
+                marginBottom: 16,
                 textAlign: 'center',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 width: '100%'
               }}>
-                <span>🏆 Your Badges</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -387,102 +407,91 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                     background: 'rgba(255, 255, 255, 0.2)',
                     border: 'none',
                     borderRadius: '50%',
-                    width: '36px',
-                    height: '36px',
-                    cursor: 'pointer',
+                    width: '32px',
+                    height: '32px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '20px',
+                    cursor: 'pointer',
                     color: '#1f2937',
-                    transition: 'all 0.2s ease'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                    fontSize: '18px'
                   }}
                 >
                   ←
                 </button>
+                <span>🏆 Your Badges ({badges.length})</span>
+                <div style={{ width: '32px' }}></div>
               </div>
               
               <div style={{
+                background: '#fff',
+                borderRadius: 12,
+                padding: 12,
+                boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
                 width: '100%',
-                height: 'calc(100% - 80px)',
+                maxHeight: 320,
                 overflowY: 'auto',
-                padding: '0 8px'
+                marginBottom: 16,
+                flex: '1 1 auto',
               }}>
                 {badges.length === 0 ? (
                   <div style={{
                     textAlign: 'center',
-                    padding: '60px 20px',
-                    color: '#6b7280',
-                    fontSize: '18px',
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center'
+                    padding: '2rem 1rem',
+                    color: '#6b7280'
                   }}>
-                    <div style={{ fontSize: '64px', marginBottom: '24px' }}>🏆</div>
-                    <div style={{ fontWeight: 'bold', marginBottom: '12px', fontSize: '20px' }}>No Badges Yet</div>
-                    <div style={{ fontSize: '16px', lineHeight: '1.5' }}>
-                      Complete challenges and achievements to earn badges!<br/>
-                      Each badge represents a milestone in your journey.
-                    </div>
+                    <div style={{ fontSize: '48px', marginBottom: '1rem' }}>🏆</div>
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                      No Badges Yet
+                    </h3>
+                    <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
+                      Complete challenges and achievements to earn your first badges!
+                    </p>
                   </div>
                 ) : (
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-                    gap: '20px',
-                    padding: '0 8px'
-                  }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {badges.map((badge) => (
                       <div
                         key={badge.id}
                         style={{
-                          background: 'rgba(255, 255, 255, 0.95)',
-                          borderRadius: '16px',
-                          padding: '20px',
-                          textAlign: 'center',
-                          border: '2px solid #e5e7eb',
-                          transition: 'all 0.3s ease',
-                          cursor: 'pointer',
-                          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                          borderRadius: 12,
+                          border: '2px solid #cbd5e1',
+                          transition: 'all 0.2s ease'
                         }}
                         onMouseOver={(e) => {
-                          e.currentTarget.style.transform = 'translateY(-4px)';
-                          e.currentTarget.style.boxShadow = '0 8px 20px rgba(139, 92, 246, 0.2)';
-                          e.currentTarget.style.borderColor = '#8b5cf6';
+                          e.currentTarget.style.background = 'linear-gradient(135deg, #f1f5f9 0%, #cbd5e1 100%)';
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
                         }}
                         onMouseOut={(e) => {
+                          e.currentTarget.style.background = 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
                           e.currentTarget.style.transform = 'translateY(0)';
-                          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
-                          e.currentTarget.style.borderColor = '#e5e7eb';
+                          e.currentTarget.style.boxShadow = 'none';
                         }}
                       >
                         <div style={{
-                          width: '80px',
-                          height: '80px',
+                          width: '48px',
+                          height: '48px',
                           borderRadius: '50%',
                           background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          margin: '0 auto 16px auto',
-                          fontSize: '32px',
-                          boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)'
+                          fontSize: '24px',
+                          marginRight: '12px',
+                          flexShrink: 0
                         }}>
                           {badge.imageUrl ? (
                             <img 
                               src={badge.imageUrl} 
                               alt={badge.name}
                               style={{
-                                width: '50px',
-                                height: '50px',
+                                width: '36px',
+                                height: '36px',
                                 borderRadius: '50%',
                                 objectFit: 'cover'
                               }}
@@ -491,61 +500,66 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                             '🏆'
                           )}
                         </div>
-                        <div style={{
-                          fontSize: '16px',
-                          fontWeight: 'bold',
-                          color: '#1f2937',
-                          marginBottom: '8px',
-                          lineHeight: '1.3'
-                        }}>
-                          {badge.name}
-                        </div>
-                        <div style={{
-                          fontSize: '13px',
-                          color: '#6b7280',
-                          lineHeight: '1.4',
-                          marginBottom: '12px',
-                          minHeight: '40px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          {badge.description}
-                        </div>
-                        <div style={{
-                          fontSize: '11px',
-                          color: '#9ca3af',
-                          fontStyle: 'italic',
-                          background: 'rgba(139, 92, 246, 0.1)',
-                          padding: '4px 8px',
-                          borderRadius: '12px',
-                          display: 'inline-block'
-                        }}>
-                          Earned: {(() => {
-                            try {
-                              if (!badge.earnedAt) return 'Unknown date';
-                              // Handle Firestore Timestamp
-                              if (badge.earnedAt.toDate && typeof badge.earnedAt.toDate === 'function') {
-                                return badge.earnedAt.toDate().toLocaleDateString();
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            color: '#1f2937',
+                            marginBottom: '2px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {badge.name}
+                          </div>
+                          <div style={{
+                            fontSize: '12px',
+                            color: '#6b7280',
+                            lineHeight: '1.3',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical'
+                          }}>
+                            {badge.description}
+                          </div>
+                          <div style={{
+                            fontSize: '10px',
+                            color: '#9ca3af',
+                            marginTop: '4px',
+                            fontStyle: 'italic'
+                          }}>
+                            {(() => {
+                              try {
+                                if (!badge.earnedAt) return 'Unknown date';
+                                // Handle Firestore Timestamp
+                                if (badge.earnedAt.toDate && typeof badge.earnedAt.toDate === 'function') {
+                                  return badge.earnedAt.toDate().toLocaleDateString();
+                                }
+                                // Handle regular Date object
+                                if (badge.earnedAt instanceof Date) {
+                                  return badge.earnedAt.toLocaleDateString();
+                                }
+                                // Handle string dates
+                                if (typeof badge.earnedAt === 'string') {
+                                  return new Date(badge.earnedAt).toLocaleDateString();
+                                }
+                                return 'Unknown date';
+                              } catch (error) {
+                                return 'Unknown date';
                               }
-                              // Handle regular Date object
-                              if (badge.earnedAt instanceof Date) {
-                                return badge.earnedAt.toLocaleDateString();
-                              }
-                              // Handle string dates
-                              if (typeof badge.earnedAt === 'string') {
-                                return new Date(badge.earnedAt).toLocaleDateString();
-                              }
-                              return 'Unknown date';
-                            } catch (error) {
-                              return 'Unknown date';
-                            }
-                          })()}
+                            })()}
+                          </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
+              </div>
+              
+              <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                Click to return to front
               </div>
             </>
           ) : activeJourneyTab ? (
