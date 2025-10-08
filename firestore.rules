@@ -14,7 +14,9 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null && 
         exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
     
     // Students collection - allow users to read/write their own documents
@@ -30,7 +32,9 @@ service cloud.firestore {
     match /students/{userId} {
       allow read: if request.auth != null && 
         exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
     
     // Test account access - allow admin access to test accounts
@@ -130,7 +134,9 @@ service cloud.firestore {
     match /classrooms/{classroomId} {
       allow read: if request.auth != null && 
         exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
     
     // Badges collection - allow admins to manage badges
@@ -146,7 +152,9 @@ service cloud.firestore {
     match /ppChangeRequests/{requestId} {
       allow create: if request.auth != null && 
         exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
       allow read, write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
@@ -157,7 +165,9 @@ service cloud.firestore {
     match /ppChangeSessions/{sessionId} {
       allow create: if request.auth != null && 
         exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper';
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
       allow read, write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||

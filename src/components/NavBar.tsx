@@ -52,6 +52,8 @@ interface Notification {
 const NavBar = memo(() => {
   const { currentUser, logout, currentRole } = useAuth();
   const navigate = useNavigate();
+  console.log('🎯 NavBar component rendered - currentUser:', currentUser?.email, 'currentRole:', currentRole);
+  
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -196,9 +198,11 @@ const NavBar = memo(() => {
             role: detectedRole,
             classId: roleData.classId 
           });
+          console.log(`🔍 Role detection - Found role document:`, roleData);
           setUserRole(detectedRole);
         } else {
           logger.roles.warn('NavBar: No role document found for user:', currentUser.uid);
+          console.log(`🔍 Role detection - No role document found for user:`, currentUser.uid);
           setUserRole('student');
         }
       } catch (error) {
@@ -208,6 +212,41 @@ const NavBar = memo(() => {
     };
 
     checkUserRole();
+  }, [currentUser]);
+
+  // Check if user has scorekeeper role (including multiple roles)
+  const [hasScorekeeperRole, setHasScorekeeperRole] = useState(false);
+  
+  useEffect(() => {
+    const checkScorekeeperRole = async () => {
+      if (!currentUser) {
+        console.log('🔍 Scorekeeper role check - No current user');
+        setHasScorekeeperRole(false);
+        return;
+      }
+      
+      try {
+        console.log(`🔍 Scorekeeper role check - Checking user: ${currentUser.uid}`);
+        // Check if user has scorekeeper role in userRoles collection
+        const roleDoc = await getDoc(doc(db, 'userRoles', currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          const isScorekeeper = roleData.role === 'scorekeeper' || 
+                               (roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('scorekeeper'));
+          console.log(`🔍 Scorekeeper role check - role: ${roleData.role}, roles: ${roleData.roles}, isScorekeeper: ${isScorekeeper}`);
+          console.log(`🔍 Full role data:`, roleData);
+          setHasScorekeeperRole(isScorekeeper);
+        } else {
+          console.log('🔍 Scorekeeper role check - No role document found');
+          setHasScorekeeperRole(false);
+        }
+      } catch (error) {
+        console.error('Error checking scorekeeper role:', error);
+        setHasScorekeeperRole(false);
+      }
+    };
+
+    checkScorekeeperRole();
   }, [currentUser]);
 
   // Close notifications dropdown when clicking outside
@@ -405,11 +444,13 @@ const NavBar = memo(() => {
 
   // Scorekeeper navigation items (only for scorekeepers)
   // Temporary: Also show for Blackbeard for testing
-  const isScorekeeper = useMemo(() => 
-    userRole === 'scorekeeper' || 
-    (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development'),
-    [userRole, currentUser?.email]
-  );
+  const isScorekeeper = useMemo(() => {
+    const result = hasScorekeeperRole || 
+      userRole === 'scorekeeper' || 
+      (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development');
+    console.log(`🔍 Scorekeeper check - hasScorekeeperRole: ${hasScorekeeperRole}, userRole: ${userRole}, email: ${currentUser?.email}, result: ${result}`);
+    return result;
+  }, [hasScorekeeperRole, userRole, currentUser?.email]);
   
   const scorekeeperNavItems = useMemo(() => (currentUser && isScorekeeper) ? [
     { to: '/scorekeeper', label: '📊 Scorekeeper', tooltip: 'Manage Class Power Points', isScorekeeper: true }
@@ -432,6 +473,9 @@ const NavBar = memo(() => {
   // Temporary debug indicator for role detection
   if (currentUser && process.env.NODE_ENV === 'development') {
     console.log(`🎯 NavBar Debug - User: ${currentUser.email}, Role: ${userRole}, Scorekeeper items: ${scorekeeperNavItems.length}`);
+    console.log(`🔍 Scorekeeper check - isScorekeeper: ${isScorekeeper}, userRole: ${userRole}, email: ${currentUser.email}`);
+    console.log(`🔍 hasScorekeeperRole: ${hasScorekeeperRole}`);
+    console.log(`🔍 scorekeeperNavItems:`, scorekeeperNavItems);
   }
 
   return (

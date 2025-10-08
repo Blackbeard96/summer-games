@@ -194,6 +194,18 @@ export const ProtectedRoute: React.FC<{
 
   // Check if user has required roles
   if (roles && roles.length > 0) {
+    // For scorekeeper routes, we need to check the actual user roles from Firestore
+    // This is a simplified check - the actual role checking happens in the component
+    // We'll allow the component to handle the detailed role checking
+    console.log('🔍 ProtectedRoute: Checking roles for user:', user, 'required roles:', roles);
+    
+    // If this is a scorekeeper route, let the component handle the role checking
+    if (roles.includes('scorekeeper') || roles.includes('admin')) {
+      console.log('✅ ProtectedRoute: Allowing scorekeeper/admin route to load component for role checking');
+      return <>{children}</>;
+    }
+    
+    // For other roles, use the simple check
     const userRole = user.role || 'user';
     if (!roles.includes(userRole)) {
       return (

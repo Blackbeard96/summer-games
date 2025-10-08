@@ -57,18 +57,28 @@ const ScorekeeperInterface: React.FC = () => {
           const classId = roleData.classId; // Legacy field
           const classIds = roleData.classIds || []; // New multi-class field
           
+          // Check if user has scorekeeper or admin role in the roles array
+          const hasScorekeeperRole = roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('scorekeeper');
+          const hasAdminRole = roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('admin');
+          const finalRole = detectedRole === 'scorekeeper' || hasScorekeeperRole ? 'scorekeeper' : 
+                           detectedRole === 'admin' || hasAdminRole ? 'admin' : detectedRole;
+          
           logger.roles.info('ScorekeeperInterface: User role detected:', { 
             userId: currentUser.uid, 
             email: currentUser.email,
             role: detectedRole,
+            roles: roleData.roles,
+            hasScorekeeperRole,
+            hasAdminRole,
+            finalRole,
             classId: classId,
             classIds: classIds
           });
           
-          setUserRole(detectedRole);
+          setUserRole(finalRole);
           
           // Handle multi-class scorekeeper assignments
-          if (detectedRole === 'scorekeeper') {
+          if (finalRole === 'scorekeeper') {
             if (classIds.length > 0) {
               // Multi-class scorekeeper - use first class for now (could be enhanced to show class selector)
               setAssignedClassId(classIds[0]);
@@ -101,7 +111,7 @@ const ScorekeeperInterface: React.FC = () => {
                 setClassName(`Class ${classId}`);
               }
             }
-          } else if (detectedRole === 'admin') {
+          } else if (finalRole === 'admin') {
             if (classId) {
               setAssignedClassId(classId);
               try {
@@ -119,6 +129,7 @@ const ScorekeeperInterface: React.FC = () => {
             } else {
               // Admin users without assigned class get access to all students
               setClassName('All Classes (Admin Access)');
+              setAssignedClassId('admin-all-classes'); // Special identifier for admin access
             }
           }
         } else {
@@ -205,35 +216,43 @@ const ScorekeeperInterface: React.FC = () => {
           allStudents.push(mergedStudent);
         });
 
-        // Get classroom to filter students
-        try {
-          const classDoc = await getDoc(doc(db, 'classrooms', assignedClassId));
-          if (classDoc.exists()) {
-            const classData = classDoc.data();
-            const classStudentIds = classData.students || [];
-            
-            // Filter students to only those in the assigned class
-            const classStudents = allStudents.filter(student => 
-              classStudentIds.includes(student.id)
-            );
-            
-            logger.roster.info('ScorekeeperInterface: Loaded students:', {
-              totalStudents: allStudents.length,
-              classStudents: classStudents.length,
-              classId: assignedClassId,
-              classStudentIds: classStudentIds
-            });
-            
-            setStudents(classStudents);
-          } else {
-            // If no classroom found, show all students for now
-            logger.roster.warn('ScorekeeperInterface: No classroom found, showing all students');
+        // Get classroom to filter students (skip for admin access to all classes)
+        if (assignedClassId === 'admin-all-classes') {
+          // Admin access to all students
+          logger.roster.info('ScorekeeperInterface: Admin access - showing all students:', {
+            totalStudents: allStudents.length
+          });
+          setStudents(allStudents);
+        } else {
+          try {
+            const classDoc = await getDoc(doc(db, 'classrooms', assignedClassId));
+            if (classDoc.exists()) {
+              const classData = classDoc.data();
+              const classStudentIds = classData.students || [];
+              
+              // Filter students to only those in the assigned class
+              const classStudents = allStudents.filter(student => 
+                classStudentIds.includes(student.id)
+              );
+              
+              logger.roster.info('ScorekeeperInterface: Loaded students:', {
+                totalStudents: allStudents.length,
+                classStudents: classStudents.length,
+                classId: assignedClassId,
+                classStudentIds: classStudentIds
+              });
+              
+              setStudents(classStudents);
+            } else {
+              // If no classroom found, show all students for now
+              logger.roster.warn('ScorekeeperInterface: No classroom found, showing all students');
+              setStudents(allStudents);
+            }
+          } catch (classError) {
+            // If classroom access fails, show all students as fallback
+            logger.roster.warn('ScorekeeperInterface: Classroom access failed, showing all students:', classError);
             setStudents(allStudents);
           }
-        } catch (classError) {
-          // If classroom access fails, show all students as fallback
-          logger.roster.warn('ScorekeeperInterface: Classroom access failed, showing all students:', classError);
-          setStudents(allStudents);
         }
       } catch (error) {
         logger.roster.error('ScorekeeperInterface: Error loading students:', error);
@@ -422,7 +441,7 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  if (!assignedClassId) {
+  if (!assignedClassId && userRole !== 'admin') {
     return (
       <div style={{ 
         display: 'flex', 

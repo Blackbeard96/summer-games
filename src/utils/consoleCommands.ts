@@ -2,6 +2,7 @@
 // Run these commands in the browser console for quick debugging
 
 import { logger } from './debugLogger';
+import { setUserRole, getUserRole, isUserScorekeeper } from './roleManagement';
 
 // Make debugging commands available globally
 if (typeof window !== 'undefined') {
@@ -269,8 +270,156 @@ if (typeof window !== 'undefined') {
     console.log('%c  • debugLogger.showActiveCategories() - Show active log categories', 'color: #6b7280');
   };
 
+  // Scorekeeper debugging commands
+  (window as any).debugScorekeeper = async () => {
+    console.log('%c📊 SCOREKEEPER DEBUGGING', 'color: #059669; font-size: 16px; font-weight: bold');
+    console.log('%c📝 Available commands:', 'color: #6b7280; font-weight: bold');
+    console.log('%c  • checkMyRole() - Check current user role', 'color: #6b7280');
+    console.log('%c  • checkMyRoleDocument() - Check full role document', 'color: #6b7280');
+    console.log('%c  • setMyRole(role) - Set current user role (student/scorekeeper/admin)', 'color: #6b7280');
+    console.log('%c  • addScorekeeperRole() - Add scorekeeper role to current user', 'color: #6b7280');
+    console.log('%c  • isScorekeeper(userId) - Check if user is scorekeeper', 'color: #6b7280');
+    console.log('%c  • forceScorekeeperCheck() - Force check scorekeeper role', 'color: #6b7280');
+  };
+
+  (window as any).checkMyRole = async () => {
+    const { auth } = await import('../firebase');
+    if (auth.currentUser) {
+      const role = await getUserRole(auth.currentUser.uid);
+      console.log('🔍 Current user role:', role);
+      return role;
+    } else {
+      console.log('❌ No user logged in');
+      return null;
+    }
+  };
+
+  (window as any).checkMyRoleDocument = async () => {
+    const { auth, db } = await import('../firebase');
+    const { doc, getDoc } = await import('firebase/firestore');
+    if (auth.currentUser) {
+      try {
+        const roleDoc = await getDoc(doc(db, 'userRoles', auth.currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          console.log('🔍 Full role document:', roleData);
+          console.log('🔍 Role field:', roleData.role);
+          console.log('🔍 Roles array:', roleData.roles);
+          console.log('🔍 Is scorekeeper?', roleData.role === 'scorekeeper' || (roleData.roles && roleData.roles.includes('scorekeeper')));
+          return roleData;
+        } else {
+          console.log('❌ No role document found');
+          return null;
+        }
+      } catch (error) {
+        console.error('❌ Error fetching role document:', error);
+        return null;
+      }
+    } else {
+      console.log('❌ No user logged in');
+      return null;
+    }
+  };
+
+  (window as any).setMyRole = async (role: 'student' | 'scorekeeper' | 'admin') => {
+    const { auth } = await import('../firebase');
+    if (auth.currentUser) {
+      const success = await setUserRole(auth.currentUser.uid, role);
+      if (success) {
+        console.log(`✅ Role set to '${role}' for user ${auth.currentUser.email}`);
+        console.log('🔄 Please refresh the page to see changes');
+      }
+      return success;
+    } else {
+      console.log('❌ No user logged in');
+      return false;
+    }
+  };
+
+  (window as any).addScorekeeperRole = async () => {
+    const { auth, db } = await import('../firebase');
+    const { doc, getDoc, setDoc } = await import('firebase/firestore');
+    if (auth.currentUser) {
+      try {
+        console.log('🔍 Adding scorekeeper role to current user...');
+        const roleDoc = await getDoc(doc(db, 'userRoles', auth.currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          console.log('🔍 Current role data:', roleData);
+          
+          // Add scorekeeper to roles array if it doesn't exist
+          let roles = roleData.roles || [];
+          if (!Array.isArray(roles)) {
+            roles = [];
+          }
+          if (!roles.includes('scorekeeper')) {
+            roles.push('scorekeeper');
+          }
+          
+          // Update the role document
+          await setDoc(doc(db, 'userRoles', auth.currentUser.uid), {
+            ...roleData,
+            roles: roles,
+            updatedAt: new Date()
+          });
+          
+          console.log('✅ Scorekeeper role added! New roles:', roles);
+          console.log('🔄 Please refresh the page to see the Scorekeeper button');
+          return true;
+        } else {
+          console.log('❌ No role document found');
+          return false;
+        }
+      } catch (error) {
+        console.error('❌ Error adding scorekeeper role:', error);
+        return false;
+      }
+    } else {
+      console.log('❌ No user logged in');
+      return false;
+    }
+  };
+
+  (window as any).isScorekeeper = async (userId: string) => {
+    const result = await isUserScorekeeper(userId);
+    console.log(`🔍 User ${userId} is scorekeeper:`, result);
+    return result;
+  };
+
+  (window as any).forceScorekeeperCheck = async () => {
+    const { auth, db } = await import('../firebase');
+    const { doc, getDoc } = await import('firebase/firestore');
+    if (auth.currentUser) {
+      try {
+        console.log('🔍 Force checking scorekeeper role...');
+        const roleDoc = await getDoc(doc(db, 'userRoles', auth.currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          console.log('🔍 Role document found:', roleData);
+          const isScorekeeper = roleData.role === 'scorekeeper' || 
+                               (roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('scorekeeper'));
+          console.log(`🔍 Role field: ${roleData.role}`);
+          console.log(`🔍 Roles array: ${roleData.roles}`);
+          console.log(`🔍 Is scorekeeper: ${isScorekeeper}`);
+          console.log('🔄 Please refresh the page to see if the Scorekeeper button appears');
+          return isScorekeeper;
+        } else {
+          console.log('❌ No role document found');
+          return false;
+        }
+      } catch (error) {
+        console.error('❌ Error checking scorekeeper role:', error);
+        return false;
+      }
+    } else {
+      console.log('❌ No user logged in');
+      return false;
+    }
+  };
+
   // Auto-run on load
   console.log('%c🎮 Summer Games Debug Commands Loaded!', 'color: #8b5cf6; font-size: 14px; font-weight: bold');
   console.log('%c💡 Type debugHelp() for available commands', 'color: #6b7280');
   console.log('%c🎯 For roster issues, type: debugRosterOnly()', 'color: #10b981; font-weight: bold');
+  console.log('%c📊 For scorekeeper issues, type: debugScorekeeper()', 'color: #059669; font-weight: bold');
 }
