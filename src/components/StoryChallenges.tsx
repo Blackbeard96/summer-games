@@ -231,6 +231,14 @@ const StoryChallenges = () => {
         // Check if Chapter 1 is now complete and progress to Chapter 2
         await checkAndProgressChapter(1);
         
+        // Force refresh user progress to show unlocked challenges
+        const userRefRefresh = doc(db, 'users', currentUser.uid);
+        const userDocRefresh = await getDoc(userRefRefresh);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+        
         // Show a brief success message only once per session
         if (!sessionStorage.getItem('profileAutoCompleteAlertShown')) {
           alert('✅ Profile challenge auto-completed! Check your notifications for details.');
@@ -331,6 +339,14 @@ const StoryChallenges = () => {
         
         // Check if Chapter 1 is now complete and progress to Chapter 2
         await checkAndProgressChapter(1);
+        
+        // Force refresh user progress to show unlocked challenges
+        const userRefRefresh = doc(db, 'users', currentUser.uid);
+        const userDocRefresh = await getDoc(userRefRefresh);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
         
         // Show a brief success message only once per session
         if (!sessionStorage.getItem('manifestAutoCompleteAlertShown')) {
@@ -475,6 +491,25 @@ const ensureChaptersInitialized = async () => {
     }
   };
 
+  // Debug function to check challenge unlock status
+  const debugChallengeUnlockStatus = () => {
+    console.log('=== CHALLENGE UNLOCK DEBUG INFO ===');
+    console.log('Current userProgress:', userProgress);
+    console.log('Chapter 1 data:', userProgress?.chapters?.[1]);
+    console.log('Get Letter challenge data:', userProgress?.chapters?.[1]?.challenges?.['ep1-get-letter']);
+    console.log('Truth Metal Choice challenge data:', userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice']);
+    
+    // Test the unlock status for each challenge
+    const currentChapter = getCurrentChapter();
+    if (currentChapter) {
+      console.log('Current chapter challenges:');
+      currentChapter.challenges.forEach(challenge => {
+        const isUnlocked = isChallengeUnlocked(challenge, userProgress);
+        console.log(`- ${challenge.title}: ${isUnlocked ? 'UNLOCKED' : 'LOCKED'}`);
+      });
+    }
+  };
+
   // Debug function to check manifest data
   const debugManifestData = () => {
     console.log('=== MANIFEST DEBUG INFO ===');
@@ -500,6 +535,148 @@ const ensureChaptersInitialized = async () => {
     
     console.log('hasManifest:', hasManifest);
     console.log('=== END DEBUG INFO ===');
+  };
+
+  // Function to diagnose and fix chapter progression issues
+  const diagnoseChapterProgression = async () => {
+    if (!currentUser || !userProgress) return;
+    
+    console.log('=== CHAPTER PROGRESSION DIAGNOSTIC ===');
+    console.log('User Progress:', userProgress);
+    console.log('Chapters data:', userProgress.chapters);
+    
+    const chapters = userProgress.chapters || {};
+    let activeChapter = null;
+    let completedChapters = [];
+    let lockedChapters = [];
+    
+    // Check each chapter
+    for (let i = 1; i <= 9; i++) {
+      const chapter = chapters[i];
+      if (chapter) {
+        if (chapter.isActive) {
+          activeChapter = i;
+        }
+        if (chapter.isCompleted) {
+          completedChapters.push(i);
+        }
+        if (!chapter.isActive && !chapter.isCompleted) {
+          lockedChapters.push(i);
+        }
+      } else {
+        lockedChapters.push(i);
+      }
+    }
+    
+    console.log('Active Chapter:', activeChapter);
+    console.log('Completed Chapters:', completedChapters);
+    console.log('Locked Chapters:', lockedChapters);
+    
+    // Determine what needs to be fixed
+    if (completedChapters.length > 0 && !activeChapter) {
+      const nextChapter = Math.max(...completedChapters) + 1;
+      console.log(`Should activate Chapter ${nextChapter}`);
+      
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        await updateDoc(userRef, {
+          [`chapters.${nextChapter}.isActive`]: true,
+          [`chapters.${nextChapter}.unlockDate`]: new Date()
+        });
+        
+        await updateDoc(studentRef, {
+          [`chapters.${nextChapter}.isActive`]: true,
+          [`chapters.${nextChapter}.unlockDate`]: new Date()
+        });
+        
+        console.log(`Chapter ${nextChapter} activated!`);
+        alert(`✅ Chapter ${nextChapter} has been activated!`);
+        
+        // Refresh user progress
+        const userDocRefresh = await getDoc(userRef);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+        
+      } catch (error) {
+        console.error('Error activating chapter:', error);
+        alert('❌ Error activating chapter. Check console for details.');
+      }
+    } else if (!activeChapter && completedChapters.length === 0) {
+      console.log('No chapters completed, should activate Chapter 1');
+      
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        await updateDoc(userRef, {
+          [`chapters.1.isActive`]: true,
+          [`chapters.1.unlockDate`]: new Date()
+        });
+        
+        await updateDoc(studentRef, {
+          [`chapters.1.isActive`]: true,
+          [`chapters.1.unlockDate`]: new Date()
+        });
+        
+        console.log('Chapter 1 activated!');
+        alert('✅ Chapter 1 has been activated!');
+        
+        // Refresh user progress
+        const userDocRefresh = await getDoc(userRef);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+        
+      } catch (error) {
+        console.error('Error activating Chapter 1:', error);
+        alert('❌ Error activating Chapter 1. Check console for details.');
+      }
+    } else {
+      console.log('Chapter progression looks correct');
+      alert('✅ Chapter progression is working correctly!');
+    }
+  };
+
+  // Function to manually activate Chapter 2 for students stuck with completed Chapter 1
+  const activateChapter2 = async () => {
+    if (!currentUser) return;
+    
+    console.log('=== ACTIVATING CHAPTER 2 ===');
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Update both collections to ensure consistency
+      await updateDoc(userRef, {
+        [`chapters.2.isActive`]: true,
+        [`chapters.2.unlockDate`]: new Date()
+      });
+      
+      await updateDoc(studentRef, {
+        [`chapters.2.isActive`]: true,
+        [`chapters.2.unlockDate`]: new Date()
+      });
+      
+      console.log('Chapter 2 activated successfully!');
+      alert('✅ Chapter 2 has been activated! You can now access Chapter 2 challenges.');
+      
+      // Refresh user progress
+      const userDocRefresh = await getDoc(userRef);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+      }
+      
+    } catch (error) {
+      console.error('Error activating Chapter 2:', error);
+      alert('❌ Error activating Chapter 2. Check console for details.');
+    }
   };
 
   // Function to manually complete all Chapter 1 challenges for testing
@@ -677,6 +854,14 @@ const ensureChaptersInitialized = async () => {
         // Check if current chapter is now complete and progress to next chapter
         if (currentChapter) {
           await checkAndProgressChapter(currentChapter.id);
+        }
+        
+        // Force refresh user progress to show unlocked challenges
+        const userRefRefresh = doc(db, 'users', currentUser.uid);
+        const userDocRefresh = await getDoc(userRefRefresh);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
         }
       }
 
@@ -976,7 +1161,7 @@ const ensureChaptersInitialized = async () => {
         // Check if current chapter is now complete and progress to next chapter
         await checkAndProgressChapter(currentChapter.id);
         
-        // Force refresh user progress
+        // Force refresh user progress to show unlocked challenges
         const userDocRefresh = await getDoc(userRef);
         if (userDocRefresh.exists()) {
           const userDataRefresh = userDocRefresh.data();
@@ -1031,6 +1216,134 @@ const ensureChaptersInitialized = async () => {
     return CHAPTERS.find(chapter => 
       userProgress.chapters[chapter.id]?.isActive
     );
+  };
+
+  // Function to check if a challenge's requirements are met
+  const isChallengeUnlocked = (challenge: any, userProgress: any) => {
+    console.log(`=== CHECKING UNLOCK STATUS FOR: ${challenge.title} ===`);
+    console.log('Challenge requirements:', challenge.requirements);
+    console.log('User progress chapters:', userProgress?.chapters);
+    
+    if (!challenge.requirements || challenge.requirements.length === 0) {
+      console.log('No requirements, challenge is unlocked');
+      return true; // No requirements means it's always unlocked
+    }
+
+    // Check each requirement
+    for (const requirement of challenge.requirements) {
+      console.log(`Checking requirement: ${requirement.type} = ${requirement.value}`);
+      switch (requirement.type) {
+        case 'artifact':
+          // Check if the required artifact has been obtained
+          if (requirement.value === 'letter_received') {
+            const letterChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-get-letter'];
+            console.log('Letter challenge data:', letterChallenge);
+            console.log('Letter challenge isCompleted:', letterChallenge?.isCompleted);
+            console.log('Letter challenge letterReceived:', letterChallenge?.letterReceived);
+            
+            if (!letterChallenge?.isCompleted || !letterChallenge?.letterReceived) {
+              console.log('❌ Letter requirement not met - challenge remains locked');
+              return false;
+            }
+            console.log('✅ Letter requirement met - challenge should be unlocked');
+          } else if (requirement.value === 'chose_truth_metal') {
+            const truthMetalChoice = userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice'];
+            if (!truthMetalChoice?.isCompleted) {
+              return false;
+            }
+          } else if (requirement.value === 'truth_metal_currency') {
+            const truthMetalTouch = userProgress?.chapters?.[1]?.challenges?.['ep1-touch-truth-metal'];
+            if (!truthMetalTouch?.isCompleted) {
+              return false;
+            }
+          } else if (requirement.value === 'ui_explored') {
+            const uiChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-mst-ui'];
+            if (!uiChallenge?.isCompleted) {
+              return false;
+            }
+          } else if (requirement.value === 'first_combat') {
+            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
+            if (!combatChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'manifest':
+          if (requirement.value === 'chosen') {
+            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-choose-manifests'];
+            if (!manifestChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'profile':
+          if (requirement.value === 'completed') {
+            const profileChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile'];
+            if (!profileChallenge?.isCompleted) {
+              return false;
+            }
+          } else if (requirement.value === 'power_card_viewed') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card'];
+            if (!powerCardChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'team':
+          if (requirement.value === 'formed') {
+            const teamChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
+            if (!teamChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'rival':
+          if (requirement.value === 'chosen') {
+            const rivalChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-rival-selection'];
+            if (!rivalChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'reflection':
+          if (requirement.value === 'echo') {
+            const reflectionChallenge = userProgress?.chapters?.[4]?.challenges?.['ch4-team-ordeal'];
+            if (!reflectionChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'leadership':
+          if (requirement.value === 'role') {
+            const leadershipChallenge = userProgress?.chapters?.[5]?.challenges?.['ch5-world-reaction'];
+            if (!leadershipChallenge?.isCompleted) {
+              return false;
+            }
+          }
+          break;
+        case 'ethics':
+          if (requirement.value === 'all') {
+            // Check if all 6 ethics are mastered
+            const ethicsChallenges = [
+              'ch8-believe', 'ch8-listen', 'ch8-speak', 
+              'ch8-grow', 'ch8-letgo', 'ch8-give'
+            ];
+            for (const ethicId of ethicsChallenges) {
+              const ethicChallenge = userProgress?.chapters?.[8]?.challenges?.[ethicId];
+              if (!ethicChallenge?.isCompleted) {
+                return false;
+              }
+            }
+          }
+          break;
+        default:
+          console.warn(`Unknown requirement type: ${requirement.type}`);
+          break;
+      }
+    }
+
+    console.log(`✅ ALL REQUIREMENTS MET FOR: ${challenge.title} - CHALLENGE IS UNLOCKED`);
+    return true; // All requirements met
   };
 
   const getChapterProgress = (chapterId: number) => {
@@ -1322,7 +1635,74 @@ const ensureChaptersInitialized = async () => {
       {/* Chapter Challenges Section */}
       {(() => {
         const currentChapter = getCurrentChapter();
-        if (!currentChapter) return null;
+        if (!currentChapter) {
+          // Show a message and fix button when no active chapter is found
+          return (
+            <div style={{ 
+              padding: '2rem', 
+              backgroundColor: '#fef3c7', 
+              border: '1px solid #f59e0b',
+              borderRadius: '0.5rem',
+              marginBottom: '2rem',
+              textAlign: 'center'
+            }}>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                marginBottom: '1rem'
+              }}>
+                <span style={{ marginRight: '0.5rem', fontSize: '1.5rem' }}>🔒</span>
+                <h3 style={{ 
+                  fontSize: '1.25rem', 
+                  fontWeight: 'bold', 
+                  color: '#92400e'
+                }}>
+                  No Active Chapter Found
+                </h3>
+              </div>
+              <p style={{ 
+                fontSize: '0.875rem', 
+                color: '#a16207',
+                marginBottom: '1.5rem'
+              }}>
+                It looks like Chapter 1 was completed but Chapter 2 wasn't activated. Click the button below to fix this issue.
+              </p>
+              <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                <button
+                  onClick={diagnoseChapterProgression}
+                  style={{
+                    padding: '0.75rem 1.5rem',
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  🔍 Diagnose & Fix
+                </button>
+                <button
+                  onClick={activateChapter2}
+                  style={{
+                    padding: '0.75rem 1.5rem',
+                    backgroundColor: '#059669',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  🚀 Activate Chapter 2
+                </button>
+              </div>
+            </div>
+          );
+        }
         
         return (
           <div style={{ marginBottom: '2rem' }}>
@@ -1345,21 +1725,23 @@ const ensureChaptersInitialized = async () => {
                 const challengeData = userProgress?.chapters?.[currentChapter.id]?.challenges?.[challenge.id] || {};
                 const isCompleted = challengeData.isCompleted;
                 const hasFile = !!challengeData.file;
+                const isUnlocked = isChallengeUnlocked(challenge, userProgress);
                 const classroomAssignment = chapterClassroomAssignments[challenge.id];
                 
                 return (
                   <div key={challenge.id} className={`challenge-${challenge.id.replace('ch1-', '')}`} style={{ 
                     padding: '1rem', 
-                    backgroundColor: isCompleted ? '#f0fdf4' : '#f9fafb',
-                    border: isCompleted ? '1px solid #22c55e' : '1px solid #e5e7eb',
+                    backgroundColor: isCompleted ? '#f0fdf4' : isUnlocked ? '#f9fafb' : '#f3f4f6',
+                    border: isCompleted ? '1px solid #22c55e' : isUnlocked ? '1px solid #e5e7eb' : '1px solid #d1d5db',
                     borderRadius: '0.5rem',
-                    transition: 'all 0.3s ease'
+                    transition: 'all 0.3s ease',
+                    opacity: isUnlocked ? 1 : 0.6
                   }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', marginBottom: '0.75rem' }}>
                       <div style={{ 
                         width: '20px', 
                         height: '20px', 
-                        backgroundColor: isCompleted ? '#22c55e' : '#e5e7eb', 
+                        backgroundColor: isCompleted ? '#22c55e' : isUnlocked ? '#e5e7eb' : '#9ca3af', 
                         borderRadius: '50%',
                         display: 'flex',
                         alignItems: 'center',
@@ -1368,16 +1750,17 @@ const ensureChaptersInitialized = async () => {
                         fontSize: '12px',
                         fontWeight: 'bold'
                       }}>
-                        {isCompleted ? '✓' : ''}
+                        {isCompleted ? '✓' : !isUnlocked ? '🔒' : ''}
                       </div>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                           <h3 style={{ 
                             fontSize: '1.125rem', 
                             fontWeight: 'bold',
-                            color: isCompleted ? '#22c55e' : '#1f2937'
+                            color: isCompleted ? '#22c55e' : isUnlocked ? '#1f2937' : '#9ca3af'
                           }}>
                             {challenge.title}
+                            {!isUnlocked && <span style={{ marginLeft: '0.5rem', fontSize: '0.875rem' }}>🔒</span>}
                           </h3>
                           {((challenge.id === 'ch1-update-profile' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-manifest-test') && isCompleted && challengeData.autoCompleted) && (
                             <span style={{
@@ -1394,12 +1777,30 @@ const ensureChaptersInitialized = async () => {
                         </div>
                         <p style={{ 
                           fontSize: '0.875rem', 
-                          color: '#6b7280', 
+                          color: isUnlocked ? '#6b7280' : '#9ca3af', 
                           marginBottom: '0.5rem',
                           fontStyle: 'italic'
                         }}>
                           {challenge.description}
                         </p>
+                        {!isUnlocked && (
+                          <div style={{
+                            padding: '0.75rem',
+                            backgroundColor: '#fef3c7',
+                            border: '1px solid #f59e0b',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.8rem',
+                            marginBottom: '0.5rem',
+                            color: '#92400e'
+                          }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                              🔒 Challenge Locked
+                            </div>
+                            <div>
+                              Complete the previous challenge to unlock this one.
+                            </div>
+                          </div>
+                        )}
                         {challenge.id === 'ch1-update-profile' && !isCompleted && (
                           <div className="challenge-profile" style={{
                             padding: '0.75rem',
@@ -1557,7 +1958,7 @@ const ensureChaptersInitialized = async () => {
                     </div>
 
                     {/* Tutorial section for Navigate the Portal challenge */}
-                    {!isCompleted && challenge.id === 'ep1-portal-sequence' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ep1-portal-sequence' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <button
                           type="button"
@@ -1604,7 +2005,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* CPU Battle section for Test Awakened Abilities challenge */}
-                    {!isCompleted && challenge.id === 'ep1-manifest-test' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ep1-manifest-test' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <button
                           type="button"
@@ -1651,7 +2052,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Special case for Get Letter challenge */}
-                    {!isCompleted && challenge.id === 'ep1-get-letter' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ep1-get-letter' && (
                       <div style={{ marginTop: '1rem' }}>
                         <button
                           onClick={() => setShowLetterModal(true)}
@@ -1674,7 +2075,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* File upload section - EXCLUDES profile, manifest, rival selection, tutorial, CPU battle, and letter challenges */}
-                    {!isCompleted && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && (
+                    {!isCompleted && isUnlocked && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -1716,7 +2117,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Rival selection challenge - special handling */}
-                    {!isCompleted && challenge.id === 'ch2-rival-selection' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ch2-rival-selection' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <button
                           type="button"
@@ -1747,7 +2148,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Profile challenge - NO file upload, only status tracking */}
-                    {!isCompleted && challenge.id === 'ch1-update-profile' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ch1-update-profile' && (
                       <div style={{
                         padding: '1rem',
                         backgroundColor: '#f0fdf4',
@@ -1834,7 +2235,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Manifest challenge - NO file upload, only status tracking */}
-                    {!isCompleted && challenge.id === 'ch1-declare-manifest' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ch1-declare-manifest' && (
                       <div className="challenge-manifest" style={{
                         padding: '1rem',
                         backgroundColor: '#f0fdf4',
@@ -1957,7 +2358,24 @@ const ensureChaptersInitialized = async () => {
                             marginBottom: '0.5rem'
                           }}
                         >
-                          🔍 Debug Manifest Data (Check Console)
+                          Debug Manifest Data
+                        </button>
+                        <button
+                          onClick={debugChallengeUnlockStatus}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#f59e0b',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%',
+                            marginBottom: '0.5rem'
+                          }}
+                        >
+                          🔍 Debug Challenge Unlock Status
                         </button>
                         <button
                           onClick={async () => {
@@ -2012,10 +2430,27 @@ const ensureChaptersInitialized = async () => {
                             cursor: 'pointer',
                             fontSize: '0.75rem',
                             fontWeight: '500',
-                            width: '100%'
+                            width: '100%',
+                            marginBottom: '0.5rem'
                           }}
                         >
                           ⚡ Complete All Chapter 1 Challenges (TEST)
+                        </button>
+                        <button
+                          onClick={activateChapter2}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#059669',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: '500',
+                            width: '100%'
+                          }}
+                        >
+                          🚀 Activate Chapter 2 (FIX LOCKED CHALLENGES)
                         </button>
                       </div>
                     )}

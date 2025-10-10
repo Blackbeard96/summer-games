@@ -24,7 +24,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'challenges' | 'team' | 'rival' | 'veil' | 'ethics'>('overview');
+  const [activeTab, setActiveTab] = useState<'challenges' | 'team' | 'rival' | 'veil' | 'ethics'>('challenges');
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
@@ -35,6 +35,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showTruthRevelation, setShowTruthRevelation] = useState(false);
   const [truthRevealed, setTruthRevealed] = useState('');
   const [isReplayMode, setIsReplayMode] = useState(false);
+  const [chapterActivationInProgress, setChapterActivationInProgress] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -179,6 +180,40 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
     const chapterProgress = userProgress.chapters?.[chapter.id];
     console.log('ChapterDetail: Chapter progress:', chapterProgress);
+    
+    // If chapter is completed but not active, reactivate this chapter so challenges can be accessed
+    if (chapterProgress?.isCompleted && !chapterProgress?.isActive && !chapterActivationInProgress) {
+      console.log('ChapterDetail: Chapter completed but not active, reactivating this chapter...');
+      
+      setChapterActivationInProgress(true);
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        
+        await updateDoc(userRef, {
+          [`chapters.${chapter.id}.isActive`]: true
+        });
+        
+        await updateDoc(studentRef, {
+          [`chapters.${chapter.id}.isActive`]: true
+        });
+        
+        console.log(`ChapterDetail: Chapter ${chapter.id} reactivated successfully!`);
+        
+        // Refresh user data
+        const userDocRefresh = await getDoc(userRef);
+        if (userDocRefresh.exists()) {
+          const userDataRefresh = userDocRefresh.data();
+          setUserProgress(userDataRefresh);
+        }
+        
+        setChapterActivationInProgress(false);
+        return;
+      } catch (error) {
+        console.error('ChapterDetail: Error reactivating chapter:', error);
+        setChapterActivationInProgress(false);
+      }
+    }
     
     if (!chapterProgress?.isActive) {
       console.log('ChapterDetail: Chapter not active, returning');
@@ -350,7 +385,54 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         studentData: !!studentData,
         chapterId: chapter.id
       });
-      checkAndAutoCompleteChallenges();
+      
+      // Check if any chapter is active, if not, activate Chapter 1
+      const chapters = userProgress.chapters || {};
+      let hasActiveChapter = false;
+      for (let i = 1; i <= 9; i++) {
+        if (chapters[i]?.isActive) {
+          hasActiveChapter = true;
+          break;
+        }
+      }
+      
+      if (!hasActiveChapter && !chapterActivationInProgress) {
+        console.log('ChapterDetail: No active chapters found, activating Chapter 1...');
+        setChapterActivationInProgress(true);
+        const activateChapter1 = async () => {
+          try {
+            const userRef = doc(db, 'users', currentUser!.uid);
+            const studentRef = doc(db, 'students', currentUser!.uid);
+            
+            await updateDoc(userRef, {
+              'chapters.1.isActive': true,
+              'chapters.1.unlockDate': new Date()
+            });
+            
+            await updateDoc(studentRef, {
+              'chapters.1.isActive': true,
+              'chapters.1.unlockDate': new Date()
+            });
+            
+            console.log('ChapterDetail: Chapter 1 activated successfully!');
+            
+            // Refresh user data
+            const userDocRefresh = await getDoc(userRef);
+            if (userDocRefresh.exists()) {
+              const userDataRefresh = userDocRefresh.data();
+              setUserProgress(userDataRefresh);
+            }
+            
+            setChapterActivationInProgress(false);
+          } catch (error) {
+            console.error('ChapterDetail: Error activating Chapter 1:', error);
+            setChapterActivationInProgress(false);
+          }
+        };
+        activateChapter1();
+      } else if (hasActiveChapter) {
+        checkAndAutoCompleteChallenges();
+      }
     }
   }, [userProgress, studentData]);
 
@@ -959,156 +1041,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
-  const renderOverview = () => (
-    <div className="space-y-6">
-      {/* Chapter Info Card */}
-      <div style={{
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        padding: '2rem',
-        borderRadius: '1rem',
-        color: 'white',
-        boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
-      }}>
-        <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-          {chapter.title}
-        </h3>
-        <p style={{ fontSize: '1.125rem', fontStyle: 'italic', marginBottom: '1rem', opacity: 0.9 }}>
-          {chapter.subtitle}
-        </p>
-        <p style={{ lineHeight: '1.6', marginBottom: '1.5rem' }}>
-          {chapter.description}
-        </p>
-        
-        {/* Chapter Stats Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-          <div style={{ 
-            background: 'rgba(255,255,255,0.1)', 
-            padding: '1rem', 
-            borderRadius: '0.5rem',
-            textAlign: 'center'
-          }}>
-            <div style={{ fontSize: '0.875rem', opacity: 0.8, marginBottom: '0.25rem' }}>Story Arc</div>
-            <div style={{ fontWeight: 'bold' }}>{chapter.storyArc}</div>
-          </div>
-          <div style={{ 
-            background: 'rgba(255,255,255,0.1)', 
-            padding: '1rem', 
-            borderRadius: '0.5rem',
-            textAlign: 'center'
-          }}>
-            <div style={{ fontSize: '0.875rem', opacity: 0.8, marginBottom: '0.25rem' }}>Team Size</div>
-            <div style={{ fontWeight: 'bold' }}>{chapter.teamSize} player{chapter.teamSize > 1 ? 's' : ''}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Requirements & Rewards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
-        {/* Requirements Card */}
-        <div style={{
-          background: 'white',
-          border: '2px solid #e5e7eb',
-          borderRadius: '1rem',
-          padding: '1.5rem',
-          boxShadow: '0 4px 6px rgba(0,0,0,0.05)'
-        }}>
-          <h4 style={{ 
-            fontSize: '1.25rem', 
-            fontWeight: 'bold', 
-            color: '#374151',
-            marginBottom: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            <span style={{ fontSize: '1.5rem' }}>🔑</span>
-            Requirements
-          </h4>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {chapter.requirements.map((req, index) => {
-              const isMet = getRequirementStatus(req);
-              return (
-                <li key={index} style={{
-                  padding: '0.75rem',
-                  marginBottom: '0.5rem',
-                  background: isMet ? '#f0fdf4' : '#f9fafb',
-                  borderRadius: '0.5rem',
-                  borderLeft: `4px solid ${isMet ? '#22c55e' : '#3b82f6'}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}>
-                  <span style={{ 
-                    color: isMet ? '#22c55e' : '#3b82f6', 
-                    fontWeight: 'bold',
-                    fontSize: '1.125rem'
-                  }}>
-                    {isMet ? '✅' : '⏳'}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      color: '#374151',
-                      fontWeight: isMet ? 'bold' : 'normal'
-                    }}>
-                      {req.description}
-                    </div>
-                    {!isMet && (
-                      <div style={{ 
-                        fontSize: '0.75rem',
-                        color: '#6b7280',
-                        marginTop: '0.25rem'
-                      }}>
-                        Requirement not met
-                      </div>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-
-        {/* Rewards Card */}
-        <div style={{
-          background: 'white',
-          border: '2px solid #10b981',
-          borderRadius: '1rem',
-          padding: '1.5rem',
-          boxShadow: '0 4px 6px rgba(0,0,0,0.05)'
-        }}>
-          <h4 style={{ 
-            fontSize: '1.25rem', 
-            fontWeight: 'bold', 
-            color: '#374151',
-            marginBottom: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            <span style={{ fontSize: '1.5rem' }}>🏆</span>
-            Rewards
-          </h4>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {chapter.rewards.map((reward, index) => (
-              <li key={index} style={{
-                padding: '0.75rem',
-                marginBottom: '0.5rem',
-                background: '#f0fdf4',
-                borderRadius: '0.5rem',
-                borderLeft: '4px solid #10b981',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem'
-              }}>
-                <span style={{ color: '#10b981', fontWeight: 'bold' }}>⭐</span>
-                {reward.description}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
 
   const renderChallenges = () => (
     <div className="space-y-6">
@@ -1756,7 +1688,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }}>
         <nav style={{ display: 'flex', gap: '0.5rem' }}>
           {[
-            { id: 'overview', label: 'Overview', icon: '📋' },
             { id: 'challenges', label: 'Challenges', icon: '⚔️' },
             ...(chapter.teamSize > 1 ? [{ id: 'team', label: 'Team', icon: '👥' }] : []),
             { id: 'rival', label: 'Rival', icon: '⚡' },
@@ -1801,7 +1732,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
       {/* Tab Content */}
       <div className="min-h-[400px]">
-        {activeTab === 'overview' && renderOverview()}
         {activeTab === 'challenges' && renderChallenges()}
         {activeTab === 'team' && renderTeamSection()}
         {activeTab === 'rival' && renderRivalSection()}

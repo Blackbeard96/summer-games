@@ -107,11 +107,17 @@ const Profile = () => {
     if (!currentUser) return;
     
     try {
-      const userRef = doc(db, 'students', currentUser.uid);
-      const docSnap = await getDoc(userRef);
+      // Fetch from both collections
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
       
-      if (docSnap.exists()) {
-        const userDataFromDB = docSnap.data();
+      const [studentsSnap, usersSnap] = await Promise.all([
+        getDoc(studentsRef),
+        getDoc(usersRef)
+      ]);
+      
+      if (studentsSnap.exists()) {
+        const userDataFromDB = studentsSnap.data();
         
         // Migrate rarity from old default (3) to new default (1)
         let rarityValue = userDataFromDB.rarity;
@@ -124,7 +130,21 @@ const Profile = () => {
           });
         }
         
-        setUserData(userDataFromDB);
+        // Get artifacts from users collection
+        let artifacts = [];
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          artifacts = usersData.artifacts || [];
+          console.log('Profile: Loaded artifacts from users collection:', artifacts);
+        }
+        
+        // Merge students data with users artifacts
+        const mergedUserData = {
+          ...userDataFromDB,
+          artifacts: artifacts
+        };
+        
+        setUserData(mergedUserData);
         setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
         setBio(userDataFromDB.bio || '');
         setManifest(userDataFromDB.manifest || 'None');
@@ -135,7 +155,7 @@ const Profile = () => {
         setBadges(userDataFromDB.badges || []);
         
         // Load manifest data
-        const manifestData = docSnap.data().manifest;
+        const manifestData = studentsSnap.data().manifest;
         if (manifestData) {
           // Convert Firestore timestamp to Date if needed
           const processedManifest = {
@@ -151,7 +171,7 @@ const Profile = () => {
         }
       } else {
         // Create user document if it doesn't exist
-        setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1 });
+        setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
       }
     } catch (error) {
       console.error('Error fetching user data:', error);
@@ -298,6 +318,62 @@ const Profile = () => {
     } catch (error) {
       console.error('Error breaking veil:', error);
       alert('Failed to break veil. Please try again.');
+    }
+  };
+
+  // Function to handle admin approval/rejection of UXP artifacts
+  const handleAdminResponse = async (artifactName: string, approved: boolean) => {
+    if (!currentUser) return;
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userSnap = await getDoc(userRef);
+      
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+          if (artifact.name === artifactName && artifact.pending) {
+            if (approved) {
+              // Mark as used and remove from inventory
+              return { ...artifact, used: true, pending: false, approvedAt: new Date() };
+            } else {
+              // Reject - remove pending status
+              return { ...artifact, pending: false, rejectedAt: new Date() };
+            }
+          }
+          return artifact;
+        }) || [];
+        
+        await updateDoc(userRef, {
+          artifacts: updatedArtifacts
+        });
+        
+        // If approved, also remove from students inventory
+        if (approved) {
+          const studentsRef = doc(db, 'students', currentUser.uid);
+          const studentsSnap = await getDoc(studentsRef);
+          if (studentsSnap.exists()) {
+            const studentsData = studentsSnap.data();
+            const currentInventory = studentsData.inventory || [];
+            const updatedInventory = currentInventory.filter((item: string) => item !== artifactName);
+            
+            await updateDoc(studentsRef, {
+              inventory: updatedInventory
+            });
+          }
+        }
+        
+        // Refresh user data
+        const updatedUserSnap = await getDoc(userRef);
+        if (updatedUserSnap.exists()) {
+          const updatedUserData = updatedUserSnap.data();
+          setUserData(updatedUserData);
+        }
+        
+        console.log(`✅ UXP artifact ${approved ? 'approved' : 'rejected'}:`, artifactName);
+      }
+    } catch (error) {
+      console.error('Error handling admin response:', error);
     }
   };
 
@@ -614,7 +690,7 @@ const Profile = () => {
               fontSize: '0.875rem',
               color: '#6b7280'
             }}>
-              {userData.artifacts.filter((a: any) => !a.used).length} Available • {userData.artifacts.filter((a: any) => a.used).length} Used
+              {userData.artifacts.filter((a: any) => !a.used && !a.pending).length} Available • {userData.artifacts.filter((a: any) => a.pending).length} In Use • {userData.artifacts.filter((a: any) => a.used).length} Used
             </div>
           )}
         </div>
@@ -717,23 +793,29 @@ const Profile = () => {
                         
                         <button 
                           style={{ 
-                            backgroundColor: '#4f46e5', 
+                            backgroundColor: artifact.pending ? '#f59e0b' : '#4f46e5', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '0.375rem', 
                             padding: '0.5rem 0.75rem', 
-                            cursor: 'pointer', 
+                            cursor: artifact.pending ? 'not-allowed' : 'pointer', 
                             fontWeight: 'bold',
                             fontSize: '0.8rem',
                             width: '100%',
-                            transition: 'background-color 0.2s ease'
+                            transition: 'background-color 0.2s ease',
+                            opacity: artifact.pending ? 0.7 : 1
                           }} 
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = '#3730a3';
+                            if (!artifact.pending) {
+                              e.currentTarget.style.backgroundColor = '#3730a3';
+                            }
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = '#4f46e5';
+                            if (!artifact.pending) {
+                              e.currentTarget.style.backgroundColor = '#4f46e5';
+                            }
                           }}
+                          disabled={artifact.pending}
                           onClick={async () => {
                             if (!currentUser) return;
                             
@@ -785,6 +867,22 @@ const Profile = () => {
                                       artifacts: updatedArtifacts
                                     });
                                     
+                                    // Also update the students collection inventory to keep both in sync
+                                    const studentsRef = doc(db, 'students', currentUser.uid);
+                                    const studentsSnap = await getDoc(studentsRef);
+                                    if (studentsSnap.exists()) {
+                                      const studentsData = studentsSnap.data();
+                                      const currentInventory = studentsData.inventory || [];
+                                      // Remove the used artifact from inventory
+                                      const updatedInventory = currentInventory.filter((item: string) => item !== enhancedArtifact.name);
+                                      
+                                      await updateDoc(studentsRef, {
+                                        inventory: updatedInventory
+                                      });
+                                      
+                                      console.log('✅ Students inventory updated:', updatedInventory);
+                                    }
+                                    
                                     console.log('✅ Shield artifact marked as used:', updatedArtifacts);
                                   }
                                   
@@ -831,11 +929,101 @@ const Profile = () => {
                                 read: false
                               });
                               
+                              // Also update both collections to mark artifact as used
+                              const userRef = doc(db, 'users', currentUser.uid);
+                              const userSnap = await getDoc(userRef);
+                              if (userSnap.exists()) {
+                                const userData = userSnap.data();
+                                const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                  if (typeof artifact === 'string') {
+                                    return artifact === enhancedArtifact.name ? { 
+                                      id: enhancedArtifact.id,
+                                      name: enhancedArtifact.name,
+                                      description: enhancedArtifact.description,
+                                      icon: enhancedArtifact.icon,
+                                      image: enhancedArtifact.image,
+                                      category: enhancedArtifact.category,
+                                      rarity: enhancedArtifact.rarity,
+                                      purchasedAt: null,
+                                      used: true,
+                                      isLegacy: true
+                                    } : artifact;
+                                  } else {
+                                    return (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) 
+                                      ? { ...artifact, used: true, usedAt: new Date() } 
+                                      : artifact;
+                                  }
+                                }) || [];
+                                
+                                // For UXP artifacts, mark as "pending" instead of "used"
+                                const isUXPArtifact = enhancedArtifact.name.includes('UXP');
+                                const artifactStatus = isUXPArtifact ? 'pending' : 'used';
+                                
+                                const finalUpdatedArtifacts = updatedArtifacts.map((artifact: any) => {
+                                  // Handle both legacy artifacts (strings) and new artifacts (objects)
+                                  if (typeof artifact === 'string') {
+                                    // Legacy artifact stored as string - match by name
+                                    if (artifact === enhancedArtifact.name) {
+                                      return { 
+                                        id: enhancedArtifact.id,
+                                        name: enhancedArtifact.name,
+                                        description: enhancedArtifact.description,
+                                        icon: enhancedArtifact.icon,
+                                        image: enhancedArtifact.image,
+                                        category: enhancedArtifact.category,
+                                        rarity: enhancedArtifact.rarity,
+                                        purchasedAt: null,
+                                        used: artifactStatus === 'used',
+                                        pending: artifactStatus === 'pending',
+                                        submittedAt: new Date(),
+                                        isLegacy: true
+                                      };
+                                    }
+                                    return artifact;
+                                  } else {
+                                    // New artifact stored as object - match by ID or name
+                                    if (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) {
+                                      return { 
+                                        ...artifact, 
+                                        used: artifactStatus === 'used',
+                                        pending: artifactStatus === 'pending',
+                                        submittedAt: new Date()
+                                      };
+                                    }
+                                    return artifact;
+                                  }
+                                });
+                                
+                                await updateDoc(userRef, {
+                                  artifacts: finalUpdatedArtifacts
+                                });
+                                
+                                // For UXP artifacts, don't remove from students inventory yet (wait for admin approval)
+                                if (!isUXPArtifact) {
+                                  // Also update the students collection inventory for non-UXP artifacts
+                                  const studentsRef = doc(db, 'students', currentUser.uid);
+                                  const studentsSnap = await getDoc(studentsRef);
+                                  if (studentsSnap.exists()) {
+                                    const studentsData = studentsSnap.data();
+                                    const currentInventory = studentsData.inventory || [];
+                                    const updatedInventory = currentInventory.filter((item: string) => item !== enhancedArtifact.name);
+                                    
+                                    await updateDoc(studentsRef, {
+                                      inventory: updatedInventory
+                                    });
+                                    
+                                    console.log('✅ Students inventory updated for non-UXP artifact:', updatedInventory);
+                                  }
+                                }
+                                
+                                console.log(`✅ Artifact marked as ${artifactStatus} for admin request:`, finalUpdatedArtifacts);
+                              }
+                              
                               alert('Your request to use this artifact has been sent to the admin!');
                             }
                           }}
                         >
-                          Use Artifact
+                          {artifact.pending ? 'In Use' : 'Use Artifact'}
                         </button>
                       </div>
                     );
@@ -937,7 +1125,67 @@ const Profile = () => {
         )}
       </div>
 
-
+      {/* Admin Debug Section for UXP Artifact Management */}
+      {userData?.artifacts?.some((artifact: any) => artifact.pending) && (
+        <div style={{
+          marginTop: '2rem',
+          padding: '1rem',
+          backgroundColor: '#fef3c7',
+          border: '1px solid #f59e0b',
+          borderRadius: '0.5rem'
+        }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#92400e' }}>
+            🔧 Admin Debug: Pending UXP Artifacts
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {userData.artifacts.filter((artifact: any) => artifact.pending).map((artifact: any) => (
+              <div key={artifact.name} style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.5rem',
+                backgroundColor: 'white',
+                borderRadius: '0.25rem',
+                border: '1px solid #d1d5db'
+              }}>
+                <span style={{ fontWeight: 'bold', color: '#374151' }}>
+                  {artifact.name} (Submitted: {artifact.submittedAt ? new Date(artifact.submittedAt).toLocaleString() : 'Unknown'})
+                </span>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={() => handleAdminResponse(artifact.name, true)}
+                    style={{
+                      backgroundColor: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.25rem',
+                      padding: '0.25rem 0.5rem',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ✅ Approve
+                  </button>
+                  <button
+                    onClick={() => handleAdminResponse(artifact.name, false)}
+                    style={{
+                      backgroundColor: '#ef4444',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.25rem',
+                      padding: '0.25rem 0.5rem',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ❌ Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Manifest Selection Modal */}
       {showManifestSelection && (

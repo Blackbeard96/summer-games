@@ -11,6 +11,7 @@ import ManifestDiagnostic from '../components/ManifestDiagnostic';
 
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { logger } from '../utils/debugLogger';
+import { collection, addDoc } from 'firebase/firestore';
 
 const Dashboard = () => {
   const { currentUser } = useAuth();
@@ -19,6 +20,7 @@ const Dashboard = () => {
   const [showManifestDiagnostic, setShowManifestDiagnostic] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+  const [showChapterFix, setShowChapterFix] = useState(false);
 
   // Firefox detection for compatibility measures
   const isFirefox = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox');
@@ -182,6 +184,89 @@ const Dashboard = () => {
       } else {
         alert('Failed to set manifest. Please try again.');
       }
+    }
+  };
+
+  // Function to fix locked challenges by activating the next chapter
+  const fixLockedChallenges = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Get current user data to check chapter status
+      const userDoc = await getDoc(userRef);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const chapters = userData.chapters || {};
+        
+        // Find completed chapters
+        const completedChapters = Object.keys(chapters).filter(chapterId => 
+          chapters[chapterId]?.isCompleted
+        ).map(Number);
+        
+        // Find active chapter
+        const activeChapter = Object.keys(chapters).find(chapterId => 
+          chapters[chapterId]?.isActive
+        );
+        
+        console.log('Chapter status:', { completedChapters, activeChapter, chapters });
+        
+        if (completedChapters.length > 0 && !activeChapter) {
+          // Activate the next chapter after the highest completed chapter
+          const nextChapterId = Math.max(...completedChapters) + 1;
+          
+          await updateDoc(userRef, {
+            [`chapters.${nextChapterId}.isActive`]: true,
+            [`chapters.${nextChapterId}.unlockDate`]: new Date()
+          });
+          
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, {
+              [`chapters.${nextChapterId}.isActive`]: true,
+              [`chapters.${nextChapterId}.unlockDate`]: new Date()
+            });
+          }
+          
+          console.log(`Chapter ${nextChapterId} activated!`);
+          alert(`✅ Chapter ${nextChapterId} has been activated! Your challenges should now be unlocked. Please refresh the page.`);
+          
+          // Add notification
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'chapter_unlocked',
+            message: `🎉 Chapter ${nextChapterId} is now unlocked!`,
+            chapterId: nextChapterId,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+          
+        } else if (!activeChapter && completedChapters.length === 0) {
+          // No chapters completed, activate Chapter 1
+          await updateDoc(userRef, {
+            'chapters.1.isActive': true,
+            'chapters.1.unlockDate': new Date()
+          });
+          
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, {
+              'chapters.1.isActive': true,
+              'chapters.1.unlockDate': new Date()
+            });
+          }
+          
+          console.log('Chapter 1 activated!');
+          alert('✅ Chapter 1 has been activated! Your challenges should now be unlocked. Please refresh the page.');
+          
+        } else {
+          alert('✅ Chapter progression looks correct. If challenges are still locked, please refresh the page.');
+        }
+      }
+    } catch (error) {
+      console.error('Error fixing locked challenges:', error);
+      alert('❌ Error fixing challenges. Check console for details.');
     }
   };
 
@@ -443,6 +528,56 @@ const Dashboard = () => {
           </button>
         </div>
       )}
+
+      {/* Chapter Fix Button - Show when challenges might be locked */}
+      <div style={{ 
+        backgroundColor: '#fef3c7', 
+        border: '1px solid #f59e0b',
+        borderRadius: '0.5rem',
+        padding: '1rem',
+        marginBottom: '1.5rem',
+        textAlign: 'center'
+      }}>
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          marginBottom: '0.5rem'
+        }}>
+          <span style={{ marginRight: '0.5rem', fontSize: '1.25rem' }}>🔧</span>
+          <h3 style={{ 
+            fontSize: '1rem', 
+            fontWeight: 'bold', 
+            color: '#92400e',
+            margin: 0
+          }}>
+            Challenges Locked?
+          </h3>
+        </div>
+        <p style={{ 
+          fontSize: '0.875rem', 
+          color: '#a16207',
+          marginBottom: '1rem',
+          margin: '0 0 1rem 0'
+        }}>
+          If your challenges are showing as locked, click the button below to fix chapter progression.
+        </p>
+        <button
+          onClick={fixLockedChallenges}
+          style={{
+            padding: '0.75rem 1.5rem',
+            backgroundColor: '#059669',
+            color: 'white',
+            border: 'none',
+            borderRadius: '0.5rem',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: 'bold'
+          }}
+        >
+          🔧 Fix Locked Challenges
+        </button>
+      </div>
 
       {/* Responsive Grid Layout: Story Challenges and Manifest Challenges */}
       <div style={{ 

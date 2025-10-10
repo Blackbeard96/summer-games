@@ -42,7 +42,7 @@ const artifacts: Artifact[] = [
     id: 'lunch-mosley',
     name: 'Lunch on Mosley', 
     description: 'Enjoy a special lunch with Mr. Mosley', 
-    price: 360, 
+    price: 999, 
     icon: '🍽️', 
     image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'food',
@@ -52,11 +52,21 @@ const artifacts: Artifact[] = [
     id: 'uxp-credit',
     name: '+2 UXP Credit', 
     description: 'Credit to be added to any non-assessment assignment', 
-    price: 50, 
+    price: 60, 
     icon: '📚', 
     image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
     rarity: 'common'
+  },
+  { 
+    id: 'uxp-credit-4',
+    name: '+4 UXP Credit', 
+    description: 'Enhanced credit to be added to any non-assessment assignment', 
+    price: 100, 
+    icon: '📖', 
+    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'special',
+    rarity: 'rare'
   },
   { 
     id: 'double-pp',
@@ -112,13 +122,25 @@ const Marketplace = () => {
       if (!currentUser) return;
 
       try {
-        const userRef = doc(db, 'students', currentUser.uid);
-        const userSnap = await getDoc(userRef);
+        // Fetch from both collections to stay in sync
+        const studentsRef = doc(db, 'students', currentUser.uid);
+        const usersRef = doc(db, 'users', currentUser.uid);
         
-        if (userSnap.exists()) {
-          const userData = userSnap.data();
-          setPowerPoints(userData.powerPoints || 0);
-          setInventory(userData.inventory || []);
+        const [studentsSnap, usersSnap] = await Promise.all([
+          getDoc(studentsRef),
+          getDoc(usersRef)
+        ]);
+        
+        if (studentsSnap.exists()) {
+          const studentsData = studentsSnap.data();
+          setPowerPoints(studentsData.powerPoints || 0);
+          setInventory(studentsData.inventory || []);
+        }
+        
+        // Also fetch user artifacts to check for consistency
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          console.log('Users artifacts:', usersData.artifacts);
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -130,7 +152,164 @@ const Marketplace = () => {
 
   // Function to count specific artifacts in inventory
   const getArtifactCount = (artifactName: string) => {
-    return inventory.filter(item => item === artifactName).length;
+    const count = inventory.filter(item => item === artifactName).length;
+    console.log(`Artifact count for "${artifactName}": ${count}`, { inventory, artifactName });
+    return count;
+  };
+
+  // Debug function to check inventory consistency
+  const debugInventoryData = async () => {
+    if (!currentUser) return;
+    
+    console.log('=== INVENTORY DEBUG INFO ===');
+    console.log('Current inventory state:', inventory);
+    
+    try {
+      // Check students collection
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const studentsSnap = await getDoc(studentsRef);
+      if (studentsSnap.exists()) {
+        const studentsData = studentsSnap.data();
+        console.log('Students collection inventory:', studentsData.inventory);
+        console.log('Students collection artifacts:', studentsData.artifacts);
+      }
+      
+      // Check users collection
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersSnap = await getDoc(usersRef);
+      if (usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        console.log('Users collection artifacts:', usersData.artifacts);
+        
+        // Check for inconsistencies
+        const studentsInventory = studentsSnap.exists() ? studentsSnap.data().inventory || [] : [];
+        const usersArtifacts = usersData.artifacts || [];
+        
+        console.log('=== INCONSISTENCY CHECK ===');
+        console.log('Students inventory items:', studentsInventory);
+        console.log('Users artifacts (not used):', usersArtifacts.filter((a: any) => !a.used && !a.pending));
+        
+        // Find items that are in students.inventory but marked as used in users.artifacts
+        const usedArtifactNames = usersArtifacts
+          .filter((a: any) => a.used || a.pending)
+          .map((a: any) => a.name);
+        
+        const inconsistentItems = studentsInventory.filter((item: string) => 
+          usedArtifactNames.includes(item)
+        );
+        
+        if (inconsistentItems.length > 0) {
+          console.log('🚨 INCONSISTENT ITEMS FOUND:', inconsistentItems);
+        } else {
+          console.log('✅ No inconsistencies found');
+        }
+      }
+    } catch (error) {
+      console.error('Error debugging inventory:', error);
+    }
+  };
+
+  // Function to clean up inventory inconsistencies
+  const cleanupInventoryData = async () => {
+    if (!currentUser) return;
+    
+    try {
+      console.log('=== CLEANING UP INVENTORY DATA ===');
+      
+      // Get data from both collections
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
+      
+      const [studentsSnap, usersSnap] = await Promise.all([
+        getDoc(studentsRef),
+        getDoc(usersRef)
+      ]);
+      
+      if (studentsSnap.exists() && usersSnap.exists()) {
+        const studentsData = studentsSnap.data();
+        const usersData = usersSnap.data();
+        
+        // Get used artifacts from users collection
+        const usedArtifacts = (usersData.artifacts || [])
+          .filter((artifact: any) => artifact.used)
+          .map((artifact: any) => artifact.name);
+        
+        console.log('Used artifacts from users collection:', usedArtifacts);
+        
+        // Clean up students collection inventory
+        const currentInventory = studentsData.inventory || [];
+        const cleanedInventory = currentInventory.filter((item: string) => 
+          !usedArtifacts.includes(item)
+        );
+        
+        console.log('Original inventory:', currentInventory);
+        console.log('Cleaned inventory:', cleanedInventory);
+        
+        if (cleanedInventory.length !== currentInventory.length) {
+          // Update students collection with cleaned inventory
+          await updateDoc(studentsRef, {
+            inventory: cleanedInventory
+          });
+          
+          // Update local state
+          setInventory(cleanedInventory);
+          
+          console.log('✅ Inventory cleaned up successfully!');
+          alert('✅ Inventory data has been cleaned up! The page will refresh.');
+          window.location.reload();
+        } else {
+          console.log('✅ Inventory data is already consistent');
+          alert('✅ Inventory data is already consistent');
+        }
+      }
+    } catch (error) {
+      console.error('Error cleaning up inventory:', error);
+      alert('❌ Error cleaning up inventory. Check console for details.');
+    }
+  };
+
+  // Function to force sync inventory from users.artifacts to students.inventory
+  const forceSyncInventory = async () => {
+    if (!currentUser) return;
+    
+    try {
+      console.log('=== FORCE SYNCING INVENTORY ===');
+      
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
+      
+      const [studentsSnap, usersSnap] = await Promise.all([
+        getDoc(studentsRef),
+        getDoc(usersRef)
+      ]);
+      
+      if (studentsSnap.exists() && usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        const usersArtifacts = usersData.artifacts || [];
+        
+        // Get all available artifacts (not used, not pending)
+        const availableArtifacts = usersArtifacts
+          .filter((a: any) => !a.used && !a.pending)
+          .map((a: any) => a.name);
+        
+        console.log('Available artifacts from users.artifacts:', availableArtifacts);
+        console.log('Current students.inventory:', studentsSnap.data().inventory);
+        
+        // Update students.inventory to match users.artifacts
+        await updateDoc(studentsRef, {
+          inventory: availableArtifacts
+        });
+        
+        console.log('✅ Force synced inventory:', availableArtifacts);
+        alert('✅ Inventory force synced! The page will refresh.');
+        
+        // Refresh the page to show updated data
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error('Error force syncing inventory:', error);
+      alert('❌ Error force syncing inventory. Check console for details.');
+    }
   };
 
   // Function to handle using an artifact
@@ -177,12 +356,52 @@ const Marketplace = () => {
         });
       }
       
-      // Update user's inventory
+      // Update user's inventory in students collection
       await updateDoc(userRef, {
         inventory: updatedInventory
       });
 
+      // Also update the users collection artifacts array to match Profile system
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersSnap = await getDoc(usersRef);
+      if (usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        const currentArtifacts = usersData.artifacts || [];
+        
+        // Find and mark the artifact as used in the users collection
+        const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+          if (typeof artifact === 'string') {
+            // Legacy artifact stored as string - match by name
+            return artifact === artifactName ? { 
+              id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+              name: artifactName,
+              used: true,
+              usedAt: new Date(),
+              isLegacy: true
+            } : artifact;
+          } else {
+            // New artifact stored as object - match by name
+            return artifact.name === artifactName 
+              ? { ...artifact, used: true, usedAt: new Date() } 
+              : artifact;
+          }
+        });
+        
+        await updateDoc(usersRef, {
+          artifacts: updatedArtifacts
+        });
+      }
+
+      // Update local state
       setInventory(updatedInventory);
+      
+      // Refresh user data to ensure consistency
+      const refreshedUserSnap = await getDoc(userRef);
+      if (refreshedUserSnap.exists()) {
+        const refreshedUserData = refreshedUserSnap.data();
+        setInventory(refreshedUserData.inventory || []);
+        setPowerPoints(refreshedUserData.powerPoints || 0);
+      }
       
       if (artifactName !== 'Double PP Boost') {
         alert(`Used ${artifactName}!`);
@@ -204,6 +423,11 @@ const Marketplace = () => {
     // Check for artifact limits
     if (item.name === '+2 UXP Credit' && getArtifactCount(item.name) >= 2) {
       alert('You can only own a maximum of 2 +2 UXP Credit artifacts at a time!');
+      return;
+    }
+    
+    if (item.name === '+4 UXP Credit' && getArtifactCount(item.name) >= 2) {
+      alert('You can only own a maximum of 2 +4 UXP Credit artifacts at a time!');
       return;
     }
     
@@ -239,6 +463,16 @@ const Marketplace = () => {
         inventory: [...inventory, item.name],
         artifacts: [...(currentUserData.artifacts || []), purchasedArtifact]
       });
+      
+      // Also update the users collection to keep both in sync
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersSnap = await getDoc(usersRef);
+      if (usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        await updateDoc(usersRef, {
+          artifacts: [...(usersData.artifacts || []), purchasedArtifact]
+        });
+      }
       
       // Create admin notification
       await createAdminNotification({
@@ -405,6 +639,66 @@ const Marketplace = () => {
               }}>
                 ⚡ {powerPoints} Power Points
               </div>
+            </div>
+          </div>
+          
+          {/* Debug Section */}
+          <div style={{
+            backgroundColor: '#f3f4f6',
+            borderRadius: '0.5rem',
+            padding: '1rem',
+            marginBottom: '1rem',
+            border: '1px solid #d1d5db'
+          }}>
+            <h3 style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#374151' }}>
+              🔧 Debug Tools
+            </h3>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={debugInventoryData}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.25rem',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '500'
+                }}
+              >
+                🔍 Debug Inventory Data
+              </button>
+              <button
+                onClick={cleanupInventoryData}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.25rem',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '500'
+                }}
+              >
+                🧹 Clean Up Inventory
+              </button>
+              <button
+                onClick={forceSyncInventory}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#059669',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.25rem',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '500'
+                }}
+              >
+                🔄 Force Sync Inventory
+              </button>
             </div>
           </div>
         </div>
@@ -595,7 +889,7 @@ const Marketplace = () => {
               {filteredArtifacts.map((artifact) => {
                 const artifactCount = getArtifactCount(artifact.name);
                 const purchased = artifactCount > 0;
-                const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
+                const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
                     background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
@@ -738,7 +1032,7 @@ const Marketplace = () => {
                               textAlign: 'right'
                             }}>
                               Owned: {artifactCount}
-                              {(artifact.name === '+2 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
+                              {(artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
                             </div>
                           )}
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
