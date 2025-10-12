@@ -15,7 +15,7 @@ export interface Chapter {
 }
 
 export interface ChapterRequirement {
-  type: 'level' | 'manifest' | 'artifact' | 'team' | 'previousChapter' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'leadership';
+  type: 'level' | 'manifest' | 'artifact' | 'team' | 'previousChapter' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'leadership' | 'ability' | 'profile';
   value: any;
   description: string;
 }
@@ -52,7 +52,7 @@ export interface GoogleClassroomAssignment {
 }
 
 export interface ChallengeRequirement {
-  type: 'artifact' | 'team' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'manifest' | 'leadership' | 'profile';
+  type: 'artifact' | 'team' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'manifest' | 'leadership' | 'profile' | 'ability';
   value: any;
   description: string;
 }
@@ -208,13 +208,13 @@ export const CHAPTERS: Chapter[] = [
       },
       {
         id: 'ep1-view-mst-ui',
-        title: 'View MST UI',
-        description: 'Explore and familiarize yourself with the MST (Mystical System Technology) user interface',
+        title: 'MST Interface Tutorial',
+        description: 'Take a guided tour of the MST (Masters of Space and Time) interface. Learn about My Profile, MST MKT, Hall of Fame, and Battle Arena.',
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'truth_metal_currency', description: 'Must have touched Truth Metal' }],
         rewards: [
-          { type: 'xp', value: 10, description: 'UI exploration XP' },
-          { type: 'pp', value: 5, description: 'UI exploration PP' }
+          { type: 'xp', value: 25, description: 'MST Tutorial completion XP' },
+          { type: 'pp', value: 10, description: 'MST Tutorial completion PP' }
         ],
         isCompleted: false
       },
@@ -273,7 +273,7 @@ export const CHAPTERS: Chapter[] = [
         title: 'Enter Xiotein School',
         description: 'Cross the threshold and officially enter Xiotein School to begin your mystical education',
         type: 'personal',
-        requirements: [{ type: 'artifact', value: 'first_combat', description: 'Must have completed first combat drill' }],
+        requirements: [{ type: 'ability', value: 'first_combat', description: 'Must have completed first combat drill' }],
         rewards: [
           { type: 'xp', value: 50, description: 'School entry XP' },
           { type: 'pp', value: 25, description: 'School entry PP' },

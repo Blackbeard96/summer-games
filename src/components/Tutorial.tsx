@@ -81,25 +81,25 @@ const Tutorial: React.FC<TutorialProps> = ({ isOpen, onClose, tutorialId }) => {
       },
       {
         id: 'nav-2',
-        title: 'Training Grounds',
-        content: 'This is your sacred space - the Training Grounds where you\'ll see your progress and current challenges. Here, your growth becomes visible.',
-        target: 'nav a[href="/"]',
+        title: 'Player\'s Journey',
+        content: 'This is your sacred space - the Player\'s Journey where you\'ll see your progress and current challenges. Here, your growth becomes visible.',
+        target: 'nav a[href="/chapters"]',
         position: 'bottom',
         illustration: '🏋️',
         action: 'click',
         character: {
           name: 'The Guide',
           image: '/guide-character.png?v=1',
-          quote: '"In the Training Grounds, every challenge is an opportunity for growth."'
+          quote: '"In the Player\'s Journey, every challenge is an opportunity for growth."'
         }
       },
       {
         id: 'nav-3',
-        title: 'Player\'s Journey',
+        title: 'Battle Arena',
         content: 'Here lies the path to your chapters and story challenges. Each chapter reveals deeper truths about yourself and the universe.',
-        target: 'nav a[href="/chapters"]',
+        target: 'nav a[href="/battle"]',
         position: 'bottom',
-        illustration: '📖',
+        illustration: '⚔️',
         action: 'click',
         character: {
           name: 'The Guide',

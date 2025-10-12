@@ -429,8 +429,7 @@ const NavBar = memo(() => {
 
   // Memoize navigation items to prevent unnecessary re-renders
   const navItems = useMemo(() => [
-    { to: '/', label: 'Training Grounds', tooltip: 'Dashboard' },
-    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter System & Story Mode' },
+    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges & Story Episodes' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ], []);

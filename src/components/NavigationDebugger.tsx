@@ -31,6 +31,8 @@ const NavigationDebugger: React.FC = () => {
   // Disabled debug panel to prevent interference with constellation tree
   return null;
 
+  // Unreachable code - keeping for reference
+  /*
   return (
     <div style={{
       position: 'fixed',
@@ -181,6 +183,7 @@ const NavigationDebugger: React.FC = () => {
       )}
     </div>
   );
+  */
 };
 
 export default NavigationDebugger;

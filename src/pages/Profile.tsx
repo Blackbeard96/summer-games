@@ -196,14 +196,38 @@ const Profile = () => {
       return;
     }
 
-    console.log('Starting upload for file:', file.name, 'Size:', file.size);
+    // Check file size (limit to 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size too large. Please select an image smaller than 5MB.');
+      return;
+    }
+
+    // Check file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file (PNG, JPG, GIF, etc.)');
+      return;
+    }
+
+    console.log('Starting upload for file:', file.name, 'Size:', file.size, 'Type:', file.type);
     setUploading(true);
     
     try {
-      const storageRef = ref(storage, `profile_pictures/${currentUser.uid}/avatar`);
+      // Add timestamp to filename to avoid conflicts
+      const timestamp = Date.now();
+      const fileExtension = file.name.split('.').pop() || 'jpg';
+      const fileName = `avatar_${timestamp}.${fileExtension}`;
+      
+      const storageRef = ref(storage, `profile_pictures/${currentUser.uid}/${fileName}`);
       console.log('Uploading to storage reference:', storageRef.fullPath);
       
-      const uploadResult = await uploadBytes(storageRef, file);
+      // Upload with metadata
+      const uploadResult = await uploadBytes(storageRef, file, {
+        contentType: file.type,
+        customMetadata: {
+          uploadedBy: currentUser.uid,
+          uploadedAt: new Date().toISOString()
+        }
+      });
       console.log('Upload successful:', uploadResult);
       
       const downloadURL = await getDownloadURL(storageRef);
@@ -221,12 +245,32 @@ const Profile = () => {
       // Update local state instead of reloading
       setUserData((prev: any) => ({ ...prev, photoURL: downloadURL }));
       
-      // Show success message
-      alert('Avatar updated successfully! If you have a display name set, the "Update Your Profile" challenge will be automatically completed.');
+      // Force a small delay to ensure state updates, then show success
+      setTimeout(() => {
+        alert('Avatar updated successfully! If you have a display name set, the "Update Your Profile" challenge will be automatically completed.');
+      }, 100);
       
     } catch (error: any) {
       console.error('Error uploading avatar:', error);
-      alert(`Upload failed: ${error.message}`);
+      console.error('Error code:', error.code);
+      console.error('Error details:', error.details);
+      
+      let errorMessage = 'Upload failed: ';
+      if (error.code === 'storage/unauthorized') {
+        errorMessage += 'You are not authorized to upload files. Please make sure you are logged in.';
+      } else if (error.code === 'storage/canceled') {
+        errorMessage += 'Upload was canceled.';
+      } else if (error.code === 'storage/unknown') {
+        errorMessage += 'An unknown error occurred. This might be a network issue or server problem. Please try again.';
+      } else if (error.code === 'storage/invalid-format') {
+        errorMessage += 'Invalid file format. Please select a valid image file.';
+      } else if (error.code === 'storage/invalid-checksum') {
+        errorMessage += 'File corruption detected. Please try uploading the file again.';
+      } else {
+        errorMessage += error.message || 'Unknown error occurred';
+      }
+      
+      alert(errorMessage);
     } finally {
       setUploading(false);
     }
@@ -391,6 +435,15 @@ const Profile = () => {
 
   const level = userData ? getLevelFromXP(userData.xp || 0) : 1;
   const avatarUrl = userData?.photoURL || currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
+  
+  // Debug logging for avatar URL
+  console.log('Profile: Avatar URL debug:', {
+    userDataPhotoURL: userData?.photoURL,
+    currentUserPhotoURL: currentUser.photoURL,
+    finalAvatarUrl: avatarUrl,
+    displayName: displayName || currentUser.displayName,
+    email: currentUser.email
+  });
 
   // Get the current manifest name from playerManifest state
   const currentManifest = playerManifest ? 
@@ -432,7 +485,7 @@ const Profile = () => {
             <PlayerCard
               key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
               name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
-              photoURL={userData?.photoURL || avatarUrl}
+              photoURL={userData?.photoURL || currentUser.photoURL || avatarUrl}
               powerPoints={userData?.powerPoints || 0}
               manifest={currentManifest}
               level={level}
@@ -446,17 +499,6 @@ const Profile = () => {
               userId={currentUser?.uid}
               onManifestReselect={() => setShowManifestSelection(true)}
               ordinaryWorld={userData?.ordinaryWorld}
-              journeyData={{
-                ordinaryWorld: userData?.ordinaryWorld,
-                callToAdventure: userData?.callToAdventure,
-                meetingMentor: userData?.meetingMentor,
-                testsAlliesEnemies: userData?.testsAlliesEnemies,
-                approachingCave: userData?.approachingCave,
-                ordeal: userData?.ordeal,
-                roadBack: userData?.roadBack,
-                resurrection: userData?.resurrection,
-                returnWithElixir: userData?.returnWithElixir,
-              }}
             />
           </div>
           

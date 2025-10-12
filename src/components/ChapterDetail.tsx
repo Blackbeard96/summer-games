@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { useBattle } from '../context/BattleContext';
+import { useStory } from '../context/StoryContext';
 import { Chapter, ChapterChallenge } from '../types/chapters';
+import { STORY_EPISODES, StoryEpisode } from '../types/story';
 import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
@@ -11,6 +15,7 @@ import TruthMetalChoiceModal from './TruthMetalChoiceModal';
 import TruthMetalTouchModal from './TruthMetalTouchModal';
 import TruthBattle from './TruthBattle';
 import TruthRevelationModal from './TruthRevelationModal';
+import MSTInterfaceTutorial from './MSTInterfaceTutorial';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -20,11 +25,15 @@ interface ChapterDetailProps {
 
 const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const { currentUser } = useAuth();
+  const { vault, moves, actionCards } = useBattle();
+  const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
+  const navigate = useNavigate();
   const [userProgress, setUserProgress] = useState<any>(null);
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'challenges' | 'team' | 'rival' | 'veil' | 'ethics'>('challenges');
+  const [activeTab, setActiveTab] = useState<'challenges' | 'team' | 'ethics' | 'story'>('challenges');
+  const [selectedEpisode, setSelectedEpisode] = useState<StoryEpisode | null>(null);
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
   const [showPortalTutorial, setShowPortalTutorial] = useState(false);
@@ -36,6 +45,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [truthRevealed, setTruthRevealed] = useState('');
   const [isReplayMode, setIsReplayMode] = useState(false);
   const [chapterActivationInProgress, setChapterActivationInProgress] = useState(false);
+  const [showMSTTutorial, setShowMSTTutorial] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -120,11 +130,38 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     // Check if challenge is completed (only after admin approval)
     if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted) return 'completed';
     
+    // If no requirements, challenge is available
+    if (!challenge.requirements || challenge.requirements.length === 0) {
+      console.log(`ChapterDetail: Challenge ${challenge.id} has no requirements - available`);
+      return chapterProgress.isActive ? 'available' : 'locked';
+    }
+    
     // Check if challenge requirements are met
     const requirementsMet = challenge.requirements.every(req => {
+      console.log(`ChapterDetail: Checking requirement: ${req.type} = ${req.value}`);
+      
       switch (req.type) {
         case 'artifact':
-          return userProgress.artifact?.identified;
+          // Handle specific artifact requirements
+          if (req.value === 'letter_received') {
+            const letterChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-get-letter'];
+            return letterChallenge?.isCompleted && letterChallenge?.letterReceived;
+          } else if (req.value === 'chose_truth_metal') {
+            const truthMetalChoice = userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice'];
+            return truthMetalChoice?.isCompleted;
+          } else if (req.value === 'truth_metal_currency') {
+            const truthMetalTouch = userProgress?.chapters?.[1]?.challenges?.['ep1-touch-truth-metal'];
+            return truthMetalTouch?.isCompleted;
+          } else if (req.value === 'ui_explored') {
+            const uiChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-mst-ui'];
+            return uiChallenge?.isCompleted;
+          } else if (req.value === 'first_combat') {
+            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
+            return combatChallenge?.isCompleted;
+          } else {
+            // Fallback to generic artifact check
+            return userProgress.artifact?.identified;
+          }
         case 'team':
           // For team requirements, we'll check squad membership in the auto-completion logic
           return true; // Let auto-completion handle this
@@ -139,17 +176,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         case 'ethics':
           return userProgress.ethics && userProgress.ethics.length >= req.value;
         case 'manifest':
-          // Check if player has chosen a manifest (from multiple possible locations)
-          return studentData?.manifest?.manifestId || 
-                 studentData?.manifestationType || 
-                 studentData?.manifest ||
-                 userProgress?.manifest ||
-                 userProgress?.manifestationType;
+          // Handle specific manifest requirements
+          if (req.value === 'chosen') {
+            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-choose-manifests'];
+            return manifestChallenge?.isCompleted;
+          } else {
+            // Check if player has chosen a manifest (from multiple possible locations)
+            return studentData?.manifest?.manifestId || 
+                   studentData?.manifestationType || 
+                   studentData?.manifest ||
+                   userProgress?.manifest ||
+                   userProgress?.manifestationType;
+          }
         case 'leadership':
           return userProgress.leadership?.role;
         case 'profile':
-          return studentData?.displayName && studentData?.photoURL;
+          // Handle specific profile requirements
+          if (req.value === 'completed') {
+            const profileChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile'];
+            return profileChallenge?.isCompleted;
+          } else if (req.value === 'power_card_viewed') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card'];
+            return powerCardChallenge?.isCompleted;
+          } else {
+            return studentData?.displayName && studentData?.photoURL;
+          }
+        case 'ability':
+          if (req.value === 'first_combat') {
+            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
+            return combatChallenge?.isCompleted;
+          } else {
+            console.warn(`ChapterDetail: Unknown ability requirement: ${req.value}`);
+            return false;
+          }
         default:
+          console.warn(`ChapterDetail: Unknown requirement type: ${req.type}`);
           return true;
       }
     });
@@ -266,12 +327,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           shouldAutoComplete = !!userProgress.rival;
           console.log('ChapterDetail: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!userProgress.rival });
           break;
-        case 'ch1-update-profile':
+        case 'ep1-update-profile':
           // Auto-complete if profile is complete
           shouldAutoComplete = !!(studentData?.displayName && studentData?.photoURL);
           console.log('ChapterDetail: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!studentData?.displayName, hasPhotoURL: !!studentData?.photoURL });
           break;
-        case 'ch1-declare-manifest':
+        case 'ep1-choose-manifests':
           // Auto-complete if manifest is chosen
           shouldAutoComplete = !!(studentData?.manifest?.manifestId || studentData?.manifestationType);
           console.log('ChapterDetail: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(studentData?.manifest?.manifestId || studentData?.manifestationType) });
@@ -570,6 +631,57 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       
     } catch (error) {
       console.error('Error handling tutorial completion:', error);
+      alert('Failed to process tutorial completion. Please try again.');
+    }
+  };
+
+  const handleMSTTutorialComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      // Mark the MST UI challenge as completed
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      const updatedChapters = {
+        ...userProgress.chapters,
+        [chapter.id]: {
+          ...userProgress.chapters[chapter.id],
+          challenges: {
+            ...userProgress.chapters[chapter.id]?.challenges,
+            'ep1-view-mst-ui': {
+              isCompleted: true,
+              status: 'approved',
+              completionDate: new Date(),
+              tutorialCompleted: true
+            }
+          }
+        }
+      };
+      
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Create notification for challenge completion
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 MST Interface Tutorial completed! You now understand the four main areas of Xiotein School. You earned +25 XP and +10 PP!`,
+        challengeId: 'ep1-view-mst-ui',
+        challengeName: 'MST Interface Tutorial',
+        xpReward: 25,
+        ppReward: 10,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+      
+      // Close the tutorial modal
+      setShowMSTTutorial(false);
+      
+      alert('🎉 MST Interface Tutorial completed! You now understand the four main areas of Xiotein School. You earned +25 XP and +10 PP!');
+      
+    } catch (error) {
+      console.error('Error handling MST tutorial completion:', error);
       alert('Failed to process tutorial completion. Please try again.');
     }
   };
@@ -1058,8 +1170,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       </h3>
       
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
-        {chapter.challenges.map((challenge) => {
+        {chapter.challenges.map((challenge, index) => {
           const status = getChallengeStatus(challenge);
+          const challengeNumber = index + 1;
           
           const getStatusColor = () => {
             switch (status) {
@@ -1090,8 +1203,25 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                     fontSize: '1.125rem', 
                     fontWeight: 'bold', 
                     color: '#000000',
-                    marginBottom: '0.5rem'
+                    marginBottom: '0.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
                   }}>
+                    <span style={{
+                      backgroundColor: colors.border,
+                      color: 'white',
+                      borderRadius: '50%',
+                      width: '24px',
+                      height: '24px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold'
+                    }}>
+                      {challengeNumber}
+                    </span>
                     {challenge.title}
                   </h4>
                   <p style={{ 
@@ -1310,8 +1440,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </button>
                           )}
 
+                          {/* MST Interface Tutorial Challenge Button */}
+                          {status === 'available' && challenge.id === 'ep1-view-mst-ui' && (
+                            <button
+                              onClick={() => setShowMSTTutorial(true)}
+                              style={{
+                                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                                color: 'white',
+                                padding: '0.75rem 1.5rem',
+                                borderRadius: '0.5rem',
+                                border: 'none',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>🎓</span>
+                              Start MST Tutorial
+                            </button>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1571,6 +1734,466 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     </div>
   );
 
+  // Calculate player power level
+  const calculatePlayerPower = () => {
+    if (!vault || !moves || !actionCards) return 0;
+    
+    const unlockedMoves = moves.filter(move => move.unlocked).length;
+    const unlockedCards = actionCards.filter(card => card.unlocked).length;
+    const vaultStrength = vault.shieldStrength + vault.firewall;
+    const level = Math.floor((vault.currentPP / vault.capacity) * 10);
+    
+    return unlockedMoves * 10 + unlockedCards * 15 + vaultStrength + level;
+  };
+
+  const playerPower = calculatePlayerPower();
+
+  // Check if episode is unlocked (with power level check)
+  const isEpisodeUnlockedWithPower = (episode: StoryEpisode) => {
+    if (episode.id === 'ep_01_xiotein_letter') return true;
+    
+    const requiredEpisodes = episode.gates.requires;
+    const hasRequiredEpisodes = requiredEpisodes.every(req => 
+      storyProgress.completedEpisodes.includes(req)
+    );
+    
+    const hasMinLevel = playerPower >= episode.gates.minPower;
+    
+    return hasRequiredEpisodes && hasMinLevel;
+  };
+
+  // Get episode status (with power level check)
+  const getEpisodeStatusWithPower = (episode: StoryEpisode) => {
+    if (storyProgress.completedEpisodes.includes(episode.id)) {
+      return 'completed';
+    } else if (isEpisodeUnlockedWithPower(episode)) {
+      return 'unlocked';
+    } else {
+      return 'locked';
+    }
+  };
+
+  // Get difficulty color
+  const getDifficultyColor = (power: number) => {
+    if (playerPower >= power) return '#10b981'; // Green - Easy
+    if (playerPower >= power * 0.8) return '#f59e0b'; // Yellow - Medium
+    return '#ef4444'; // Red - Hard
+  };
+
+  // Handle episode selection
+  const handleEpisodeClick = (episode: StoryEpisode) => {
+    const status = getEpisodeStatusWithPower(episode);
+    if (status === 'locked') return;
+    
+    setSelectedEpisode(episode);
+  };
+
+  // Start episode
+  const handleStartEpisode = async (episode: StoryEpisode) => {
+    try {
+      await startEpisode(episode.id);
+      // Navigate to episode battle
+      navigate(`/story/${episode.id}/battle`);
+    } catch (error) {
+      console.error('Error starting episode:', error);
+    }
+  };
+
+  const renderStoryEpisodes = () => (
+    <div style={{ padding: '1.5rem' }}>
+      <div style={{ marginBottom: '2rem' }}>
+        <h3 style={{ 
+          fontSize: '1.5rem', 
+          fontWeight: 'bold', 
+          marginBottom: '1rem',
+          color: '#1f2937'
+        }}>
+          📖 Story Episodes
+        </h3>
+        
+        {/* Progress Bar */}
+        <div style={{
+          background: '#f3f4f6',
+          borderRadius: '0.5rem',
+          padding: '1rem',
+          marginBottom: '2rem'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Season Progress</span>
+            <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+              {storyProgress.completedEpisodes.length}/9 Episodes
+            </span>
+          </div>
+          <div style={{
+            background: '#e5e7eb',
+            height: '8px',
+            borderRadius: '4px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              background: 'linear-gradient(90deg, #10b981 0%, #059669 100%)',
+              height: '100%',
+              width: `${(storyProgress.completedEpisodes.length / 9) * 100}%`,
+              transition: 'width 0.3s ease'
+            }} />
+          </div>
+        </div>
+
+        {/* Player Power */}
+        <div style={{
+          background: '#f8fafc',
+          borderRadius: '0.5rem',
+          padding: '1rem',
+          display: 'inline-block',
+          marginBottom: '2rem'
+        }}>
+          <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+            Your Power Level
+          </div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
+            {playerPower}
+          </div>
+        </div>
+      </div>
+
+      {/* Episode Grid */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+        gap: '1.5rem'
+      }}>
+        {STORY_EPISODES.map(episode => {
+          const status = getEpisodeStatusWithPower(episode);
+          const isUnlocked = status !== 'locked';
+          const isCompleted = status === 'completed';
+          
+          return (
+            <div
+              key={episode.id}
+              onClick={() => handleEpisodeClick(episode)}
+              style={{
+                background: isUnlocked 
+                  ? 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'
+                  : 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)',
+                borderRadius: '1rem',
+                padding: '1.5rem',
+                cursor: isUnlocked ? 'pointer' : 'not-allowed',
+                boxShadow: isUnlocked 
+                  ? '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                  : '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+                transition: 'all 0.3s ease',
+                opacity: isUnlocked ? 1 : 0.7,
+                position: 'relative',
+                border: '1px solid #e5e7eb'
+              }}
+              onMouseEnter={(e) => {
+                if (isUnlocked) {
+                  e.currentTarget.style.transform = 'translateY(-4px)';
+                  e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.1)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = isUnlocked 
+                  ? '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                  : '0 1px 3px 0 rgba(0, 0, 0, 0.1)';
+              }}
+            >
+              {/* Status Badge */}
+              <div style={{
+                position: 'absolute',
+                top: '0.75rem',
+                right: '0.75rem',
+                background: isCompleted ? '#10b981' : isUnlocked ? '#3b82f6' : '#6b7280',
+                color: 'white',
+                padding: '0.25rem 0.75rem',
+                borderRadius: '0.75rem',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                textTransform: 'uppercase'
+              }}>
+                {isCompleted ? '✓' : isUnlocked ? 'Unlocked' : 'Locked'}
+              </div>
+
+              {/* Chapter Number */}
+              <div style={{
+                position: 'absolute',
+                top: '0.75rem',
+                left: '0.75rem',
+                background: 'rgba(0,0,0,0.1)',
+                color: isUnlocked ? '#374151' : '#9ca3af',
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1rem',
+                fontWeight: 'bold'
+              }}>
+                {episode.chapter}
+              </div>
+
+              {/* Episode Content */}
+              <div style={{ marginTop: '2.5rem' }}>
+                <h4 style={{
+                  fontSize: '1.125rem',
+                  fontWeight: 'bold',
+                  color: isUnlocked ? '#1f2937' : '#9ca3af',
+                  marginBottom: '0.75rem',
+                  textAlign: 'center'
+                }}>
+                  {episode.title}
+                </h4>
+
+                <p style={{
+                  color: isUnlocked ? '#6b7280' : '#9ca3af',
+                  fontSize: '0.875rem',
+                  lineHeight: '1.5',
+                  marginBottom: '1rem',
+                  textAlign: 'center'
+                }}>
+                  {episode.summary}
+                </p>
+
+                {/* Difficulty */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: '1rem',
+                  gap: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '0.75rem', color: isUnlocked ? '#6b7280' : '#9ca3af' }}>
+                    Power:
+                  </span>
+                  <span style={{
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    color: getDifficultyColor(episode.recommendedPower)
+                  }}>
+                    {episode.recommendedPower}
+                  </span>
+                </div>
+
+                {/* Rewards Preview */}
+                <div style={{
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.2)',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem',
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    color: '#065f46',
+                    marginBottom: '0.25rem'
+                  }}>
+                    Rewards:
+                  </div>
+                  <div style={{
+                    fontSize: '0.75rem',
+                    color: '#065f46',
+                    lineHeight: '1.4'
+                  }}>
+                    {episode.rewards.fixed.slice(0, 2).join(', ')}
+                    {episode.rewards.fixed.length > 2 && '...'}
+                  </div>
+                </div>
+
+                {/* Start Button */}
+                {isUnlocked && !isCompleted && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartEpisode(episode);
+                    }}
+                    style={{
+                      background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      width: '100%',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    🚀 Start Episode
+                  </button>
+                )}
+
+                {isCompleted && (
+                  <div style={{
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: 'white',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    textAlign: 'center',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold'
+                  }}>
+                    ✅ Complete
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Episode Detail Modal */}
+      {selectedEpisode && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '2rem'
+        }}
+        onClick={() => setSelectedEpisode(null)}
+        >
+          <div style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '80vh',
+            overflow: 'auto'
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              textAlign: 'center'
+            }}>
+              {selectedEpisode.title}
+            </h2>
+
+            <p style={{
+              color: '#6b7280',
+              fontSize: '1rem',
+              lineHeight: '1.6',
+              marginBottom: '2rem',
+              textAlign: 'center'
+            }}>
+              {selectedEpisode.summary}
+            </p>
+
+            {/* Objectives */}
+            <div style={{ marginBottom: '2rem' }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem' }}>
+                🎯 Objectives
+              </h3>
+              {selectedEpisode.objectives.map((objective, index) => (
+                <div key={index} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  marginBottom: '0.5rem'
+                }}>
+                  <div style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '50%',
+                    background: objective.required ? '#ef4444' : '#f59e0b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    color: 'white',
+                    fontWeight: 'bold'
+                  }}>
+                    {objective.required ? '!' : '?'}
+                  </div>
+                  <span style={{ color: '#374151' }}>
+                    {objective.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Rewards */}
+            <div style={{ marginBottom: '2rem' }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem' }}>
+                🎁 Rewards
+              </h3>
+              <div style={{
+                background: '#f8fafc',
+                padding: '1rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #e5e7eb'
+              }}>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <strong>Fixed Rewards:</strong>
+                </div>
+                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '1rem' }}>
+                  {selectedEpisode.rewards.fixed.join(', ')}
+                </div>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <strong>Choice Rewards:</strong>
+                </div>
+                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                  {selectedEpisode.rewards.choices.join(', ')}
+                </div>
+              </div>
+            </div>
+
+            {/* Start Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleStartEpisode(selectedEpisode);
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                color: 'white',
+                border: 'none',
+                padding: '1rem 2rem',
+                borderRadius: '0.75rem',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                width: '100%',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.3)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            >
+              🚀 Start Episode
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   if (loading) {
     return (
       <div className="bg-white rounded-xl shadow-xl p-8">
@@ -1690,9 +2313,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           {[
             { id: 'challenges', label: 'Challenges', icon: '⚔️' },
             ...(chapter.teamSize > 1 ? [{ id: 'team', label: 'Team', icon: '👥' }] : []),
-            { id: 'rival', label: 'Rival', icon: '⚡' },
-            { id: 'veil', label: 'Veil', icon: '🕯️' },
-            ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : [])
+            ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : []),
+            { id: 'story', label: 'Story Episodes', icon: '📖' }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1734,9 +2356,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       <div className="min-h-[400px]">
         {activeTab === 'challenges' && renderChallenges()}
         {activeTab === 'team' && renderTeamSection()}
-        {activeTab === 'rival' && renderRivalSection()}
-        {activeTab === 'veil' && renderVeilSection()}
         {activeTab === 'ethics' && renderEthicsSection()}
+        {activeTab === 'story' && renderStoryEpisodes()}
       </div>
 
       {/* Rival Selection Modal */}
@@ -1801,6 +2422,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             onClose={() => setShowTruthRevelation(false)}
             truthRevealed={truthRevealed}
             onComplete={handleTruthRevelationComplete}
+          />
+
+          {/* MST Interface Tutorial Modal */}
+          <MSTInterfaceTutorial
+            isOpen={showMSTTutorial}
+            onComplete={handleMSTTutorialComplete}
+            onClose={() => setShowMSTTutorial(false)}
           />
         </div>
       );

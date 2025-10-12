@@ -41,6 +41,7 @@ const Leaderboard = withRouteSplitting(() => import('./pages/Leaderboard'));
 const Chapters = withRouteSplitting(() => import('./pages/Chapters'));
 const Squads = withRouteSplitting(() => import('./pages/Squads'));
 const Battle = withRouteSplitting(() => import('./pages/Battle'));
+const StoryEpisodeBattle = withRouteSplitting(() => import('./pages/StoryEpisodeBattle'));
 
 // Loading component for lazy-loaded routes
 const PageLoader = () => (
@@ -182,7 +183,7 @@ const AppContent = () => {
   React.useEffect(() => {
     const path = window.location.pathname;
     const routeMetadata = {
-      '/': { title: 'Training Grounds', description: 'Your manifestation journey begins here' },
+      '/': { title: 'Dashboard', description: 'Your manifestation journey begins here' },
       '/profile': { title: 'My Profile', description: 'View and manage your manifestation profile' },
       '/chapters': { title: "Player's Journey", description: 'Explore your story chapters and challenges' },
       '/battle': { title: 'Battle Arena', description: 'Engage in MST battles and challenges' },
@@ -233,6 +234,11 @@ const AppContent = () => {
             <Route path="/battle" element={
               <ProtectedRoute user={true}>
                 <Battle />
+              </ProtectedRoute>
+            } />
+            <Route path="/story/:episodeId/battle" element={
+              <ProtectedRoute user={true}>
+                <StoryEpisodeBattle />
               </ProtectedRoute>
             } />
             <Route path="/scorekeeper" element={

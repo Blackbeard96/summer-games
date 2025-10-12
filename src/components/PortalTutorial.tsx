@@ -23,7 +23,7 @@ const PortalTutorial: React.FC<PortalTutorialProps> = ({ isOpen, onComplete, onC
     },
     {
       title: "Navigation Bar",
-      content: "The top navigation bar gives you access to all major areas: Training Grounds, Player's Journey, Battle Arena, Hall of Fame, and more.",
+      content: "The top navigation bar gives you access to all major areas: Player's Journey, Battle Arena, Hall of Fame, and more.",
       highlight: "navigation",
       action: "Notice the navigation options"
     },

@@ -57,6 +57,12 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     });
     
     switch (requirement.type) {
+      case 'level':
+        // Check if user has reached the required level
+        const userLevel = studentData?.level || userProgress?.level || 1;
+        const requiredLevel = requirement.value || 1;
+        console.log(`ChapterTracker: Level check - user: ${userLevel}, required: ${requiredLevel}`);
+        return userLevel >= requiredLevel;
       case 'manifest':
         // Use standardized manifest detection utility
         const manifestData = { studentData, userProgress };
@@ -81,7 +87,13 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         return userProgress?.leadership?.role;
       case 'profile':
         return studentData?.displayName && studentData?.photoURL;
+      case 'previousChapter':
+        // Check if previous chapter is completed
+        const prevChapterId = requirement.value;
+        const prevChapterProgress = userProgress?.chapters?.[prevChapterId];
+        return prevChapterProgress?.isCompleted || false;
       default:
+        console.warn(`ChapterTracker: Unknown requirement type: ${requirement.type}`);
         return false;
     }
   };

@@ -577,6 +577,57 @@ const Dashboard = () => {
         >
           🔧 Fix Locked Challenges
         </button>
+        <button
+          onClick={async () => {
+            if (currentUser) {
+              console.log('🧪 Testing auto-completion manually...');
+              try {
+                const userRef = doc(db, 'users', currentUser.uid);
+                const userDoc = await getDoc(userRef);
+                if (userDoc.exists()) {
+                  const userData = userDoc.data();
+                  console.log('User data:', userData);
+                  
+                  // Force auto-complete profile challenge
+                  if (userData.displayName && userData.photoURL) {
+                    await updateDoc(userRef, {
+                      [`chapters.1.challenges.ep1-update-profile.isCompleted`]: true,
+                      [`chapters.1.challenges.ep1-update-profile.completedAt`]: serverTimestamp()
+                    });
+                    console.log('✅ Profile challenge auto-completed');
+                  }
+                  
+                  // Force auto-complete manifest challenge
+                  if (userData.playerManifest || userData.manifest) {
+                    await updateDoc(userRef, {
+                      [`chapters.1.challenges.ep1-choose-manifests.isCompleted`]: true,
+                      [`chapters.1.challenges.ep1-choose-manifests.completedAt`]: serverTimestamp()
+                    });
+                    console.log('✅ Manifest challenge auto-completed');
+                  }
+                  
+                  alert('Auto-completion test completed! Check console for details.');
+                }
+              } catch (error) {
+                console.error('Auto-completion test failed:', error);
+                alert('Auto-completion test failed. Check console for details.');
+              }
+            }
+          }}
+          style={{
+            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            color: 'white',
+            padding: '0.75rem 1.5rem',
+            borderRadius: '0.5rem',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: 'bold',
+            marginLeft: '1rem'
+          }}
+        >
+          🧪 Test Auto-Complete
+        </button>
       </div>
 
       {/* Responsive Grid Layout: Story Challenges and Manifest Challenges */}

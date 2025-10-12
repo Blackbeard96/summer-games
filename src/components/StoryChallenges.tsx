@@ -118,8 +118,8 @@ const StoryChallenges = () => {
     
     // Check if we're in Chapter 1 and challenges are not completed
     const isChapter1Active = userProgress.chapters?.[1]?.isActive;
-    const isProfileChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ch1-update-profile']?.isCompleted;
-    const isManifestChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ch1-declare-manifest']?.isCompleted;
+    const isProfileChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
+    const isManifestChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-choose-manifests']?.isCompleted;
     
     if (isProfileComplete && isChapter1Active && !isProfileChallengeCompleted) {
       console.log('Profile is complete, auto-completing challenge...');
@@ -152,14 +152,23 @@ const StoryChallenges = () => {
 
   // Function to check and auto-complete profile update challenge
   const checkAndCompleteProfileChallenge = async (userData: any) => {
+    console.log('🔍 checkAndCompleteProfileChallenge called', { 
+      currentUser: !!currentUser, 
+      userData: !!userData,
+      chapter1Active: userData?.chapters?.[1]?.isActive 
+    });
+    
     if (!currentUser) return;
 
     try {
       // Check if we're in Chapter 1 (since getCurrentChapter might not be available yet)
-      if (!userData.chapters?.[1]?.isActive) return;
+      if (!userData.chapters?.[1]?.isActive) {
+        console.log('❌ Chapter 1 not active, skipping profile auto-completion');
+        return;
+      }
 
       // Check if challenge is already completed
-      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ch1-update-profile']?.isCompleted;
+      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
       if (isAlreadyCompleted) {
         console.log('Profile challenge already completed');
         return;
@@ -172,13 +181,14 @@ const StoryChallenges = () => {
                        (currentUser.photoURL && currentUser.photoURL.trim() !== '') ||
                        (userData.avatar && userData.avatar.trim() !== '');
       
-      console.log('Profile completion check:', { 
+      console.log('🔍 Profile completion check:', { 
         hasDisplayName, 
         hasAvatar, 
         displayName: userData.displayName, 
         photoURL: userData.photoURL,
         currentUserPhotoURL: currentUser.photoURL,
-        userDataAvatar: userData.avatar
+        userDataAvatar: userData.avatar,
+        shouldAutoComplete: hasDisplayName && hasAvatar
       });
       
       if (hasDisplayName && hasAvatar) {
@@ -192,7 +202,7 @@ const StoryChallenges = () => {
             ...userData.chapters?.[1],
             challenges: {
               ...userData.chapters?.[1]?.challenges,
-              'ch1-update-profile': {
+              'ep1-update-profile': {
                 isCompleted: true,
                 completedAt: serverTimestamp(),
                 autoCompleted: true
@@ -211,7 +221,7 @@ const StoryChallenges = () => {
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || '',
-          challengeId: 'ch1-update-profile',
+          challengeId: 'ep1-update-profile',
           challengeName: 'Update Your Profile',
           submissionType: 'auto_completed',
           status: 'approved',
@@ -254,14 +264,23 @@ const StoryChallenges = () => {
 
   // Function to check and auto-complete manifest declaration challenge
   const checkAndCompleteManifestChallenge = async (userData: any) => {
+    console.log('🔍 checkAndCompleteManifestChallenge called', { 
+      currentUser: !!currentUser, 
+      userData: !!userData,
+      chapter1Active: userData?.chapters?.[1]?.isActive 
+    });
+    
     if (!currentUser) return;
 
     try {
       // Check if we're in Chapter 1
-      if (!userData.chapters?.[1]?.isActive) return;
+      if (!userData.chapters?.[1]?.isActive) {
+        console.log('❌ Chapter 1 not active, skipping manifest auto-completion');
+        return;
+      }
 
       // Check if challenge is already completed
-      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ch1-declare-manifest']?.isCompleted;
+      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ep1-choose-manifests']?.isCompleted;
       if (isAlreadyCompleted) {
         console.log('Manifest challenge already completed');
         return;
@@ -301,7 +320,7 @@ const StoryChallenges = () => {
             ...userData.chapters?.[1],
             challenges: {
               ...userData.chapters?.[1]?.challenges,
-              'ch1-declare-manifest': {
+              'ep1-choose-manifests': {
                 isCompleted: true,
                 completedAt: serverTimestamp(),
                 autoCompleted: true
@@ -320,7 +339,7 @@ const StoryChallenges = () => {
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || '',
-          challengeId: 'ch1-declare-manifest',
+          challengeId: 'ep1-choose-manifests',
           challengeName: 'Declare Your Manifest',
           submissionType: 'auto_completed',
           status: 'approved',
@@ -696,12 +715,12 @@ const ensureChaptersInitialized = async () => {
           ...currentData.chapters?.[1],
           challenges: {
             ...currentData.chapters?.[1]?.challenges,
-            'ch1-update-profile': {
+            'ep1-update-profile': {
               isCompleted: true,
               completedAt: serverTimestamp(),
               autoCompleted: true
             },
-            'ch1-declare-manifest': {
+            'ep1-choose-manifests': {
               isCompleted: true,
               completedAt: serverTimestamp(),
               autoCompleted: true
@@ -1224,14 +1243,17 @@ const ensureChaptersInitialized = async () => {
     console.log('Challenge requirements:', challenge.requirements);
     console.log('User progress chapters:', userProgress?.chapters);
     
+    // Always unlock challenges with no requirements
     if (!challenge.requirements || challenge.requirements.length === 0) {
-      console.log('No requirements, challenge is unlocked');
+      console.log('✅ No requirements, challenge is unlocked');
       return true; // No requirements means it's always unlocked
     }
 
     // Check each requirement
     for (const requirement of challenge.requirements) {
-      console.log(`Checking requirement: ${requirement.type} = ${requirement.value}`);
+      console.log(`🔍 Checking requirement: ${requirement.type} = ${requirement.value}`);
+      let requirementMet = false;
+      
       switch (requirement.type) {
         case 'artifact':
           // Check if the required artifact has been obtained
@@ -1241,84 +1263,80 @@ const ensureChaptersInitialized = async () => {
             console.log('Letter challenge isCompleted:', letterChallenge?.isCompleted);
             console.log('Letter challenge letterReceived:', letterChallenge?.letterReceived);
             
-            if (!letterChallenge?.isCompleted || !letterChallenge?.letterReceived) {
-              console.log('❌ Letter requirement not met - challenge remains locked');
-              return false;
-            }
-            console.log('✅ Letter requirement met - challenge should be unlocked');
+            requirementMet = letterChallenge?.isCompleted && letterChallenge?.letterReceived;
+            console.log(requirementMet ? '✅ Letter requirement met' : '❌ Letter requirement not met');
           } else if (requirement.value === 'chose_truth_metal') {
             const truthMetalChoice = userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice'];
-            if (!truthMetalChoice?.isCompleted) {
-              return false;
-            }
+            requirementMet = truthMetalChoice?.isCompleted;
           } else if (requirement.value === 'truth_metal_currency') {
             const truthMetalTouch = userProgress?.chapters?.[1]?.challenges?.['ep1-touch-truth-metal'];
-            if (!truthMetalTouch?.isCompleted) {
-              return false;
-            }
+            requirementMet = truthMetalTouch?.isCompleted;
           } else if (requirement.value === 'ui_explored') {
             const uiChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-mst-ui'];
-            if (!uiChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = uiChallenge?.isCompleted;
           } else if (requirement.value === 'first_combat') {
             const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
-            if (!combatChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = combatChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown artifact requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'manifest':
           if (requirement.value === 'chosen') {
             const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-choose-manifests'];
-            if (!manifestChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = manifestChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown manifest requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'profile':
           if (requirement.value === 'completed') {
             const profileChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile'];
-            if (!profileChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = profileChallenge?.isCompleted;
           } else if (requirement.value === 'power_card_viewed') {
             const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card'];
-            if (!powerCardChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = powerCardChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown profile requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'team':
           if (requirement.value === 'formed') {
             const teamChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
-            if (!teamChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = teamChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown team requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'rival':
           if (requirement.value === 'chosen') {
             const rivalChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-rival-selection'];
-            if (!rivalChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = rivalChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown rival requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'reflection':
           if (requirement.value === 'echo') {
             const reflectionChallenge = userProgress?.chapters?.[4]?.challenges?.['ch4-team-ordeal'];
-            if (!reflectionChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = reflectionChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown reflection requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'leadership':
           if (requirement.value === 'role') {
             const leadershipChallenge = userProgress?.chapters?.[5]?.challenges?.['ch5-world-reaction'];
-            if (!leadershipChallenge?.isCompleted) {
-              return false;
-            }
+            requirementMet = leadershipChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown leadership requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         case 'ethics':
@@ -1328,17 +1346,35 @@ const ensureChaptersInitialized = async () => {
               'ch8-believe', 'ch8-listen', 'ch8-speak', 
               'ch8-grow', 'ch8-letgo', 'ch8-give'
             ];
-            for (const ethicId of ethicsChallenges) {
+            requirementMet = ethicsChallenges.every(ethicId => {
               const ethicChallenge = userProgress?.chapters?.[8]?.challenges?.[ethicId];
-              if (!ethicChallenge?.isCompleted) {
-                return false;
-              }
-            }
+              return ethicChallenge?.isCompleted;
+            });
+          } else {
+            console.warn(`❌ Unknown ethics requirement: ${requirement.value}`);
+            requirementMet = false;
+          }
+          break;
+        case 'ability':
+          if (requirement.value === 'first_combat') {
+            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
+            requirementMet = combatChallenge?.isCompleted;
+          } else {
+            console.warn(`❌ Unknown ability requirement: ${requirement.value}`);
+            requirementMet = false;
           }
           break;
         default:
-          console.warn(`Unknown requirement type: ${requirement.type}`);
+          console.warn(`❌ Unknown requirement type: ${requirement.type}`);
+          requirementMet = false;
           break;
+      }
+      
+      console.log(`📊 Requirement ${requirement.type} = ${requirement.value}: ${requirementMet ? '✅ MET' : '❌ NOT MET'}`);
+      
+      if (!requirementMet) {
+        console.log(`❌ REQUIREMENT FAILED FOR: ${challenge.title} - CHALLENGE IS LOCKED`);
+        return false;
       }
     }
 
@@ -1721,12 +1757,13 @@ const ensureChaptersInitialized = async () => {
               📖 Chapter {currentChapter.id} Challenges
             </h3>
             <div style={{ display: 'grid', gap: '1rem' }}>
-              {currentChapter.challenges.map((challenge) => {
+              {currentChapter.challenges.map((challenge, index) => {
                 const challengeData = userProgress?.chapters?.[currentChapter.id]?.challenges?.[challenge.id] || {};
                 const isCompleted = challengeData.isCompleted;
                 const hasFile = !!challengeData.file;
                 const isUnlocked = isChallengeUnlocked(challenge, userProgress);
                 const classroomAssignment = chapterClassroomAssignments[challenge.id];
+                const challengeNumber = index + 1;
                 
                 return (
                   <div key={challenge.id} className={`challenge-${challenge.id.replace('ch1-', '')}`} style={{ 
@@ -1750,19 +1787,36 @@ const ensureChaptersInitialized = async () => {
                         fontSize: '12px',
                         fontWeight: 'bold'
                       }}>
-                        {isCompleted ? '✓' : !isUnlocked ? '🔒' : ''}
+                        {isCompleted ? '✓' : !isUnlocked ? '🔒' : challengeNumber}
                       </div>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                           <h3 style={{ 
                             fontSize: '1.125rem', 
                             fontWeight: 'bold',
-                            color: isCompleted ? '#22c55e' : isUnlocked ? '#1f2937' : '#9ca3af'
+                            color: isCompleted ? '#22c55e' : isUnlocked ? '#1f2937' : '#9ca3af',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem'
                           }}>
+                            <span style={{
+                              backgroundColor: isCompleted ? '#22c55e' : isUnlocked ? '#e5e7eb' : '#9ca3af',
+                              color: 'white',
+                              borderRadius: '50%',
+                              width: '20px',
+                              height: '20px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '0.75rem',
+                              fontWeight: 'bold'
+                            }}>
+                              {challengeNumber}
+                            </span>
                             {challenge.title}
                             {!isUnlocked && <span style={{ marginLeft: '0.5rem', fontSize: '0.875rem' }}>🔒</span>}
                           </h3>
-                          {((challenge.id === 'ch1-update-profile' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-manifest-test') && isCompleted && challengeData.autoCompleted) && (
+                          {((challenge.id === 'ep1-update-profile' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-manifest-test') && isCompleted && challengeData.autoCompleted) && (
                             <span style={{
                               padding: '0.25rem 0.5rem',
                               background: '#10b981',
@@ -1801,7 +1855,7 @@ const ensureChaptersInitialized = async () => {
                             </div>
                           </div>
                         )}
-                        {challenge.id === 'ch1-update-profile' && !isCompleted && (
+                        {challenge.id === 'ep1-update-profile' && !isCompleted && (
                           <div className="challenge-profile" style={{
                             padding: '0.75rem',
                             backgroundColor: '#dbeafe',
@@ -2075,7 +2129,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* File upload section - EXCLUDES profile, manifest, rival selection, tutorial, CPU battle, and letter challenges */}
-                    {!isCompleted && isUnlocked && challenge.id !== 'ch1-update-profile' && challenge.id !== 'ch1-declare-manifest' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && (
+                    {!isCompleted && isUnlocked && challenge.id !== 'ep1-update-profile' && challenge.id !== 'ep1-choose-manifests' && challenge.id !== 'ch2-rival-selection' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <input
                           type="file"
@@ -2148,7 +2202,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Profile challenge - NO file upload, only status tracking */}
-                    {!isCompleted && isUnlocked && challenge.id === 'ch1-update-profile' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ep1-update-profile' && (
                       <div style={{
                         padding: '1rem',
                         backgroundColor: '#f0fdf4',
@@ -2235,7 +2289,7 @@ const ensureChaptersInitialized = async () => {
                     )}
 
                     {/* Manifest challenge - NO file upload, only status tracking */}
-                    {!isCompleted && isUnlocked && challenge.id === 'ch1-declare-manifest' && (
+                    {!isCompleted && isUnlocked && challenge.id === 'ep1-choose-manifests' && (
                       <div className="challenge-manifest" style={{
                         padding: '1rem',
                         backgroundColor: '#f0fdf4',

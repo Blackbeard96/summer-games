@@ -60,7 +60,7 @@ if (typeof window !== 'undefined') {
     console.log('React app mounted:', !!document.querySelector('#root'));
     console.log('Local storage available:', 'localStorage' in window);
     
-    console.log('%c💡 Try refreshing the Training Grounds page and watch for GENERAL category logs', 'color: #6b7280');
+    console.log('%c💡 Try refreshing the Dashboard page and watch for GENERAL category logs', 'color: #6b7280');
   };
 
   // Force refresh role detection in NavBar
@@ -261,7 +261,7 @@ if (typeof window !== 'undefined') {
     console.log('%c  • clearAll() - Clear console + disable noisy logs', 'color: #ef4444');
     console.log('%c  • rosterStatus() - Quick roster state check', 'color: #10b981');
     console.log('%c  • debugRoster() - Detailed roster debugging (Role Manager page only)', 'color: #10b981');
-    console.log('%c  • debugDashboard() - Training Grounds/Dashboard debugging', 'color: #10b981');
+    console.log('%c  • debugDashboard() - Dashboard debugging', 'color: #10b981');
     console.log('%c  • checkUserRole(email?) - Check current or specific user\'s role', 'color: #059669');
     console.log('%c  • debugRoleAssignment() - Debug role assignment process', 'color: #8b5cf6');
     console.log('%c  • assignScorekeeperRole(classId?) - Manually assign scorekeeper role', 'color: #059669');

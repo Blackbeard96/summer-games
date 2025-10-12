@@ -228,12 +228,12 @@ const ChallengeTracker = () => {
           shouldAutoComplete = !!rival;
           console.log('ChallengeTracker: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!rival });
           break;
-        case 'ch1-update-profile':
+        case 'ep1-update-profile':
           // Auto-complete if profile is complete
           shouldAutoComplete = !!(userProgress.displayName && userProgress.photoURL);
           console.log('ChallengeTracker: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!userProgress.displayName, hasPhotoURL: !!userProgress.photoURL });
           break;
-        case 'ch1-declare-manifest':
+        case 'ep1-choose-manifests':
           // Auto-complete if manifest is chosen
           shouldAutoComplete = !!(userProgress.manifest?.manifestId || userProgress.manifestationType);
           console.log('ChallengeTracker: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(userProgress.manifest?.manifestId || userProgress.manifestationType) });
