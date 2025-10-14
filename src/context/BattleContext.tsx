@@ -31,6 +31,7 @@ import {
   ACTION_CARD_TEMPLATES,
   MOVE_DAMAGE_VALUES
 } from '../types/battle';
+import { getMoveDamage } from '../utils/moveOverrides';
 
 interface BattleContextType {
   // Vault Management
@@ -1851,11 +1852,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ppStolen = 0;
         } else {
           // This is an offensive move
-          const moveDamage = MOVE_DAMAGE_VALUES[selectedMove.name];
-          if (moveDamage) {
-            const totalDamage = moveDamage.damage;
-            console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage}`);
-            console.log(`📊 Move damage values:`, moveDamage);
+          const moveDamageValue = await getMoveDamage(selectedMove.name);
+          if (moveDamageValue) {
+            // Handle both single damage values and damage ranges
+            let totalDamage: number;
+            if (typeof moveDamageValue === 'object') {
+              // It's a range, use the max value for damage calculation
+              totalDamage = moveDamageValue.max;
+            } else {
+              // It's a single value
+              totalDamage = moveDamageValue;
+            }
+            
+            console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage} (from override: ${typeof moveDamageValue === 'object' ? `${moveDamageValue.min}-${moveDamageValue.max}` : moveDamageValue})`);
+            console.log(`📊 Move damage values:`, moveDamageValue);
             console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
             console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
             

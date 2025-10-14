@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Move } from '../types/battle';
+import { getMoveName } from '../utils/moveOverrides';
 
 interface BattleAnimationsProps {
   move: Move | null;
@@ -14,9 +15,23 @@ const BattleAnimations: React.FC<BattleAnimationsProps> = ({
 }) => {
   const [showAnimation, setShowAnimation] = useState(false);
   const [animationType, setAnimationType] = useState<string>('');
+  const [overriddenMoveName, setOverriddenMoveName] = useState<string>('');
 
   useEffect(() => {
     if (move) {
+      // Load the overridden move name
+      const loadMoveName = async () => {
+        try {
+          const customName = await getMoveName(move.name);
+          setOverriddenMoveName(customName);
+        } catch (error) {
+          console.error('Error loading move name override:', error);
+          setOverriddenMoveName(move.name);
+        }
+      };
+      
+      loadMoveName();
+      
       setShowAnimation(true);
       setAnimationType(getAnimationType(move));
       
@@ -112,7 +127,7 @@ const BattleAnimations: React.FC<BattleAnimationsProps> = ({
         border: `3px solid ${getMoveColor(move)}`,
         animation: 'slideInDown 0.5s ease-out'
       }}>
-        {move.name.toUpperCase()}!
+        {(overriddenMoveName || move.name).toUpperCase()}!
       </div>
 
       {/* Elemental Effects */}

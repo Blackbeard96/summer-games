@@ -11,10 +11,12 @@ import {
 import { getLevelFromXP } from '../utils/leveling';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { loadMoveOverrides } from '../utils/moveOverrides';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move) => void;
   onTargetSelect: (targetId: string) => void;
+  onEscape?: () => void;
   selectedMove: Move | null;
   selectedTarget: string | null;
   availableMoves: Move[];
@@ -26,6 +28,7 @@ interface BattleArenaProps {
 const BattleArena: React.FC<BattleArenaProps> = ({
   onMoveSelect,
   onTargetSelect,
+  onEscape,
   selectedMove,
   selectedTarget,
   availableMoves,
@@ -39,29 +42,85 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const [showTargetMenu, setShowTargetMenu] = useState(false);
   const [currentLogIndex, setCurrentLogIndex] = useState(0);
   const [userLevel, setUserLevel] = useState(1);
+  const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
+  const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
 
-  // Fetch user level
+  // Load move overrides when component mounts
   useEffect(() => {
-    const fetchUserLevel = async () => {
-      if (!currentUser) return;
-      
+    const loadOverrides = async () => {
       try {
-        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          const calculatedLevel = getLevelFromXP(userData.xp || 0);
-          console.log('BattleArena: User data from Firestore:', userData);
-          console.log('BattleArena: User XP from Firestore:', userData.xp);
-          console.log('BattleArena: Calculated level from XP:', calculatedLevel);
-          setUserLevel(calculatedLevel);
-        }
+        console.log('BattleArena: Loading move overrides...');
+        const overrides = await loadMoveOverrides();
+        setMoveOverrides(overrides);
+        console.log('BattleArena: Move overrides loaded:', overrides);
       } catch (error) {
-        console.error('Error fetching user level:', error);
+        console.error('BattleArena: Error loading move overrides:', error);
       }
     };
 
-    fetchUserLevel();
+    loadOverrides();
+  }, []);
+
+  // Fetch user level and photo
+  useEffect(() => {
+    const fetchUserData = async () => {
+      if (!currentUser) {
+        console.log('BattleArena: No currentUser available');
+        return;
+      }
+      
+      console.log('BattleArena: Fetching data for user:', currentUser.uid, currentUser.email);
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        console.log('BattleArena: User document exists:', userDoc.exists());
+        
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const calculatedLevel = getLevelFromXP(userData.xp || 0);
+          console.log('BattleArena: Full user data from Firestore:', userData);
+          console.log('BattleArena: User XP from Firestore:', userData.xp);
+          console.log('BattleArena: Calculated level from XP:', calculatedLevel);
+          console.log('BattleArena: User photoURL from Firestore:', userData.photoURL);
+          console.log('BattleArena: Current user photoURL:', currentUser.photoURL);
+          console.log('BattleArena: User displayName from Firestore:', userData.displayName);
+          console.log('BattleArena: Current user displayName:', currentUser.displayName);
+          
+          const finalPhotoURL = userData.photoURL || currentUser.photoURL || null;
+          console.log('BattleArena: Final photoURL being set:', finalPhotoURL);
+          
+          setUserLevel(calculatedLevel);
+          setUserPhotoURL(finalPhotoURL);
+        } else {
+          console.log('BattleArena: No user document found in students collection');
+          // Try users collection as fallback
+          const userDoc2 = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc2.exists()) {
+            const userData2 = userDoc2.data();
+            console.log('BattleArena: Found user data in users collection:', userData2);
+            const finalPhotoURL = userData2.photoURL || currentUser.photoURL || null;
+            setUserPhotoURL(finalPhotoURL);
+          }
+        }
+      } catch (error) {
+        console.error('BattleArena: Error fetching user data:', error);
+      }
+    };
+
+    fetchUserData();
   }, [currentUser]);
+
+  // Helper function to get move data with overrides applied
+  const getMoveDataWithOverrides = (moveName: string) => {
+    const override = moveOverrides[moveName];
+    const defaultMove = MOVE_DAMAGE_VALUES[moveName];
+    
+    return {
+      name: override?.name || moveName,
+      damage: override?.damage || defaultMove?.damage || 0,
+      description: override?.description || ''
+    };
+  };
 
   // Auto-advance battle log
   useEffect(() => {
@@ -87,6 +146,12 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const handleTargetClick = (targetId: string) => {
     onTargetSelect(targetId);
     setShowTargetMenu(false);
+  };
+
+  const handleEscape = () => {
+    if (onEscape) {
+      onEscape();
+    }
   };
 
 
@@ -119,6 +184,15 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     return icons[element as keyof typeof icons] || '⭐';
   };
 
+  const getOpponentImage = (opponentName: string) => {
+    // Return opponent-specific images based on name
+    if (opponentName.toLowerCase().includes('hela')) {
+      return '/images/Hela.png';
+    }
+    // Add more opponent images as needed
+    return null; // Default fallback
+  };
+
   return (
     <div style={{
       width: '100%',
@@ -142,31 +216,77 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         ⚔️ MST BATTLE ARENA ⚔️
       </div>
 
-      {/* Player's Vault (Bottom Left) */}
+
+      {/* Player Profile Picture */}
       <div style={{
         position: 'absolute',
-        bottom: '80px',
-        left: '80px',
-        width: '120px',
-        height: '120px',
-        background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+        bottom: '20px',
+        left: '20px',
+        width: '140px',
+        height: '140px',
         borderRadius: '50%',
-        border: '4px solid #92400e',
+        border: '4px solid #fbbf24',
+        overflow: 'hidden',
+        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+        background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        fontSize: '3rem',
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+        fontSize: '4rem',
         animation: isPlayerTurn ? 'pulse 1s infinite' : 'none'
       }}>
-        🏦
+        {(() => {
+          console.log('BattleArena: Rendering player profile - userPhotoURL:', userPhotoURL);
+          console.log('BattleArena: userPhotoURL type:', typeof userPhotoURL);
+          console.log('BattleArena: userPhotoURL length:', userPhotoURL?.length);
+          return userPhotoURL && userPhotoURL.trim() !== '';
+        })() ? (
+          <img 
+            key={userPhotoURL}
+            src={userPhotoURL || undefined} 
+            alt="Player Avatar"
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              borderRadius: '50%'
+            }}
+            onLoad={() => {
+              console.log('BattleArena: Player image loaded successfully:', userPhotoURL);
+            }}
+            onError={(e) => {
+              console.log('BattleArena: Player image failed to load:', userPhotoURL);
+              e.currentTarget.style.display = 'none';
+              const fallbackElement = e.currentTarget.nextElementSibling as HTMLElement;
+              if (fallbackElement) {
+                fallbackElement.style.display = 'flex';
+              }
+            }}
+          />
+        ) : (
+          <div 
+            key={`fallback-${currentUser?.displayName || 'player'}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '100%',
+              height: '100%',
+              fontSize: '3rem',
+              color: 'white',
+              fontWeight: 'bold'
+            }}
+          >
+            {currentUser?.displayName?.[0]?.toUpperCase() || 'P'}
+          </div>
+        )}
       </div>
 
       {/* Player Status Box */}
       <div style={{
         position: 'absolute',
         bottom: '20px',
-        left: '20px',
+        left: '180px',
         width: '200px',
         background: 'rgba(255, 255, 255, 0.95)',
         border: '3px solid #8B4513',
@@ -222,33 +342,73 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       </div>
 
-      {/* Opponent Vault (Top Right) - Always visible */}
+      {/* Opponent Profile Picture - Always visible */}
       {availableTargets.length > 0 && (
         <>
+
+          {/* Opponent Profile Picture */}
           <div style={{
             position: 'absolute',
-            top: '80px',
-            right: '80px',
-            width: '120px',
-            height: '120px',
-            background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+            top: '20px',
+            right: '20px',
+            width: '140px',
+            height: '140px',
             borderRadius: '50%',
-            border: '4px solid #991b1b',
+            border: '4px solid #ef4444',
+            overflow: 'hidden',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: '3rem',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            fontSize: '4rem',
             animation: !isPlayerTurn ? 'pulse 1s infinite' : 'none'
           }}>
-            🏰
+            {(() => {
+              const opponentImage = getOpponentImage(availableTargets[0]?.name || '');
+              return opponentImage ? (
+                <img 
+                  src={opponentImage} 
+                  alt="Opponent Avatar"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    objectPosition: '55% -20%',
+                    borderRadius: '50%',
+                    transform: 'scale(2.5)'
+                  }}
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    const fallbackElement = e.currentTarget.nextElementSibling as HTMLElement;
+                    if (fallbackElement) {
+                      fallbackElement.style.display = 'flex';
+                    }
+                  }}
+                />
+              ) : null;
+            })()}
+            <div 
+              style={{
+                display: getOpponentImage(availableTargets[0]?.name || '') ? 'none' : 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '100%',
+                height: '100%',
+                fontSize: '3rem',
+                color: 'white',
+                fontWeight: 'bold'
+              }}
+            >
+              {availableTargets[0]?.name?.[0]?.toUpperCase() || 'O'}
+            </div>
           </div>
 
           {/* Opponent Status Box */}
           <div style={{
             position: 'absolute',
             top: '20px',
-            right: '20px',
+            right: '180px',
             width: '200px',
             background: 'rgba(255, 255, 255, 0.95)',
             border: '3px solid #8B4513',
@@ -373,7 +533,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                   {getElementalIcon(move.elementalAffinity)}
-                  <span>{move.name}</span>
+                  <span>{getMoveDataWithOverrides(move.name).name}</span>
                 </div>
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
@@ -383,11 +543,20 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   const playerLevel = userLevel;
                   
                   // Show damage range for offensive moves
-                  const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-                  if (moveDamage && moveDamage.damage > 0) {
-                    const damageRange = calculateDamageRange(moveDamage.damage, move.level, move.masteryLevel);
+                  const moveData = getMoveDataWithOverrides(move.name);
+                  if (moveData.damage && (typeof moveData.damage === 'number' ? moveData.damage > 0 : moveData.damage.min > 0 || moveData.damage.max > 0)) {
+                    // Handle both single damage values and damage ranges
+                    let damageRange;
+                    if (typeof moveData.damage === 'object') {
+                      // It's already a range, use it directly
+                      damageRange = moveData.damage;
+                    } else {
+                      // It's a single value, calculate range based on mastery level
+                      damageRange = calculateDamageRange(moveData.damage, move.level, move.masteryLevel);
+                    }
+                    
                     const rangeString = formatDamageRange(damageRange);
-                    console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString);
+                    console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString, '(from override:', moveOverrides[move.name] ? 'YES' : 'NO', ')');
                     return (
                       <div style={{ 
                         fontSize: '0.625rem', 
@@ -399,6 +568,9 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         marginTop: '2px'
                       }}>
                         Damage: {rangeString}
+                        {moveOverrides[move.name] && (
+                          <span style={{ color: '#10B981', marginLeft: '4px' }}>⭐</span>
+                        )}
                       </div>
                     );
                   }
@@ -594,7 +766,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             🏦 VAULT
           </button>
           <button
-            onClick={() => {/* TODO: Implement run/escape */}}
+            onClick={handleEscape}
             style={{
               background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
               color: 'white',

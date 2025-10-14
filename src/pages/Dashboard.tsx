@@ -628,6 +628,53 @@ const Dashboard = () => {
         >
           🧪 Test Auto-Complete
         </button>
+        
+        <button
+          onClick={async () => {
+            if (!currentUser?.uid) {
+              console.log('❌ No current user or UID available');
+              return;
+            }
+            
+            console.log('🔍 Power Card Challenge Debug...');
+            const userRef = doc(db, 'students', currentUser.uid);
+            const studentDoc = await getDoc(userRef);
+            if (studentDoc.exists()) {
+              const studentData = studentDoc.data();
+              console.log('📊 Student Data:', {
+                hasPhotoURL: !!studentData?.photoURL,
+                photoURL: studentData?.photoURL,
+                hasDisplayName: !!studentData?.displayName,
+                displayName: studentData?.displayName,
+                hasPowerCardDescription: !!studentData?.powerCardDescription,
+                hasPowerCardBackground: !!studentData?.powerCardBackground,
+                hasPowerCardImage: !!studentData?.powerCardImage,
+                allKeys: Object.keys(studentData)
+              });
+              
+              const hasPowerCardCustomization = !!(studentData?.powerCardDescription || 
+                                                   studentData?.powerCardBackground || 
+                                                   studentData?.powerCardImage ||
+                                                   studentData?.photoURL);
+              console.log('🎴 Power Card Customization Check:', { hasPowerCardCustomization });
+            } else {
+              console.log('❌ No student document found');
+            }
+          }}
+          style={{
+            background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+            color: 'white',
+            padding: '0.75rem 1.5rem',
+            borderRadius: '0.5rem',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: 'bold',
+            marginLeft: '1rem'
+          }}
+        >
+          🎴 Debug Power Card
+        </button>
       </div>
 
       {/* Responsive Grid Layout: Story Challenges and Manifest Challenges */}

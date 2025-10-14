@@ -219,15 +219,28 @@ export const CHAPTERS: Chapter[] = [
         isCompleted: false
       },
       {
-        id: 'ep1-choose-manifests',
-        title: 'Choose Manifests',
-        description: 'Select your manifestation type and declare your path in the mystical arts',
+        id: 'ep1-power-card-intro',
+        title: 'Discover Your Power Card',
+        description: 'The Truth Metal transforms into a card - a visual and physical manifestation of your power. Explore your Power Card to understand yourself, your manifests, and your potential. The more you strengthen your manifest on your journey, the more your Power Card will reveal.',
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'ui_explored', description: 'Must have explored MST UI' }],
         rewards: [
-          { type: 'xp', value: 20, description: 'Manifest chosen XP' },
-          { type: 'pp', value: 10, description: 'Manifest chosen PP' },
-          { type: 'manifest', value: 'chosen', description: 'Manifest chosen' }
+          { type: 'xp', value: 25, description: 'Power Card discovery XP' },
+          { type: 'pp', value: 15, description: 'Power Card understanding PP' },
+          { type: 'artifact', value: 'power_card_discovered', description: 'Power Card discovered' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep1-portal-sequence',
+        title: 'Journey to Xiotein',
+        description: 'Receive a letter from Xiotein School directing you to an abandoned subway station. Meet other manifesters and face your first true test when the villain Hela appears, threatening to take your power cards or end your journey before it begins.',
+        type: 'personal',
+        requirements: [{ type: 'artifact', value: 'power_card_discovered', description: 'Must have discovered your Power Card' }],
+        rewards: [
+          { type: 'xp', value: 50, description: 'Portal sequence completion XP' },
+          { type: 'pp', value: 25, description: 'First villain encounter PP' },
+          { type: 'artifact', value: 'hela_encountered', description: 'Encountered Hela' }
         ],
         isCompleted: false
       },

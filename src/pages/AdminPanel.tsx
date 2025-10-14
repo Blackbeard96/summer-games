@@ -21,6 +21,7 @@ import RoleManager from '../components/RoleManager';
 import ScorekeeperInterface from '../components/ScorekeeperInterface';
 import PPChangeApproval from '../components/PPChangeApproval';
 import RoleSystemSetup from '../components/RoleSystemSetup';
+import ManifestAdmin from '../components/ManifestAdmin';
 
 interface ChallengeData {
   completed?: boolean;
@@ -64,6 +65,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountManager, setShowTestAccountManager] = useState(false);
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
+  const [showManifestAdmin, setShowManifestAdmin] = useState(false);
   const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
@@ -1761,77 +1763,63 @@ const AdminPanel: React.FC = () => {
           minHeight: '300px',
           color: '#374151',
           border: '1px solid #e5e7eb',
-          marginBottom: '2rem'
+          marginBottom: '2rem',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center'
         }}>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>All Manifests</h2>
-          <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
-            View all available manifests in the Nine Knowings Universe and their details.
+          <h2 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>
+            Manifest Administration
+          </h2>
+          <p style={{ fontSize: '1.25rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem', maxWidth: '600px' }}>
+            Manage manifests, edit move names and damage values, and configure the Nine Knowings Universe manifest system.
           </p>
           
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
-            {MANIFESTS.map((manifest) => (
-              <div key={manifest.id} style={{
-                background: 'white',
-                borderRadius: '0.75rem',
-                padding: '1.5rem',
-                border: '1px solid #e5e7eb',
-                boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-                  <span style={{ fontSize: '2rem', marginRight: '0.75rem' }}>{manifest.icon}</span>
-                  <div>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: manifest.color, margin: 0 }}>
-                      {manifest.name}
-                    </h3>
-                    <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
-                      ID: {manifest.id}
-                    </p>
-                  </div>
-                </div>
-                
-                <p style={{ color: '#374151', marginBottom: '1rem', lineHeight: '1.5' }}>
-                  {manifest.description}
-                </p>
-                
-                <div style={{ marginBottom: '1rem' }}>
-                  <strong style={{ color: '#374151' }}>Catalyst:</strong> {manifest.catalyst}
-                </div>
-                
-                <div style={{ marginBottom: '1rem' }}>
-                  <strong style={{ color: '#374151' }}>Signature Move:</strong> {manifest.signatureMove}
-                </div>
-                
-                <div>
-                  <strong style={{ color: '#374151' }}>Levels:</strong>
-                  <div style={{ marginTop: '0.5rem' }}>
-                    {manifest.levels.map((level) => (
-                      <div key={level.level} style={{
-                        background: level.unlocked ? '#f0f9ff' : '#f3f4f6',
-                        border: `1px solid ${level.unlocked ? '#0ea5e9' : '#d1d5db'}`,
-                        borderRadius: '0.375rem',
-                        padding: '0.75rem',
-                        marginBottom: '0.5rem'
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                          <span style={{ fontWeight: 'bold', color: level.unlocked ? '#0ea5e9' : '#6b7280' }}>
-                            Level {level.level}: {level.scale}
-                          </span>
-                          <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                            {level.xpRequired} XP
-                          </span>
-                        </div>
-                        <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: '0.25rem 0' }}>
-                          {level.description}
-                        </p>
-                        <p style={{ fontSize: '0.875rem', color: '#059669', fontStyle: 'italic', margin: 0 }}>
-                          Example: {level.example}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
+          <button
+            onClick={() => setShowManifestAdmin(true)}
+            style={{
+              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.75rem',
+              padding: '1rem 2rem',
+              fontSize: '1.125rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 6px 20px rgba(79, 70, 229, 0.4)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(79, 70, 229, 0.3)';
+            }}
+          >
+            🎯 Open Manifest Admin Panel
+          </button>
+          
+          <div style={{ 
+            marginTop: '2rem', 
+            padding: '1.5rem', 
+            background: 'rgba(79, 70, 229, 0.05)', 
+            borderRadius: '0.5rem',
+            border: '1px solid rgba(79, 70, 229, 0.1)',
+            maxWidth: '500px'
+          }}>
+            <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '0.75rem', color: '#4f46e5' }}>
+              Admin Features:
+            </h3>
+            <ul style={{ fontSize: '0.875rem', color: '#6b7280', lineHeight: '1.6', margin: 0, paddingLeft: '1.25rem' }}>
+              <li>View all manifests in an interactive grid layout</li>
+              <li>Edit move names and damage values</li>
+              <li>Configure manifest details and descriptions</li>
+              <li>Manage ascension levels and XP requirements</li>
+              <li>Preview changes before saving</li>
+            </ul>
           </div>
         </div>
       ) : activeTab === 'submissions' ? (
@@ -3238,6 +3226,12 @@ const AdminPanel: React.FC = () => {
       <ManifestDiagnostic
         isOpen={showManifestDiagnostic}
         onClose={() => setShowManifestDiagnostic(false)}
+      />
+
+      {/* Manifest Admin Modal */}
+      <ManifestAdmin
+        isOpen={showManifestAdmin}
+        onClose={() => setShowManifestAdmin(false)}
       />
 
       {/* Test Account Manager Modal */}

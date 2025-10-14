@@ -16,6 +16,7 @@ import TruthMetalTouchModal from './TruthMetalTouchModal';
 import TruthBattle from './TruthBattle';
 import TruthRevelationModal from './TruthRevelationModal';
 import MSTInterfaceTutorial from './MSTInterfaceTutorial';
+import HelaBattle from './HelaBattle';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -41,6 +42,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showTruthMetalModal, setShowTruthMetalModal] = useState(false);
   const [showTruthMetalTouchModal, setShowTruthMetalTouchModal] = useState(false);
   const [showTruthBattle, setShowTruthBattle] = useState(false);
+  const [showHelaBattle, setShowHelaBattle] = useState(false);
   const [showTruthRevelation, setShowTruthRevelation] = useState(false);
   const [truthRevealed, setTruthRevealed] = useState('');
   const [isReplayMode, setIsReplayMode] = useState(false);
@@ -158,6 +160,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           } else if (req.value === 'first_combat') {
             const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
             return combatChallenge?.isCompleted;
+          } else if (req.value === 'power_card_discovered') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
+            return powerCardChallenge?.isCompleted;
           } else {
             // Fallback to generic artifact check
             return userProgress.artifact?.identified;
@@ -178,7 +183,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         case 'manifest':
           // Handle specific manifest requirements
           if (req.value === 'chosen') {
-            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-choose-manifests'];
+            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             return manifestChallenge?.isCompleted;
           } else {
             // Check if player has chosen a manifest (from multiple possible locations)
@@ -332,10 +337,23 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           shouldAutoComplete = !!(studentData?.displayName && studentData?.photoURL);
           console.log('ChapterDetail: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!studentData?.displayName, hasPhotoURL: !!studentData?.photoURL });
           break;
-        case 'ep1-choose-manifests':
-          // Auto-complete if manifest is chosen
-          shouldAutoComplete = !!(studentData?.manifest?.manifestId || studentData?.manifestationType);
-          console.log('ChapterDetail: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(studentData?.manifest?.manifestId || studentData?.manifestationType) });
+        case 'ep1-power-card-intro':
+          // Auto-complete if Power Card has been customized (description, background, or image)
+          const hasPowerCardCustomization = !!(studentData?.powerCardDescription || 
+                                               studentData?.powerCardBackground || 
+                                               studentData?.powerCardImage ||
+                                               studentData?.photoURL); // Profile picture counts as Power Card image
+          shouldAutoComplete = hasPowerCardCustomization;
+          console.log('ChapterDetail: Power Card discovery challenge auto-complete check:', { 
+            shouldAutoComplete, 
+            hasPowerCardDescription: !!studentData?.powerCardDescription,
+            hasPowerCardBackground: !!studentData?.powerCardBackground,
+            hasPowerCardImage: !!studentData?.powerCardImage,
+            hasProfilePicture: !!studentData?.photoURL,
+            studentDataKeys: studentData ? Object.keys(studentData) : 'no studentData',
+            photoURLValue: studentData?.photoURL,
+            displayNameValue: studentData?.displayName
+          });
           break;
         default:
           // For other challenges, check if they have no requirements and are team-type
@@ -360,7 +378,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
               [challenge.id]: {
                 isCompleted: true,
                 status: 'approved',
-                completionDate: new Date()
+                completedAt: serverTimestamp()
               }
             }
           }
@@ -383,7 +401,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             [challenge.id]: {
               completed: true,
               status: 'approved',
-              completionDate: new Date()
+              completedAt: serverTimestamp()
             }
           };
           
@@ -652,7 +670,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             'ep1-view-mst-ui': {
               isCompleted: true,
               status: 'approved',
-              completionDate: new Date(),
+              completedAt: serverTimestamp(),
               tutorialCompleted: true
             }
           }
@@ -662,6 +680,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       await updateDoc(userRef, {
         chapters: updatedChapters
       });
+
+      // Update local state to reflect the completion
+      setUserProgress((prev: any) => ({
+        ...prev,
+        chapters: updatedChapters
+      }));
 
       // Create notification for challenge completion
       await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
@@ -730,6 +754,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       await updateDoc(userRef, {
         chapters: updatedChapters
       });
+
+      // Update local state to reflect the completion
+      setUserProgress((prev: any) => ({
+        ...prev,
+        chapters: updatedChapters
+      }));
 
       // Add to challenge submissions
       await addDoc(collection(db, 'challengeSubmissions'), {
@@ -977,6 +1007,75 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     } catch (error) {
       console.error('Error completing letter challenge:', error);
       alert('Failed to complete the letter challenge. Please try again.');
+    }
+  };
+
+  // Hela Battle Handlers
+  const handleHelaBattleVictory = async () => {
+    if (!currentUser) return;
+
+    // If in replay mode, just show victory message without updating database
+    if (isReplayMode) {
+      alert('🎉 Victory! You\'ve defeated Hela in this replay!');
+      setIsReplayMode(false);
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = await getDoc(userRef);
+      
+      if (currentData.exists()) {
+        const updatedChapters = {
+          ...currentData.data().chapters,
+          [chapter.id]: {
+            ...currentData.data().chapters?.[chapter.id],
+            challenges: {
+              ...currentData.data().chapters?.[chapter.id]?.challenges,
+              ['ep1-portal-sequence']: {
+                isCompleted: true,
+                status: 'approved',
+                completedAt: serverTimestamp(),
+                helaDefeated: true
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Update local state
+        setUserProgress((prev: any) => ({
+          ...prev,
+          chapters: updatedChapters
+        }));
+
+        console.log('Portal sequence challenge completed - Hela defeated!');
+        alert('🎉 Victory! You\'ve defeated Hela and can now continue to Xiotein School!');
+      }
+    } catch (error) {
+      console.error('Error completing portal sequence challenge:', error);
+      alert('Failed to complete the portal sequence challenge. Please try again.');
+    }
+  };
+
+  const handleHelaBattleDefeat = () => {
+    if (isReplayMode) {
+      alert('💀 Hela has overpowered you in this replay! Try a different strategy!');
+      setIsReplayMode(false);
+    } else {
+      alert('💀 Hela has overpowered you. Your journey ends here... Try again when you\'re stronger!');
+    }
+  };
+
+  const handleHelaBattleEscape = () => {
+    if (isReplayMode) {
+      alert('🏃 You chose to run away from Hela in this replay!');
+      setIsReplayMode(false);
+    } else {
+      alert('🏃 You chose to run away from Hela. The portal remains closed, but you live to fight another day...');
     }
   };
 
@@ -1247,52 +1346,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                 </span>
               </div>
 
-                          {/* Tutorial section for Navigate the Portal challenge */}
-                          {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                style={{ 
-                                  padding: '0.75rem 1.5rem', 
-                                  background: '#3b82f6', 
-                                  color: 'white', 
-                                  border: 'none', 
-                                  borderRadius: '0.5rem', 
-                                  cursor: 'pointer',
-                                  fontWeight: 'bold',
-                                  fontSize: '0.875rem',
-                                  transition: 'all 0.2s ease'
-                                }}
-                                onClick={() => setShowPortalTutorial(true)}
-                                onMouseOver={(e) => {
-                                  e.currentTarget.style.background = '#2563eb';
-                                  e.currentTarget.style.transform = 'translateY(-2px)';
-                                }}
-                                onMouseOut={(e) => {
-                                  e.currentTarget.style.background = '#3b82f6';
-                                  e.currentTarget.style.transform = 'translateY(0)';
-                                }}
-                              >
-                                🎓 Start Tutorial
-                              </button>
-                              <div style={{
-                                padding: '0.75rem',
-                                backgroundColor: '#dbeafe',
-                                border: '1px solid #3b82f6',
-                                borderRadius: '0.25rem',
-                                fontSize: '0.8rem',
-                                color: '#1e40af',
-                                maxWidth: '300px'
-                              }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                                  💡 Tutorial Instructions
-                                </div>
-                                <div>
-                                  Take a guided tour of Xiotein School to learn about all the features and areas. Completing the tutorial will finish this challenge!
-                                </div>
-                              </div>
-                            </div>
-                          )}
 
                           {/* CPU Battle section for Test Awakened Abilities challenge */}
                           {status === 'available' && challenge.id === 'ep1-manifest-test' && (
@@ -1473,8 +1526,74 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </button>
                           )}
 
+                          {/* Power Card Discovery Challenge Button */}
+                          {status === 'available' && challenge.id === 'ep1-power-card-intro' && (
+                            <button
+                              onClick={() => navigate('/profile')}
+                              style={{
+                                background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                                color: 'white',
+                                border: '3px solid #d97706',
+                                borderRadius: '0.75rem',
+                                padding: '1rem',
+                                fontSize: '1rem',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(251, 191, 36, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(251, 191, 36, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>🎴</span>
+                              Update Your Power Card
+                            </button>
+                          )}
+
+                          {/* Portal Sequence Challenge Button */}
+                          {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
+                            <button
+                              onClick={() => setShowHelaBattle(true)}
+                              style={{
+                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                color: 'white',
+                                border: '3px solid #5a67d8',
+                                borderRadius: '0.75rem',
+                                padding: '1rem',
+                                fontSize: '1rem',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(102, 126, 234, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(102, 126, 234, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>🚇</span>
+                              Journey to Xiotein
+                            </button>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1563,13 +1682,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                   </div>
                   
                   {/* Replay Button for Battle Challenges */}
-                  {(challenge.id === 'ep1-touch-truth-metal' || challenge.id === 'ep1-manifest-test') && (
+                  {(challenge.id === 'ep1-touch-truth-metal' || challenge.id === 'ep1-manifest-test' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-combat-drill') && (
                     <button
                       onClick={() => {
                         setIsReplayMode(true);
                         if (challenge.id === 'ep1-touch-truth-metal') {
                           setShowTruthMetalTouchModal(true);
                         } else if (challenge.id === 'ep1-manifest-test') {
+                          setShowCPUBattleModal(true);
+                        } else if (challenge.id === 'ep1-portal-sequence') {
+                          setShowHelaBattle(true);
+                        } else if (challenge.id === 'ep1-combat-drill') {
                           setShowCPUBattleModal(true);
                         }
                       }}
@@ -2429,6 +2552,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             isOpen={showMSTTutorial}
             onComplete={handleMSTTutorialComplete}
             onClose={() => setShowMSTTutorial(false)}
+          />
+
+          {/* Hela Battle Modal */}
+          <HelaBattle
+            isOpen={showHelaBattle}
+            onClose={() => setShowHelaBattle(false)}
+            onVictory={handleHelaBattleVictory}
+            onDefeat={handleHelaBattleDefeat}
+            onEscape={handleHelaBattleEscape}
           />
         </div>
       );

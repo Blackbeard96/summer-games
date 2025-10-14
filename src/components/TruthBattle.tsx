@@ -52,6 +52,11 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
       setTimeout(() => {
         onVictory(revealedTruth);
       }, 2000);
+    } else if (result === 'escape') {
+      // Handle escape - close the battle immediately without completing the challenge
+      setTimeout(() => {
+        onClose();
+      }, 1000);
     } else {
       setBattlePhase('defeat');
       setTimeout(() => {

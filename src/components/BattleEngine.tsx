@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
+import { Move } from '../types/battle';
+import { getMoveDamage, getMoveName } from '../utils/moveOverrides';
 import { 
   calculateDamageRange, 
   calculateShieldBoostRange, 
@@ -92,12 +93,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     fetchUserLevel();
   }, [currentUser]);
 
-  // Update opponent when prop changes
+  // Update opponent when prop changes (only on initial mount or when prop actually changes)
   useEffect(() => {
     if (propOpponent) {
-      setOpponent(propOpponent);
+      setOpponent(prev => {
+        // Only update if the prop is actually different (prevent resetting during battle)
+        if (prev.id !== propOpponent.id || prev.name !== propOpponent.name) {
+          return propOpponent;
+        }
+        return prev;
+      });
     }
-  }, [propOpponent]);
+  }, [propOpponent?.id, propOpponent?.name]);
 
   const availableMoves = moves.filter(move => move.unlocked && move.currentCooldown === 0);
   const availableTargets = [
@@ -151,9 +158,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     let playerShieldBoost = 0;
     let playerHealing = 0;
     
+    // Get the overridden move name for battle log messages
+    const overriddenMoveName = await getMoveName(move.name);
+    
     // Offensive moves - use damage range system
     if (move.damage) {
-      const baseDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || move.damage || 0;
+      const moveDamageValue = await getMoveDamage(move.name);
+      // Handle both single damage values and damage ranges
+      let baseDamage: number;
+      if (typeof moveDamageValue === 'object') {
+        // It's a range, use the max value for damage calculation
+        baseDamage = moveDamageValue.max;
+      } else {
+        // It's a single value
+        baseDamage = moveDamageValue;
+      }
+      
       const damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
       const damageResult = rollDamage(damageRange, playerLevel, move.level, move.masteryLevel);
       
@@ -164,13 +184,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       // Log attack with damage breakdown and range info
       const rangeInfo = damageResult.isMaxDamage ? ' (MAX DAMAGE!)' : '';
       if (shieldDamage > 0 && remainingDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to PP)${rangeInfo}!`);
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to PP)${rangeInfo}!`);
       } else if (shieldDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${shieldDamage} damage to shields${rangeInfo}!`);
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields${rangeInfo}!`);
       } else if (remainingDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${move.name} for ${remainingDamage} damage to PP${rangeInfo}!`);
+        newLog.push(`⚔️ ${playerName} attacked ${opponent.name} with ${overriddenMoveName} for ${remainingDamage} damage to PP${rangeInfo}!`);
       } else {
-        newLog.push(`⚔️ ${playerName} used ${move.name} on ${opponent.name}${rangeInfo}!`);
+        newLog.push(`⚔️ ${playerName} used ${overriddenMoveName} on ${opponent.name}${rangeInfo}!`);
       }
       
       console.log('Damage Roll Debug:', {
@@ -186,7 +206,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     
     if (move.ppSteal) {
       // PP steal also uses damage range system
-      const baseDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || move.damage || 0;
+      const moveDamageValue = await getMoveDamage(move.name);
+      // Handle both single damage values and damage ranges
+      let baseDamage: number;
+      if (typeof moveDamageValue === 'object') {
+        // It's a range, use the max value for damage calculation
+        baseDamage = moveDamageValue.max;
+      } else {
+        // It's a single value
+        baseDamage = moveDamageValue;
+      }
+      
       const damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
       const damageResult = rollDamage(damageRange, playerLevel, move.level, move.masteryLevel);
       
@@ -203,7 +233,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       
       playerShieldBoost = shieldResult.damage; // Using damage field for shield boost amount
       const rangeInfo = shieldResult.isMaxDamage ? ' (MAX BOOST!)' : '';
-      newLog.push(`🛡️ ${playerName} used ${move.name} to boost shields by ${playerShieldBoost}${rangeInfo}!`);
+      newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}${rangeInfo}!`);
       
       console.log('Shield Boost Debug:', {
         moveName: move.name,
@@ -224,7 +254,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       
       playerHealing = healingResult.damage; // Using damage field for healing amount
       const rangeInfo = healingResult.isMaxDamage ? ' (MAX HEAL!)' : '';
-      newLog.push(`💚 ${playerName} used ${move.name} to heal for ${playerHealing} PP${rangeInfo}!`);
+      newLog.push(`💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP${rangeInfo}!`);
     }
     
     // Update opponent stats
@@ -267,7 +297,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     if (newOpponent.currentPP <= 0) {
       newLog.push(`💀 ${opponent.name} has been defeated!`);
       newLog.push(`🎉 Victory! You have successfully raided ${opponent.name}'s vault!`);
-      newLog.push(`🏆 Training Dummy defeated! Great job!`);
+      newLog.push(`🏆 ${opponent.name} defeated! Great job!`);
       setBattleState(prev => ({
         ...prev,
         phase: 'victory',
@@ -302,14 +332,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     if (!vault) return;
     
     const newLog = [...currentLog];
-    // Simple opponent AI - random move selection with damage ranges
-    // Training Dummy has reduced damage for new players
-    const opponentMoves = [
-      { name: 'Vault Breach', baseDamage: 8, level: 1, masteryLevel: 1 },
-      { name: 'PP Drain', baseDamage: 6, level: 1, masteryLevel: 1 },
-      { name: 'Shield Bash', baseDamage: 7, level: 1, masteryLevel: 1 },
-      { name: 'Energy Strike', baseDamage: 9, level: 1, masteryLevel: 1 }
-    ];
+    // Opponent AI - different moves for different opponents
+    let opponentMoves;
+    
+    if (opponent.id === 'hela') {
+      // Hela's ice-based moves
+      opponentMoves = [
+        { name: 'Ice Shard', baseDamage: 7, level: 1, masteryLevel: 1, type: 'attack' },
+        { name: 'Ice Wall', baseDamage: 0, level: 1, masteryLevel: 1, type: 'defense' }
+      ];
+    } else {
+      // Default training dummy moves
+      opponentMoves = [
+        { name: 'Vault Breach', baseDamage: 8, level: 1, masteryLevel: 1 },
+        { name: 'PP Drain', baseDamage: 6, level: 1, masteryLevel: 1 },
+        { name: 'Shield Bash', baseDamage: 7, level: 1, masteryLevel: 1 },
+        { name: 'Energy Strike', baseDamage: 9, level: 1, masteryLevel: 1 }
+      ];
+    }
     
     const opponentMove = opponentMoves[Math.floor(Math.random() * opponentMoves.length)];
     
@@ -320,8 +360,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     const totalDamage = damageResult.damage;
     let shieldDamage = 0;
     let ppStolen = 0;
+    let opponentShieldRestore = 0;
     
-    if (totalDamage > 0) {
+    // Special handling for Hela's Ice Wall move
+    if (opponent.id === 'hela' && opponentMove.name === 'Ice Wall') {
+      // Ice Wall restores 5-10 shields for Hela
+      const shieldRange = { min: 5, max: 10 };
+      opponentShieldRestore = Math.floor(Math.random() * (shieldRange.max - shieldRange.min + 1)) + shieldRange.min;
+      newLog.push(`🧊 ${opponent.name} used ${opponentMove.name} and restored ${opponentShieldRestore} shields!`);
+    } else if (totalDamage > 0) {
       // Apply damage to shields first, then PP
       shieldDamage = Math.min(totalDamage, vault.shieldStrength);
       const remainingDamage = totalDamage - shieldDamage;
@@ -372,6 +419,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       console.log('✅ Vault updated successfully after CPU attack');
     } catch (error) {
       console.error('❌ Failed to update vault after CPU attack:', error);
+    }
+    
+    // Update opponent shields if Ice Wall was used
+    if (opponentShieldRestore > 0) {
+      setOpponent(prev => {
+        const newOpponentShieldStrength = Math.min(prev.maxShieldStrength, prev.shieldStrength + opponentShieldRestore);
+        console.log(`✅ ${opponent.name}'s shields restored: ${prev.shieldStrength} → ${newOpponentShieldStrength}`);
+        return {
+          ...prev,
+          shieldStrength: newOpponentShieldStrength
+        };
+      });
     }
     
     // Check for defeat
@@ -432,6 +491,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }
   }, [battleState.phase, onBattleEnd]);
 
+  // Handle escape
+  const handleEscape = () => {
+    // Add escape message to battle log
+    setBattleState(prev => ({
+      ...prev,
+      battleLog: [...prev.battleLog, 'You chose to run away from the battle!']
+    }));
+    
+    // End battle with escape result after a short delay
+    setTimeout(() => {
+      onBattleEnd('escape');
+    }, 1000);
+  };
+
   if (!vault) {
     return (
       <div style={{
@@ -452,6 +525,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
       <BattleArena
         onMoveSelect={handleMoveSelect}
         onTargetSelect={handleTargetSelect}
+        onEscape={handleEscape}
         selectedMove={battleState.selectedMove}
         selectedTarget={battleState.selectedTarget}
         availableMoves={availableMoves}
@@ -550,7 +624,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
               You defeated {opponent.name}!
             </div>
             <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', opacity: 0.8 }}>
-              Training Dummy defeated! Great job!
+              {opponent.name} defeated! Great job!
             </div>
           </div>
         </div>

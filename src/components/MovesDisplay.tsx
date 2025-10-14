@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange, 
@@ -6,6 +6,7 @@ import {
   calculateHealingRange,
   formatDamageRange 
 } from '../utils/damageCalculator';
+import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription } from '../utils/moveOverrides';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -46,8 +47,42 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   getNextElementalMilestone,
   elementalProgress,
 }) => {
+  const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
+  const [overridesLoaded, setOverridesLoaded] = useState(false);
+
+  // Load move overrides when component mounts
+  useEffect(() => {
+    const loadOverrides = async () => {
+      try {
+        console.log('MovesDisplay: Loading move overrides...');
+        const overrides = await loadMoveOverrides();
+        setMoveOverrides(overrides);
+        setOverridesLoaded(true);
+        console.log('MovesDisplay: Move overrides loaded:', overrides);
+      } catch (error) {
+        console.error('MovesDisplay: Error loading move overrides:', error);
+        setOverridesLoaded(true); // Set to true even on error to prevent infinite loading
+      }
+    };
+
+    loadOverrides();
+  }, []);
+
   console.log('MovesDisplay: movesRemaining:', movesRemaining, 'offlineMovesRemaining:', offlineMovesRemaining);
   console.log('MovesDisplay: Total moves loaded:', moves.length);
+  console.log('MovesDisplay: Move overrides loaded:', overridesLoaded, 'overrides:', moveOverrides);
+
+  // Helper function to get move data with overrides applied
+  const getMoveDataWithOverrides = (moveName: string) => {
+    const override = moveOverrides[moveName];
+    const defaultMove = MOVE_DAMAGE_VALUES[moveName];
+    
+    return {
+      name: override?.name || moveName,
+      damage: override?.damage || defaultMove?.damage || 0,
+      description: override?.description || ''
+    };
+  };
 
   // Filter moves by category and unlocked status
   const manifestMoves = moves.filter(move => move.category === 'manifest' && move.unlocked);
@@ -191,7 +226,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             textAlign: 'center'
           }}>
-            {move.name}
+            {getMoveDataWithOverrides(move.name).name}
           </h3>
           {move.level > 1 && (
             <span style={{ 
@@ -225,7 +260,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textAlign: 'center',
             marginBottom: '0.75rem'
           }}>
-            {move.description}
+            {getMoveDataWithOverrides(move.name).description || move.description}
           </p>
 
           {/* Power Type Information */}
@@ -291,9 +326,18 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
 
           {/* Combined Damage Range */}
           {(() => {
-            const moveDamage = MOVE_DAMAGE_VALUES[move.name];
-            if (moveDamage && moveDamage.damage > 0) {
-              const damageRange = calculateDamageRange(moveDamage.damage, move.level, move.masteryLevel);
+            const moveData = getMoveDataWithOverrides(move.name);
+            if (moveData.damage && (typeof moveData.damage === 'number' ? moveData.damage > 0 : moveData.damage.min > 0 || moveData.damage.max > 0)) {
+              // Handle both single damage values and damage ranges
+              let damageRange;
+              if (typeof moveData.damage === 'object') {
+                // It's already a range, use it directly
+                damageRange = moveData.damage;
+              } else {
+                // It's a single value, calculate range based on mastery level
+                damageRange = calculateDamageRange(moveData.damage, move.level, move.masteryLevel);
+              }
+              
               const rangeString = formatDamageRange(damageRange);
               return (
                 <div style={{
@@ -306,6 +350,11 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }}>
                   <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE RANGE</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{rangeString}</div>
+                  {moveOverrides[move.name] && (
+                    <div style={{ fontSize: '0.6rem', color: '#10B981', marginTop: '0.25rem' }}>
+                      ⭐ CUSTOM VALUE
+                    </div>
+                  )}
                 </div>
               );
             }
@@ -411,7 +460,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             </div>
             <div style={{ fontSize: '0.75rem', color: '#059669', lineHeight: '1.3' }}>
               {(() => {
-                const currentDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || 0;
+                const moveData = getMoveDataWithOverrides(move.name);
+                const currentDamage = typeof moveData.damage === 'object' ? moveData.damage.min : moveData.damage;
                 const nextDamage = nextLevelStats.damage !== undefined ? nextLevelStats.damage : 0;
                 if (currentDamage > 0 && nextDamage > 0) {
                   const currentRange = calculateDamageRange(currentDamage, move.level, move.masteryLevel);

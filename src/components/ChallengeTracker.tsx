@@ -233,10 +233,20 @@ const ChallengeTracker = () => {
           shouldAutoComplete = !!(userProgress.displayName && userProgress.photoURL);
           console.log('ChallengeTracker: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!userProgress.displayName, hasPhotoURL: !!userProgress.photoURL });
           break;
-        case 'ep1-choose-manifests':
-          // Auto-complete if manifest is chosen
-          shouldAutoComplete = !!(userProgress.manifest?.manifestId || userProgress.manifestationType);
-          console.log('ChallengeTracker: Manifest declaration challenge auto-complete check:', { shouldAutoComplete, hasManifest: !!(userProgress.manifest?.manifestId || userProgress.manifestationType) });
+        case 'ep1-power-card-intro':
+          // Auto-complete if Power Card has been customized (description, background, or image)
+          const hasPowerCardCustomization = !!(userProgress?.powerCardDescription || 
+                                               userProgress?.powerCardBackground || 
+                                               userProgress?.powerCardImage ||
+                                               userProgress?.photoURL); // Profile picture counts as Power Card image
+          shouldAutoComplete = hasPowerCardCustomization;
+          console.log('ChallengeTracker: Power Card discovery challenge auto-complete check:', { 
+            shouldAutoComplete, 
+            hasPowerCardDescription: !!userProgress?.powerCardDescription,
+            hasPowerCardBackground: !!userProgress?.powerCardBackground,
+            hasPowerCardImage: !!userProgress?.powerCardImage,
+            hasProfilePicture: !!userProgress?.photoURL
+          });
           break;
         default:
           // For other challenges, check if they have no requirements and are team-type
@@ -259,7 +269,7 @@ const ChallengeTracker = () => {
               [challenge.id]: {
                 isCompleted: true,
                 status: 'approved',
-                completionDate: new Date()
+                completedAt: serverTimestamp()
               }
             }
           }
@@ -282,7 +292,7 @@ const ChallengeTracker = () => {
             [challenge.id]: {
               completed: true,
               status: 'approved',
-              completionDate: new Date()
+              completedAt: serverTimestamp()
             }
           };
           
@@ -474,11 +484,16 @@ const ChallengeTracker = () => {
     
     try {
       const userRef = doc(db, 'students', currentUser.uid);
-      await setDoc(userRef, { 
-        challenges: {}, 
-        xp: 0, 
-        powerPoints: 0, 
-        manifestationType: elementName
+      
+      // Get existing user data to preserve progress
+      const userSnap = await getDoc(userRef);
+      const existingData = userSnap.exists() ? userSnap.data() : {};
+      
+      // Only update the manifestation type, preserve all other data
+      await updateDoc(userRef, { 
+        manifestationType: elementName,
+        // Only reset XP/PP if this is a new user (no existing data)
+        ...(userSnap.exists() ? {} : { xp: 0, powerPoints: 0, challenges: {} })
       });
       
       setManifestationType(elementName);

@@ -48,8 +48,8 @@ const StoryChallenges = () => {
         
         // Check and auto-complete profile update challenge
         checkAndCompleteProfileChallenge(userData);
-        // Check and auto-complete manifest declaration challenge
-        checkAndCompleteManifestChallenge(userData);
+        // Check and auto-complete Power Card discovery challenge
+        checkAndCompletePowerCardChallenge(userData);
         // Check and auto-complete rival selection challenge
         checkAndCompleteRivalChallenge(userData);
         
@@ -67,9 +67,9 @@ const StoryChallenges = () => {
           manifest: studentData.manifest || prev?.manifest
         }));
         
-        // Check manifest completion with merged data
+        // Check Power Card completion with merged data
         if (studentData.manifest) {
-          checkAndCompleteManifestChallenge({
+          checkAndCompletePowerCardChallenge({
             ...userProgress,
             ...studentData,
             manifest: studentData.manifest
@@ -119,7 +119,7 @@ const StoryChallenges = () => {
     // Check if we're in Chapter 1 and challenges are not completed
     const isChapter1Active = userProgress.chapters?.[1]?.isActive;
     const isProfileChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
-    const isManifestChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-choose-manifests']?.isCompleted;
+    const isManifestChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-power-card-intro']?.isCompleted;
     
     if (isProfileComplete && isChapter1Active && !isProfileChallengeCompleted) {
       console.log('Profile is complete, auto-completing challenge...');
@@ -127,8 +127,8 @@ const StoryChallenges = () => {
     }
     
     if (hasManifest && isChapter1Active && !isManifestChallengeCompleted) {
-      console.log('Manifest is chosen, auto-completing challenge...');
-      checkAndCompleteManifestChallenge(userProgress);
+      console.log('Manifest is chosen, auto-completing Power Card challenge...');
+      checkAndCompletePowerCardChallenge(userProgress);
     }
   }, [currentUser, userProgress]);
 
@@ -262,9 +262,9 @@ const StoryChallenges = () => {
     }
   };
 
-  // Function to check and auto-complete manifest declaration challenge
-  const checkAndCompleteManifestChallenge = async (userData: any) => {
-    console.log('🔍 checkAndCompleteManifestChallenge called', { 
+  // Function to check and auto-complete Power Card discovery challenge
+  const checkAndCompletePowerCardChallenge = async (userData: any) => {
+    console.log('🔍 checkAndCompletePowerCardChallenge called', { 
       currentUser: !!currentUser, 
       userData: !!userData,
       chapter1Active: userData?.chapters?.[1]?.isActive 
@@ -280,37 +280,28 @@ const StoryChallenges = () => {
       }
 
       // Check if challenge is already completed
-      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ep1-choose-manifests']?.isCompleted;
+      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ep1-power-card-intro']?.isCompleted;
       if (isAlreadyCompleted) {
         console.log('Manifest challenge already completed');
         return;
       }
 
-      // Check if manifest is chosen (has manifest data) - check multiple possible formats
-      const hasManifest = (userData.manifest && 
-                          userData.manifest.manifestId && 
-                          userData.manifest.manifestId !== 'None' &&
-                          userData.manifest.manifestId !== '') ||
-                         (userData.manifest && 
-                          typeof userData.manifest === 'object' && 
-                          Object.keys(userData.manifest).length > 0) ||
-                         (userData.manifest && 
-                          typeof userData.manifest === 'string' && 
-                          userData.manifest !== 'None' && 
-                          userData.manifest !== '') ||
-                         (userData.manifestationType && 
-                          userData.manifestationType !== 'None' && 
-                          userData.manifestationType !== '');
+      // Check if Power Card has been customized (description, background, or image)
+      const hasPowerCardCustomization = !!(userData?.powerCardDescription || 
+                                           userData?.powerCardBackground || 
+                                           userData?.powerCardImage ||
+                                           userData?.photoURL); // Profile picture counts as Power Card image
       
-      console.log('Manifest completion check:', { 
-        hasManifest, 
-        manifest: userData.manifest,
-        manifestId: userData.manifest?.manifestId,
-        manifestationType: userData.manifestationType
+      console.log('Power Card completion check:', { 
+        hasPowerCardCustomization, 
+        hasPowerCardDescription: !!userData?.powerCardDescription,
+        hasPowerCardBackground: !!userData?.powerCardBackground,
+        hasPowerCardImage: !!userData?.powerCardImage,
+        hasProfilePicture: !!userData?.photoURL
       });
       
-      if (hasManifest) {
-        console.log('Manifest is chosen, auto-completing challenge...');
+      if (hasPowerCardCustomization) {
+        console.log('Power Card has been customized, auto-completing challenge...');
         
         // Auto-complete the manifest challenge
         const userRef = doc(db, 'users', currentUser.uid);
@@ -320,7 +311,7 @@ const StoryChallenges = () => {
             ...userData.chapters?.[1],
             challenges: {
               ...userData.chapters?.[1]?.challenges,
-              'ep1-choose-manifests': {
+              'ep1-power-card-intro': {
                 isCompleted: true,
                 completedAt: serverTimestamp(),
                 autoCompleted: true
@@ -339,13 +330,13 @@ const StoryChallenges = () => {
           displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || '',
-          challengeId: 'ep1-choose-manifests',
-          challengeName: 'Declare Your Manifest',
+          challengeId: 'ep1-power-card-intro',
+          challengeName: 'Discover Your Power Card',
           submissionType: 'auto_completed',
           status: 'approved',
           timestamp: serverTimestamp(),
-          xpReward: 20,
-          ppReward: 8,
+          xpReward: 25,
+          ppReward: 15,
           manifestationType: 'Chapter Challenge',
           character: 'Chapter System',
           autoCompleted: true
@@ -373,7 +364,7 @@ const StoryChallenges = () => {
           sessionStorage.setItem('manifestAutoCompleteAlertShown', 'true');
         }
       } else {
-        console.log('Manifest not chosen yet:', { hasManifest });
+        console.log('Power Card not customized yet:', { hasPowerCardCustomization });
       }
     } catch (error) {
       console.error('Error auto-completing manifest challenge:', error);
@@ -504,7 +495,7 @@ const ensureChaptersInitialized = async () => {
       console.log('Manual manifest completion check triggered');
       console.log('Current userProgress:', userProgress);
       console.log('Manifest data:', userProgress.manifest);
-      await checkAndCompleteManifestChallenge(userProgress);
+      await checkAndCompletePowerCardChallenge(userProgress);
       // Check for chapter progression after manual completion
       await checkAndProgressChapter(1);
     }
@@ -720,7 +711,7 @@ const ensureChaptersInitialized = async () => {
               completedAt: serverTimestamp(),
               autoCompleted: true
             },
-            'ep1-choose-manifests': {
+            'ep1-power-card-intro': {
               isCompleted: true,
               completedAt: serverTimestamp(),
               autoCompleted: true
@@ -963,7 +954,7 @@ const ensureChaptersInitialized = async () => {
                 'ch2-rival-selection': {
                   isCompleted: true,
                   status: 'approved',
-                  completionDate: new Date()
+                  completedAt: serverTimestamp()
                 }
               }
             }
@@ -1277,6 +1268,9 @@ const ensureChaptersInitialized = async () => {
           } else if (requirement.value === 'first_combat') {
             const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
             requirementMet = combatChallenge?.isCompleted;
+          } else if (requirement.value === 'power_card_discovered') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
+            requirementMet = powerCardChallenge?.isCompleted;
           } else {
             console.warn(`❌ Unknown artifact requirement: ${requirement.value}`);
             requirementMet = false;
@@ -1284,7 +1278,7 @@ const ensureChaptersInitialized = async () => {
           break;
         case 'manifest':
           if (requirement.value === 'chosen') {
-            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-choose-manifests'];
+            const manifestChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             requirementMet = manifestChallenge?.isCompleted;
           } else {
             console.warn(`❌ Unknown manifest requirement: ${requirement.value}`);
@@ -2011,52 +2005,6 @@ const ensureChaptersInitialized = async () => {
                       </div>
                     </div>
 
-                    {/* Tutorial section for Navigate the Portal challenge */}
-                    {!isCompleted && isUnlocked && challenge.id === 'ep1-portal-sequence' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          style={{ 
-                            padding: '0.75rem 1.5rem', 
-                            background: '#3b82f6', 
-                            color: 'white', 
-                            border: 'none', 
-                            borderRadius: '0.5rem', 
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                            fontSize: '0.875rem',
-                            transition: 'all 0.2s ease'
-                          }}
-                          onClick={() => setShowPortalTutorial(true)}
-                          onMouseOver={(e) => {
-                            e.currentTarget.style.background = '#2563eb';
-                            e.currentTarget.style.transform = 'translateY(-2px)';
-                          }}
-                          onMouseOut={(e) => {
-                            e.currentTarget.style.background = '#3b82f6';
-                            e.currentTarget.style.transform = 'translateY(0)';
-                          }}
-                        >
-                          🎓 Start Tutorial
-                        </button>
-                        <div style={{
-                          padding: '0.75rem',
-                          backgroundColor: '#dbeafe',
-                          border: '1px solid #3b82f6',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.8rem',
-                          color: '#1e40af',
-                          maxWidth: '300px'
-                        }}>
-                          <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                            💡 Tutorial Instructions
-                          </div>
-                          <div>
-                            Take a guided tour of Xiotein School to learn about all the features and areas. Completing the tutorial will finish this challenge!
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
                     {/* CPU Battle section for Test Awakened Abilities challenge */}
                     {!isCompleted && isUnlocked && challenge.id === 'ep1-manifest-test' && (
@@ -2436,7 +2384,7 @@ const ensureChaptersInitialized = async () => {
                             console.log('🔧 Manual manifest sync and challenge check...');
                             await ensureChaptersInitialized();
                             if (userProgress?.manifest) {
-                              await checkAndCompleteManifestChallenge(userProgress);
+                              await checkAndCompletePowerCardChallenge(userProgress);
                             } else {
                               console.log('No manifest data found in userProgress');
                             }
