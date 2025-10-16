@@ -1751,14 +1751,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return { success: false, message: 'No user or vault found' };
     }
     
-    // Consume an offline move first
-    console.log('🔥 About to consume offline move...');
-    const moveConsumed = await consumeOfflineMove();
-    console.log('🔥 Offline move consumed result:', moveConsumed);
-    if (!moveConsumed) {
-      console.log('🔥 Early return: No offline moves remaining');
-      return { success: false, message: 'No offline moves remaining' };
-    }
+    // Note: Move consumption is now handled by BattleEngine before calling this function
+    // No need to consume moves here to avoid double consumption
     
     try {
       console.log('Executing vault siege attack:', { moveId, targetUserId, actionCardId });

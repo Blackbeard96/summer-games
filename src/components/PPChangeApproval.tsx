@@ -8,7 +8,8 @@ import {
   updateDoc, 
   serverTimestamp,
   query,
-  where
+  where,
+  addDoc
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
@@ -126,6 +127,50 @@ const PPChangeApproval: React.FC = () => {
         reviewedAt: serverTimestamp()
       });
 
+      // Create notifications for students whose PP was changed
+      for (const change of request.changes) {
+        try {
+          // Calculate final PP for this specific change
+          let changeFinalPP = change.newPP;
+          try {
+            const activeBoost = await getActivePPBoost(change.studentId);
+            if (activeBoost && change.changeAmount > 0) {
+              const boostedAmount = applyPPBoost(change.changeAmount, change.studentId, activeBoost);
+              changeFinalPP = change.currentPP + boostedAmount;
+            }
+          } catch (error) {
+            // Use original newPP if boost calculation fails
+            changeFinalPP = change.newPP;
+          }
+
+          await addDoc(collection(db, 'students', change.studentId, 'notifications'), {
+            type: 'pp_change_approved',
+            message: `Your Power Points have been updated by ${change.changeAmount > 0 ? '+' : ''}${change.changeAmount}. New total: ${changeFinalPP}`,
+            changeAmount: change.changeAmount,
+            newTotal: changeFinalPP,
+            scorekeeperName: request.scorekeeperEmail,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+        } catch (notificationError) {
+          console.error('Error creating PP change notification:', notificationError);
+        }
+      }
+
+      // Create notification for scorekeeper
+      try {
+        await addDoc(collection(db, 'students', request.scorekeeperId, 'notifications'), {
+          type: 'pp_changes_approved',
+          message: `Your PP change request for ${request.className} has been approved!`,
+          className: request.className,
+          changesCount: request.changes.length,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      } catch (notificationError) {
+        console.error('Error creating scorekeeper notification:', notificationError);
+      }
+
       // Remove from local state
       setChangeRequests(prev => prev.filter(r => r.id !== requestId));
 
@@ -148,12 +193,30 @@ const PPChangeApproval: React.FC = () => {
 
     setProcessing(requestId);
     try {
+      // Find the request object first
+      const request = changeRequests.find(r => r.id === requestId);
+      if (!request) return;
+
       // Update the change request status
       await updateDoc(doc(db, 'ppChangeRequests', requestId), {
         status: 'rejected',
         reviewedBy: currentUser.uid,
         reviewedAt: serverTimestamp()
       });
+
+      // Create notification for scorekeeper
+      try {
+        await addDoc(collection(db, 'students', request.scorekeeperId, 'notifications'), {
+          type: 'pp_changes_rejected',
+          message: `Your PP change request for ${request.className} has been rejected.`,
+          className: request.className,
+          changesCount: request.changes.length,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      } catch (notificationError) {
+        console.error('Error creating scorekeeper rejection notification:', notificationError);
+      }
 
       // Remove from local state
       setChangeRequests(prev => prev.filter(r => r.id !== requestId));

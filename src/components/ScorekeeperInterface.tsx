@@ -13,6 +13,8 @@ import {
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import SearchBar from './SearchBar';
+import { searchStudents } from '../utils/searchUtils';
 
 // FORCE DEBUG LOG - This should appear in console when component loads
 console.log('🚨 ScorekeeperInterface.tsx: COMPONENT FILE LOADED - VERSION 2.0');
@@ -31,6 +33,8 @@ interface Student {
 const ScorekeeperInterface: React.FC = () => {
   const { currentUser } = useAuth();
   const [students, setStudents] = useState<Student[]>([]);
+  const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [userRole, setUserRole] = useState<UserRole>('student');
   const [loading, setLoading] = useState<boolean>(true);
   const [assignedClassId, setAssignedClassId] = useState<string>('');
@@ -262,6 +266,21 @@ const ScorekeeperInterface: React.FC = () => {
     loadStudents();
   }, [assignedClassId, userRole]);
 
+  // Filter students based on search query
+  useEffect(() => {
+    const filtered = searchStudents(students, searchQuery);
+    setFilteredStudents(filtered);
+  }, [students, searchQuery]);
+
+  // Search handlers
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+  };
+
   // Handle PP adjustment (now tracks pending changes)
   const handleAdjustPP = async (studentId: string, change: number) => {
     const student = students.find(s => s.id === studentId);
@@ -348,6 +367,22 @@ const ScorekeeperInterface: React.FC = () => {
       };
 
       await addDoc(collection(db, 'ppChangeRequests'), changeRequest);
+
+      // Create notification for admin
+      try {
+        await addDoc(collection(db, 'adminNotifications'), {
+          type: 'pp_change_submitted',
+          message: `${currentUser.email} submitted ${changesToSubmit.length} PP changes for ${className} requiring approval.`,
+          scorekeeperId: currentUser.uid,
+          scorekeeperEmail: currentUser.email,
+          className: className,
+          changesCount: changesToSubmit.length,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      } catch (notificationError) {
+        console.error('Error creating admin notification:', notificationError);
+      }
 
       logger.roster.info('ScorekeeperInterface: Submitted changes for approval:', {
         scorekeeperId: currentUser.uid,
@@ -460,8 +495,8 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  // Sort students by PP (highest first)
-  const sortedStudents = [...students].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
+  // Sort filtered students by PP (highest first)
+  const sortedStudents = [...filteredStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
   const totalPP = students.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
   const averagePP = students.length > 0 ? Math.round(totalPP / students.length) : 0;
 
@@ -489,6 +524,25 @@ const ScorekeeperInterface: React.FC = () => {
         }}>
           {className} - Manage Power Points for all students
         </p>
+      </div>
+
+      {/* Search Bar */}
+      <div style={{ marginBottom: '2rem' }}>
+        <SearchBar
+          placeholder="Search students by name or email..."
+          onSearch={handleSearch}
+          onClear={handleClearSearch}
+          style={{ maxWidth: '500px' }}
+        />
+        {searchQuery && (
+          <div style={{ 
+            marginTop: '0.5rem', 
+            fontSize: '0.875rem', 
+            color: '#6b7280' 
+          }}>
+            Showing {filteredStudents.length} of {students.length} students
+          </div>
+        )}
       </div>
 
       {/* Instructions Section */}

@@ -4,13 +4,14 @@ import { useAuth } from '../context/AuthContext';
 import { useStory } from '../context/StoryContext';
 import { useBattle } from '../context/BattleContext';
 import { STORY_EPISODES, BossData } from '../types/story';
+import { Move, ActionCard } from '../types/battle';
 import EpisodeRewardsModal from '../components/EpisodeRewardsModal';
 
 const StoryEpisodeBattle: React.FC = () => {
   const { episodeId } = useParams<{ episodeId: string }>();
   const { currentUser } = useAuth();
   const { defeatBoss } = useStory();
-  const { vault } = useBattle();
+  const { vault, moves, actionCards } = useBattle();
   const navigate = useNavigate();
 
   const [episode, setEpisode] = useState(STORY_EPISODES.find(ep => ep.id === episodeId));
@@ -26,6 +27,10 @@ const StoryEpisodeBattle: React.FC = () => {
   const [victory, setVictory] = useState(false);
   const [showRewards, setShowRewards] = useState(false);
   const [turn, setTurn] = useState(1);
+  const [selectedMove, setSelectedMove] = useState<Move | null>(null);
+  const [selectedActionCard, setSelectedActionCard] = useState<ActionCard | null>(null);
+  const [playerEnergy, setPlayerEnergy] = useState(10);
+  const [maxPlayerEnergy] = useState(10);
 
   useEffect(() => {
     if (!episode) {
@@ -56,36 +61,138 @@ const StoryEpisodeBattle: React.FC = () => {
     return Math.round(baseDamage * modifier);
   };
 
-  const playerAttack = () => {
+  const executePlayerTurn = () => {
     if (!boss || battleEnded || !isBattling) return;
 
-    // Player attacks
-    const damage = calculateDamage(20 + (vault?.shieldStrength || 0));
-    const newBossHealth = Math.max(0, bossHealth - damage);
-    setBossHealth(newBossHealth);
-    addToBattleLog(`💥 You deal ${damage} damage to ${boss.name}!`);
+    let actionTaken = false;
 
-    // Check if boss is defeated
-    if (newBossHealth <= 0) {
-      handleVictory();
+    // Execute selected move
+    if (selectedMove) {
+      executeMove(selectedMove);
+      actionTaken = true;
+    }
+
+    // Execute selected action card
+    if (selectedActionCard) {
+      executeActionCard(selectedActionCard);
+      actionTaken = true;
+    }
+
+    if (!actionTaken) {
+      addToBattleLog('⚠️ Please select a move or action card!');
       return;
     }
 
-    // Check for phase transition
-    const healthPercent = newBossHealth / maxBossHealth;
-    if (boss.phases >= 2 && currentPhase === 1 && healthPercent <= 0.5) {
-      setCurrentPhase(2);
-      addToBattleLog(`🌟 ${boss.name} enters Phase 2!`);
-    }
-    if (boss.phases >= 3 && currentPhase === 2 && healthPercent <= 0.25) {
-      setCurrentPhase(3);
-      addToBattleLog(`⚡ ${boss.name} enters Phase 3!`);
+    // Clear selections
+    setSelectedMove(null);
+    setSelectedActionCard(null);
+  };
+
+  const executeMove = (move: Move) => {
+    if (!boss || !vault) return;
+
+    // Check energy cost
+    if (playerEnergy < move.cost) {
+      addToBattleLog(`⚠️ Not enough energy! Need ${move.cost}, have ${playerEnergy}`);
+      return;
     }
 
-    // Boss attacks back
+    // Consume energy
+    setPlayerEnergy(prev => prev - move.cost);
+
+    // Calculate damage based on move properties
+    let totalDamage = 0;
+    let healing = 0;
+    let shieldBoost = 0;
+
+    if (move.damage) {
+      totalDamage = calculateDamage(move.damage + (move.masteryLevel - 1) * 2);
+    }
+    if (move.healing) {
+      healing = calculateDamage(move.healing + (move.masteryLevel - 1) * 2);
+    }
+    if (move.shieldBoost) {
+      shieldBoost = move.shieldBoost + (move.masteryLevel - 1) * 2;
+    }
+
+    // Apply damage to boss
+    if (totalDamage > 0) {
+      const newBossHealth = Math.max(0, bossHealth - totalDamage);
+      setBossHealth(newBossHealth);
+      addToBattleLog(`💥 ${move.name} deals ${totalDamage} damage to ${boss.name}!`);
+
+      // Check if boss is defeated
+      if (newBossHealth <= 0) {
+        handleVictory();
+        return;
+      }
+
+      // Check for phase transition
+      const healthPercent = newBossHealth / maxBossHealth;
+      if (boss.phases >= 2 && currentPhase === 1 && healthPercent <= 0.5) {
+        setCurrentPhase(2);
+        addToBattleLog(`🌟 ${boss.name} enters Phase 2!`);
+      }
+      if (boss.phases >= 3 && currentPhase === 2 && healthPercent <= 0.25) {
+        setCurrentPhase(3);
+        addToBattleLog(`⚡ ${boss.name} enters Phase 3!`);
+      }
+    }
+
+    // Apply healing to player
+    if (healing > 0) {
+      const newPlayerHealth = Math.min(maxPlayerHealth, playerHealth + healing);
+      setPlayerHealth(newPlayerHealth);
+      addToBattleLog(`💚 ${move.name} heals you for ${healing} HP!`);
+    }
+
+    // Apply shield boost
+    if (shieldBoost > 0) {
+      addToBattleLog(`🛡️ ${move.name} boosts your shield by ${shieldBoost}!`);
+      // Note: Shield boost would need to be applied to vault, but for story battles we'll just log it
+    }
+
+    // Boss attacks back after a delay
     setTimeout(() => {
       bossAttack();
-    }, 1000);
+    }, 1500);
+  };
+
+  const executeActionCard = (card: ActionCard) => {
+    if (!vault) return;
+
+    // Check if card has uses remaining
+    if (card.uses <= 0) {
+      addToBattleLog(`⚠️ ${card.name} has no uses remaining!`);
+      return;
+    }
+
+    // Execute card effect
+    switch (card.effect.type) {
+      case 'shield_restore':
+        addToBattleLog(`🛡️ ${card.name} restores your shields!`);
+        // In a real implementation, this would restore vault shields
+        break;
+      case 'pp_restore':
+        addToBattleLog(`⚡ ${card.name} restores your energy!`);
+        setPlayerEnergy(maxPlayerEnergy);
+        break;
+      case 'shield_breach':
+        addToBattleLog(`💥 ${card.name} bypasses boss defenses!`);
+        // This would affect the next attack
+        break;
+      default:
+        addToBattleLog(`✨ ${card.name} effect activated!`);
+    }
+
+    // Consume card use
+    // Note: In a real implementation, this would update the card's uses in the database
+    addToBattleLog(`🃏 ${card.name} used (${card.uses - 1} remaining)`);
+
+    // Boss attacks back after a delay
+    setTimeout(() => {
+      bossAttack();
+    }, 1500);
   };
 
   const bossAttack = () => {
@@ -140,6 +247,9 @@ const StoryEpisodeBattle: React.FC = () => {
 
     setTurn(prev => prev + 1);
     setIsBattling(false);
+    
+    // Restore some energy for next turn
+    setPlayerEnergy(prev => Math.min(maxPlayerEnergy, prev + 2));
   };
 
   const handleVictory = async () => {
@@ -168,12 +278,6 @@ const StoryEpisodeBattle: React.FC = () => {
     addToBattleLog(`💀 Defeat! You have been defeated...`);
   };
 
-  const handleAttackClick = () => {
-    if (isBattling) return;
-    setIsBattling(true);
-    playerAttack();
-  };
-
   const handleRetry = () => {
     // Reset battle state
     if (!episode) return;
@@ -183,11 +287,18 @@ const StoryEpisodeBattle: React.FC = () => {
     setMaxBossHealth(bossData.health);
     setCurrentPhase(1);
     setPlayerHealth(maxPlayerHealth);
+    setPlayerEnergy(maxPlayerEnergy);
     setBattleLog([]);
     setBattleEnded(false);
     setVictory(false);
+    setShowRewards(false);
     setTurn(1);
-    addToBattleLog(`⚔️ Battle Start: ${bossData.name}`);
+    setIsBattling(false);
+    setSelectedMove(null);
+    setSelectedActionCard(null);
+    
+    // Restart battle
+    addToBattleLog(`⚔️ Battle Restart: ${bossData.name}`);
     addToBattleLog(`${bossData.name} has ${bossData.health} HP!`);
   };
 
@@ -457,10 +568,118 @@ const StoryEpisodeBattle: React.FC = () => {
             Turn {turn}
           </div>
 
-          {/* Action Buttons */}
+          {/* Player Energy */}
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              marginBottom: '0.5rem',
+              color: 'white'
+            }}>
+              <span style={{ fontWeight: 'bold' }}>Energy</span>
+              <span>{playerEnergy}/{maxPlayerEnergy}</span>
+            </div>
+            <div style={{
+              background: 'rgba(0, 0, 0, 0.3)',
+              height: '12px',
+              borderRadius: '6px',
+              overflow: 'hidden',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              <div style={{
+                background: 'linear-gradient(90deg, #8b5cf6, #7c3aed)',
+                height: '100%',
+                width: `${(playerEnergy / maxPlayerEnergy) * 100}%`,
+                transition: 'width 0.3s ease'
+              }} />
+            </div>
+          </div>
+
+          {/* Move Selection */}
           {!battleEnded && (
+            <div style={{ marginBottom: '1rem' }}>
+              <h4 style={{ color: 'white', fontSize: '1rem', marginBottom: '0.5rem' }}>
+                Select Move:
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                {moves.filter(move => move.unlocked).slice(0, 4).map(move => (
+                  <button
+                    key={move.id}
+                    onClick={() => setSelectedMove(move)}
+                    disabled={isBattling || playerEnergy < move.cost}
+                    style={{
+                      background: selectedMove?.id === move.id 
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                        : playerEnergy < move.cost
+                          ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'
+                          : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.75rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: (isBattling || playerEnergy < move.cost) ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold' }}>{move.name}</div>
+                    <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                      {move.cost} Energy
+                      {move.damage && ` • ${move.damage} DMG`}
+                      {move.healing && ` • ${move.healing} HEAL`}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Action Cards */}
+          {!battleEnded && (
+            <div style={{ marginBottom: '1rem' }}>
+              <h4 style={{ color: 'white', fontSize: '1rem', marginBottom: '0.5rem' }}>
+                Action Cards:
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                {actionCards.filter(card => card.unlocked && card.uses > 0).slice(0, 2).map(card => (
+                  <button
+                    key={card.id}
+                    onClick={() => setSelectedActionCard(card)}
+                    disabled={isBattling}
+                    style={{
+                      background: selectedActionCard?.id === card.id 
+                        ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+                        : 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.75rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: isBattling ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold' }}>🃏 {card.name}</div>
+                    <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                      {card.uses} uses • {card.effect.type.replace('_', ' ')}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Execute Turn Button */}
+          {!battleEnded && (selectedMove || selectedActionCard) && (
             <button
-              onClick={handleAttackClick}
+              onClick={() => {
+                setIsBattling(true);
+                executePlayerTurn();
+              }}
               disabled={isBattling}
               style={{
                 width: '100%',
@@ -475,20 +694,11 @@ const StoryEpisodeBattle: React.FC = () => {
                 fontWeight: 'bold',
                 cursor: isBattling ? 'not-allowed' : 'pointer',
                 transition: 'all 0.2s',
-                boxShadow: isBattling ? 'none' : '0 4px 12px rgba(239, 68, 68, 0.4)'
-              }}
-              onMouseEnter={(e) => {
-                if (!isBattling) {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(239, 68, 68, 0.5)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.4)';
+                boxShadow: isBattling ? 'none' : '0 4px 12px rgba(239, 68, 68, 0.4)',
+                marginTop: '1rem'
               }}
             >
-              {isBattling ? '⏳ Attacking...' : '⚔️ Attack'}
+              {isBattling ? '⏳ Executing...' : '⚔️ Execute Turn'}
             </button>
           )}
 

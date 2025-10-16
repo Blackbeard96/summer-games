@@ -608,7 +608,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <span style={{ fontSize: '1.5rem' }}>⚔️</span>
           </div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#dc2626', marginBottom: '0.5rem' }}>
-            {vault.movesRemaining} / {vault.maxMovesPerDay}
+            {remainingOfflineMoves} / {maxOfflineMoves}
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
@@ -618,9 +618,9 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               overflow: 'hidden'
             }}>
               <div style={{
-                background: `linear-gradient(90deg, ${getStatusColor((vault.movesRemaining / vault.maxMovesPerDay) * 100)} 0%, ${getStatusColor((vault.movesRemaining / vault.maxMovesPerDay) * 100)}80 100%)`,
+                background: `linear-gradient(90deg, ${getStatusColor((remainingOfflineMoves / maxOfflineMoves) * 100)} 0%, ${getStatusColor((remainingOfflineMoves / maxOfflineMoves) * 100)}80 100%)`,
                 height: '100%',
-                width: `${(vault.movesRemaining / vault.maxMovesPerDay) * 100}%`,
+                width: `${(remainingOfflineMoves / maxOfflineMoves) * 100}%`,
                 transition: 'width 0.3s ease'
               }} />
             </div>
@@ -632,7 +632,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             fontSize: '0.875rem',
             color: '#6b7280'
           }}>
-            <span>{getStatusIcon((vault.movesRemaining / vault.maxMovesPerDay) * 100)} Daily Remaining</span>
+            <span>{getStatusIcon((remainingOfflineMoves / maxOfflineMoves) * 100)} Daily Remaining</span>
             <span>Resets Daily</span>
           </div>
           

@@ -22,6 +22,16 @@ import ScorekeeperInterface from '../components/ScorekeeperInterface';
 import PPChangeApproval from '../components/PPChangeApproval';
 import RoleSystemSetup from '../components/RoleSystemSetup';
 import ManifestAdmin from '../components/ManifestAdmin';
+import SearchBar from '../components/SearchBar';
+import { searchStudents } from '../utils/searchUtils';
+
+interface Classroom {
+  id: string;
+  name: string;
+  description?: string;
+  maxStudents?: number;
+  students: string[];
+}
 
 interface ChallengeData {
   completed?: boolean;
@@ -54,6 +64,9 @@ const AdminPanel: React.FC = () => {
   const { showLevelUpNotification } = useLevelUp();
   const { currentUser } = useAuth();
   const [students, setStudents] = useState<Student[]>([]);
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [editingStudent, setEditingStudent] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ displayName: '', email: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ studentId: string; challenge: string } | null>(null);
@@ -374,6 +387,36 @@ const AdminPanel: React.FC = () => {
     }
   }, [activeTab, students]);
 
+  // Filter students based on search query
+  useEffect(() => {
+    const filtered = searchStudents(students, searchQuery);
+    setFilteredStudents(filtered);
+  }, [students, searchQuery]);
+
+  // Search handlers
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+  };
+
+  // Helper function to get classrooms for a student
+  const getStudentClassrooms = (studentId: string): string[] => {
+    console.log('🔍 getStudentClassrooms called for student:', studentId);
+    console.log('🔍 Available classrooms length:', classrooms.length);
+    console.log('🔍 Available classrooms:', classrooms);
+    console.log('🔍 Classroom students arrays:', classrooms.map(c => ({ name: c.name, students: c.students })));
+    
+    const result = classrooms
+      .filter(classroom => classroom.students.includes(studentId))
+      .map(classroom => classroom.name);
+    
+    console.log('🔍 Found classrooms for student', studentId, ':', result);
+    return result;
+  };
+
   // Add a function to refresh students data
   const refreshStudentsData = async () => {
     try {
@@ -392,11 +435,14 @@ const AdminPanel: React.FC = () => {
 
   useEffect(() => {
     const fetchStudents = async () => {
-      console.log('Fetching students data...');
+      console.log('🚀 AdminPanel: Starting fetchStudents function...');
       
       // Force fresh data by using getDocs with no caching
       const usersSnapshot = await getDocs(collection(db, 'users'));
       const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+      
+      console.log('📊 AdminPanel: Raw classroom snapshot docs:', classroomsSnapshot.docs.length);
       
       console.log('Users collection size:', usersSnapshot.docs.length);
       console.log('Students collection size:', studentsSnapshot.docs.length);
@@ -456,7 +502,24 @@ const AdminPanel: React.FC = () => {
       
       const list = Array.from(studentsMap.values()) as Student[];
       console.log('Final students list:', list);
+      console.log('Student IDs:', list.map(s => s.id));
       setStudents(list);
+
+      // Process classroom data
+      console.log('🏫 AdminPanel: Processing classroom data...');
+      const classroomsData: Classroom[] = classroomsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Classroom[];
+      
+      console.log('🏫 AdminPanel: Classrooms data:', classroomsData);
+      console.log('🏫 AdminPanel: Classrooms count:', classroomsData.length);
+      classroomsData.forEach(classroom => {
+        console.log(`🏫 AdminPanel: Classroom "${classroom.name}" has ${classroom.students?.length || 0} students:`, classroom.students);
+      });
+      console.log('🏫 AdminPanel: Setting classrooms state...');
+      setClassrooms(classroomsData);
+      console.log('🏫 AdminPanel: Classrooms state set successfully');
     };
     fetchStudents();
   }, []);
@@ -798,7 +861,7 @@ const AdminPanel: React.FC = () => {
     setSelected(prev => prev.includes(studentId) ? prev.filter(id => id !== studentId) : [...prev, studentId]);
   };
   const selectAll = () => {
-    setSelected(students.map(s => s.id));
+    setSelected(filteredStudents.map(s => s.id));
   };
   const deselectAll = () => {
     setSelected([]);
@@ -2321,6 +2384,28 @@ const AdminPanel: React.FC = () => {
                   Deselect All
                 </button>
               </div>
+
+              {/* Search Bar */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '0.75rem' }}>
+                  Search Students
+                </h3>
+                <SearchBar
+                  placeholder="Search by name or email..."
+                  onSearch={handleSearch}
+                  onClear={handleClearSearch}
+                  style={{ maxWidth: '400px' }}
+                />
+                {searchQuery && (
+                  <div style={{ 
+                    marginTop: '0.5rem', 
+                    fontSize: '0.875rem', 
+                    color: '#6b7280' 
+                  }}>
+                    Showing {filteredStudents.length} of {students.length} students
+                  </div>
+                )}
+              </div>
               
               {selected.length > 0 && (
                 <div style={{
@@ -2456,8 +2541,8 @@ const AdminPanel: React.FC = () => {
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
                       <input
                         type="checkbox"
-                        checked={selected.length === students.length && students.length > 0}
-                        onChange={() => selected.length === students.length ? deselectAll() : selectAll()}
+                        checked={selected.length === filteredStudents.length && filteredStudents.length > 0}
+                        onChange={() => selected.length === filteredStudents.length ? deselectAll() : selectAll()}
                       />
                     </th>
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Student</th>
@@ -2469,11 +2554,12 @@ const AdminPanel: React.FC = () => {
                         Type amount + Enter or click Set
                       </div>
                     </th>
+                    <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Classrooms</th>
                     <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((student) => (
+                  {filteredStudents.map((student) => (
                     <tr key={student.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
                       <td style={{ padding: '1rem' }}>
                         <input
@@ -2628,6 +2714,36 @@ const AdminPanel: React.FC = () => {
                               </button>
                             )}
                           </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                          {getStudentClassrooms(student.id).length > 0 ? (
+                            getStudentClassrooms(student.id).map((className, index) => (
+                              <span
+                                key={index}
+                                style={{
+                                  backgroundColor: '#e0f2fe',
+                                  color: '#0c4a6e',
+                                  padding: '0.25rem 0.5rem',
+                                  borderRadius: '0.375rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '500',
+                                  border: '1px solid #0284c7'
+                                }}
+                              >
+                                {className}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ 
+                              color: '#9ca3af', 
+                              fontSize: '0.875rem', 
+                              fontStyle: 'italic' 
+                            }}>
+                              No classrooms
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td style={{ padding: '1rem' }}>

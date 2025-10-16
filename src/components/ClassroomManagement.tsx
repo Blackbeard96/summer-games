@@ -5,6 +5,17 @@ import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import StudentListItem from './StudentListItem';
 import { useGoogleLogin } from '@react-oauth/google';
+import SearchBar from './SearchBar';
+import { searchStudents } from '../utils/searchUtils';
+
+// Classroom interface
+interface Classroom {
+  id: string;
+  name: string;
+  description?: string;
+  maxStudents?: number;
+  students: string[];
+}
 
 // Google Classroom API types
 interface GoogleClassroomCourse {
@@ -104,6 +115,8 @@ interface Student {
 const ClassroomManagement: React.FC = () => {
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showAddStudentsModal, setShowAddStudentsModal] = useState<string | null>(null);
@@ -233,6 +246,21 @@ const ClassroomManagement: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Filter students based on search query
+  useEffect(() => {
+    const filtered = searchStudents(students, searchQuery);
+    setFilteredStudents(filtered);
+  }, [students, searchQuery]);
+
+  // Search handlers
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+  };
+
   const createClassroom = async () => {
     if (!newClassroom.name.trim()) return;
 
@@ -308,6 +336,11 @@ const ClassroomManagement: React.FC = () => {
     return students.find(student => student.id === studentId);
   };
 
+  // Helper function to check which classrooms a student is enrolled in
+  const getStudentClassrooms = (studentId: string) => {
+    return classrooms.filter(classroom => classroom.students.includes(studentId));
+  };
+
   const getAvailableStudents = (classroomId: string) => {
     const classroom = classrooms.find(c => c.id === classroomId);
     if (!classroom) {
@@ -319,6 +352,16 @@ const ClassroomManagement: React.FC = () => {
     console.log('ClassroomManagement: Available students for classroom', classroomId, ':', availableStudents.length);
     console.log('ClassroomManagement: Classroom students:', classroom.students.length);
     console.log('ClassroomManagement: Total students:', students.length);
+    
+    // Debug: Check if JB is in the students list and which classrooms he's in
+    const jbStudent = students.find(s => s.displayName === 'JB' || s.email?.includes('jeremiah.mejiacuello26'));
+    if (jbStudent) {
+      console.log('ClassroomManagement: JB student found:', jbStudent);
+      console.log('ClassroomManagement: JB is in classrooms:', classrooms.filter(c => c.students.includes(jbStudent.id)).map(c => c.name));
+      console.log('ClassroomManagement: JB is available for classroom', classroomId, ':', !classroom.students.includes(jbStudent.id));
+    } else {
+      console.log('ClassroomManagement: JB student NOT found in students list');
+    }
     
     return availableStudents;
   };
@@ -763,6 +806,38 @@ const ClassroomManagement: React.FC = () => {
           <p style={{ fontSize: '1.125rem', color: '#6b7280' }}>
             Create and manage classrooms, add students, and organize your learning environment.
           </p>
+          
+          {/* Debug Panel - Remove this after debugging */}
+          <div style={{ 
+            backgroundColor: '#fef3c7', 
+            border: '1px solid #f59e0b', 
+            borderRadius: '0.5rem', 
+            padding: '1rem', 
+            marginTop: '1rem',
+            fontSize: '0.875rem'
+          }}>
+            <h4 style={{ margin: '0 0 0.5rem 0', color: '#92400e' }}>🔍 Debug Info</h4>
+            <div style={{ color: '#92400e' }}>
+              <div>Total Students: {students.length}</div>
+              <div>Total Classrooms: {classrooms.length}</div>
+              {(() => {
+                const jbStudent = students.find(s => s.displayName === 'JB' || s.email?.includes('jeremiah.mejiacuello26'));
+                if (jbStudent) {
+                  const jbClassrooms = getStudentClassrooms(jbStudent.id);
+                  return (
+                    <div>
+                      <div>JB Student Found: ✅</div>
+                      <div>JB ID: {jbStudent.id}</div>
+                      <div>JB Email: {jbStudent.email}</div>
+                      <div>JB Enrolled in {jbClassrooms.length} classroom(s): {jbClassrooms.map(c => c.name).join(', ') || 'None'}</div>
+                    </div>
+                  );
+                } else {
+                  return <div>JB Student: ❌ Not found</div>;
+                }
+              })()}
+            </div>
+          </div>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
@@ -1228,6 +1303,27 @@ const ClassroomManagement: React.FC = () => {
               <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: 0 }}>
                 Select students to add to this classroom. You can scroll to see all available students.
               </p>
+              
+              {/* Search Bar for Add Students Modal */}
+              <div style={{ marginTop: '1rem' }}>
+                <SearchBar
+                  placeholder="Search students by name or email..."
+                  onSearch={handleSearch}
+                  onClear={handleClearSearch}
+                  style={{ maxWidth: '100%' }}
+                />
+                {searchQuery && (
+                  <div style={{ 
+                    marginTop: '0.5rem', 
+                    fontSize: '0.75rem', 
+                    color: '#6b7280' 
+                  }}>
+                    Showing {getAvailableStudents(showAddStudentsModal).filter(student => 
+                      searchStudents([student], searchQuery).length > 0
+                    ).length} of {getAvailableStudents(showAddStudentsModal).length} available students
+                  </div>
+                )}
+              </div>
               {getAvailableStudents(showAddStudentsModal).length > 5 && (
                 <div style={{ 
                   fontSize: '0.75rem', 
@@ -1281,7 +1377,9 @@ const ClassroomManagement: React.FC = () => {
                   gap: '0.5rem',
                   padding: '1rem'
                 }}>
-                  {getAvailableStudents(showAddStudentsModal).map((student) => (
+                  {getAvailableStudents(showAddStudentsModal).filter(student => 
+                    searchStudents([student], searchQuery).length > 0
+                  ).map((student) => (
                     <label key={student.id} style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -1910,6 +2008,38 @@ const ClassroomManagement: React.FC = () => {
               </p>
             </div>
             
+            {/* Search Bar for PP View Modal */}
+            <div style={{ marginBottom: '1rem' }}>
+              <SearchBar
+                placeholder="Search students by name or email..."
+                onSearch={handleSearch}
+                onClear={handleClearSearch}
+                style={{ maxWidth: '400px' }}
+              />
+              {searchQuery && (
+                <div style={{ 
+                  marginTop: '0.5rem', 
+                  fontSize: '0.875rem', 
+                  color: '#6b7280' 
+                }}>
+                  Showing {(() => {
+                    const classroom = classrooms.find(c => c.id === showClassPPView);
+                    if (!classroom) return 0;
+                    const classStudents = classroom.students.map(studentId => 
+                      students.find(s => s.id === studentId)
+                    ).filter(Boolean) as Student[];
+                    return classStudents.filter(student => 
+                      searchStudents([student], searchQuery).length > 0
+                    ).length;
+                  })()} of {(() => {
+                    const classroom = classrooms.find(c => c.id === showClassPPView);
+                    if (!classroom) return 0;
+                    return classroom.students.length;
+                  })()} students
+                </div>
+              )}
+            </div>
+            
             <div style={{ 
               flex: 1, 
               overflowY: 'auto', 
@@ -1949,8 +2079,9 @@ const ClassroomManagement: React.FC = () => {
                   );
                 }
                 
-                // Sort students by PP (highest first)
-                const sortedStudents = [...classStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
+                // Filter and sort students by PP (highest first)
+                const filteredClassStudents = searchStudents(classStudents, searchQuery);
+                const sortedStudents = [...filteredClassStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
                 const totalPP = classStudents.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
                 const averagePP = classStudents.length > 0 ? Math.round(totalPP / classStudents.length) : 0;
                 

@@ -396,7 +396,6 @@ const Battle: React.FC = () => {
       }}>
         {[
           { id: 'battle', label: 'Visual Battle', icon: '⚔️' },
-          { id: 'lobby', label: 'Battle Lobby', icon: '🏟️' },
           { id: 'vault', label: 'Vault Management', icon: '🏦' },
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
@@ -558,8 +557,8 @@ const Battle: React.FC = () => {
                 gap: '0.5rem',
                 marginBottom: '0.5rem'
               }}>
-                <span style={{ fontSize: '1.2rem' }}>🚀</span>
-                <strong style={{ color: '#1e40af' }}>Live Battles</strong>
+                <span style={{ fontSize: '1.2rem' }}>⚔️</span>
+                <strong style={{ color: '#1e40af' }}>Visual Battles</strong>
               </div>
               <p style={{ 
                 fontSize: '0.875rem', 
@@ -567,16 +566,8 @@ const Battle: React.FC = () => {
                 margin: 0,
                 lineHeight: '1.4'
               }}>
-                In-class contests for big prizes. Compete with classmates in real-time battles for exclusive rewards and recognition.
+                Engage in epic visual battles with classmates! Choose from PvP battles, offline moves, or practice mode to hone your skills.
               </p>
-              <div style={{ 
-                fontSize: '0.75rem', 
-                color: '#6b7280',
-                fontStyle: 'italic',
-                marginTop: '0.5rem'
-              }}>
-                ⚠️ Currently under construction
-              </div>
             </div>
             
             <div style={{ 
@@ -591,8 +582,8 @@ const Battle: React.FC = () => {
                 gap: '0.5rem',
                 marginBottom: '0.5rem'
               }}>
-                <span style={{ fontSize: '1.2rem' }}>🏰</span>
-                <strong style={{ color: '#1e40af' }}>Vault Sieges</strong>
+                <span style={{ fontSize: '1.2rem' }}>📊</span>
+                <strong style={{ color: '#1e40af' }}>Battle Dashboard</strong>
               </div>
               <p style={{ 
                 fontSize: '0.875rem', 
@@ -600,7 +591,7 @@ const Battle: React.FC = () => {
                 margin: 0,
                 lineHeight: '1.4'
               }}>
-                Offline mode to attack rival vaults and take some of their PP. Players may make 3 moves per day from their Manifest Abilities, Action Cards, or System Skills.
+                Monitor your vault stats, battle history, and quick actions all in one place. Manage your Power Points, shields, and battle moves efficiently.
               </p>
             </div>
           </div>
@@ -630,7 +621,7 @@ const Battle: React.FC = () => {
           }}>
             {activeTab === 'moves' 
               ? 'Focus on upgrading your most powerful moves first, then expand your move collection to have more strategic options in battle!'
-              : 'Use your daily offline moves strategically to maximize PP gains. Each successful vault siege can earn you Power Points from defeated rivals!'
+              : 'Monitor your vault stats and battle history to track your progress. Use quick actions to enhance your abilities before engaging in visual battles!'
             }
           </p>
         </div>
@@ -640,21 +631,7 @@ const Battle: React.FC = () => {
       <div style={{ minHeight: '400px' }}>
         {activeTab === 'battle' && (
           <div>
-            {!selectedBattleMode ? (
-              <BattleModeSelector onModeSelect={setSelectedBattleMode} />
-            ) : selectedBattleMode === 'pvp' ? (
-              <PvPBattle onBack={() => setSelectedBattleMode(null)} />
-            ) : selectedBattleMode === 'offline' ? (
-              <OfflineMoveBattle onBack={() => setSelectedBattleMode(null)} />
-            ) : selectedBattleMode === 'practice' ? (
-              <PracticeModeBattle onBack={() => setSelectedBattleMode(null)} />
-            ) : null}
-          </div>
-        )}
-        
-        {activeTab === 'lobby' && (
-          <div>
-            {/* Enhanced Vault Stats - Only in Battle Lobby */}
+            {/* Enhanced Vault Stats - Now in Visual Battle */}
             <VaultStats
               vault={vault}
               moves={moves}
@@ -665,6 +642,19 @@ const Battle: React.FC = () => {
               onRestoreShields={handleRestoreShields}
               onCreateBattle={handleCreateBattle}
             />
+
+            {/* Battle Mode Selection */}
+            <div style={{ marginTop: '2rem' }}>
+            {!selectedBattleMode ? (
+              <BattleModeSelector onModeSelect={setSelectedBattleMode} />
+            ) : selectedBattleMode === 'pvp' ? (
+              <PvPBattle onBack={() => setSelectedBattleMode(null)} />
+            ) : selectedBattleMode === 'offline' ? (
+              <OfflineMoveBattle onBack={() => setSelectedBattleMode(null)} />
+            ) : selectedBattleMode === 'practice' ? (
+              <PracticeModeBattle onBack={() => setSelectedBattleMode(null)} />
+            ) : null}
+            </div>
 
             {/* Battle History Section */}
             <div style={{ marginTop: '2rem' }}>
@@ -1062,7 +1052,7 @@ const Battle: React.FC = () => {
             {console.log('Battle page: vault?.movesRemaining:', vault?.movesRemaining, 'remainingOfflineMoves:', remainingOfflineMoves)}
             <MovesDisplay
           moves={moves}
-          movesRemaining={vault?.movesRemaining ?? 1}
+          movesRemaining={remainingOfflineMoves}
           offlineMovesRemaining={remainingOfflineMoves}
           maxOfflineMoves={BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES}
           onUpgradeMove={upgradeMove}

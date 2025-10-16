@@ -790,7 +790,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             border: '1px solid #93c5fd'
           }}>
             <span style={{ fontSize: '0.875rem', color: '#1e40af', fontWeight: '500' }}>
-              ⚔️ Battle Moves: {movesRemaining} remaining
+              ⚔️ Battle Moves: {offlineMovesRemaining} remaining
             </span>
           </div>
           <div style={{ 

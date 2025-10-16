@@ -29,6 +29,8 @@ interface Opponent {
 
 interface BattleEngineProps {
   onBattleEnd: (result: 'victory' | 'defeat' | 'escape') => void;
+  onMoveConsumption?: () => Promise<boolean>;
+  onExecuteVaultSiegeAttack?: (moveId: string, targetUserId: string) => Promise<{ success: boolean; message: string; ppStolen?: number; xpGained?: number; shieldDamage?: number; overshieldAbsorbed?: boolean } | undefined>;
   opponent?: Opponent;
 }
 
@@ -44,7 +46,7 @@ interface BattleState {
 }
 
 
-const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: propOpponent }) => {
+const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumption, onExecuteVaultSiegeAttack, opponent: propOpponent }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
@@ -134,6 +136,32 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
 
   const handleAnimationComplete = async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
+
+    // Check if offline moves are available before executing the move
+    if (onMoveConsumption) {
+      try {
+        // First, try to consume a move to validate availability
+        const moveConsumed = await onMoveConsumption();
+        if (!moveConsumed) {
+          // No moves available, prevent move execution
+          const newLog = [...battleState.battleLog];
+          newLog.push('❌ No offline moves remaining! Purchase more moves to continue attacking.');
+          setBattleState(prev => ({
+            ...prev,
+            battleLog: newLog,
+            phase: 'selection',
+            selectedMove: null,
+            selectedTarget: null,
+            currentAnimation: null,
+            isAnimating: false
+          }));
+          return;
+        }
+      } catch (error) {
+        console.error('❌ Failed to validate move availability:', error);
+        return;
+      }
+    }
 
     const move = battleState.selectedMove;
     console.log('Move Execution Debug:', {
@@ -270,27 +298,48 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, opponent: prop
     }
     if (playerShieldBoost > 0) {
       const oldShield = vault.shieldStrength;
-      newVault.shieldStrength = Math.min(50, vault.shieldStrength + playerShieldBoost);
+      newVault.shieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + playerShieldBoost);
       console.log('Shield Boost Applied:', {
         oldShield,
         boostAmount: playerShieldBoost,
         newShield: newVault.shieldStrength,
-        maxShield: 50
+        maxShield: vault.maxShieldStrength
       });
     }
     if (playerHealing > 0) {
       newVault.currentPP = Math.min(1000, vault.currentPP + playerHealing);
     }
     
-    // Update vault in context
-    try {
-      await updateVault({
-        currentPP: newVault.currentPP,
-        shieldStrength: newVault.shieldStrength
-      });
-      console.log('✅ Vault updated successfully after player move');
-    } catch (error) {
-      console.error('❌ Failed to update vault after player move:', error);
+    // Execute the actual vault siege attack in the database
+    if (onExecuteVaultSiegeAttack && opponent && move) {
+      try {
+        console.log('🔥 Executing actual vault siege attack in database...');
+        const attackResult = await onExecuteVaultSiegeAttack(move.id, opponent.id);
+        console.log('🔥 Vault siege attack result:', attackResult);
+        
+        if (attackResult?.success) {
+          console.log('✅ Database vault siege attack successful');
+          // The database has been updated, so we can trust the local state
+        } else {
+          console.error('❌ Database vault siege attack failed:', attackResult?.message);
+          // If database attack failed, we should revert local changes
+          return;
+        }
+      } catch (error) {
+        console.error('❌ Error executing vault siege attack:', error);
+        return;
+      }
+    } else {
+      // Fallback: Update vault in context (for non-offline battles)
+      try {
+        await updateVault({
+          currentPP: newVault.currentPP,
+          shieldStrength: newVault.shieldStrength
+        });
+        console.log('✅ Vault updated successfully after player move');
+      } catch (error) {
+        console.error('❌ Failed to update vault after player move:', error);
+      }
     }
     
     // Check for victory

@@ -3,7 +3,7 @@ import { StoryEpisode, StoryReward, PATH_CHOICES } from '../types/story';
 import { useStory } from '../context/StoryContext';
 import { useBattle } from '../context/BattleContext';
 import { useAuth } from '../context/AuthContext';
-import { doc, updateDoc, increment } from 'firebase/firestore';
+import { doc, updateDoc, increment, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
 interface EpisodeRewardsModalProps {
@@ -15,11 +15,112 @@ interface EpisodeRewardsModalProps {
 const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onClose, onClaimComplete }) => {
   const { claimRewards } = useStory();
   const { currentUser } = useAuth();
+  const { unlockMove, unlockActionCard } = useBattle();
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimed, setClaimed] = useState(false);
 
   const isEpisode9 = episode.id === 'ep_09_pressure_points';
+
+  // Grant fixed rewards from episode completion
+  const grantFixedRewards = async (fixedRewards: string[]) => {
+    if (!currentUser) return;
+
+    for (const rewardId of fixedRewards) {
+      try {
+        // Map reward IDs to actual system unlocks
+        if (rewardId.includes('move_')) {
+          await unlockMove(rewardId);
+        } else if (rewardId.includes('card_') || rewardId.includes('action_card_')) {
+          await unlockActionCard(rewardId);
+        } else if (rewardId.includes('vault_')) {
+          // Handle vault upgrades
+          await grantVaultUpgrade(rewardId);
+        } else if (rewardId.includes('artifact_')) {
+          // Handle artifact rewards
+          await grantArtifact(rewardId);
+        }
+      } catch (error) {
+        console.error(`Failed to grant reward ${rewardId}:`, error);
+      }
+    }
+  };
+
+  // Grant choice-based rewards
+  const grantChoiceReward = async (choiceId: string) => {
+    if (!currentUser) return;
+
+    try {
+      // Map choice rewards to actual unlocks
+      if (choiceId.includes('move_')) {
+        await unlockMove(choiceId);
+      } else if (choiceId.includes('card_') || choiceId.includes('action_card_')) {
+        await unlockActionCard(choiceId);
+      } else if (choiceId.includes('vault_')) {
+        await grantVaultUpgrade(choiceId);
+      } else if (choiceId.includes('artifact_')) {
+        await grantArtifact(choiceId);
+      }
+    } catch (error) {
+      console.error(`Failed to grant choice reward ${choiceId}:`, error);
+    }
+  };
+
+  // Grant vault upgrades
+  const grantVaultUpgrade = async (upgradeId: string) => {
+    if (!currentUser) return;
+
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const vaultDoc = await getDoc(vaultRef);
+      
+      if (vaultDoc.exists()) {
+        const currentVault = vaultDoc.data();
+        
+        // Apply specific vault upgrades based on reward ID
+        const updates: any = {};
+        
+        if (upgradeId === 'vault_materials_shield_core') {
+          updates.maxShieldStrength = Math.min(60, (currentVault.maxShieldStrength || 50) + 5);
+          updates.shieldStrength = updates.maxShieldStrength; // Restore to max
+        } else if (upgradeId === 'firewall_module_v1') {
+          updates.firewall = Math.min(20, (currentVault.firewall || 10) + 5);
+        } else if (upgradeId.includes('capacity')) {
+          updates.capacity = Math.min(2000, (currentVault.capacity || 1000) + 200);
+        }
+        
+        if (Object.keys(updates).length > 0) {
+          await updateDoc(vaultRef, updates);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to grant vault upgrade:', error);
+    }
+  };
+
+  // Grant artifact rewards
+  const grantArtifact = async (artifactId: string) => {
+    if (!currentUser) return;
+
+    try {
+      // For now, artifacts are tracked as unlocked items in the user's profile
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const unlockedArtifacts = userData.unlockedArtifacts || [];
+        
+        if (!unlockedArtifacts.includes(artifactId)) {
+          await updateDoc(userRef, {
+            unlockedArtifacts: [...unlockedArtifacts, artifactId]
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to grant artifact:', error);
+    }
+  };
 
   const handleClaimRewards = async () => {
     if (!currentUser) return;
@@ -50,8 +151,13 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
         xp: increment(episode.rewards.xp)
       });
 
-      // TODO: Grant fixed rewards (moves, items, etc.)
-      // TODO: Grant selected choice reward
+      // Grant fixed rewards (moves, items, artifacts, etc.)
+      await grantFixedRewards(episode.rewards.fixed);
+
+      // Grant selected choice reward if applicable
+      if (selectedChoice) {
+        await grantChoiceReward(selectedChoice);
+      }
       
       setClaimed(true);
       

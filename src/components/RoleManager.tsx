@@ -15,6 +15,7 @@ import {
 import { UserRole, UserRoleData, getRoleDisplayName, getRoleBadgeColor } from '../types/roles';
 import StudentListItem from './StudentListItem';
 import { logger } from '../utils/debugLogger';
+import { useMobile, useHaptic } from '../hooks/useMobile';
 
 interface Student {
   id: string;
@@ -49,6 +50,8 @@ const RoleManager: React.FC = () => {
   }
   
   const { currentUser } = useAuth();
+  const { isMobile, isTouch } = useMobile();
+  const { light } = useHaptic();
   const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [filteredStudents, setFilteredStudents] = useState<StudentWithRole[]>([]);
   const [availableClasses, setAvailableClasses] = useState<ClassInfo[]>([]);
@@ -535,6 +538,11 @@ const RoleManager: React.FC = () => {
         console.error('Error creating notification:', notificationError);
       }
 
+      // Haptic feedback for mobile
+      if (isTouch) {
+        light();
+      }
+      
       alert(`✅ Successfully assigned ${getRoleDisplayName(newRole)} role!`);
       
     } catch (error) {
@@ -592,10 +600,11 @@ const RoleManager: React.FC = () => {
   return (
     <div style={{ 
       backgroundColor: 'white', 
-      borderRadius: '0.75rem', 
-      padding: '2rem', 
+      borderRadius: isMobile ? '0.5rem' : '0.75rem', 
+      padding: isMobile ? '1rem' : '2rem', 
       boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-      border: '2px solid #7c3aed'
+      border: '2px solid #7c3aed',
+      margin: isMobile ? '0.5rem' : '0'
     }}>
       {/* Header */}
       <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
@@ -712,51 +721,51 @@ const RoleManager: React.FC = () => {
       {/* Role Statistics */}
       <div style={{ 
         display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
-        gap: '1rem',
-        marginBottom: '2rem'
+        gridTemplateColumns: isMobile ? 'repeat(3, 1fr)' : 'repeat(auto-fit, minmax(150px, 1fr))', 
+        gap: isMobile ? '0.5rem' : '1rem',
+        marginBottom: isMobile ? '1rem' : '2rem'
       }}>
         <div style={{
           backgroundColor: '#fef2f2',
           border: '2px solid #fecaca',
-          borderRadius: '0.75rem',
-          padding: '1rem',
+          borderRadius: isMobile ? '0.5rem' : '0.75rem',
+          padding: isMobile ? '0.75rem' : '1rem',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#dc2626' }}>
+          <div style={{ fontSize: isMobile ? '1.5rem' : '2rem', fontWeight: 'bold', color: '#dc2626' }}>
             {roleStats.admin}
           </div>
-          <div style={{ fontSize: '0.875rem', color: '#7f1d1d', fontWeight: 'bold' }}>
-            Administrators
+          <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#7f1d1d', fontWeight: 'bold' }}>
+            {isMobile ? 'Admin' : 'Administrators'}
           </div>
         </div>
         
         <div style={{
           backgroundColor: '#f0fdf4',
           border: '2px solid #bbf7d0',
-          borderRadius: '0.75rem',
-          padding: '1rem',
+          borderRadius: isMobile ? '0.5rem' : '0.75rem',
+          padding: isMobile ? '0.75rem' : '1rem',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#059669' }}>
+          <div style={{ fontSize: isMobile ? '1.5rem' : '2rem', fontWeight: 'bold', color: '#059669' }}>
             {roleStats.scorekeeper}
           </div>
-          <div style={{ fontSize: '0.875rem', color: '#065f46', fontWeight: 'bold' }}>
-            Scorekeepers
+          <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#065f46', fontWeight: 'bold' }}>
+            {isMobile ? 'Scorekeeper' : 'Scorekeepers'}
           </div>
         </div>
         
         <div style={{
           backgroundColor: '#eff6ff',
           border: '2px solid #bfdbfe',
-          borderRadius: '0.75rem',
-          padding: '1rem',
+          borderRadius: isMobile ? '0.5rem' : '0.75rem',
+          padding: isMobile ? '0.75rem' : '1rem',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#3b82f6' }}>
+          <div style={{ fontSize: isMobile ? '1.5rem' : '2rem', fontWeight: 'bold', color: '#3b82f6' }}>
             {roleStats.student}
           </div>
-          <div style={{ fontSize: '0.875rem', color: '#1e40af', fontWeight: 'bold' }}>
+          <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#1e40af', fontWeight: 'bold' }}>
             Students
           </div>
         </div>
