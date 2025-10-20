@@ -1814,6 +1814,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let message = '';
       
       if (selectedMove) {
+        console.log(`🔍 Processing move: ${selectedMove.name}, type: ${selectedMove.type}, damage: ${selectedMove.damage}, shieldBoost: ${selectedMove.shieldBoost}`);
+        
         // Check if this is a defensive move that boosts attacker's shields
         if (selectedMove.type === 'defense' && selectedMove.shieldBoost) {
           // This is a defensive move that boosts the attacker's shields
@@ -1847,6 +1849,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } else {
           // This is an offensive move
           const moveDamageValue = await getMoveDamage(selectedMove.name);
+          console.log(`🔍 Move damage lookup for ${selectedMove.name}:`, moveDamageValue);
+          
           if (moveDamageValue) {
             // Handle both single damage values and damage ranges
             let totalDamage: number;
@@ -1882,7 +1886,25 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields)`;
             }
           } else {
-            message = `Used ${selectedMove.name} against target vault`;
+            console.log(`⚠️ No damage value found for move ${selectedMove.name}, using fallback damage`);
+            // Give a small amount of damage for moves that don't have damage values
+            const fallbackDamage = 5; // Minimum damage for any offensive move
+            
+            // Apply damage to shields first, then to PP
+            if (targetVaultData.shieldStrength > 0) {
+              shieldDamage = Math.min(fallbackDamage, targetVaultData.shieldStrength);
+              const remainingDamage = fallbackDamage - shieldDamage;
+              
+              if (remainingDamage > 0) {
+                ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Dealt ${fallbackDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP) [fallback]`;
+              } else {
+                message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields [fallback]`;
+              }
+            } else {
+              ppStolen = Math.min(fallbackDamage, targetVaultData.currentPP);
+              message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields) [fallback]`;
+            }
           }
         }
       }
@@ -2132,6 +2154,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else {
         console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
       }
+
+      // Award minimum XP for any successful attack (even if no PP stolen and no shield damage)
+      if (ppStolen === 0 && shieldDamage === 0 && !overshieldAbsorbed && (selectedMove || selectedCard)) {
+        const minimumXpReward = 1; // Always give at least 1 XP for a successful attack
+        console.log(`🎯 Awarding minimum ${minimumXpReward} XP for successful attack with no damage`);
+        await awardBattleXp(minimumXpReward, `Successfully attacked ${targetName}`);
+      }
       
       // Award XP for cracking shields (even if no PP was stolen)
       if (shieldsCracked) {
@@ -2147,23 +2176,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         targetName,
         moveId: moveId || null,
         moveName: selectedMove?.name || null,
-        damage,
-        ppStolen,
-        shieldDamage,
-        message,
-        overshieldAbsorbed,
+        damage: damage || 0,
+        ppStolen: ppStolen || 0,
+        shieldDamage: shieldDamage || 0,
+        message: message || 'Attack completed',
+        overshieldAbsorbed: overshieldAbsorbed || false,
         timestamp: serverTimestamp(),
         targetVaultBefore: {
           currentPP: targetVaultData.currentPP,
           shieldStrength: targetVaultData.shieldStrength,
-          overshield: targetVaultData.overshield,
+          overshield: targetVaultData.overshield || 0,
         },
         targetVaultAfter: {
           currentPP: updates.currentPP !== undefined ? updates.currentPP : targetVaultData.currentPP,
           shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
-          overshield: updates.overshield !== undefined ? updates.overshield : targetVaultData.overshield,
+          overshield: updates.overshield !== undefined ? updates.overshield : (targetVaultData.overshield || 0),
         },
-        ppStolenFromTarget: ppStolen,
+        ppStolenFromTarget: ppStolen || 0,
         ppStolenDate: serverTimestamp(),
       };
     
@@ -2183,12 +2212,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Refresh vault data to ensure everything is synchronized
       await refreshVaultData();
       
+      // Calculate total XP gained
+      let totalXpGained = 0;
+      if (ppStolen > 0) {
+        totalXpGained += calculateXpReward(ppStolen);
+      }
+      if (shieldDamage > 0 && !overshieldAbsorbed) {
+        totalXpGained += Math.min(shieldDamage, 3);
+      }
+      if (shieldsCracked) {
+        totalXpGained += 2;
+      }
+      // Add minimum XP for successful attacks with no damage
+      if (ppStolen === 0 && shieldDamage === 0 && !overshieldAbsorbed && (selectedMove || selectedCard)) {
+        totalXpGained += 1;
+      }
+
       // Return the attack results
       return {
         success: true,
         message: message,
         ppStolen: ppStolen,
-        xpGained: (ppStolen > 0 ? calculateXpReward(ppStolen) : 0) + (shieldDamage > 0 ? Math.min(shieldDamage, 3) : 0) + (shieldsCracked ? 2 : 0),
+        xpGained: totalXpGained,
         shieldDamage: shieldDamage,
         overshieldAbsorbed: overshieldAbsorbed
       };

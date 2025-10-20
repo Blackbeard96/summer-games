@@ -12,6 +12,7 @@ import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
+import { CHAPTERS } from '../types/chapters';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -81,6 +82,7 @@ const Profile = () => {
   const [badges, setBadges] = useState(userData?.badges || []);
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
+  const [nextChallenge, setNextChallenge] = useState<any>(null);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -101,6 +103,120 @@ const Profile = () => {
       'Metal': '#9CA3AF'
     };
     return elementColors[elementName] || '#6b7280'; // Default gray if not found
+  };
+
+  // Function to check if a challenge's requirements are met
+  const isChallengeUnlocked = (challenge: any, userProgress: any) => {
+    // Always unlock challenges with no requirements
+    if (!challenge.requirements || challenge.requirements.length === 0) {
+      return true;
+    }
+
+    // Special case: Chapter 1 Challenge 1 should ALWAYS be unlocked for new players
+    if (challenge.id === 'ep1-get-letter') {
+      return true;
+    }
+
+    // Check each requirement
+    for (const requirement of challenge.requirements) {
+      let requirementMet = false;
+      
+      switch (requirement.type) {
+        case 'artifact':
+          if (requirement.value === 'letter_received') {
+            const letterChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-get-letter'];
+            requirementMet = letterChallenge?.isCompleted && letterChallenge?.letterReceived;
+          } else if (requirement.value === 'chose_truth_metal') {
+            const truthMetalChoice = userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice'];
+            requirementMet = truthMetalChoice?.isCompleted;
+          } else if (requirement.value === 'truth_metal_currency') {
+            const truthMetalTouch = userProgress?.chapters?.[1]?.challenges?.['ep1-touch-truth-metal'];
+            requirementMet = truthMetalTouch?.isCompleted;
+          } else if (requirement.value === 'ui_explored') {
+            const uiChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-mst-ui'];
+            requirementMet = uiChallenge?.isCompleted;
+          } else if (requirement.value === 'first_combat') {
+            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
+            requirementMet = combatChallenge?.isCompleted;
+          } else if (requirement.value === 'power_card_discovered') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
+            requirementMet = powerCardChallenge?.isCompleted;
+          }
+          break;
+        case 'manifest':
+          if (requirement.value === 'chosen') {
+            requirementMet = !!userProgress?.manifest || !!userProgress?.manifestationType;
+          }
+          break;
+        case 'profile':
+          if (requirement.value === 'completed') {
+            const profileChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile'];
+            requirementMet = profileChallenge?.isCompleted;
+          } else if (requirement.value === 'power_card_viewed') {
+            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card'];
+            requirementMet = powerCardChallenge?.isCompleted;
+          }
+          break;
+        case 'team':
+          if (requirement.value === 'formed') {
+            const teamChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
+            requirementMet = teamChallenge?.isCompleted;
+          }
+          break;
+        case 'rival':
+          if (requirement.value === 'chosen') {
+            const rivalChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-rival-selection'];
+            requirementMet = rivalChallenge?.isCompleted;
+          }
+          break;
+        case 'level':
+          const userLevel = getLevelFromXP(userProgress?.xp || 0);
+          requirementMet = userLevel >= requirement.value;
+          break;
+        case 'previousChapter':
+          const prevChapter = userProgress?.chapters?.[requirement.value];
+          requirementMet = prevChapter?.isCompleted;
+          break;
+      }
+      
+      if (!requirementMet) {
+        return false;
+      }
+    }
+    
+    return true;
+  };
+
+  // Function to find the next available challenge
+  const findNextChallenge = (userProgress: any) => {
+    if (!userProgress?.chapters) return null;
+
+    // Find the first active chapter
+    const activeChapter = CHAPTERS.find(chapter => 
+      userProgress.chapters[chapter.id]?.isActive
+    );
+
+    if (!activeChapter) return null;
+
+    // Find the first unlocked but not completed challenge in the active chapter
+    for (const challenge of activeChapter.challenges) {
+      const challengeProgress = userProgress.chapters[activeChapter.id]?.challenges?.[challenge.id];
+      
+      // Skip if already completed
+      if (challengeProgress?.isCompleted) {
+        continue;
+      }
+
+      // Check if challenge is unlocked
+      if (isChallengeUnlocked(challenge, userProgress)) {
+        return {
+          ...challenge,
+          chapter: activeChapter
+        };
+      }
+    }
+
+    return null;
   };
 
   const fetchUserData = async () => {
@@ -138,10 +254,11 @@ const Profile = () => {
           console.log('Profile: Loaded artifacts from users collection:', artifacts);
         }
         
-        // Merge students data with users artifacts
+        // Merge students data with users artifacts and chapters
         const mergedUserData = {
           ...userDataFromDB,
-          artifacts: artifacts
+          artifacts: artifacts,
+          chapters: usersSnap.exists() ? usersSnap.data().chapters : userDataFromDB.chapters
         };
         
         setUserData(mergedUserData);
@@ -153,6 +270,10 @@ const Profile = () => {
         setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
         setMoves(userDataFromDB.moves || []);
         setBadges(userDataFromDB.badges || []);
+        
+        // Find the next available challenge
+        const nextChallengeData = findNextChallenge(mergedUserData);
+        setNextChallenge(nextChallengeData);
         
         // Load manifest data
         const manifestData = studentsSnap.data().manifest;
@@ -666,6 +787,150 @@ const Profile = () => {
             </div>
           </div>
 
+          {/* Next Challenge Section */}
+          {nextChallenge && (
+            <div style={{ 
+              backgroundColor: 'white', 
+              borderRadius: '0.75rem', 
+              padding: '2rem', 
+              boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
+              border: '1px solid #e5e7eb',
+              marginBottom: '2rem'
+            }}>
+              <h2 style={{ 
+                fontSize: '1.5rem', 
+                fontWeight: 'bold', 
+                marginBottom: '1.5rem', 
+                color: '#4f46e5',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                🎯 Next Challenge
+              </h2>
+              
+              <div style={{
+                backgroundColor: '#f0f9ff',
+                border: '1px solid #0ea5e9',
+                borderRadius: '0.5rem',
+                padding: '1.5rem',
+                marginBottom: '1rem'
+              }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.75rem', 
+                  marginBottom: '1rem' 
+                }}>
+                  <div style={{
+                    backgroundColor: '#0ea5e9',
+                    color: 'white',
+                    borderRadius: '50%',
+                    width: '40px',
+                    height: '40px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1.25rem',
+                    fontWeight: 'bold'
+                  }}>
+                    {nextChallenge.chapter.id}
+                  </div>
+                  <div>
+                    <h3 style={{ 
+                      fontSize: '1.25rem', 
+                      fontWeight: 'bold', 
+                      color: '#0c4a6e',
+                      margin: 0
+                    }}>
+                      {nextChallenge.title}
+                    </h3>
+                    <p style={{ 
+                      fontSize: '0.875rem', 
+                      color: '#0369a1',
+                      margin: 0
+                    }}>
+                      Chapter {nextChallenge.chapter.id}: {nextChallenge.chapter.title}
+                    </p>
+                  </div>
+                </div>
+                
+                <p style={{ 
+                  color: '#0c4a6e', 
+                  marginBottom: '1rem',
+                  lineHeight: '1.5'
+                }}>
+                  {nextChallenge.description}
+                </p>
+                
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  marginBottom: '1rem'
+                }}>
+                  <span style={{
+                    backgroundColor: '#0ea5e9',
+                    color: 'white',
+                    padding: '0.25rem 0.5rem',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    textTransform: 'uppercase'
+                  }}>
+                    {nextChallenge.type}
+                  </span>
+                  {nextChallenge.rewards && nextChallenge.rewards.length > 0 && (
+                    <span style={{
+                      backgroundColor: '#fbbf24',
+                      color: '#92400e',
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: '0.25rem',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold'
+                    }}>
+                      {nextChallenge.rewards.map((reward: any) => 
+                        `+${reward.value} ${reward.type.toUpperCase()}`
+                      ).join(', ')}
+                    </span>
+                  )}
+                </div>
+                
+                <button
+                  onClick={() => navigate('/chapters')}
+                  style={{
+                    backgroundColor: '#0ea5e9',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.75rem 1.5rem',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    width: '100%',
+                    transition: 'background-color 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#0284c7';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#0ea5e9';
+                  }}
+                >
+                  🚀 Start Challenge
+                </button>
+              </div>
+              
+              <div style={{
+                fontSize: '0.875rem',
+                color: '#6b7280',
+                textAlign: 'center',
+                fontStyle: 'italic'
+              }}>
+                Continue your Player's Journey and unlock new abilities!
+              </div>
+            </div>
+          )}
 
         </div>
       </div>

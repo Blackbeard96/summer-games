@@ -60,6 +60,16 @@ const RoleManager: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [assigning, setAssigning] = useState<string>('');
 
+  // Check if current user is admin by email (like other components)
+  const isAdminByEmail = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                        currentUser?.email === 'admin@mstgames.net' ||
+                        currentUser?.email === 'edm21179@gmail.com' ||
+                        currentUser?.email === 'eddymosley9@gmail.com' ||
+                        currentUser?.email?.includes('eddymosley') ||
+                        currentUser?.email?.includes('admin') ||
+                        currentUser?.email?.includes('mstgames') ||
+                        currentUser?.email?.includes('compscihigh');
+
   // Debugging function for roster updates
   const debugRosterState = () => {
     logger.roster.info('=== ROSTER DEBUG STATE ===', {
@@ -163,7 +173,7 @@ const RoleManager: React.FC = () => {
   useEffect(() => {
     logger.roster.debug('loadAllStudents useEffect triggered', { currentUser: !!currentUser, userRole });
     
-    if (!currentUser || userRole !== 'admin') {
+    if (!currentUser || (userRole !== 'admin' && !isAdminByEmail)) {
       logger.roster.debug('Skipping student load - not admin or no user');
       return;
     }
@@ -245,15 +255,29 @@ const RoleManager: React.FC = () => {
     };
 
     loadAllStudents();
-  }, [currentUser, userRole]);
+  }, [currentUser, userRole, isAdminByEmail]);
 
   // Load available classes
   useEffect(() => {
-    if (!currentUser || userRole !== 'admin') return;
+    console.log('RoleManager: loadClasses useEffect triggered', {
+      currentUser: currentUser?.email,
+      userRole,
+      isAdminByEmail,
+      shouldLoad: !!(currentUser && (userRole === 'admin' || isAdminByEmail))
+    });
+    
+    if (!currentUser || (userRole !== 'admin' && !isAdminByEmail)) {
+      console.log('RoleManager: Skipping class load - not admin or no user');
+      return;
+    }
 
     const loadClasses = async () => {
       try {
-        console.log('RoleManager: Loading classrooms...');
+        console.log('RoleManager: Loading classrooms...', {
+          currentUser: currentUser?.email,
+          userRole,
+          isAdminByEmail
+        });
         const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
         
         const classes = classroomsSnapshot.docs.map(doc => {
@@ -280,7 +304,7 @@ const RoleManager: React.FC = () => {
     };
 
     loadClasses();
-  }, [currentUser, userRole]);
+  }, [currentUser, userRole, isAdminByEmail]);
 
   // Filter students when class or students change
   useEffect(() => {
@@ -399,7 +423,24 @@ const RoleManager: React.FC = () => {
   }, [selectedClass, allStudents]);
 
   const handleAssignRole = async (studentId: string, newRole: UserRole, targetClassId?: string) => {
-    if (!currentUser || userRole !== 'admin') return;
+    if (!currentUser || (userRole !== 'admin' && !isAdminByEmail)) {
+      console.log('❌ Role assignment blocked:', {
+        currentUser: !!currentUser,
+        userRole,
+        isAdminByEmail,
+        studentId,
+        newRole
+      });
+      return;
+    }
+
+    console.log('✅ Role assignment allowed:', {
+      currentUser: currentUser?.email,
+      userRole,
+      isAdminByEmail,
+      studentId,
+      newRole
+    });
 
     setAssigning(studentId);
     const classId = targetClassId || selectedClass;
@@ -572,7 +613,15 @@ const RoleManager: React.FC = () => {
     );
   }
 
-  if (userRole !== 'admin') {
+  // Debug logging for access control
+  console.log('🔍 RoleManager Access Check:', {
+    userRole,
+    currentUser: currentUser?.email,
+    isAdminByEmail,
+    finalAccess: userRole === 'admin' || isAdminByEmail
+  });
+
+  if (userRole !== 'admin' && !isAdminByEmail) {
     return (
       <div style={{ 
         padding: '2rem', 
@@ -587,6 +636,18 @@ const RoleManager: React.FC = () => {
         <p style={{ color: '#7f1d1d' }}>
           You need Administrator permissions to manage user roles.
         </p>
+        <div style={{ 
+          background: '#f3f4f6', 
+          padding: '1rem', 
+          borderRadius: '0.5rem', 
+          margin: '1rem 0',
+          fontSize: '0.9rem',
+          color: '#6b7280'
+        }}>
+          <p><strong>Current User:</strong> {currentUser?.email || 'Not logged in'}</p>
+          <p><strong>User Role:</strong> {userRole}</p>
+          <p><strong>Email Admin Check:</strong> {isAdminByEmail ? '✅ Admin' : '❌ Not Admin'}</p>
+        </div>
       </div>
     );
   }

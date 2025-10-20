@@ -63,9 +63,19 @@ export const migrateExistingUserToChapters = async (userId: string) => {
 
     const userData = userDoc.data();
     
-    // If chapters already exist, no migration needed
+    // If chapters already exist, ensure Chapter 1 is active
     if (userData.chapters) {
-      console.log('User already has chapter progress');
+      console.log('User has chapter progress, checking Chapter 1 activation...');
+      
+      // Check if Chapter 1 is active, if not, activate it
+      if (!userData.chapters[1]?.isActive) {
+        console.log('Chapter 1 not active, activating it...');
+        await updateDoc(userRef, {
+          'chapters.1.isActive': true,
+          'chapters.1.unlockDate': new Date()
+        });
+        console.log('Chapter 1 activated for existing user');
+      }
       return;
     }
 
@@ -74,9 +84,9 @@ export const migrateExistingUserToChapters = async (userId: string) => {
     
     CHAPTERS.forEach(chapter => {
       chapterProgress[chapter.id] = {
-        isActive: false,
+        isActive: chapter.id === 1, // Only Chapter 1 is active initially
         isCompleted: false,
-        unlockDate: null,
+        unlockDate: chapter.id === 1 ? new Date() : null,
         challenges: {}
       };
 
@@ -89,11 +99,6 @@ export const migrateExistingUserToChapters = async (userId: string) => {
       });
     });
 
-    // All players start in Chapter 1 until they meet requirements
-    // Only activate Chapter 1 initially
-    chapterProgress[1].isActive = true;
-    chapterProgress[1].unlockDate = new Date();
-
     // Update user document
     await updateDoc(userRef, {
       chapters: chapterProgress
@@ -102,6 +107,45 @@ export const migrateExistingUserToChapters = async (userId: string) => {
     console.log(`Migrated user ${userId} to Chapter 1 - starting point`);
   } catch (error) {
     console.error('Error migrating user to chapters:', error);
+  }
+};
+
+// Ensure Chapter 1 is always active for users
+export const ensureChapter1Active = async (userId: string) => {
+  try {
+    const userRef = doc(db, 'users', userId);
+    const userDoc = await getDoc(userRef);
+    
+    if (!userDoc.exists()) {
+      console.log('User document does not exist');
+      return false;
+    }
+
+    const userData = userDoc.data();
+    
+    // Check if chapters exist
+    if (!userData.chapters) {
+      console.log('No chapters found, initializing...');
+      await initializeChapterProgress(userId);
+      return true;
+    }
+
+    // Check if Chapter 1 is active
+    if (!userData.chapters[1]?.isActive) {
+      console.log('Chapter 1 not active, activating it...');
+      await updateDoc(userRef, {
+        'chapters.1.isActive': true,
+        'chapters.1.unlockDate': new Date()
+      });
+      console.log('Chapter 1 activated successfully');
+      return true;
+    }
+
+    console.log('Chapter 1 is already active');
+    return true;
+  } catch (error) {
+    console.error('Error ensuring Chapter 1 is active:', error);
+    return false;
   }
 };
 

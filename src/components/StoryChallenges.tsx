@@ -37,6 +37,9 @@ const StoryChallenges = () => {
   useEffect(() => {
     if (!currentUser) return;
 
+    // Ensure Chapter 1 is active for all users
+    ensureChaptersInitialized();
+
     const userRef = doc(db, 'users', currentUser.uid);
     const studentRef = doc(db, 'students', currentUser.uid);
     
@@ -371,19 +374,16 @@ const StoryChallenges = () => {
     }
   };
 
-  // Function to ensure chapters are initialized
+  // Function to ensure chapters are initialized and Chapter 1 is active
 const ensureChaptersInitialized = async () => {
-  if (!currentUser || !userProgress) return;
+  if (!currentUser) return;
 
   try {
-    // Check if chapters exist
-    if (!userProgress.chapters) {
-      console.log('No chapters found, initializing chapter progress...');
-      
-      // Import the initialization function
-      const { initializeChapterProgress } = await import('../utils/chapterInit');
-      await initializeChapterProgress(currentUser.uid);
-      
+    // Import the initialization function
+    const { ensureChapter1Active } = await import('../utils/chapterInit');
+    const success = await ensureChapter1Active(currentUser.uid);
+    
+    if (success) {
       // Refresh user data after initialization
       const userRef = doc(db, 'users', currentUser.uid);
       const userDoc = await getDoc(userRef);
@@ -489,6 +489,84 @@ const ensureChaptersInitialized = async () => {
     }
   };
 
+  // Manual profile completion bypass - for students who say their profile is updated
+  const manualCompleteProfileChallenge = async () => {
+    if (!currentUser || !userProgress) return;
+
+    try {
+      console.log('Manual profile challenge completion - bypassing detection');
+      
+      // Confirm with user
+      const confirmed = window.confirm(
+        'Are you sure your profile is updated with your display name and avatar? This will mark the challenge as complete.'
+      );
+      
+      if (!confirmed) return;
+
+      // Manually complete the profile challenge
+      const userRef = doc(db, 'users', currentUser.uid);
+      const updatedChapters = {
+        ...userProgress.chapters,
+        [1]: {
+          ...userProgress.chapters?.[1],
+          challenges: {
+            ...userProgress.chapters?.[1]?.challenges,
+            'ep1-update-profile': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: false,
+              manuallyCompleted: true,
+              completedBy: 'user_manual_override'
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Add to challenge submissions for tracking
+      await addDoc(collection(db, 'challengeSubmissions'), {
+        userId: currentUser.uid,
+        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        email: currentUser.email || '',
+        photoURL: currentUser.photoURL || '',
+        challengeId: 'ep1-update-profile',
+        challengeName: 'Update Your Profile',
+        submissionType: 'manual_override',
+        status: 'approved',
+        timestamp: serverTimestamp(),
+        xpReward: 15,
+        ppReward: 5,
+        manifestationType: 'Chapter Challenge',
+        character: 'Chapter System',
+        autoCompleted: false,
+        manuallyCompleted: true,
+        notes: 'User manually completed - profile detection failed'
+      });
+
+      // Create notification for challenge completion
+      await createChallengeNotification('Update Your Profile', 15, 5, true);
+      
+      // Check for chapter progression after manual completion
+      await checkAndProgressChapter(1);
+      
+      alert('✅ Profile challenge completed manually! You can now proceed to the next challenge.');
+      
+      // Refresh user progress
+      const userDocRefresh = await getDoc(userRef);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+      }
+      
+    } catch (error) {
+      console.error('Error manually completing profile challenge:', error);
+      alert('❌ Error completing profile challenge. Please try again.');
+    }
+  };
+
   // Manual trigger function for manifest testing
   const manualCheckManifestCompletion = async () => {
     if (userProgress) {
@@ -548,6 +626,41 @@ const ensureChaptersInitialized = async () => {
   };
 
   // Function to diagnose and fix chapter progression issues
+  // Enhanced diagnostic function for Chapter 1 access issues
+  const diagnoseChapter1Access = async () => {
+    if (!currentUser || !userProgress) return;
+    
+    console.log('=== CHAPTER 1 ACCESS DIAGNOSTIC ===');
+    console.log('Current user:', currentUser.uid);
+    console.log('User progress exists:', !!userProgress);
+    console.log('Chapters exist:', !!userProgress?.chapters);
+    
+    if (userProgress?.chapters) {
+      console.log('Chapter 1 exists:', !!userProgress.chapters[1]);
+      console.log('Chapter 1 isActive:', userProgress.chapters[1]?.isActive);
+      console.log('Chapter 1 unlockDate:', userProgress.chapters[1]?.unlockDate);
+      console.log('Chapter 1 challenges:', userProgress.chapters[1]?.challenges);
+      
+      // Check specific challenges
+      const challenges = userProgress.chapters[1]?.challenges || {};
+      console.log('Challenge ep1-get-letter exists:', !!challenges['ep1-get-letter']);
+      console.log('Challenge ep1-get-letter isCompleted:', challenges['ep1-get-letter']?.isCompleted);
+      
+      // Test unlock logic
+      const getLetterChallenge = CHAPTERS[0]?.challenges[0];
+      if (getLetterChallenge) {
+        console.log('Get Letter challenge requirements:', getLetterChallenge.requirements);
+        const isUnlocked = isChallengeUnlocked(getLetterChallenge, userProgress);
+        console.log('Get Letter challenge isUnlocked:', isUnlocked);
+      }
+    } else {
+      console.log('❌ NO CHAPTERS FOUND - This is the problem!');
+      console.log('Attempting to initialize chapters...');
+      await ensureChaptersInitialized();
+    }
+    console.log('=== END DIAGNOSTIC ===');
+  };
+
   const diagnoseChapterProgression = async () => {
     if (!currentUser || !userProgress) return;
     
@@ -1234,10 +1347,16 @@ const ensureChaptersInitialized = async () => {
     console.log('Challenge requirements:', challenge.requirements);
     console.log('User progress chapters:', userProgress?.chapters);
     
-    // Always unlock challenges with no requirements
+    // Always unlock challenges with no requirements - CRITICAL FOR CHAPTER 1 CHALLENGES
     if (!challenge.requirements || challenge.requirements.length === 0) {
       console.log('✅ No requirements, challenge is unlocked');
       return true; // No requirements means it's always unlocked
+    }
+
+    // Special case: Chapter 1 Challenge 1 should ALWAYS be unlocked for new players
+    if (challenge.id === 'ep1-get-letter') {
+      console.log('✅ Chapter 1 Challenge 1 - ALWAYS UNLOCKED for new players');
+      return true;
     }
 
     // Check each requirement
@@ -2217,22 +2336,53 @@ const ensureChaptersInitialized = async () => {
                             </div>
                           </div>
                         </div>
-                        <button
-                          onClick={manualCheckProfileCompletion}
-                          style={{
-                            padding: '0.75rem 1.5rem',
-                            backgroundColor: '#22c55e',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '0.5rem',
-                            cursor: 'pointer',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold',
-                            width: '100%'
-                          }}
-                        >
-                          Check & Complete Profile Challenge
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
+                          <button
+                            onClick={manualCheckProfileCompletion}
+                            style={{
+                              padding: '0.75rem 1.5rem',
+                              backgroundColor: '#22c55e',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.5rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: 'bold',
+                              width: '100%'
+                            }}
+                          >
+                            🔍 Check & Complete Profile Challenge
+                          </button>
+                          
+                          <button
+                            onClick={manualCompleteProfileChallenge}
+                            style={{
+                              padding: '0.75rem 1.5rem',
+                              backgroundColor: '#f59e0b',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.5rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: 'bold',
+                              width: '100%'
+                            }}
+                          >
+                            🚀 My Profile is Updated - Skip Detection
+                          </button>
+                          
+                          <div style={{
+                            fontSize: '0.75rem',
+                            color: '#6b7280',
+                            textAlign: 'center',
+                            marginTop: '0.25rem',
+                            padding: '0.5rem',
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '0.25rem'
+                          }}>
+                            💡 If the app isn't detecting your profile update, use the orange button to manually complete this challenge.
+                          </div>
+                        </div>
                       </div>
                     )}
 

@@ -1079,6 +1079,92 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  // Manual profile completion bypass - for students who say their profile is updated
+  const manualCompleteProfileChallenge = async () => {
+    if (!currentUser || !userProgress) return;
+
+    try {
+      console.log('ChapterDetail: Manual profile challenge completion - bypassing detection');
+      
+      // Confirm with user
+      const confirmed = window.confirm(
+        'Are you sure your profile is updated with your display name and avatar? This will mark the challenge as complete.'
+      );
+      
+      if (!confirmed) return;
+
+      // Manually complete the profile challenge
+      const userRef = doc(db, 'users', currentUser.uid);
+      const updatedChapters = {
+        ...userProgress.chapters,
+        [1]: {
+          ...userProgress.chapters?.[1],
+          challenges: {
+            ...userProgress.chapters?.[1]?.challenges,
+            'ep1-update-profile': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              autoCompleted: false,
+              manuallyCompleted: true,
+              completedBy: 'user_manual_override'
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Add to challenge submissions for tracking
+      await addDoc(collection(db, 'challengeSubmissions'), {
+        userId: currentUser.uid,
+        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        email: currentUser.email || '',
+        photoURL: currentUser.photoURL || '',
+        challengeId: 'ep1-update-profile',
+        challengeName: 'Update Your Profile',
+        submissionType: 'manual_override',
+        status: 'approved',
+        timestamp: serverTimestamp(),
+        xpReward: 15,
+        ppReward: 5,
+        manifestationType: 'Chapter Challenge',
+        character: 'Chapter System',
+        autoCompleted: false,
+        manuallyCompleted: true,
+        notes: 'User manually completed - profile detection failed'
+      });
+
+      // Create notification for challenge completion
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 Challenge "Update Your Profile" was manually completed! You earned +15 XP and +5 PP.`,
+        challengeId: 'ep1-update-profile',
+        challengeName: 'Update Your Profile',
+        xpReward: 15,
+        ppReward: 5,
+        timestamp: serverTimestamp(),
+        read: false,
+        isAutoCompleted: false,
+        manuallyCompleted: true
+      });
+      
+      alert('✅ Profile challenge completed manually! You can now proceed to the next challenge.');
+      
+      // Refresh user data
+      const userDocRefresh = await getDoc(userRef);
+      if (userDocRefresh.exists()) {
+        const userDataRefresh = userDocRefresh.data();
+        setUserProgress(userDataRefresh);
+      }
+      
+    } catch (error) {
+      console.error('ChapterDetail: Error manually completing profile challenge:', error);
+      alert('❌ Error completing profile challenge. Please try again.');
+    }
+  };
+
   const handleChallengeComplete = async (challenge: ChapterChallenge) => {
     if (!currentUser) return;
 
@@ -1091,12 +1177,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
 
     // Special handling for profile update challenge
-    if (challenge.id === 'ch1-update-profile') {
+    if (challenge.id === 'ep1-update-profile') {
       const hasDisplayName = studentData?.displayName;
       const hasPhotoURL = studentData?.photoURL;
       
       if (!hasDisplayName || !hasPhotoURL) {
-        alert('Please complete your profile first by adding a display name and uploading an avatar image.');
+        // Show options for profile challenge
+        const userChoice = window.confirm(
+          'Profile not detected as complete. Do you want to:\n\n' +
+          '• Click OK to manually mark as complete (if you know your profile is updated)\n' +
+          '• Click Cancel to go update your profile first'
+        );
+        
+        if (userChoice) {
+          await manualCompleteProfileChallenge();
+        }
         return;
       }
     }
