@@ -399,7 +399,7 @@ const Battle: React.FC = () => {
           { id: 'vault', label: 'Vault Management', icon: '🏦' },
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
-          { id: 'offline', label: 'Offline Moves', icon: '⏰' },
+          { id: 'offline', label: 'Vault Siege', icon: '🏰' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -566,7 +566,7 @@ const Battle: React.FC = () => {
                 margin: 0,
                 lineHeight: '1.4'
               }}>
-                Engage in epic visual battles with classmates! Choose from PvP battles, offline moves, or practice mode to hone your skills.
+                Engage in epic visual battles with classmates! Choose from PvP battles, vault siege, or practice mode to hone your skills.
               </p>
             </div>
             
@@ -650,7 +650,14 @@ const Battle: React.FC = () => {
             ) : selectedBattleMode === 'pvp' ? (
               <PvPBattle onBack={() => setSelectedBattleMode(null)} />
             ) : selectedBattleMode === 'offline' ? (
-              <OfflineMoveBattle onBack={() => setSelectedBattleMode(null)} />
+              <VaultSiegeModal 
+                isOpen={true} 
+                onClose={() => setSelectedBattleMode(null)} 
+                onAttackComplete={() => {
+                  // Refresh data after attack
+                  syncVaultPP();
+                }}
+              />
             ) : selectedBattleMode === 'practice' ? (
               <PracticeModeBattle onBack={() => setSelectedBattleMode(null)} />
             ) : null}
@@ -1453,12 +1460,12 @@ const Battle: React.FC = () => {
 
         {activeTab === 'offline' && (
           <div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Offline Moves</h3>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Vault Siege</h3>
             <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
-              You have {remainingOfflineMoves} offline moves remaining today. These moves are processed at set intervals.
+              You have {remainingOfflineMoves} vault siege attacks remaining today. Launch strategic attacks on player vaults to steal PP and break shields.
             </p>
             
-            {/* Purchase Offline Moves Button */}
+            {/* Purchase Vault Siege Moves Button */}
             <div style={{ 
               background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
               border: '2px solid #fbbf24',
@@ -1475,11 +1482,11 @@ const Battle: React.FC = () => {
               }}>
                 <span style={{ fontSize: '1.5rem', marginRight: '0.5rem' }}>⏰</span>
                 <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#92400e' }}>
-                  Purchase Additional Offline Moves
+                  Purchase Additional Vault Siege Moves
                 </span>
               </div>
               <p style={{ color: '#92400e', fontSize: '0.875rem', marginBottom: '1rem' }}>
-                Buy extra offline moves to increase your daily action capacity
+                Buy extra vault siege attacks to increase your daily action capacity
               </p>
               <button
                 onClick={() => handlePurchaseOfflineMoves()}
@@ -1603,7 +1610,7 @@ const Battle: React.FC = () => {
 
             {offlineMoves.length > 0 && (
               <div style={{ marginTop: '2rem' }}>
-                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Recent Offline Moves</h4>
+                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Recent Vault Siege Attacks</h4>
                 <div style={{ display: 'grid', gap: '0.5rem' }}>
                   {offlineMoves.slice(0, 5).map(move => (
                     <div key={move.id} style={{ 

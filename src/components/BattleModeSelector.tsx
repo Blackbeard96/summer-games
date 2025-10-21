@@ -28,13 +28,13 @@ const BattleModeSelector: React.FC<BattleModeSelectorProps> = ({ onModeSelect })
     },
     {
       id: 'offline' as const,
-      title: 'Offline Move',
+      title: 'Vault Siege',
       subtitle: 'Attack Vaults',
-      icon: '🏦',
-      description: 'Attack player vaults when they\'re offline',
+      icon: '🏰',
+      description: 'Launch strategic attacks on player vaults to steal PP and break shields',
       rewards: 'Medium PP + XP Boost',
-      color: '#f59e0b',
-      gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+      color: '#dc2626',
+      gradient: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
       available: remainingOfflineMoves > 0,
       details: `Limited to 3 moves per day (${remainingOfflineMoves} remaining)`,
       movesRemaining: remainingOfflineMoves
