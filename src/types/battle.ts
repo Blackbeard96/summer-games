@@ -1247,10 +1247,10 @@ export const MOVE_DAMAGE_VALUES: Record<string, { damage: number }> = {
 };
 
 // Action card damage values (combined shield damage + PP steal)
-export const ACTION_CARD_DAMAGE_VALUES: Record<string, { damage: number }> = {
-  'Shield Breaker': { damage: 22 }, // 22 + 0
+export const ACTION_CARD_DAMAGE_VALUES: Record<string, { damage: number | { min: number; max: number } }> = {
+  'Shield Breaker': { damage: { min: 18, max: 26 } }, // 22 ± 4
   'Shield Restore': { damage: 0 }, // Self-heal
-  'Teleport PP': { damage: 25 }, // 0 + 25
+  'Teleport PP': { damage: { min: 20, max: 30 } }, // 25 ± 5
   'Double XP': { damage: 0 }, // Utility
 };
 

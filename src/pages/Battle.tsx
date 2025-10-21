@@ -1305,8 +1305,21 @@ const Battle: React.FC = () => {
                     {/* Effect Stats */}
                     {(() => {
                       const cardDamage = ACTION_CARD_DAMAGE_VALUES[card.name];
-                      if (cardDamage && cardDamage.damage > 0) {
-                        const damageRange = calculateDamageRange(cardDamage.damage, card.masteryLevel, card.masteryLevel);
+                      if (cardDamage && cardDamage.damage) {
+                        let damageRange;
+                        if (typeof cardDamage.damage === 'object') {
+                          // It's already a range, create proper DamageRange object
+                          damageRange = {
+                            min: cardDamage.damage.min,
+                            max: cardDamage.damage.max,
+                            average: Math.floor((cardDamage.damage.min + cardDamage.damage.max) / 2)
+                          };
+                        } else if (cardDamage.damage > 0) {
+                          // It's a single value, calculate range based on mastery level
+                          damageRange = calculateDamageRange(cardDamage.damage, card.masteryLevel, card.masteryLevel);
+                        } else {
+                          return null;
+                        }
                         const rangeString = formatDamageRange(damageRange);
                         return (
                           <div style={{ 

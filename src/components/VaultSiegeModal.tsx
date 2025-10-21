@@ -5,6 +5,8 @@ import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
 import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
+import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
+import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
 
 interface VaultSiegeModalProps {
   isOpen: boolean;
@@ -28,6 +30,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const { vault, moves, actionCards, executeVaultSiegeAttack, syncVaultPP, syncStudentPP, refreshVaultData, getRemainingOfflineMoves, offlineMoves, attackHistory } = useBattle();
   
   const [players, setPlayers] = useState<Player[]>([]);
+  const [filteredPlayers, setFilteredPlayers] = useState<Player[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
   const [selectedActionCards, setSelectedActionCards] = useState<string[]>([]);
@@ -134,9 +138,24 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       setSelectedMoves([]);
       setSelectedActionCards([]);
       setSelectedTarget('');
+      setSearchQuery('');
       setAttackResults(null);
     }
   }, [isOpen]);
+
+  // Filter players based on search query
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredPlayers(players);
+    } else {
+      const query = searchQuery.toLowerCase().trim();
+      const filtered = players.filter(player => 
+        player.displayName.toLowerCase().includes(query) ||
+        player.uid.toLowerCase().includes(query) // This will match email if uid is email
+      );
+      setFilteredPlayers(filtered);
+    }
+  }, [players, searchQuery]);
 
   // Load available players (excluding current user)
   useEffect(() => {
@@ -185,6 +204,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         
         console.log('VaultSiegeModal: Final players list:', availablePlayers);
         setPlayers(availablePlayers);
+        setFilteredPlayers(availablePlayers);
       } catch (error) {
         console.error('Error loading players:', error);
       } finally {
@@ -339,7 +359,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       }
 
       // Show success message with actual PP and XP gains
-      const targetName = players.find(p => p.uid === selectedTarget)?.displayName || 'Unknown';
+      const targetName = filteredPlayers.find(p => p.uid === selectedTarget)?.displayName || 
+                        players.find(p => p.uid === selectedTarget)?.displayName || 'Unknown';
       const successMessage = totalPPStolen > 0 
         ? `Attack successful! Stole ${totalPPStolen} PP and earned ${totalXP} XP from ${targetName}!`
         : `Attack executed against ${targetName}! ${totalShieldDamage > 0 ? `Dealt ${totalShieldDamage} shield damage.` : ''}`;
@@ -470,24 +491,43 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   if (!isOpen) return null;
 
   const modalContent = (
-    <div 
-      ref={modalRef}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(255, 0, 0, 0.8)', // Changed to bright red background
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 999999,
-        pointerEvents: 'auto',
-        width: '100vw',
-        height: '100vh',
-        border: '10px solid yellow', // Added bright yellow border
-      }}>
+    <>
+      <style>
+        {`
+          .vault-siege-scroll::-webkit-scrollbar {
+            height: 8px;
+          }
+          .vault-siege-scroll::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+          }
+          .vault-siege-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+          }
+          .vault-siege-scroll::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+          }
+        `}
+      </style>
+      <div 
+        ref={modalRef}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(255, 0, 0, 0.8)', // Changed to bright red background
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 999999,
+          pointerEvents: 'auto',
+          width: '100vw',
+          height: '100vh',
+          border: '10px solid yellow', // Added bright yellow border
+        }}>
       <div style={{
         background: 'lime', // Changed to bright lime background
         borderRadius: '12px',
@@ -677,7 +717,86 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
         {/* Target Selection */}
         <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#374151' }}>Select Target Vault</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '1.1rem', color: '#374151' }}>Select Target Vault</h3>
+            <div style={{ 
+              fontSize: '0.875rem', 
+              color: '#6b7280',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <span>Players: {filteredPlayers.length}</span>
+              {searchQuery && (
+                <>
+                  <span>•</span>
+                  <span>Filtered by: "{searchQuery}"</span>
+                </>
+              )}
+            </div>
+          </div>
+          
+          {/* Search Input */}
+          <div style={{ marginBottom: '1rem', position: 'relative' }}>
+            <input
+              type="text"
+              placeholder="Search players by name or email..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem',
+                paddingRight: searchQuery ? '3rem' : '1rem',
+                border: '2px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                backgroundColor: 'white',
+                color: '#374151',
+                outline: 'none',
+                transition: 'border-color 0.2s ease',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = '#4f46e5';
+                e.target.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = '#e5e7eb';
+                e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#6b7280',
+                  cursor: 'pointer',
+                  padding: '0.25rem',
+                  borderRadius: '0.25rem',
+                  fontSize: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'color 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#374151';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#6b7280';
+                }}
+                title="Clear search"
+              >
+                ×
+              </button>
+            )}
+          </div>
           {loading ? (
             <div style={{ 
               textAlign: 'center', 
@@ -688,7 +807,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             }}>
               🔄 Loading available players...
             </div>
-          ) : players.length === 0 ? (
+          ) : filteredPlayers.length === 0 ? (
             <div style={{ 
               textAlign: 'center', 
               padding: '2rem', 
@@ -696,19 +815,33 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               background: '#f9fafb',
               borderRadius: '8px'
             }}>
-              <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>👥</div>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>No Players Available</div>
+              <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
+                {searchQuery ? '🔍' : '👥'}
+              </div>
+              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                {searchQuery ? 'No Players Found' : 'No Players Available'}
+              </div>
               <div style={{ fontSize: '0.875rem' }}>
-                There are no other players in the system to attack.
+                {searchQuery 
+                  ? `No players match your search for "${searchQuery}". Try a different search term.`
+                  : 'There are no other players in the system to attack.'
+                }
               </div>
             </div>
           ) : (
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
-              gap: '1rem' 
-            }}>
-              {players.map(player => {
+            <div 
+              className="vault-siege-scroll"
+              style={{ 
+                display: 'flex', 
+                gap: '1rem',
+                overflowX: 'auto',
+                paddingBottom: '0.5rem',
+                scrollbarWidth: 'thin',
+                scrollbarColor: '#cbd5e1 #f1f5f9',
+                scrollBehavior: 'smooth',
+                WebkitOverflowScrolling: 'touch'
+              }}>
+              {filteredPlayers.map(player => {
                 const isSelected = selectedTarget === player.uid;
                 const shieldPercentage = ((player.shieldStrength || 0) / (player.maxShieldStrength || 50)) * 100;
                 
@@ -759,11 +892,14 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       transition: 'all 0.3s ease',
                       boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
                       minHeight: '160px',
+                      minWidth: '280px',
+                      maxWidth: '280px',
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'space-between',
                       position: 'relative',
-                      overflow: 'hidden'
+                      overflow: 'hidden',
+                      flexShrink: 0
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) {
@@ -930,14 +1066,40 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                                 <span>Available: {remainingMoves - selectedActionCards.length}</span>
             </div>
           </div>
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
-            gap: '1rem' 
-          }}>
+          <div 
+            className="vault-siege-scroll"
+            style={{ 
+              display: 'flex', 
+              gap: '1rem',
+              overflowX: 'auto',
+              paddingBottom: '0.5rem',
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e1 #f1f5f9',
+              scrollBehavior: 'smooth',
+              WebkitOverflowScrolling: 'touch'
+            }}>
             {unlockedMoves.map(move => {
               const isSelected = selectedMoves.includes(move.id);
-              const totalDamage = MOVE_DAMAGE_VALUES[move.name]?.damage || 0;
+              
+              // Get move data with overrides and calculate damage range
+              const moveDamageValue = getMoveDamageSync(move.name);
+              let damageRange = null;
+              let damageDisplay = null;
+              
+              if (moveDamageValue) {
+                if (typeof moveDamageValue === 'object') {
+                  // It's already a range, create proper DamageRange object
+                  damageRange = {
+                    min: moveDamageValue.min,
+                    max: moveDamageValue.max,
+                    average: Math.floor((moveDamageValue.min + moveDamageValue.max) / 2)
+                  };
+                } else {
+                  // It's a single value, calculate range based on mastery level
+                  damageRange = calculateDamageRange(moveDamageValue, move.level, move.masteryLevel);
+                }
+                damageDisplay = formatDamageRange(damageRange);
+              }
               
               // Determine card background based on move category and selection
               const getCardBackground = () => {
@@ -972,12 +1134,15 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     transition: 'all 0.3s ease',
                     boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
                     minHeight: '160px',
+                    minWidth: '280px',
+                    maxWidth: '280px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
                     position: 'relative',
                     overflow: 'hidden',
                     opacity: move.unlocked ? 1 : 0.6,
+                    flexShrink: 0
                   }}
                   onMouseEnter={(e) => {
                     if (!isSelected) {
@@ -1061,7 +1226,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       {move.description}
                     </div>
                     
-                    {totalDamage > 0 && (
+                    {damageDisplay && (
                       <div style={{ 
                         display: 'grid',
                         gridTemplateColumns: '1fr',
@@ -1069,9 +1234,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         marginBottom: '0.75rem'
                       }}>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE RANGE</div>
                           <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                            {totalDamage}
+                            {damageDisplay}
                           </div>
                         </div>
                       </div>
@@ -1115,14 +1280,39 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                                 <span>Available: {remainingMoves - selectedMoves.length}</span>
             </div>
           </div>
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
-            gap: '1rem' 
-          }}>
+          <div 
+            className="vault-siege-scroll"
+            style={{ 
+              display: 'flex', 
+              gap: '1rem',
+              overflowX: 'auto',
+              paddingBottom: '0.5rem',
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e1 #f1f5f9',
+              scrollBehavior: 'smooth',
+              WebkitOverflowScrolling: 'touch'
+            }}>
             {unlockedCards.map(card => {
               const isSelected = selectedActionCards.includes(card.id);
-              const totalDamage = ACTION_CARD_DAMAGE_VALUES[card.name]?.damage || 0;
+              
+              // Get action card damage value
+              const cardDamageValue = ACTION_CARD_DAMAGE_VALUES[card.name]?.damage || 0;
+              let damageDisplay = null;
+              
+              if (cardDamageValue) {
+                if (typeof cardDamageValue === 'object') {
+                  // It's a range, create proper DamageRange object
+                  const damageRange = {
+                    min: cardDamageValue.min,
+                    max: cardDamageValue.max,
+                    average: Math.floor((cardDamageValue.min + cardDamageValue.max) / 2)
+                  };
+                  damageDisplay = formatDamageRange(damageRange);
+                } else if (cardDamageValue > 0) {
+                  // It's a single value
+                  damageDisplay = cardDamageValue.toString();
+                }
+              }
               
               // Determine card background based on selection
               const getCardBackground = () => {
@@ -1146,12 +1336,15 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     transition: 'all 0.3s ease',
                     boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
                     minHeight: '160px',
+                    minWidth: '280px',
+                    maxWidth: '280px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
                     position: 'relative',
                     overflow: 'hidden',
                     opacity: card.unlocked ? 1 : 0.6,
+                    flexShrink: 0
                   }}
                   onMouseEnter={(e) => {
                     if (!isSelected) {
@@ -1230,7 +1423,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       {card.description}
                     </div>
                     
-                    {totalDamage > 0 && (
+                    {damageDisplay && (
                       <div style={{ 
                         display: 'grid',
                         gridTemplateColumns: '1fr',
@@ -1238,9 +1431,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         marginBottom: '0.75rem'
                       }}>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>DAMAGE</div>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>
+                            {typeof cardDamageValue === 'object' ? 'DAMAGE RANGE' : 'DAMAGE'}
+                          </div>
                           <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#dc2626' }}>
-                            {totalDamage}
+                            {damageDisplay}
                           </div>
                         </div>
                       </div>
@@ -1359,6 +1554,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         </div>
       </div>
     </div>
+    </>
   );
 
   return createPortal(modalContent, document.body);
