@@ -21,8 +21,8 @@ const BattleModeSelector: React.FC<BattleModeSelectorProps> = ({ onModeSelect })
       icon: '⚔️',
       description: 'Challenge other players in real-time turn-based combat',
       rewards: 'Large PP + XP Boost',
-      color: '#ef4444',
-      gradient: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+      color: '#f59e0b',
+      gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
       available: true,
       details: 'Create or join battle rooms for epic vault-to-vault combat'
     },

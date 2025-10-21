@@ -504,33 +504,62 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     logger.battle.debug('Setting up attack history listener');
     
-    // Get all attacks where user is attacker or target
-    const attacksQuery = query(
+    // Get all attacks where user is attacker (outgoing attacks)
+    const outgoingAttacksQuery = query(
       collection(db, 'vaultSiegeAttacks'),
       where('attackerId', '==', currentUser.uid)
     );
     
-    const unsubscribeAttacks = onSnapshot(attacksQuery, (snapshot) => {
-      const attacks: VaultSiegeAttack[] = [];
-      snapshot.forEach((doc) => {
-        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
-        logger.battle.debug('Found attack by user:', attackData);
-        attacks.push(attackData);
-      });
-      logger.battle.debug('Setting attack history:', attacks);
-      setAttackHistory(attacks);
+    // Get all attacks where user is target (incoming attacks)
+    const incomingAttacksQuery = query(
+      collection(db, 'vaultSiegeAttacks'),
+      where('targetId', '==', currentUser.uid)
+    );
+    
+    let outgoingAttacks: VaultSiegeAttack[] = [];
+    let incomingAttacks: VaultSiegeAttack[] = [];
+    
+    const updateAttackHistory = () => {
+      const allAttacks = [...outgoingAttacks, ...incomingAttacks];
+      logger.battle.debug('Setting combined attack history:', allAttacks);
+      setAttackHistory(allAttacks);
       
       // Automatically trigger debug update to ensure UI consistency
       const remainingMoves = getRemainingOfflineMoves();
       // logger.battle.debug('Auto-triggering debug update after attack history change');
       // logger.battle.debug('Current offline moves count:', offlineMoves.length);
-      // logger.battle.debug('Current attack history count:', attacks.length);
+      // logger.battle.debug('Current attack history count:', allAttacks.length);
       // logger.battle.debug('Calculated remaining moves:', remainingMoves);
+    };
+    
+    const unsubscribeOutgoingAttacks = onSnapshot(outgoingAttacksQuery, (snapshot) => {
+      outgoingAttacks = [];
+      snapshot.forEach((doc) => {
+        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
+        logger.battle.debug('Found outgoing attack by user:', attackData);
+        outgoingAttacks.push(attackData);
+      });
+      updateAttackHistory();
     }, (error) => {
-      logger.battle.error('Error listening to attack history:', error);
+      logger.battle.error('Error listening to outgoing attack history:', error);
+    });
+    
+    const unsubscribeIncomingAttacks = onSnapshot(incomingAttacksQuery, (snapshot) => {
+      incomingAttacks = [];
+      snapshot.forEach((doc) => {
+        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
+        logger.battle.debug('Found incoming attack to user:', attackData);
+        incomingAttacks.push(attackData);
+      });
+      updateAttackHistory();
+    }, (error) => {
+      logger.battle.error('Error listening to incoming attack history:', error);
     });
 
-    return () => unsubscribeAttacks();
+    return () => {
+      unsubscribeOutgoingAttacks();
+      unsubscribeIncomingAttacks();
+    };
   }, [currentUser]);
 
   // Vault Management

@@ -275,32 +275,6 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               >
                 🚀 Live Battle
               </button>
-              <button
-                onClick={() => onCreateBattle('vault_siege')}
-                title="Attack a rival's vault to break their shields and take their PP"
-                style={{
-                  background: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  fontSize: '0.875rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                🏰 Vault Siege
-              </button>
             </>
           )}
           
