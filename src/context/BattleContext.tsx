@@ -705,9 +705,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     try {
       const vaultRef = doc(db, 'vaults', currentUser.uid);
+      // Restore only the specified amount, but don't exceed maximum
       const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + amount);
       const actualRestored = newShieldStrength - vault.shieldStrength;
-      const newPP = vault.currentPP - cost;
+      
+      // Only charge for the actual shields restored, not the full cost
+      const actualCost = Math.round((actualRestored / amount) * cost);
+      const newPP = vault.currentPP - actualCost;
       
       await updateDoc(vaultRef, {
         shieldStrength: newShieldStrength,

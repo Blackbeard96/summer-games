@@ -375,10 +375,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           </button>
           
           <button 
-            onClick={() => {
-              const neededShields = vault.maxShieldStrength - vault.shieldStrength;
-              onRestoreShields(neededShields, 30);
-            }}
+            onClick={() => onRestoreShields(50, 30)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
