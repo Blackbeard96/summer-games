@@ -80,6 +80,26 @@ const artifacts: Artifact[] = [
     originalPrice: 100,
     discount: 25
   },
+  { 
+    id: 'skip-the-line',
+    name: 'Skip the Line', 
+    description: 'Skip the line and be the next up to use the pass to leave', 
+    price: 50, 
+    icon: '🚀', 
+    image: 'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'special',
+    rarity: 'common'
+  },
+  { 
+    id: 'work-extension',
+    name: 'Work Extension', 
+    description: 'Complete assignments that were past due and normally would no longer be graded', 
+    price: 50, 
+    icon: '📝', 
+    image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'special',
+    rarity: 'common'
+  },
 ];
 
 const Marketplace = () => {
@@ -340,6 +360,38 @@ const Marketplace = () => {
           alert('Failed to activate PP boost. Please try again.');
           return;
         }
+      } else if (artifactName === 'Skip the Line') {
+        // Create admin notification for Skip the Line
+        await createAdminNotification({
+          type: 'skip_line_request',
+          title: 'Skip the Line Request',
+          message: `${currentUser.displayName || currentUser.email} used Skip the Line - they should be next to use the pass to leave`,
+          data: {
+            userId: currentUser.uid,
+            userName: currentUser.displayName || currentUser.email,
+            artifactName: artifactName,
+            usageTime: new Date(),
+            location: 'Marketplace',
+            priority: 'high'
+          }
+        });
+        alert(`🚀 Skip the Line activated! You'll be notified when it's your turn to use the pass to leave.`);
+      } else if (artifactName === 'Work Extension') {
+        // Create admin notification for Work Extension
+        await createAdminNotification({
+          type: 'work_extension_request',
+          title: 'Work Extension Request',
+          message: `${currentUser.displayName || currentUser.email} used Work Extension - they want to complete past due assignments`,
+          data: {
+            userId: currentUser.uid,
+            userName: currentUser.displayName || currentUser.email,
+            artifactName: artifactName,
+            usageTime: new Date(),
+            location: 'Marketplace',
+            priority: 'medium'
+          }
+        });
+        alert(`📝 Work Extension activated! You can now complete assignments that were past due. Contact your teacher for details.`);
       } else {
         // Create admin notification for other artifacts
         await createAdminNotification({
