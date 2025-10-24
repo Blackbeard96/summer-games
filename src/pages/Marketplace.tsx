@@ -203,16 +203,18 @@ const Marketplace = () => {
         }
       }).length;
       
-      // Use the higher count to ensure we don't miss any items
-      const totalCount = Math.max(studentsCount, usersCount);
+      // For debugging - let's be more conservative and only use students inventory for now
+      // This should match what the Profile page shows
+      const totalCount = studentsCount;
       
-      console.log(`Artifact count for "${artifactName}": ${totalCount}`, { 
+      console.log(`🔍 DEBUG: Artifact count for "${artifactName}":`, { 
         artifactName, 
         studentsCount, 
         usersCount, 
         totalCount,
-        studentsInventory,
-        usersArtifacts: usersArtifacts.map((a: any) => typeof a === 'string' ? a : a.name)
+        studentsInventory: studentsInventory,
+        usersArtifacts: usersArtifacts.map((a: any) => typeof a === 'string' ? a : a.name),
+        note: 'Using studentsCount only to match Profile page'
       });
       
       return totalCount;
@@ -220,6 +222,7 @@ const Marketplace = () => {
       console.error('Error counting artifacts:', error);
       // Fallback to local inventory count
       const count = inventory.filter(item => item === artifactName).length;
+      console.log(`🔍 FALLBACK: Using local inventory count for "${artifactName}": ${count}`, { inventory });
       return count;
     }
   };
@@ -389,6 +392,73 @@ const Marketplace = () => {
     } catch (error) {
       console.error('Error force syncing inventory:', error);
       alert('❌ Error force syncing inventory. Check console for details.');
+    }
+  };
+
+  // Function to clear phantom shield data
+  const clearPhantomShield = async () => {
+    if (!currentUser) return;
+    
+    try {
+      console.log('=== CLEARING PHANTOM SHIELD DATA ===');
+      
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
+      
+      const [studentsSnap, usersSnap] = await Promise.all([
+        getDoc(studentsRef),
+        getDoc(usersRef)
+      ]);
+      
+      let changesMade = false;
+      
+      // Clear Shield from students inventory
+      if (studentsSnap.exists()) {
+        const studentsData = studentsSnap.data();
+        const currentInventory = studentsData.inventory || [];
+        const cleanedInventory = currentInventory.filter((item: string) => item !== 'Shield');
+        
+        if (cleanedInventory.length !== currentInventory.length) {
+          await updateDoc(studentsRef, {
+            inventory: cleanedInventory
+          });
+          console.log('✅ Removed Shield from students inventory');
+          changesMade = true;
+        }
+      }
+      
+      // Clear Shield from users artifacts
+      if (usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        const currentArtifacts = usersData.artifacts || [];
+        const cleanedArtifacts = currentArtifacts.filter((artifact: any) => {
+          if (typeof artifact === 'string') {
+            return artifact !== 'Shield';
+          } else {
+            return artifact.name !== 'Shield';
+          }
+        });
+        
+        if (cleanedArtifacts.length !== currentArtifacts.length) {
+          await updateDoc(usersRef, {
+            artifacts: cleanedArtifacts
+          });
+          console.log('✅ Removed Shield from users artifacts');
+          changesMade = true;
+        }
+      }
+      
+      if (changesMade) {
+        console.log('✅ Phantom Shield data cleared!');
+        alert('✅ Phantom Shield data cleared! The page will refresh.');
+        window.location.reload();
+      } else {
+        console.log('ℹ️ No Shield data found to clear');
+        alert('ℹ️ No Shield data found to clear');
+      }
+    } catch (error) {
+      console.error('Error clearing phantom shield:', error);
+      alert('❌ Error clearing phantom shield. Check console for details.');
     }
   };
 
@@ -824,6 +894,21 @@ const Marketplace = () => {
                 }}
               >
                 🔄 Force Sync Inventory
+              </button>
+              <button
+                onClick={clearPhantomShield}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.25rem',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '500'
+                }}
+              >
+                🛡️ Clear Phantom Shield
               </button>
             </div>
           </div>
