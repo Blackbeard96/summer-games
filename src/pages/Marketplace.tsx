@@ -106,6 +106,7 @@ const Marketplace = () => {
   const { currentUser } = useAuth();
   const [powerPoints, setPowerPoints] = useState(0);
   const [inventory, setInventory] = useState<string[]>([]);
+  const [artifactCounts, setArtifactCounts] = useState<Record<string, number>>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedRarity, setSelectedRarity] = useState('all');
@@ -170,11 +171,70 @@ const Marketplace = () => {
     fetchData();
   }, [currentUser]);
 
-  // Function to count specific artifacts in inventory
-  const getArtifactCount = (artifactName: string) => {
-    const count = inventory.filter(item => item === artifactName).length;
-    console.log(`Artifact count for "${artifactName}": ${count}`, { inventory, artifactName });
-    return count;
+  // Update artifact counts when component mounts or inventory changes
+  useEffect(() => {
+    updateAllArtifactCounts();
+  }, [currentUser, inventory]);
+
+  // Function to count specific artifacts in inventory (including used ones)
+  const getArtifactCount = async (artifactName: string) => {
+    if (!currentUser) return 0;
+    
+    try {
+      // Check students collection for current inventory
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const studentsSnap = await getDoc(studentsRef);
+      const studentsInventory = studentsSnap.exists() ? studentsSnap.data().inventory || [] : [];
+      
+      // Check users collection for all artifacts (including used ones)
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersSnap = await getDoc(usersRef);
+      const usersArtifacts = usersSnap.exists() ? usersSnap.data().artifacts || [] : [];
+      
+      // Count from students inventory (current available items)
+      const studentsCount = studentsInventory.filter((item: string) => item === artifactName).length;
+      
+      // Count from users artifacts (all purchased items, including used)
+      const usersCount = usersArtifacts.filter((artifact: any) => {
+        if (typeof artifact === 'string') {
+          return artifact === artifactName;
+        } else {
+          return artifact.name === artifactName;
+        }
+      }).length;
+      
+      // Use the higher count to ensure we don't miss any items
+      const totalCount = Math.max(studentsCount, usersCount);
+      
+      console.log(`Artifact count for "${artifactName}": ${totalCount}`, { 
+        artifactName, 
+        studentsCount, 
+        usersCount, 
+        totalCount,
+        studentsInventory,
+        usersArtifacts: usersArtifacts.map((a: any) => typeof a === 'string' ? a : a.name)
+      });
+      
+      return totalCount;
+    } catch (error) {
+      console.error('Error counting artifacts:', error);
+      // Fallback to local inventory count
+      const count = inventory.filter(item => item === artifactName).length;
+      return count;
+    }
+  };
+
+  // Function to update all artifact counts
+  const updateAllArtifactCounts = async () => {
+    if (!currentUser) return;
+    
+    const newCounts: Record<string, number> = {};
+    
+    for (const artifact of artifacts) {
+      newCounts[artifact.name] = await getArtifactCount(artifact.name);
+    }
+    
+    setArtifactCounts(newCounts);
   };
 
   // Debug function to check inventory consistency
@@ -455,6 +515,9 @@ const Marketplace = () => {
         setPowerPoints(refreshedUserData.powerPoints || 0);
       }
       
+      // Refresh artifact counts
+      await updateAllArtifactCounts();
+      
       if (artifactName !== 'Double PP Boost') {
         alert(`Used ${artifactName}!`);
       }
@@ -473,18 +536,26 @@ const Marketplace = () => {
     }
 
     // Check for artifact limits
-    if (item.name === '+2 UXP Credit' && getArtifactCount(item.name) >= 2) {
+    const artifactCount = await getArtifactCount(item.name);
+    
+    if (item.name === '+2 UXP Credit' && artifactCount >= 2) {
       alert('You can only own a maximum of 2 +2 UXP Credit artifacts at a time!');
       return;
     }
     
-    if (item.name === '+4 UXP Credit' && getArtifactCount(item.name) >= 2) {
+    if (item.name === '+4 UXP Credit' && artifactCount >= 2) {
       alert('You can only own a maximum of 2 +4 UXP Credit artifacts at a time!');
       return;
     }
     
-    if (item.name === 'Get Out of Check-in Free' && getArtifactCount(item.name) >= 2) {
+    if (item.name === 'Get Out of Check-in Free' && artifactCount >= 2) {
       alert('You can only own a maximum of 2 Get Out of Check-in Free artifacts at a time!');
+      return;
+    }
+    
+    // Shield purchase limit - only 1 shield total (including used ones)
+    if (item.name === 'Shield' && artifactCount >= 1) {
+      alert('You can only own 1 Shield at a time (including used shields)!');
       return;
     }
 
@@ -543,6 +614,9 @@ const Marketplace = () => {
       
       setPowerPoints(prev => prev - item.price);
       setInventory(prev => [...prev, item.name]);
+      
+      // Refresh artifact counts
+      await updateAllArtifactCounts();
       
       alert(`Successfully purchased ${item.name}!`);
     } catch (error) {
@@ -939,9 +1013,10 @@ const Marketplace = () => {
               gap: isMobile ? '1rem' : '1.5rem' 
             }}>
               {filteredArtifacts.map((artifact) => {
-                const artifactCount = getArtifactCount(artifact.name);
+                const artifactCount = artifactCounts[artifact.name] || 0;
                 const purchased = artifactCount > 0;
                 const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
+                const isShieldAtLimit = artifact.name === 'Shield' && artifactCount >= 1;
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
                     background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
@@ -1085,6 +1160,7 @@ const Marketplace = () => {
                             }}>
                               Owned: {artifactCount}
                               {(artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
+                              {artifact.name === 'Shield' && ` (Max: 1)`}
                             </div>
                           )}
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1122,23 +1198,23 @@ const Marketplace = () => {
                             )}
                             <button
                               onClick={() => handlePurchase(artifact)}
-                              disabled={isAtLimit || powerPoints < artifact.price}
+                              disabled={isAtLimit || isShieldAtLimit || powerPoints < artifact.price}
                               style={{
-                                backgroundColor: isAtLimit ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
+                                backgroundColor: (isAtLimit || isShieldAtLimit) ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
                                 color: 'white',
                                 border: 'none',
                                 padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
                                 borderRadius: '0.375rem',
                                 fontSize: isMobile ? '0.75rem' : '0.875rem',
                                 fontWeight: '500',
-                                cursor: isAtLimit || powerPoints < artifact.price ? 'not-allowed' : 'pointer',
-                                opacity: isAtLimit || powerPoints < artifact.price ? 0.6 : 1,
+                                cursor: (isAtLimit || isShieldAtLimit || powerPoints < artifact.price) ? 'not-allowed' : 'pointer',
+                                opacity: (isAtLimit || isShieldAtLimit || powerPoints < artifact.price) ? 0.6 : 1,
                                 transition: 'all 0.2s',
                                 minWidth: isMobile ? '80px' : 'auto',
                                 minHeight: isMobile ? '36px' : 'auto'
                               }}
                               onMouseEnter={e => {
-                                if (!isAtLimit && powerPoints >= artifact.price && !isMobile) {
+                                if (!isAtLimit && !isShieldAtLimit && powerPoints >= artifact.price && !isMobile) {
                                   e.currentTarget.style.transform = 'translateY(-1px)';
                                 }
                               }}
@@ -1148,7 +1224,7 @@ const Marketplace = () => {
                                 }
                               }}
                             >
-                              {isAtLimit ? 'At Limit' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
+                              {isAtLimit ? 'At Limit' : isShieldAtLimit ? 'Owned' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
                             </button>
                           </div>
                         </div>
