@@ -22,6 +22,7 @@ interface Player {
   level: number;
   shieldStrength?: number;
   maxShieldStrength?: number;
+  overshield?: number;
 }
 
 const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultSiegeModalProps) => {
@@ -193,6 +194,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               const vaultData = vaultDoc.data();
               player.shieldStrength = vaultData.shieldStrength || 0;
               player.maxShieldStrength = vaultData.maxShieldStrength || 50;
+              player.overshield = vaultData.overshield || 0;
               console.log('VaultSiegeModal: Loaded vault for', player.displayName, vaultData);
             } else {
               console.log('VaultSiegeModal: No vault found for', player.displayName);
@@ -845,10 +847,13 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 const isSelected = selectedTarget === player.uid;
                 const shieldPercentage = ((player.shieldStrength || 0) / (player.maxShieldStrength || 50)) * 100;
                 
-                // Determine card background based on shield status
+                // Determine card background based on shield status and overshield
                 const getCardBackground = () => {
                   if (isSelected) {
                     return 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)';
+                  } else if ((player.overshield || 0) > 0) {
+                    // Special golden background for overshield
+                    return 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
                   } else if (shieldPercentage >= 80) {
                     return 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
                   } else if (shieldPercentage >= 50) {
@@ -860,6 +865,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
                 // Get shield status icon
                 const getShieldIcon = () => {
+                  if ((player.overshield || 0) > 0) return '✨';
                   if (shieldPercentage >= 80) return '🛡️';
                   if (shieldPercentage >= 50) return '⚠️';
                   return '💥';
@@ -984,6 +990,20 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                           <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#059669' }}>
                             {player.shieldStrength || 0}/{player.maxShieldStrength || 50}
                           </div>
+                          {(player.overshield || 0) > 0 && (
+                            <div style={{ 
+                              marginTop: '0.25rem',
+                              padding: '0.125rem 0.375rem',
+                              backgroundColor: '#fbbf24',
+                              color: '#92400e',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.625rem',
+                              fontWeight: 'bold',
+                              display: 'inline-block'
+                            }}>
+                              ✨ +{player.overshield} Overshield{(player.overshield || 0) > 1 ? 's' : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1033,6 +1053,20 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 <div style={{ fontWeight: 'bold', color: '#2563eb' }}>
                   {targetVault.shieldStrength} / {targetVault.maxShieldStrength}
                 </div>
+                {(targetVault.overshield || 0) > 0 && (
+                  <div style={{ 
+                    marginTop: '0.25rem',
+                    padding: '0.125rem 0.375rem',
+                    backgroundColor: '#fbbf24',
+                    color: '#92400e',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.625rem',
+                    fontWeight: 'bold',
+                    display: 'inline-block'
+                  }}>
+                    ✨ +{targetVault.overshield} Overshield{(targetVault.overshield || 0) > 1 ? 's' : ''}
+                  </div>
+                )}
               </div>
               <div>
                 <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Firewall</span>
