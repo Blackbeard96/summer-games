@@ -55,6 +55,7 @@ interface BattleContextType {
   applyElementFilterToExistingMoves: (userElement?: string) => Promise<void>;
   forceMigration: () => Promise<void>;
   upgradeMove: (moveId: string) => Promise<void>;
+  resetMoveLevel: (moveId: string) => Promise<void>;
   
   // Action Card Management
   actionCards: ActionCard[];
@@ -1072,21 +1073,32 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     try {
       const move = moves.find(m => m.id === moveId);
-      if (!move || move.masteryLevel >= 5) {
+      if (!move || move.masteryLevel >= 10) {
         setError('Move cannot be upgraded');
         return;
       }
 
-      // Calculate upgrade cost
-      const upgradeCost = (() => {
-        switch (move.masteryLevel) {
-          case 1: return 50;
-          case 2: return 100;
-          case 3: return 200;
-          case 4: return 400;
-          default: return 0;
-        }
-      })();
+      // Calculate exponential upgrade cost based on current level
+      // Base price: 100 PP for Level 1 → Level 2
+      // Then multiplied by the respective multiplier for each level
+      const basePrice = 100;
+      const nextLevel = move.masteryLevel + 1;
+      let upgradeCost: number;
+      if (nextLevel === 2) {
+        // Level 1 → Level 2: base price
+        upgradeCost = basePrice;
+      } else if (nextLevel === 3) {
+        // Level 2 → Level 3: base * 2
+        upgradeCost = basePrice * 2;
+      } else if (nextLevel === 4) {
+        // Level 3 → Level 4: base * 4
+        upgradeCost = basePrice * 4;
+      } else if (nextLevel === 5) {
+        // Level 4 → Level 5: base * 8
+        upgradeCost = basePrice * 8;
+      } else {
+        upgradeCost = basePrice;
+      }
 
       // Check if player has enough PP
       if (vault.currentPP < upgradeCost) {
@@ -1094,13 +1106,101 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
+      // Calculate random damage boost based on the new level (after upgrade)
+      const newLevel = move.masteryLevel + 1;
+      let damageBoostMultiplier: number;
+      
+      switch (newLevel) {
+        case 2:
+          // Level 2: x2.0 - x2.3 damage boost
+          damageBoostMultiplier = 2.0 + Math.random() * 0.3; // Random between 2.0 and 2.3
+          break;
+        case 3:
+          // Level 3: x1.25 - x1.5 damage boost
+          damageBoostMultiplier = 1.25 + Math.random() * 0.25; // Random between 1.25 and 1.5
+          break;
+        case 4:
+          // Level 4: x1.3 - x1.6 damage boost
+          damageBoostMultiplier = 1.3 + Math.random() * 0.3; // Random between 1.3 and 1.6
+          break;
+        case 5:
+          // Level 5: x2.0 - x2.5 damage boost
+          damageBoostMultiplier = 2.0 + Math.random() * 0.5; // Random between 2.0 and 2.5
+          break;
+        case 6:
+          // Level 6 (Ascended I): x2.0 - x2.3 damage boost
+          damageBoostMultiplier = 2.0 + Math.random() * 0.3; // Random between 2.0 and 2.3
+          break;
+        case 7:
+          // Level 7 (Ascended II): x1.25 - x1.5 damage boost
+          damageBoostMultiplier = 1.25 + Math.random() * 0.25; // Random between 1.25 and 1.5
+          break;
+        case 8:
+          // Level 8 (Ascended III): x1.3 - x1.6 damage boost
+          damageBoostMultiplier = 1.3 + Math.random() * 0.3; // Random between 1.3 and 1.6
+          break;
+        case 9:
+          // Level 9 (Ascended IV): x2.0 - x2.5 damage boost
+          damageBoostMultiplier = 2.0 + Math.random() * 0.5; // Random between 2.0 and 2.5
+          break;
+        case 10:
+          // Level 10 (Transcendent): x3.0 - x3.5 damage boost (special high boost)
+          damageBoostMultiplier = 3.0 + Math.random() * 0.5; // Random between 3.0 and 3.5
+          break;
+        default:
+          damageBoostMultiplier = 1.0;
+      }
+
+      // Apply boost multiplier to all numeric properties (damage, shieldBoost, healing, ppSteal, etc.)
+      const updatedMoves = moves.map(m => {
+        if (m.id === moveId) {
+          const updatedMove = { 
+            ...m, 
+            masteryLevel: newLevel
+          };
+          
+          // Apply boost to damage
+          let baseDamage = m.damage;
+          if (!baseDamage || baseDamage === 0) {
+            const moveDamageValue = MOVE_DAMAGE_VALUES[m.name];
+            baseDamage = moveDamageValue?.damage || 0;
+          }
+          if (baseDamage > 0) {
+            updatedMove.damage = Math.floor(baseDamage * damageBoostMultiplier);
+          }
+          
+          // Apply boost to shieldBoost
+          if (m.shieldBoost && m.shieldBoost > 0) {
+            updatedMove.shieldBoost = Math.floor(m.shieldBoost * damageBoostMultiplier);
+          }
+          
+          // Apply boost to healing
+          if (m.healing && m.healing > 0) {
+            updatedMove.healing = Math.floor(m.healing * damageBoostMultiplier);
+          }
+          
+          // Apply boost to ppSteal
+          if (m.ppSteal && m.ppSteal > 0) {
+            updatedMove.ppSteal = Math.floor(m.ppSteal * damageBoostMultiplier);
+          }
+          
+          // Apply boost to debuffStrength
+          if (m.debuffStrength && m.debuffStrength > 0) {
+            updatedMove.debuffStrength = Math.floor(m.debuffStrength * damageBoostMultiplier);
+          }
+          
+          // Apply boost to buffStrength
+          if (m.buffStrength && m.buffStrength > 0) {
+            updatedMove.buffStrength = Math.floor(m.buffStrength * damageBoostMultiplier);
+          }
+          
+          return updatedMove;
+        }
+        return m;
+      });
+
       // Update moves in database
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
-      const updatedMoves = moves.map(m => 
-        m.id === moveId 
-          ? { ...m, masteryLevel: m.masteryLevel + 1 } 
-          : m
-      );
       await updateDoc(movesRef, { moves: updatedMoves });
       setMoves(updatedMoves);
 
@@ -1110,10 +1210,123 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         currentPP: vault.currentPP - upgradeCost 
       });
 
-      console.log(`Upgraded ${move.name} to level ${move.masteryLevel + 1} for ${upgradeCost} PP`);
+      // Update vault state
+      setVault({ ...vault, currentPP: vault.currentPP - upgradeCost });
+
+      // Collect all boosted properties for the alert message
+      const boostedProperties: string[] = [];
+      if (updatedMoves.find(m => m.id === moveId)?.damage) {
+        const oldDamage = moves.find(m => m.id === moveId)?.damage || 0;
+        const newDamage = updatedMoves.find(m => m.id === moveId)?.damage || 0;
+        if (oldDamage > 0) {
+          boostedProperties.push(`Damage: ${oldDamage} → ${newDamage}`);
+        }
+      }
+      if (move.shieldBoost && move.shieldBoost > 0) {
+        const oldShield = move.shieldBoost;
+        const newShield = updatedMoves.find(m => m.id === moveId)?.shieldBoost || 0;
+        boostedProperties.push(`Shield Boost: ${oldShield} → ${newShield}`);
+      }
+      if (move.healing && move.healing > 0) {
+        const oldHealing = move.healing;
+        const newHealing = updatedMoves.find(m => m.id === moveId)?.healing || 0;
+        boostedProperties.push(`Healing: ${oldHealing} → ${newHealing}`);
+      }
+      if (move.debuffStrength && move.debuffStrength > 0) {
+        const oldDebuff = move.debuffStrength;
+        const newDebuff = updatedMoves.find(m => m.id === moveId)?.debuffStrength || 0;
+        boostedProperties.push(`Debuff: ${oldDebuff} → ${newDebuff}`);
+      }
+      if (move.buffStrength && move.buffStrength > 0) {
+        const oldBuff = move.buffStrength;
+        const newBuff = updatedMoves.find(m => m.id === moveId)?.buffStrength || 0;
+        boostedProperties.push(`Buff: ${oldBuff} → ${newBuff}`);
+      }
+
+      const boostPercent = ((damageBoostMultiplier - 1) * 100).toFixed(1);
+      console.log(`Upgraded ${move.name} to level ${newLevel} for ${upgradeCost} PP with ${boostPercent}% boost`);
+      
+      // Show success message with boost info for all properties
+      const boostInfo = boostedProperties.length > 0 
+        ? `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)\n\n${boostedProperties.join('\n')}`
+        : `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)`;
+      alert(`✅ Successfully upgraded ${move.name} to Level ${newLevel}!${boostInfo}`);
     } catch (err) {
       console.error('Error upgrading move:', err);
       setError('Failed to upgrade move');
+    }
+  };
+
+  const resetMoveLevel = async (moveId: string) => {
+    if (!currentUser) return;
+    
+    try {
+      const move = moves.find(m => m.id === moveId);
+      if (!move) {
+        setError('Move not found');
+        return;
+      }
+
+      // Get original base values from MOVE_DAMAGE_VALUES and MOVE_TEMPLATES
+      const moveDamageValue = MOVE_DAMAGE_VALUES[move.name];
+      const originalDamage = moveDamageValue?.damage || 0;
+      
+      // Get base values from template
+      const moveTemplate = MOVE_TEMPLATES.find(t => t.name === move.name);
+      const originalShieldBoost = moveTemplate?.shieldBoost || 0;
+      const originalHealing = moveTemplate?.healing || 0;
+      const originalPpSteal = moveTemplate?.ppSteal || 0;
+      const originalDebuffStrength = moveTemplate?.debuffStrength || 0;
+      const originalBuffStrength = moveTemplate?.buffStrength || 0;
+
+      // Reset move to level 1 with all original values
+      const updatedMoves = moves.map(m => 
+        m.id === moveId 
+          ? { 
+              ...m, 
+              masteryLevel: 1,
+              damage: originalDamage > 0 ? originalDamage : m.damage,
+              shieldBoost: originalShieldBoost > 0 ? originalShieldBoost : m.shieldBoost,
+              healing: originalHealing > 0 ? originalHealing : m.healing,
+              ppSteal: originalPpSteal > 0 ? originalPpSteal : m.ppSteal,
+              debuffStrength: originalDebuffStrength > 0 ? originalDebuffStrength : m.debuffStrength,
+              buffStrength: originalBuffStrength > 0 ? originalBuffStrength : m.buffStrength
+            } 
+          : m
+      );
+
+      // Update moves in database
+      const movesRef = doc(db, 'battleMoves', currentUser.uid);
+      await updateDoc(movesRef, { moves: updatedMoves });
+      setMoves(updatedMoves);
+
+      // Collect reset properties for the alert message
+      const resetProperties: string[] = [];
+      if (originalDamage > 0) {
+        resetProperties.push(`Damage: ${originalDamage}`);
+      }
+      if (originalShieldBoost > 0) {
+        resetProperties.push(`Shield Boost: ${originalShieldBoost}`);
+      }
+      if (originalHealing > 0) {
+        resetProperties.push(`Healing: ${originalHealing}`);
+      }
+      if (originalDebuffStrength > 0) {
+        resetProperties.push(`Debuff: ${originalDebuffStrength}`);
+      }
+      if (originalBuffStrength > 0) {
+        resetProperties.push(`Buff: ${originalBuffStrength}`);
+      }
+
+      const resetInfo = resetProperties.length > 0 
+        ? `\n\nBase values restored:\n${resetProperties.join('\n')}`
+        : `\n\nBase values restored.`;
+      
+      console.log(`Reset ${move.name} to level 1 with original values`);
+      alert(`✅ Successfully reset ${move.name} to Level 1!${resetInfo}`);
+    } catch (err) {
+      console.error('Error resetting move:', err);
+      setError('Failed to reset move');
     }
   };
 
@@ -1154,14 +1367,56 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
+      // Calculate exponential upgrade cost based on current level
+      // Base price: 100 PP for Level 1 → Level 2
+      // Then multiplied by the respective multiplier for each level
+      const basePrice = 100;
+      const nextLevel = card.masteryLevel + 1;
+      let upgradeCost: number;
+      if (nextLevel === 2) {
+        // Level 1 → Level 2: base price
+        upgradeCost = basePrice;
+      } else if (nextLevel === 3) {
+        // Level 2 → Level 3: base * 2
+        upgradeCost = basePrice * 2;
+      } else if (nextLevel === 4) {
+        // Level 3 → Level 4: base * 4
+        upgradeCost = basePrice * 4;
+      } else if (nextLevel === 5) {
+        // Level 4 → Level 5: base * 8
+        upgradeCost = basePrice * 8;
+      } else {
+        upgradeCost = basePrice;
+      }
+
       // Check if player has enough PP
-      if (vault.currentPP < card.upgradeCost) {
-        setError(`Not enough PP. Need ${card.upgradeCost} PP to upgrade.`);
+      if (vault.currentPP < upgradeCost) {
+        setError(`Not enough PP. Need ${upgradeCost} PP to upgrade.`);
         return;
       }
 
-      // Calculate new effect strength based on next level
-      const newStrength = card.nextLevelEffect?.strength || card.effect.strength + 5;
+      // Calculate random boost multiplier based on the new level (same as moves)
+      let boostMultiplier: number;
+      switch (nextLevel) {
+        case 2:
+          boostMultiplier = 2.0 + Math.random() * 0.3; // Random between 2.0 and 2.3
+          break;
+        case 3:
+          boostMultiplier = 1.25 + Math.random() * 0.25; // Random between 1.25 and 1.5
+          break;
+        case 4:
+          boostMultiplier = 1.3 + Math.random() * 0.3; // Random between 1.3 and 1.6
+          break;
+        case 5:
+          boostMultiplier = 2.0 + Math.random() * 0.5; // Random between 2.0 and 2.5
+          break;
+        default:
+          boostMultiplier = 1.0;
+      }
+
+      // Apply boost multiplier to effect strength
+      const currentStrength = card.effect.strength;
+      const newStrength = Math.floor(currentStrength * boostMultiplier);
       
       // Update action card in database
       const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
@@ -1173,11 +1428,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             ...c.effect,
             strength: newStrength
           },
-          upgradeCost: Math.floor(c.upgradeCost * 1.5), // Increase upgrade cost
-          nextLevelEffect: c.masteryLevel < 4 ? {
-            strength: Math.floor(newStrength * 1.3), // 30% increase for next level
-            duration: c.nextLevelEffect?.duration
-          } : undefined // No next level at max
+          upgradeCost: upgradeCost
         } : c
       );
       await updateDoc(cardsRef, { cards: updatedCards });
@@ -1186,10 +1437,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Deduct PP from vault
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       await updateDoc(vaultRef, { 
-        currentPP: vault.currentPP - card.upgradeCost 
+        currentPP: vault.currentPP - upgradeCost 
       });
 
-      console.log(`Upgraded ${card.name} to level ${card.masteryLevel + 1} for ${card.upgradeCost} PP`);
+      // Update vault state
+      setVault({ ...vault, currentPP: vault.currentPP - upgradeCost });
+
+      const boostPercent = ((boostMultiplier - 1) * 100).toFixed(1);
+      console.log(`Upgraded ${card.name} to level ${nextLevel} for ${upgradeCost} PP with ${boostPercent}% boost`);
+      
+      // Show success message with boost info
+      alert(`✅ Successfully upgraded ${card.name} to Level ${nextLevel}!\n\nEffect boost: ${boostPercent}% (${boostMultiplier.toFixed(2)}x multiplier)\n\nStrength: ${currentStrength} → ${newStrength}`);
     } catch (err) {
       console.error('Error upgrading action card:', err);
       setError('Failed to upgrade action card');
@@ -1881,22 +2139,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ppStolen = 0;
         } else {
           // This is an offensive move
-          const moveDamageValue = await getMoveDamage(selectedMove.name);
-          console.log(`🔍 Move damage lookup for ${selectedMove.name}:`, moveDamageValue);
-          
-          if (moveDamageValue) {
-            // Handle both single damage values and damage ranges
-            let totalDamage: number;
-            if (typeof moveDamageValue === 'object') {
-              // It's a range, use the max value for damage calculation
-              totalDamage = moveDamageValue.max;
-            } else {
-              // It's a single value
-              totalDamage = moveDamageValue;
-            }
+          // Use the move's actual damage property if it exists (from upgrades), otherwise use lookup
+          let totalDamage: number;
+          if (selectedMove.damage && selectedMove.damage > 0) {
+            // Use the upgraded damage directly (already includes boost multiplier)
+            totalDamage = selectedMove.damage;
+            console.log(`🔍 Using upgraded damage for ${selectedMove.name}:`, totalDamage);
+          } else {
+            // Fall back to lookup for moves that haven't been upgraded yet
+            const moveDamageValue = await getMoveDamage(selectedMove.name);
+            console.log(`🔍 Move damage lookup for ${selectedMove.name}:`, moveDamageValue);
             
-            console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage} (from override: ${typeof moveDamageValue === 'object' ? `${moveDamageValue.min}-${moveDamageValue.max}` : moveDamageValue})`);
-            console.log(`📊 Move damage values:`, moveDamageValue);
+            if (moveDamageValue) {
+              // Handle both single damage values and damage ranges
+              if (typeof moveDamageValue === 'object') {
+                // It's a range, use the max value for damage calculation
+                totalDamage = moveDamageValue.max;
+              } else {
+                // It's a single value
+                totalDamage = moveDamageValue;
+              }
+            } else {
+              totalDamage = 0;
+            }
+          }
+          
+          if (totalDamage > 0) {
+            console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage}`);
             console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
             console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
             
@@ -2630,6 +2899,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     applyElementFilterToExistingMoves,
     forceMigration,
     upgradeMove,
+    resetMoveLevel,
     actionCards,
     setActionCards,
     unlockActionCard,

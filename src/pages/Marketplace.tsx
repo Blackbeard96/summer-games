@@ -100,6 +100,16 @@ const artifacts: Artifact[] = [
     category: 'special',
     rarity: 'common'
   },
+  { 
+    id: 'instant-a',
+    name: 'Instant A', 
+    description: 'Grants an automatic A for the trimester, no matter what your grade may actually be. Limited to one user per class.', 
+    price: 99, 
+    icon: '⭐', 
+    image: '/images/Instant A.png',
+    category: 'special',
+    rarity: 'legendary'
+  },
 ];
 
 const Marketplace = () => {
@@ -112,6 +122,7 @@ const Marketplace = () => {
   const [selectedRarity, setSelectedRarity] = useState('all');
   const [isMobile, setIsMobile] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
 
   // Function to create admin notifications
   const createAdminNotification = async (notification: any) => {
@@ -462,9 +473,106 @@ const Marketplace = () => {
     }
   };
 
+  // Function to display ERROR 1001 with binary smile
+  const showError1001 = () => {
+    const binarySmile = `
+      ╔════════════════════════════════════╗
+      ║         ERROR 1001                 ║
+      ║                                     ║
+      ║     01001000 01100101 01101100      ║
+      ║     01101100 01101111 00100000      ║
+      ║                                     ║
+      ║         01110111 01101111           ║
+      ║         01110010 01101100           ║
+      ║         01100100 00101110           ║
+      ║                                     ║
+      ╚════════════════════════════════════╝
+    `;
+    
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      font-family: 'Courier New', monospace;
+    `;
+    
+    const content = document.createElement('div');
+    content.style.cssText = `
+      background: #000;
+      border: 2px solid #ff0000;
+      padding: 2rem;
+      border-radius: 0.5rem;
+      color: #00ff00;
+      text-align: center;
+      box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+      max-width: 500px;
+      position: relative;
+    `;
+    
+    const errorTitle = document.createElement('div');
+    errorTitle.style.cssText = `
+      font-size: 1.5rem;
+      color: #ff0000;
+      margin-bottom: 1rem;
+      font-weight: bold;
+    `;
+    errorTitle.textContent = 'ERROR 1001';
+    
+    const binaryText = document.createElement('pre');
+    binaryText.style.cssText = `
+      font-size: 1rem;
+      color: #00ff00;
+      margin: 1rem 0;
+      white-space: pre;
+      line-height: 1.2;
+      text-align: center;
+      font-family: 'Courier New', monospace;
+    `;
+    binaryText.textContent = `    0 1 0 1 0
+  0 1     0 1     0 1
+0 1         1         1 0
+  0   0 0 0   0 0 0   0
+    0         0`;
+    
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'CLOSE';
+    closeButton.style.cssText = `
+      background: #ff0000;
+      color: #000;
+      border: none;
+      padding: 0.5rem 1.5rem;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-weight: bold;
+      margin-top: 1rem;
+      font-family: 'Courier New', monospace;
+    `;
+    closeButton.onclick = () => document.body.removeChild(modal);
+    
+    content.appendChild(errorTitle);
+    content.appendChild(binaryText);
+    content.appendChild(closeButton);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+  };
+
   // Function to handle using an artifact
   const handleUseArtifact = async (artifactName: string) => {
     if (!currentUser) return;
+
+    // Handle Instant A - show ERROR 1001 and don't consume the item
+    if (artifactName === 'Instant A') {
+      showError1001();
+      return;
+    }
 
     try {
       const userRef = doc(db, 'students', currentUser.uid);
@@ -1120,6 +1228,7 @@ const Marketplace = () => {
                       e.currentTarget.style.boxShadow = `0 10px 25px -3px ${getRarityColor(artifact.rarity)}40, 0 4px 6px -2px rgba(0, 0, 0, 0.05)`;
                       e.currentTarget.style.borderColor = getRarityColor(artifact.rarity);
                     }
+                    setHoveredArtifactId(artifact.id);
                   }}
                   onMouseLeave={(e) => {
                     if (!isMobile) {
@@ -1127,6 +1236,7 @@ const Marketplace = () => {
                       e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
                       e.currentTarget.style.borderColor = `${getRarityColor(artifact.rarity)}20`;
                     }
+                    setHoveredArtifactId(null);
                   }}
                   >
                     {/* Mystical glow effect */}
@@ -1181,6 +1291,27 @@ const Marketplace = () => {
                       }}>
                         {artifact.rarity.toUpperCase()}
                       </div>
+                      {artifact.id === 'instant-a' && hoveredArtifactId === 'instant-a' && (
+                        <div style={{
+                          position: 'absolute',
+                          bottom: '0',
+                          left: '0',
+                          right: '0',
+                          background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                          color: 'white',
+                          padding: '0.5rem',
+                          textAlign: 'center',
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold',
+                          boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.3)',
+                          zIndex: 10,
+                          transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
+                          opacity: 1,
+                          transform: 'translateY(0)'
+                        }}>
+                          ⚠️ Limited to One User per Class
+                        </div>
+                      )}
                     </div>
 
                     {/* Product Info */}

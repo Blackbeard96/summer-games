@@ -530,10 +530,12 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
                     textAlign: 'left'
                   }}
                 >
-                  <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>{move.name}</div>
+                  <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>{move.name} [Level {move.masteryLevel}]</div>
                   <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>{move.description}</div>
                   {(() => {
-                    const totalDamage = (move.damage || 0) + (move.ppSteal || 0);
+                    // Use the move's actual damage if it exists (from upgrades), which already includes boosts
+                    const moveDamage = move.damage && move.damage > 0 ? move.damage : 0;
+                    const totalDamage = moveDamage + (move.ppSteal || 0);
                     return totalDamage > 0 && (
                       <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>Damage: {totalDamage}</div>
                     );

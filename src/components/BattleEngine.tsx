@@ -191,15 +191,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
     
     // Offensive moves - use damage range system
     if (move.damage) {
-      const moveDamageValue = await getMoveDamage(move.name);
-      // Handle both single damage values and damage ranges
+      // Use the move's actual damage property if it exists (from upgrades), otherwise use lookup
       let baseDamage: number;
-      if (typeof moveDamageValue === 'object') {
-        // It's a range, use the max value for damage calculation
-        baseDamage = moveDamageValue.max;
+      if (move.damage > 0) {
+        // Use the upgraded damage directly (already includes boost multiplier)
+        baseDamage = move.damage;
       } else {
-        // It's a single value
-        baseDamage = moveDamageValue;
+        // Fall back to lookup for moves that haven't been upgraded yet
+        const moveDamageValue = await getMoveDamage(move.name);
+        // Handle both single damage values and damage ranges
+        if (typeof moveDamageValue === 'object') {
+          // It's a range, use the max value for damage calculation
+          baseDamage = moveDamageValue.max;
+        } else {
+          // It's a single value
+          baseDamage = moveDamageValue;
+        }
       }
       
       const damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);

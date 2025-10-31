@@ -1115,23 +1115,28 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             {unlockedMoves.map(move => {
               const isSelected = selectedMoves.includes(move.id);
               
-              // Get move data with overrides and calculate damage range
-              const moveDamageValue = getMoveDamageSync(move.name);
+              // Get move data and calculate damage range
+              // Use the move's actual damage if it exists (from upgrades), otherwise use lookup
+              let baseDamage: number;
+              if (move.damage && move.damage > 0) {
+                // Use the upgraded damage directly
+                baseDamage = move.damage;
+              } else {
+                // Fall back to lookup for moves that haven't been upgraded yet
+                const moveDamageValue = getMoveDamageSync(move.name);
+                if (typeof moveDamageValue === 'object') {
+                  baseDamage = moveDamageValue.max || moveDamageValue.min || 0;
+                } else {
+                  baseDamage = moveDamageValue || 0;
+                }
+              }
+              
               let damageRange = null;
               let damageDisplay = null;
               
-              if (moveDamageValue) {
-                if (typeof moveDamageValue === 'object') {
-                  // It's already a range, create proper DamageRange object
-                  damageRange = {
-                    min: moveDamageValue.min,
-                    max: moveDamageValue.max,
-                    average: Math.floor((moveDamageValue.min + moveDamageValue.max) / 2)
-                  };
-                } else {
-                  // It's a single value, calculate range based on mastery level
-                  damageRange = calculateDamageRange(moveDamageValue, move.level, move.masteryLevel);
-                }
+              if (baseDamage > 0) {
+                // Calculate range based on the actual damage and mastery level
+                damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
                 damageDisplay = formatDamageRange(damageRange);
               }
               
@@ -1226,7 +1231,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                       marginBottom: '0.25rem'
                     }}>
-                      {move.name}
+                      {move.name} [Level {move.masteryLevel}]
                     </div>
                     <div style={{ 
                       color: 'rgba(255,255,255,0.9)',

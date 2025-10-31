@@ -25,7 +25,15 @@ export interface BattleCalculation {
 export class BattleEngine {
   // Calculate move effectiveness based on mastery level
   static calculateMovePower(move: Move): number {
+    // Use the move's actual damage if it exists (from upgrades with boost), otherwise calculate from base
     const basePower = move.damage || move.healing || move.shieldBoost || 0;
+    // If damage already includes boost from upgrades, don't apply mastery multiplier again
+    // Otherwise, apply mastery multiplier
+    if (move.damage && move.damage > 0) {
+      // Damage already includes boost, just use it directly
+      return basePower;
+    }
+    // For moves without upgraded damage, apply mastery multiplier
     const masteryMultiplier = 1 + (move.masteryLevel - 1) * 0.2; // 20% increase per mastery level
     return Math.floor(basePower * masteryMultiplier);
   }

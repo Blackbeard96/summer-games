@@ -1126,6 +1126,88 @@ const Profile = () => {
                           onClick={async () => {
                             if (!currentUser) return;
                             
+                            // Handle Instant A - show ERROR 1001 and don't consume the item
+                            if (enhancedArtifact.name === 'Instant A') {
+                              const showError1001 = () => {
+                                const modal = document.createElement('div');
+                                modal.style.cssText = `
+                                  position: fixed;
+                                  top: 0;
+                                  left: 0;
+                                  right: 0;
+                                  bottom: 0;
+                                  background: rgba(0, 0, 0, 0.9);
+                                  display: flex;
+                                  align-items: center;
+                                  justify-content: center;
+                                  z-index: 10000;
+                                  font-family: 'Courier New', monospace;
+                                `;
+                                
+                                const content = document.createElement('div');
+                                content.style.cssText = `
+                                  background: #000;
+                                  border: 2px solid #ff0000;
+                                  padding: 2rem;
+                                  border-radius: 0.5rem;
+                                  color: #00ff00;
+                                  text-align: center;
+                                  box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+                                  max-width: 500px;
+                                  position: relative;
+                                `;
+                                
+                                const errorTitle = document.createElement('div');
+                                errorTitle.style.cssText = `
+                                  font-size: 1.5rem;
+                                  color: #ff0000;
+                                  margin-bottom: 1rem;
+                                  font-weight: bold;
+                                `;
+                                errorTitle.textContent = 'ERROR 1001';
+                                
+                                const binaryText = document.createElement('pre');
+                                binaryText.style.cssText = `
+                                  font-size: 1rem;
+                                  color: #00ff00;
+                                  margin: 1rem 0;
+                                  white-space: pre;
+                                  line-height: 1.2;
+                                  text-align: center;
+                                  font-family: 'Courier New', monospace;
+                                `;
+                                binaryText.textContent = `    0 1 0 1 0
+  0 1     0 1     0 1
+0 1         1         1 0
+  0   0 0 0   0 0 0   0
+    0         0`;
+                                
+                                const closeButton = document.createElement('button');
+                                closeButton.textContent = 'CLOSE';
+                                closeButton.style.cssText = `
+                                  background: #ff0000;
+                                  color: #000;
+                                  border: none;
+                                  padding: 0.5rem 1.5rem;
+                                  border-radius: 0.25rem;
+                                  cursor: pointer;
+                                  font-weight: bold;
+                                  margin-top: 1rem;
+                                  font-family: 'Courier New', monospace;
+                                `;
+                                closeButton.onclick = () => document.body.removeChild(modal);
+                                
+                                content.appendChild(errorTitle);
+                                content.appendChild(binaryText);
+                                content.appendChild(closeButton);
+                                modal.appendChild(content);
+                                document.body.appendChild(modal);
+                              };
+                              
+                              showError1001();
+                              return;
+                            }
+                            
                             // Handle Shield artifact specifically
                             if (enhancedArtifact.name === 'Shield') {
                               try {

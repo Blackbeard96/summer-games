@@ -14,6 +14,7 @@ interface MovesDisplayProps {
   offlineMovesRemaining: number;
   maxOfflineMoves: number;
   onUpgradeMove: (moveId: string) => void;
+  onResetMoveLevel?: (moveId: string) => void;
   onUnlockElementalMoves?: (elementalAffinity: string) => void;
   onForceUnlockAllMoves?: () => void;
   onResetMovesWithElementFilter?: () => void;
@@ -34,6 +35,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   offlineMovesRemaining, 
   maxOfflineMoves, 
   onUpgradeMove,
+  onResetMoveLevel,
   onUnlockElementalMoves,
   onForceUnlockAllMoves,
   onResetMovesWithElementFilter,
@@ -144,13 +146,32 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   };
 
   const renderMoveCard = (move: Move) => {
-    // Check if move can be upgraded
-    const canUpgrade = move.masteryLevel < 5;
-    const upgradeCost = 100; // Fixed cost per upgrade
+    // Check if move can be upgraded (up to level 10)
+    const canUpgrade = move.masteryLevel < 10;
+    const canAscend = move.masteryLevel === 5;
+    
+    // Calculate exponential upgrade cost based on current level
+    // Base price: 100 PP for Level 1 → Level 2
+    // Then multiplied by the respective multiplier for each level
+    const getUpgradeCost = () => {
+      const basePrice = 100;
+      const nextLevel = move.masteryLevel + 1;
+      if (nextLevel === 2) return basePrice; // Level 1 → Level 2: 100 PP
+      if (nextLevel === 3) return basePrice * 2; // Level 2 → Level 3: 200 PP
+      if (nextLevel === 4) return basePrice * 4; // Level 3 → Level 4: 400 PP
+      if (nextLevel === 5) return basePrice * 8; // Level 4 → Level 5: 800 PP
+      if (nextLevel === 6) return basePrice * 16; // Level 5 → Level 6 (Ascend): 1600 PP
+      if (nextLevel === 7) return basePrice * 32; // Level 6 → Level 7: 3200 PP
+      if (nextLevel === 8) return basePrice * 64; // Level 7 → Level 8: 6400 PP
+      if (nextLevel === 9) return basePrice * 128; // Level 8 → Level 9: 12800 PP
+      if (nextLevel === 10) return basePrice * 256; // Level 9 → Level 10: 25600 PP
+      return basePrice;
+    };
+    const upgradeCost = getUpgradeCost();
 
-    // Get current stats from upgrade template
+    // Get current stats from upgrade template (only relevant for levels 1-5)
     const upgradeTemplate = MOVE_UPGRADE_TEMPLATES[move.name];
-    const currentLevelStats = upgradeTemplate ? upgradeTemplate[`level${move.masteryLevel}` as keyof typeof upgradeTemplate] : null;
+    const currentLevelStats = upgradeTemplate && move.masteryLevel <= 5 ? upgradeTemplate[`level${move.masteryLevel}` as keyof typeof upgradeTemplate] : null;
     const nextLevelStats = upgradeTemplate && move.masteryLevel < 5 ? upgradeTemplate[`level${move.masteryLevel + 1}` as keyof typeof upgradeTemplate] : null;
 
     // Determine card background based on move category
@@ -226,7 +247,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             textAlign: 'center'
           }}>
-            {getMoveDataWithOverrides(move.name).name}
+            {getMoveDataWithOverrides(move.name).name} [Level {move.masteryLevel}]
           </h3>
           {move.level > 1 && (
             <span style={{ 
@@ -326,17 +347,24 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
 
           {/* Combined Damage Range */}
           {(() => {
-            const moveData = getMoveDataWithOverrides(move.name);
-            if (moveData.damage && (typeof moveData.damage === 'number' ? moveData.damage > 0 : moveData.damage.min > 0 || moveData.damage.max > 0)) {
-              // Handle both single damage values and damage ranges
-              let damageRange;
+            // Use the move's actual damage if it exists (from upgrades), otherwise use lookup
+            let baseDamage: number;
+            if (move.damage && move.damage > 0) {
+              // Use the upgraded damage directly
+              baseDamage = move.damage;
+            } else {
+              // Fall back to lookup for moves that haven't been upgraded yet
+              const moveData = getMoveDataWithOverrides(move.name);
               if (typeof moveData.damage === 'object') {
-                // It's already a range, use it directly
-                damageRange = moveData.damage;
+                baseDamage = moveData.damage.max || moveData.damage.min || 0;
               } else {
-                // It's a single value, calculate range based on mastery level
-                damageRange = calculateDamageRange(moveData.damage, move.level, move.masteryLevel);
+                baseDamage = moveData.damage || 0;
               }
+            }
+            
+            if (baseDamage > 0) {
+              // Calculate range based on the actual damage and mastery level
+              let damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
               
               const rangeString = formatDamageRange(damageRange);
               return (
@@ -426,7 +454,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
             <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Mastery Level</span>
             <span style={{ fontSize: '0.875rem', color: getMasteryColor(move.masteryLevel), fontWeight: 'bold' }}>
-              {getMasteryLabel(move.masteryLevel)} ({move.masteryLevel}/5)
+              {getMasteryLabel(move.masteryLevel)} ({move.masteryLevel}/{move.masteryLevel <= 5 ? 5 : 10})
             </span>
           </div>
           <div style={{ 
@@ -437,7 +465,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             overflow: 'hidden'
           }}>
             <div style={{ 
-              width: `${(move.masteryLevel / 5) * 100}%`, 
+              width: `${(move.masteryLevel / (move.masteryLevel <= 5 ? 5 : 10)) * 100}%`, 
               background: getMasteryColor(move.masteryLevel), 
               height: '100%', 
               borderRadius: '0.5rem',
@@ -446,8 +474,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           </div>
         </div>
 
-        {/* Upgrade Preview (if can upgrade) */}
-        {canUpgrade && nextLevelStats && (
+        {/* Upgrade Preview (if can upgrade and below level 5, or if ascended) */}
+        {canUpgrade && (move.masteryLevel < 5 ? nextLevelStats : true) && (
           <div style={{ 
             background: 'rgba(34, 197, 94, 0.1)',
             border: '1px solid rgba(34, 197, 94, 0.2)',
@@ -460,36 +488,258 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             </div>
             <div style={{ fontSize: '0.75rem', color: '#059669', lineHeight: '1.3' }}>
               {(() => {
-                const moveData = getMoveDataWithOverrides(move.name);
-                const currentDamage = typeof moveData.damage === 'object' ? moveData.damage.min : moveData.damage;
-                const nextDamage = nextLevelStats.damage !== undefined ? nextLevelStats.damage : 0;
-                if (currentDamage > 0 && nextDamage > 0) {
-                  const currentRange = calculateDamageRange(currentDamage, move.level, move.masteryLevel);
-                  const nextRange = calculateDamageRange(nextDamage, move.level + 1, move.masteryLevel);
+                // Use the move's actual current damage
+                let currentBaseDamage: number;
+                if (move.damage && move.damage > 0) {
+                  currentBaseDamage = move.damage;
+                } else {
+                  // Fall back to lookup for moves that haven't been upgraded yet
+                  const moveData = getMoveDataWithOverrides(move.name);
+                  if (typeof moveData.damage === 'object') {
+                    currentBaseDamage = moveData.damage.max || moveData.damage.min || 0;
+                  } else {
+                    currentBaseDamage = moveData.damage || 0;
+                  }
+                }
+                
+                if (currentBaseDamage > 0) {
+                  // Calculate current damage range
+                  const currentRange = calculateDamageRange(currentBaseDamage, move.level, move.masteryLevel);
+                  
+                  // Calculate next level damage based on boost multipliers
+                  const nextLevel = move.masteryLevel + 1;
+                  let minBoost: number, maxBoost: number;
+                  
+                  switch (nextLevel) {
+                    case 2:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 3:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 4:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 5:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 6:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 7:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 8:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 9:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 10:
+                      minBoost = 3.0;
+                      maxBoost = 3.5;
+                      break;
+                    default:
+                      minBoost = 1.0;
+                      maxBoost = 1.0;
+                  }
+                  
+                  // Calculate next level damage range (using min and max multipliers)
+                  // For preview, we'll show a range based on min and max possible boosts
+                  const nextMinDamage = Math.floor(currentBaseDamage * minBoost);
+                  const nextMaxDamage = Math.floor(currentBaseDamage * maxBoost);
+                  
+                  // Calculate damage ranges for both min and max boost scenarios
+                  const nextRangeMin = calculateDamageRange(nextMinDamage, move.level, nextLevel);
+                  const nextRangeMax = calculateDamageRange(nextMaxDamage, move.level, nextLevel);
+                  
+                  // Combine into a range showing the potential span
+                  const nextRange = {
+                    min: nextRangeMin.min,
+                    max: nextRangeMax.max,
+                    average: Math.floor((nextRangeMin.average + nextRangeMax.average) / 2)
+                  };
+                  
                   return (
                     <div>Damage: {formatDamageRange(currentRange)} → {formatDamageRange(nextRange)}</div>
                   );
                 }
                 return null;
               })()}
-              {nextLevelStats.debuffStrength !== undefined && (
+              {(() => {
+                // Calculate next level shield boost based on current shield boost and multiplier
+                if (move.shieldBoost && move.shieldBoost > 0) {
+                  const nextLevel = move.masteryLevel + 1;
+                  let minBoost: number, maxBoost: number;
+                  
+                  switch (nextLevel) {
+                    case 2:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 3:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 4:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 5:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 6:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 7:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 8:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 9:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 10:
+                      minBoost = 3.0;
+                      maxBoost = 3.5;
+                      break;
+                    default:
+                      minBoost = 1.0;
+                      maxBoost = 1.0;
+                  }
+                  
+                  const currentShield = move.shieldBoost;
+                  const nextMinShield = Math.floor(currentShield * minBoost);
+                  const nextMaxShield = Math.floor(currentShield * maxBoost);
+                  
+                  return (
+                    <div>Shield: {currentShield} → {nextMinShield}-{nextMaxShield}</div>
+                  );
+                }
+                return null;
+              })()}
+              {(() => {
+                // Calculate next level healing based on current healing and multiplier
+                if (move.healing && move.healing > 0) {
+                  const nextLevel = move.masteryLevel + 1;
+                  let minBoost: number, maxBoost: number;
+                  
+                  switch (nextLevel) {
+                    case 2:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 3:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 4:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 5:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 6:
+                      minBoost = 2.0;
+                      maxBoost = 2.3;
+                      break;
+                    case 7:
+                      minBoost = 1.25;
+                      maxBoost = 1.5;
+                      break;
+                    case 8:
+                      minBoost = 1.3;
+                      maxBoost = 1.6;
+                      break;
+                    case 9:
+                      minBoost = 2.0;
+                      maxBoost = 2.5;
+                      break;
+                    case 10:
+                      minBoost = 3.0;
+                      maxBoost = 3.5;
+                      break;
+                    default:
+                      minBoost = 1.0;
+                      maxBoost = 1.0;
+                  }
+                  
+                  const currentHealing = move.healing;
+                  const nextMinHealing = Math.floor(currentHealing * minBoost);
+                  const nextMaxHealing = Math.floor(currentHealing * maxBoost);
+                  
+                  return (
+                    <div>Healing: {currentHealing} → {nextMinHealing}-{nextMaxHealing}</div>
+                  );
+                }
+                return null;
+              })()}
+              {nextLevelStats && nextLevelStats.debuffStrength !== undefined && (
                 <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>
               )}
-              {nextLevelStats.buffStrength !== undefined && (
+              {nextLevelStats && nextLevelStats.buffStrength !== undefined && (
                 <div>Buff: {move.buffStrength || 0} → {nextLevelStats.buffStrength}</div>
-              )}
-              {nextLevelStats.shieldBoost !== undefined && (
-                <div>Shield: {move.shieldBoost || 0} → {nextLevelStats.shieldBoost}</div>
-              )}
-              {nextLevelStats.healing !== undefined && (
-                <div>Healing: {move.healing || 0} → {nextLevelStats.healing}</div>
               )}
             </div>
           </div>
         )}
 
-        {/* Upgrade Button */}
-        {move.masteryLevel < 5 && (
+        {/* Ascend Button - Show if level is exactly 5 */}
+        {canAscend && onUpgradeMove && (
+          <button
+            onClick={() => {
+              if (window.confirm(`Ascend ${getMoveDataWithOverrides(move.name).name} beyond Level 5? This will unlock the Ascension path to Level 10!`)) {
+                onUpgradeMove(move.id);
+              }
+            }}
+            style={{
+              background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+              color: 'white',
+              border: '3px solid #f59e0b',
+              padding: '0.75rem',
+              borderRadius: '0.75rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 'bold',
+              width: '100%',
+              marginBottom: '0.5rem',
+              transition: 'all 0.2s',
+              backdropFilter: 'blur(10px)',
+              boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
+              e.currentTarget.style.transform = 'scale(1.02)';
+              e.currentTarget.style.boxShadow = '0 0 25px rgba(245, 158, 11, 0.8)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
+            }}
+          >
+            ⬆️ Ascend (1600 PP)
+          </button>
+        )}
+
+        {/* Upgrade Button - Show for levels 1-4 and 6-9 */}
+        {canUpgrade && move.masteryLevel !== 5 && (
           <button
             onClick={() => onUpgradeMove(move.id)}
             disabled={!canUpgrade}

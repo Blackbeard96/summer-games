@@ -101,18 +101,40 @@ const StoryEpisodeBattle: React.FC = () => {
     setPlayerEnergy(prev => prev - move.cost);
 
     // Calculate damage based on move properties
+    // Use the move's actual damage if it exists (from upgrades), which already includes boosts
     let totalDamage = 0;
     let healing = 0;
     let shieldBoost = 0;
 
-    if (move.damage) {
-      totalDamage = calculateDamage(move.damage + (move.masteryLevel - 1) * 2);
+    if (move.damage && move.damage > 0) {
+      // Use the upgraded damage directly (already includes boost multiplier)
+      totalDamage = calculateDamage(move.damage);
+    } else {
+      // Fall back to base damage calculation if not upgraded yet
+      const baseDamage = move.damage || 0;
+      if (baseDamage > 0) {
+        totalDamage = calculateDamage(baseDamage + (move.masteryLevel - 1) * 2);
+      }
     }
-    if (move.healing) {
-      healing = calculateDamage(move.healing + (move.masteryLevel - 1) * 2);
+    
+    if (move.healing && move.healing > 0) {
+      // Use the upgraded healing directly (already includes boost multiplier)
+      healing = calculateDamage(move.healing);
+    } else {
+      const baseHealing = move.healing || 0;
+      if (baseHealing > 0) {
+        healing = calculateDamage(baseHealing + (move.masteryLevel - 1) * 2);
+      }
     }
-    if (move.shieldBoost) {
-      shieldBoost = move.shieldBoost + (move.masteryLevel - 1) * 2;
+    
+    if (move.shieldBoost && move.shieldBoost > 0) {
+      // Use the upgraded shield boost directly (already includes boost multiplier)
+      shieldBoost = move.shieldBoost;
+    } else {
+      const baseShieldBoost = move.shieldBoost || 0;
+      if (baseShieldBoost > 0) {
+        shieldBoost = baseShieldBoost + (move.masteryLevel - 1) * 2;
+      }
     }
 
     // Apply damage to boss
@@ -624,7 +646,7 @@ const StoryEpisodeBattle: React.FC = () => {
                       textAlign: 'left'
                     }}
                   >
-                    <div style={{ fontWeight: 'bold' }}>{move.name}</div>
+                    <div style={{ fontWeight: 'bold' }}>{move.name} [Level {move.masteryLevel}]</div>
                     <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
                       {move.cost} Energy
                       {move.damage && ` • ${move.damage} DMG`}

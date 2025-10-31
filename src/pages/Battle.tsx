@@ -42,6 +42,7 @@ const Battle: React.FC = () => {
     upgradeVaultFirewall,
     restoreVaultShields,
     upgradeMove,
+    resetMoveLevel,
     upgradeActionCard,
     resetActionCards,
     unlockElementalMoves,
@@ -1063,6 +1064,7 @@ const Battle: React.FC = () => {
           offlineMovesRemaining={remainingOfflineMoves}
           maxOfflineMoves={BATTLE_CONSTANTS.DAILY_OFFLINE_MOVES}
           onUpgradeMove={upgradeMove}
+          onResetMoveLevel={resetMoveLevel}
           onUnlockElementalMoves={unlockElementalMoves}
           onForceUnlockAllMoves={() => forceUnlockAllMoves(userElement)}
           onResetMovesWithElementFilter={() => resetMovesWithElementFilter(userElement)}

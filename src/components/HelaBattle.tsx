@@ -2,6 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { useBattle } from '../context/BattleContext';
 import BattleEngine from './BattleEngine';
 
+// CSS for glow animation
+const glowStyle = `
+  @keyframes glow {
+    from {
+      text-shadow: 0 0 10px rgba(0, 212, 255, 0.8), 0 0 20px rgba(0, 212, 255, 0.6);
+    }
+    to {
+      text-shadow: 0 0 20px rgba(0, 212, 255, 1), 0 0 30px rgba(0, 212, 255, 0.8), 0 0 40px rgba(0, 212, 255, 0.6);
+    }
+  }
+`;
+
 interface HelaBattleProps {
   isOpen: boolean;
   onClose: () => void;
@@ -17,7 +29,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
   onDefeat, 
   onEscape 
 }) => {
-  const [battlePhase, setBattlePhase] = useState<'intro' | 'hela_revealed' | 'choice' | 'battle' | 'victory' | 'defeat'>('intro');
+  const [battlePhase, setBattlePhase] = useState<'intro' | 'hela_revealed' | 'choice' | 'battle' | 'victory' | 'reawakened' | 'defeat'>('intro');
   const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [playerChoice, setPlayerChoice] = useState<'fight' | 'run' | null>(null);
   const { vault } = useBattle();
@@ -58,10 +70,11 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
     setShowBattleEngine(false);
     
     if (result === 'victory') {
+      // Show victory briefly, then transition to reawakening
       setBattlePhase('victory');
       setTimeout(() => {
-        onVictory();
-      }, 2000);
+        setBattlePhase('reawakened');
+      }, 3000); // Show victory for 3 seconds before reawakening
     } else if (result === 'escape') {
       onEscape();
     } else {
@@ -86,19 +99,21 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.9)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 10000,
-      padding: '2rem'
-    }}>
+    <>
+      <style>{glowStyle}</style>
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.9)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10000,
+        padding: '2rem'
+      }}>
       <div style={{
         backgroundColor: '#1a1a2e',
         border: '3px solid #16213e',
@@ -352,31 +367,118 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
               🎉 Victory!
             </h2>
             <p style={{ fontSize: '1.1rem', color: '#eee', marginBottom: '2rem' }}>
-              You've defeated Hela and can now continue to Xiotein School!
+              You've defeated Hela! But something feels wrong...
             </p>
+            <div style={{ 
+              fontSize: '0.9rem', 
+              color: '#aaa',
+              fontStyle: 'italic',
+              marginTop: '2rem'
+            }}>
+              The air grows colder...
+            </div>
+          </div>
+        )}
+
+        {battlePhase === 'reawakened' && (
+          <div style={{ textAlign: 'center' }}>
+            <h2 style={{ 
+              color: '#00d4ff', 
+              fontSize: '2rem', 
+              marginBottom: '1rem',
+              textShadow: '0 0 20px rgba(0, 212, 255, 0.8)',
+              animation: 'glow 2s ease-in-out infinite alternate'
+            }}>
+              ❄️ Hela Reawakened
+            </h2>
+            
+            <div style={{ 
+              marginBottom: '2rem'
+            }}>
+              <img 
+                src="/images/Hela Re-Awakened.png" 
+                alt="Reawakened Hela" 
+                style={{
+                  width: '500px',
+                  height: '350px',
+                  objectFit: 'contain',
+                  borderRadius: '1rem',
+                  border: '3px solid #00d4ff',
+                  boxShadow: '0 0 30px rgba(0, 212, 255, 0.6)',
+                  marginBottom: '1.5rem',
+                  filter: 'drop-shadow(0 0 15px rgba(0, 212, 255, 0.5))'
+                }}
+              />
+              
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.2) 0%, rgba(135, 206, 250, 0.2) 100%)',
+                border: '2px solid #00d4ff',
+                borderRadius: '0.5rem',
+                padding: '1.5rem',
+                maxWidth: '600px',
+                margin: '0 auto 2rem auto',
+                boxShadow: '0 0 20px rgba(0, 212, 255, 0.4)'
+              }}>
+                <p style={{ 
+                  color: '#00d4ff', 
+                  fontWeight: 'bold',
+                  margin: '0 0 1rem 0',
+                  fontSize: '1.2rem',
+                  textShadow: '0 0 10px rgba(0, 212, 255, 0.8)'
+                }}>
+                  🧊 The chill intensifies...
+                </p>
+                
+                <div style={{ 
+                  fontSize: '1.1rem', 
+                  lineHeight: '1.6', 
+                  color: '#e0f7ff',
+                  textAlign: 'left'
+                }}>
+                  <p style={{ marginBottom: '1rem' }}>
+                    As you catch your breath, a bone-chilling cold seeps through the air. 
+                    The temperature drops rapidly, and your breath becomes visible.
+                  </p>
+                  
+                  <p style={{ marginBottom: '1rem' }}>
+                    Hela slowly rises, her form radiating an icy aura that sends shivers down your spine. 
+                    You can feel the raw power emanating from her Reawakened state - it's unlike anything 
+                    you've experienced before.
+                  </p>
+                  
+                  <p style={{ marginBottom: '0', fontWeight: 'bold', color: '#00d4ff' }}>
+                    The battle isn't over. Hela has only begun to show her true power.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <button
-              onClick={onClose}
+              onClick={() => {
+                onVictory(); // Still mark challenge as complete, but with reawakening encounter
+              }}
               style={{
-                background: 'linear-gradient(135deg, #28a745 0%, #20c997 100%)',
+                background: 'linear-gradient(135deg, #00d4ff 0%, #0099cc 100%)',
                 color: 'white',
-                border: '3px solid #1e7e34',
+                border: '3px solid #00d4ff',
                 borderRadius: '0.5rem',
                 padding: '1rem 2rem',
                 fontSize: '1.1rem',
                 fontWeight: 'bold',
                 cursor: 'pointer',
-                transition: 'all 0.2s'
+                transition: 'all 0.2s',
+                boxShadow: '0 0 20px rgba(0, 212, 255, 0.5)'
               }}
               onMouseOver={(e) => {
                 e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+                e.currentTarget.style.boxShadow = '0 0 30px rgba(0, 212, 255, 0.8)';
               }}
               onMouseOut={(e) => {
                 e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
+                e.currentTarget.style.boxShadow = '0 0 20px rgba(0, 212, 255, 0.5)';
               }}
             >
-              Continue Journey
+              Continue (You survived the encounter...)
             </button>
           </div>
         )}
@@ -420,7 +522,8 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 };
 

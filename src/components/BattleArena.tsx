@@ -533,7 +533,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                   {getElementalIcon(move.elementalAffinity)}
-                  <span>{getMoveDataWithOverrides(move.name).name}</span>
+                  <span>{getMoveDataWithOverrides(move.name).name} [Level {move.masteryLevel}]</span>
                 </div>
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
@@ -543,17 +543,24 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   const playerLevel = userLevel;
                   
                   // Show damage range for offensive moves
-                  const moveData = getMoveDataWithOverrides(move.name);
-                  if (moveData.damage && (typeof moveData.damage === 'number' ? moveData.damage > 0 : moveData.damage.min > 0 || moveData.damage.max > 0)) {
-                    // Handle both single damage values and damage ranges
-                    let damageRange;
+                  // Use the move's actual damage if it exists (from upgrades), otherwise use lookup
+                  let baseDamage: number;
+                  if (move.damage && move.damage > 0) {
+                    // Use the upgraded damage directly
+                    baseDamage = move.damage;
+                  } else {
+                    // Fall back to lookup for moves that haven't been upgraded yet
+                    const moveData = getMoveDataWithOverrides(move.name);
                     if (typeof moveData.damage === 'object') {
-                      // It's already a range, use it directly
-                      damageRange = moveData.damage;
+                      baseDamage = moveData.damage.max || moveData.damage.min || 0;
                     } else {
-                      // It's a single value, calculate range based on mastery level
-                      damageRange = calculateDamageRange(moveData.damage, move.level, move.masteryLevel);
+                      baseDamage = moveData.damage || 0;
                     }
+                  }
+                  
+                  if (baseDamage > 0) {
+                    // Calculate range based on the actual damage and mastery level
+                    let damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
                     
                     const rangeString = formatDamageRange(damageRange);
                     console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString, '(from override:', moveOverrides[move.name] ? 'YES' : 'NO', ')');
