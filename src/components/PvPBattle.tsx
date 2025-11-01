@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, getDoc, updateDoc, addDoc, collection, onSnapshot, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, getDocs, updateDoc, addDoc, collection, onSnapshot, query, where, orderBy, serverTimestamp, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
+import { getLevelFromXP } from '../utils/leveling';
+import PvPRewardSpin from './PvPRewardSpin';
+import WaitingRoomModal from './WaitingRoomModal';
 
-interface BattleRoom {
+export type RiskLevel = 'easy' | 'medium' | 'high';
+
+export interface BattleRoom {
   id: string;
   hostId: string;
   hostName: string;
@@ -14,6 +19,30 @@ interface BattleRoom {
   createdAt: any;
   participants: string[];
   maxParticipants: number;
+  hostPhotoURL?: string;
+  riskLevel?: RiskLevel;
+  riskPercentage?: number; // 10, 20, or 25
+}
+
+interface OpponentData {
+  id: string;
+  name: string;
+  currentPP: number;
+  maxPP: number;
+  shieldStrength: number;
+  maxShieldStrength: number;
+  level: number;
+  photoURL?: string;
+}
+
+interface RoomWithOpponent extends BattleRoom {
+  opponent?: OpponentData;
+  hostVault?: {
+    currentPP: number;
+    capacity: number;
+    shieldStrength: number;
+    maxShieldStrength: number;
+  };
 }
 
 interface PvPBattleProps {
@@ -24,13 +53,21 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   const { currentUser } = useAuth();
   const { vault, moves } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
-  const [battleRooms, setBattleRooms] = useState<BattleRoom[]>([]);
+  const [battleRooms, setBattleRooms] = useState<RoomWithOpponent[]>([]);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [currentRoom, setCurrentRoom] = useState<BattleRoom | null>(null);
+  const [opponent, setOpponent] = useState<OpponentData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showRiskSelection, setShowRiskSelection] = useState(false);
+  const [selectedRiskLevel, setSelectedRiskLevel] = useState<RiskLevel | null>(null);
+  const [showRewardSpin, setShowRewardSpin] = useState(false);
+  const [isWinner, setIsWinner] = useState(false);
+  const [rewardAmount, setRewardAmount] = useState(0);
+  const [showWaitingRoom, setShowWaitingRoom] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Fetch user level
+  // Fetch user level and restore battle if user is in one
   useEffect(() => {
     const fetchUserLevel = async () => {
       if (!currentUser) return;
@@ -39,7 +76,8 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          setUserLevel(userData.level || 1);
+          const calculatedLevel = getLevelFromXP(userData.xp || 0);
+          setUserLevel(calculatedLevel);
         }
       } catch (error) {
         console.error('Error fetching user level:', error);
@@ -47,34 +85,316 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
     };
 
     fetchUserLevel();
+
+    // Check if user is in an active battle room and restore it
+    const restoreActiveBattle = async () => {
+      if (!currentUser) return;
+
+      try {
+        // Query for rooms where user is a participant and status is in-progress
+        const activeBattleQuery = query(
+          collection(db, 'battleRooms'),
+          where('participants', 'array-contains', currentUser.uid),
+          where('status', '==', 'in-progress')
+        );
+
+        const snapshot = await getDocs(activeBattleQuery);
+        
+        if (!snapshot.empty) {
+          // User has an active battle - restore it
+          const activeRoom = snapshot.docs[0];
+          const roomData = { id: activeRoom.id, ...activeRoom.data() } as BattleRoom;
+          
+          console.log('PvP Battle: Restoring active battle on mount', roomData.id);
+          setCurrentRoom(roomData);
+          await fetchOpponentData(roomData);
+          setShowBattleEngine(true);
+        }
+      } catch (error) {
+        console.error('Error restoring active battle:', error);
+      }
+    };
+
+    restoreActiveBattle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser]);
 
-  // Listen for battle rooms
+  // Fetch opponent and vault data for rooms
+  useEffect(() => {
+    const fetchRoomData = async () => {
+      if (!currentUser || battleRooms.length === 0) return;
+
+      // Only fetch if rooms don't already have opponent data
+      const roomsNeedingData = battleRooms.filter(room => {
+        // Need data if room has participants other than host and no opponent data yet
+        const hasOpponent = room.hostId === currentUser.uid
+          ? room.participants.some(p => p !== currentUser.uid)
+          : room.hostId !== currentUser.uid;
+        return hasOpponent && !room.opponent;
+      });
+      
+      if (roomsNeedingData.length === 0) return;
+
+      const roomsWithData = await Promise.all(
+        battleRooms.map(async (room) => {
+          // Skip if already has opponent data
+          if (room.opponent) return room;
+          
+          const roomData: RoomWithOpponent = { ...room };
+          
+          // Get opponent (host if current user is not host, otherwise first participant who isn't current user)
+          const opponentId = room.hostId === currentUser.uid
+            ? room.participants.find(p => p !== currentUser.uid)
+            : room.hostId;
+
+          if (opponentId) {
+            try {
+              const [opponentStudent, opponentVault] = await Promise.all([
+                getDoc(doc(db, 'students', opponentId)),
+                getDoc(doc(db, 'vaults', opponentId))
+              ]);
+
+              if (opponentStudent.exists()) {
+                const studentData = opponentStudent.data();
+                const vaultData = opponentVault.exists() ? opponentVault.data() : null;
+                const opponentLevel = getLevelFromXP(studentData.xp || 0);
+
+                roomData.opponent = {
+                  id: opponentId,
+                  name: studentData.displayName || studentData.name || 'Unknown Player',
+                  currentPP: vaultData?.currentPP || 0,
+                  maxPP: vaultData?.capacity || 1000,
+                  shieldStrength: vaultData?.shieldStrength || 0,
+                  maxShieldStrength: vaultData?.maxShieldStrength || 100,
+                  level: opponentLevel,
+                  photoURL: studentData.photoURL || null
+                };
+              }
+
+              if (room.hostId === currentUser.uid && opponentVault.exists()) {
+                const vaultData = opponentVault.data();
+                roomData.hostVault = {
+                  currentPP: vaultData.currentPP || 0,
+                  capacity: vaultData.capacity || 1000,
+                  shieldStrength: vaultData.shieldStrength || 0,
+                  maxShieldStrength: vaultData.maxShieldStrength || 100
+                };
+              }
+            } catch (error) {
+              console.error(`Error fetching data for opponent ${opponentId}:`, error);
+            }
+          }
+
+          return roomData;
+        })
+      );
+
+      // Only update if we actually added opponent data
+      const hasNewData = roomsWithData.some((room, idx) => 
+        room.opponent && !battleRooms[idx]?.opponent
+      );
+      
+      if (hasNewData) {
+        setBattleRooms(roomsWithData);
+      }
+    };
+
+    fetchRoomData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [battleRooms.map(r => `${r.id}-${r.participants.join(',')}`).join('|'), currentUser]);
+
+  // Listen for battle rooms - use polling instead of real-time to avoid Firestore assertion errors
   useEffect(() => {
     if (!currentUser) return;
 
-    const q = query(
-      collection(db, 'battleRooms'),
-      where('status', 'in', ['waiting', 'in-progress']),
-      orderBy('createdAt', 'desc')
-    );
+    let isMounted = true;
+    let intervalId: NodeJS.Timeout | null = null;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rooms = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as BattleRoom[];
-      setBattleRooms(rooms);
-    });
+    const fetchRooms = async () => {
+      if (!isMounted || !currentUser) return;
 
-    return () => unsubscribe();
+      try {
+        // Fetch both waiting rooms (to join) and in-progress rooms (to rejoin)
+        const waitingQuery = query(
+          collection(db, 'battleRooms'),
+          where('status', '==', 'waiting')
+        );
+
+        const inProgressQuery = query(
+          collection(db, 'battleRooms'),
+          where('status', '==', 'in-progress')
+        );
+
+        const [waitingSnapshot, inProgressSnapshot] = await Promise.all([
+          getDocs(waitingQuery),
+          getDocs(inProgressQuery)
+        ]);
+        
+        const waitingRooms = waitingSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as BattleRoom[];
+
+        const inProgressRooms = inProgressSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as BattleRoom[];
+
+        // Combine both lists
+        const rooms = [...waitingRooms, ...inProgressRooms];
+
+        console.log('PvP Battle: Fetched rooms:', { waiting: waitingRooms.length, inProgress: inProgressRooms.length, total: rooms.length });
+
+        // Clean up old completed rooms (older than 1 hour) - but keep in-progress rooms
+        const now = Date.now();
+        const oneHourAgo = now - (60 * 60 * 1000); // 1 hour in milliseconds
+        
+        const oldCompletedRoomsToDelete = rooms.filter(room => {
+          // Only delete completed rooms, not in-progress ones (users might rejoin)
+          if (room.status !== 'completed' && room.status !== 'waiting') {
+            return false;
+          }
+          
+          if (!room.createdAt) return false;
+          
+          // Handle both Firestore Timestamp and regular date
+          let roomTimestamp: number;
+          if (room.createdAt?.toMillis) {
+            // Firestore Timestamp
+            roomTimestamp = room.createdAt.toMillis();
+          } else if (room.createdAt?.seconds) {
+            // Firestore Timestamp as object with seconds
+            roomTimestamp = room.createdAt.seconds * 1000;
+          } else if (room.createdAt instanceof Date) {
+            // Regular Date object
+            roomTimestamp = room.createdAt.getTime();
+          } else if (typeof room.createdAt === 'number') {
+            // Already a timestamp
+            roomTimestamp = room.createdAt;
+          } else {
+            return false; // Can't determine age, skip
+          }
+          
+          return roomTimestamp < oneHourAgo;
+        });
+
+        // Delete old completed/waiting rooms (but preserve in-progress rooms)
+        if (oldCompletedRoomsToDelete.length > 0) {
+          console.log(`PvP Battle: Deleting ${oldCompletedRoomsToDelete.length} old completed/waiting rooms`);
+          await Promise.all(
+            oldCompletedRoomsToDelete.map(async (room) => {
+              try {
+                await deleteDoc(doc(db, 'battleRooms', room.id));
+                console.log(`PvP Battle: Deleted old room ${room.id}`);
+              } catch (error) {
+                console.error(`Error deleting old room ${room.id}:`, error);
+              }
+            })
+          );
+          
+          // Remove deleted rooms from the list
+          const remainingRooms = rooms.filter(room => 
+            !oldCompletedRoomsToDelete.some(oldRoom => oldRoom.id === room.id)
+          );
+          
+          // Continue processing with remaining rooms
+          rooms.splice(0, rooms.length, ...remainingRooms);
+        }
+
+        // Separate rooms into: rooms user can rejoin (they're a participant) and rooms they can join (new)
+        const roomsUserIsIn = rooms.filter(room => 
+          room.participants && room.participants.includes(currentUser.uid)
+        );
+
+        const roomsUserCanJoin = rooms.filter(room => {
+          // Don't show rooms where user is already a participant (those go to rejoin list)
+          if (room.participants && room.participants.includes(currentUser.uid)) {
+            return false;
+          }
+          // Only show waiting rooms that aren't full
+          if (room.status !== 'waiting') {
+            return false;
+          }
+          if (room.participants && room.participants.length >= (room.maxParticipants || 2)) {
+            return false;
+          }
+          return true;
+        });
+
+        // For rooms user is in, check if battle should be restored
+        // Only restore if not already showing a battle
+        if (roomsUserIsIn.length > 0 && !showBattleEngine && !currentRoom) {
+          const inProgressRoom = roomsUserIsIn.find(room => room.status === 'in-progress');
+          if (inProgressRoom) {
+            // User is in an in-progress battle - restore it
+            console.log('PvP Battle: Restoring battle room from polling', inProgressRoom.id);
+            setCurrentRoom({ ...inProgressRoom, id: inProgressRoom.id } as BattleRoom);
+            await fetchOpponentData(inProgressRoom);
+            setShowBattleEngine(true);
+          }
+        }
+
+        // Show both lists: available rooms to join + rooms user can rejoin
+        const availableRooms = [...roomsUserCanJoin, ...roomsUserIsIn];
+
+        console.log('PvP Battle: Available rooms after filtering:', availableRooms.length);
+
+        // Fetch host photo URLs for all available rooms (search filtering happens in render)
+        const roomsWithPhotos = await Promise.all(
+          availableRooms.map(async (room) => {
+            try {
+              const hostDoc = await getDoc(doc(db, 'students', room.hostId));
+              if (hostDoc.exists()) {
+                room.hostPhotoURL = hostDoc.data().photoURL || null;
+              }
+            } catch (error) {
+              console.error('Error fetching host photo:', error);
+            }
+            return room;
+          })
+        );
+
+        if (isMounted) {
+          setBattleRooms(roomsWithPhotos);
+        }
+      } catch (error: any) {
+        console.error('Error fetching battle rooms:', error);
+        if (error.code === 'permission-denied') {
+          console.error('Permission denied - check Firestore security rules');
+        } else if (error.code === 'failed-precondition' || error.code === 'unimplemented') {
+          console.warn('Index error detected - room query may need a Firestore index');
+        }
+        if (isMounted) {
+          setBattleRooms([]);
+        }
+      }
+    };
+
+    // Fetch immediately
+    fetchRooms();
+
+    // Poll every 2 seconds to get updates
+    intervalId = setInterval(fetchRooms, 2000);
+
+    return () => {
+      isMounted = false;
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [currentUser]);
 
-  const createBattleRoom = async () => {
+  const createBattleRoom = async (riskLevel: RiskLevel) => {
     if (!currentUser || !vault) return;
 
     setLoading(true);
     try {
+      const riskPercentages = {
+        easy: 10,
+        medium: 20,
+        high: 25
+      };
+
       const roomData = {
         hostId: currentUser.uid,
         hostName: currentUser.displayName || currentUser.email || 'Anonymous',
@@ -82,7 +402,9 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         status: 'waiting',
         createdAt: serverTimestamp(),
         participants: [currentUser.uid],
-        maxParticipants: 2
+        maxParticipants: 2,
+        riskLevel: riskLevel,
+        riskPercentage: riskPercentages[riskLevel]
       };
 
       const docRef = await addDoc(collection(db, 'battleRooms'), roomData);
@@ -92,7 +414,9 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
       if (roomDoc.exists()) {
         const room = { id: docRef.id, ...roomDoc.data() } as BattleRoom;
         setCurrentRoom(room);
-        setShowCreateRoom(false);
+        setShowRiskSelection(false);
+        setSelectedRiskLevel(null);
+        setShowWaitingRoom(true); // Show waiting room after creating room
       }
     } catch (error) {
       console.error('Error creating battle room:', error);
@@ -103,7 +427,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   };
 
   const joinBattleRoom = async (roomId: string) => {
-    if (!currentUser) return;
+    if (!currentUser || !vault) return;
 
     setLoading(true);
     try {
@@ -118,69 +442,242 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
       const room = roomDoc.data() as BattleRoom;
       
       if (room.participants.includes(currentUser.uid)) {
-        alert('You are already in this battle room.');
+        // User is already in room, restore battle state
+        setCurrentRoom(room);
+        await fetchOpponentData(room);
+        if (room.status === 'in-progress') {
+          setShowBattleEngine(true);
+          setShowWaitingRoom(false);
+        } else {
+          setShowWaitingRoom(true);
+        }
+        setLoading(false);
         return;
       }
 
-      if (room.participants.length >= room.maxParticipants) {
+      // Allow rejoining even if room is full (user is a participant)
+      if (room.participants.length >= room.maxParticipants && !room.participants.includes(currentUser.uid)) {
         alert('This battle room is full.');
+        setLoading(false);
         return;
       }
 
       // Add user to room
+      const updatedParticipants = [...room.participants, currentUser.uid];
+      const isRoomFull = updatedParticipants.length >= room.maxParticipants;
+      
       await updateDoc(roomRef, {
-        participants: [...room.participants, currentUser.uid],
-        status: room.participants.length + 1 >= room.maxParticipants ? 'in-progress' : 'waiting'
+        participants: updatedParticipants,
+        status: isRoomFull ? 'in-progress' : 'waiting'
       });
 
-      // Set current room and start battle
-      const updatedRoom = { ...room, participants: [...room.participants, currentUser.uid] };
+      // Set current room and fetch opponent data
+      const updatedRoom: BattleRoom = { 
+        ...room, 
+        participants: updatedParticipants, 
+        status: (isRoomFull ? 'in-progress' : 'waiting') as 'waiting' | 'in-progress' | 'completed'
+      };
       setCurrentRoom(updatedRoom);
-      setShowBattleEngine(true);
-    } catch (error) {
+      await fetchOpponentData(updatedRoom);
+      
+      // If room is now full (2 participants), start battle immediately
+      if (isRoomFull) {
+        setShowBattleEngine(true);
+        setShowWaitingRoom(false);
+        // Notify the room creator that opponent joined (triggers battle for them too)
+        // The WaitingRoomModal listener will handle this for the creator
+      } else {
+        // Show waiting room while waiting for more players (if maxParticipants > 2)
+        setShowWaitingRoom(true);
+      }
+    } catch (error: any) {
       console.error('Error joining battle room:', error);
-      alert('Failed to join battle room. Please try again.');
+      let errorMessage = 'Failed to join battle room. Please try again.';
+      
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Please check your account status.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Service unavailable. Please try again in a moment.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      alert(errorMessage);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchOpponentData = async (room: BattleRoom) => {
+    if (!currentUser) return;
+
+    // Determine opponent ID
+    const opponentId = room.hostId === currentUser.uid
+      ? room.participants.find(p => p !== currentUser.uid)
+      : room.hostId;
+
+    if (!opponentId) {
+      console.warn('No opponent found in room');
+      return;
+    }
+
+    try {
+      const [opponentStudent, opponentVault] = await Promise.all([
+        getDoc(doc(db, 'students', opponentId)),
+        getDoc(doc(db, 'vaults', opponentId))
+      ]);
+
+      if (opponentStudent.exists() && opponentVault.exists()) {
+        const studentData = opponentStudent.data();
+        const vaultData = opponentVault.data();
+        const opponentLevel = getLevelFromXP(studentData.xp || 0);
+
+        setOpponent({
+          id: opponentId,
+          name: studentData.displayName || studentData.name || 'Unknown Player',
+          currentPP: vaultData.currentPP || 0,
+          maxPP: vaultData.capacity || 1000,
+          shieldStrength: vaultData.shieldStrength || 0,
+          maxShieldStrength: vaultData.maxShieldStrength || 100,
+          level: opponentLevel,
+          photoURL: studentData.photoURL || null
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching opponent data:', error);
     }
   };
 
   const leaveBattleRoom = async () => {
     if (!currentUser || !currentRoom) return;
 
+    const confirmLeave = window.confirm(
+      'Are you sure you want to leave the battle? You can rejoin later, but your opponent may continue.'
+    );
+
+    if (!confirmLeave) return;
+
     try {
       const roomRef = doc(db, 'battleRooms', currentRoom.id);
-      const updatedParticipants = currentRoom.participants.filter(id => id !== currentUser.uid);
       
-      if (updatedParticipants.length === 0) {
-        // Delete room if empty
-        await updateDoc(roomRef, { status: 'completed' });
-      } else {
-        // Update room
-        await updateDoc(roomRef, {
-          participants: updatedParticipants,
-          status: 'waiting'
-        });
-      }
-
+      // Don't remove participant from room - allow rejoin
+      // Just hide the battle UI locally
+      // Room stays active so player can rejoin
+      
       setCurrentRoom(null);
       setShowBattleEngine(false);
+      setShowWaitingRoom(false);
+      
+      console.log('PvP Battle: Left room (can rejoin)', currentRoom.id);
     } catch (error) {
       console.error('Error leaving battle room:', error);
     }
   };
 
-  const handleBattleEnd = (result: 'victory' | 'defeat' | 'escape') => {
-    setShowBattleEngine(false);
-    setCurrentRoom(null);
+  const handleOpponentJoined = async (opponentData: OpponentData) => {
+    // Opponent joined! Set opponent and transition to battle
+    setOpponent(opponentData);
+    setShowWaitingRoom(false);
+    setShowBattleEngine(true);
     
-    if (result === 'victory') {
-      alert('🎉 Victory! You won the PvP battle! Large PP + XP boost earned!');
-    } else if (result === 'defeat') {
-      alert('💀 Defeat! Better luck next time!');
-    } else {
-      alert('🏃 You escaped from battle!');
+    // Update room status to in-progress if needed
+    if (currentRoom && currentRoom.participants.length < 2) {
+      try {
+        const roomRef = doc(db, 'battleRooms', currentRoom.id);
+        await updateDoc(roomRef, {
+          status: 'in-progress',
+          participants: [...currentRoom.participants, opponentData.id]
+        });
+        
+        // Update local currentRoom state
+        setCurrentRoom({
+          ...currentRoom,
+          status: 'in-progress',
+          participants: [...currentRoom.participants, opponentData.id]
+        });
+      } catch (error) {
+        console.error('Error updating room status:', error);
+      }
     }
+  };
+
+  const handleBattleEnd = async (result: 'victory' | 'defeat' | 'escape', winnerId?: string, loserId?: string) => {
+    setShowBattleEngine(false);
+    
+    if (result === 'escape') {
+      setCurrentRoom(null);
+      alert('🏃 You escaped from battle!');
+      return;
+    }
+
+    if (!currentRoom || !winnerId || !loserId || !currentUser) {
+      setCurrentRoom(null);
+      return;
+    }
+
+    // Calculate PP transfer based on risk level
+    const riskPercentage = currentRoom.riskPercentage || 10;
+    
+    // Fetch both players' vaults to calculate transfers
+    try {
+      const [winnerVaultDoc, loserVaultDoc] = await Promise.all([
+        getDoc(doc(db, 'vaults', winnerId)),
+        getDoc(doc(db, 'vaults', loserId))
+      ]);
+
+      if (winnerVaultDoc.exists() && loserVaultDoc.exists()) {
+        const loserVault = loserVaultDoc.data();
+        const winnerVault = winnerVaultDoc.data();
+        const loserTotalPP = loserVault.capacity || 1000;
+        
+        // Amount at risk (percentage of loser's total PP)
+        const ppAtRisk = Math.floor(loserTotalPP * (riskPercentage / 100));
+        
+        // Calculate actual loss (loser's current PP or PP at risk, whichever is less)
+        const actualLoss = Math.min(ppAtRisk, loserVault.currentPP || 0);
+        
+        // Transfer PP from loser to winner immediately (base amount)
+        const loserRef = doc(db, 'vaults', loserId);
+        const winnerRef = doc(db, 'vaults', winnerId);
+        
+        const newLoserPP = Math.max(0, (loserVault.currentPP || 0) - actualLoss);
+        const winnerCurrentPP = winnerVault.currentPP || 0;
+        const winnerCapacity = winnerVault.capacity || 1000;
+        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + actualLoss);
+        
+        // Update both vaults
+        await Promise.all([
+          updateDoc(loserRef, { currentPP: newLoserPP }),
+          updateDoc(winnerRef, { currentPP: newWinnerPP })
+        ]);
+        
+        // Update student documents
+        await Promise.all([
+          updateDoc(doc(db, 'students', loserId), { currentPP: newLoserPP }),
+          updateDoc(doc(db, 'students', winnerId), { currentPP: newWinnerPP })
+        ]);
+        
+        // Show reward spin for winner or loser
+        if (winnerId === currentUser.uid) {
+          // Player won - show winner spin for bonus multiplier
+          setIsWinner(true);
+          setRewardAmount(actualLoss);
+          setShowBattleEngine(false);
+          setShowRewardSpin(true);
+        } else {
+          // Player lost - show recovery spin
+          setIsWinner(false);
+          setRewardAmount(actualLoss);
+          setShowBattleEngine(false);
+          setShowRewardSpin(true);
+        }
+      }
+    } catch (error) {
+      console.error('Error calculating battle rewards:', error);
+      alert('Error processing battle rewards. Please try again.');
+    }
+    
+    setCurrentRoom(null);
   };
 
   if (showBattleEngine && currentRoom) {
@@ -196,11 +693,55 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           justifyContent: 'space-between',
           alignItems: 'center'
         }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '1.25rem' }}>⚔️ PvP Battle in Progress</h3>
-            <p style={{ margin: '0.25rem 0 0 0', opacity: 0.9 }}>
-              Room: {currentRoom.hostName} (Lv. {currentRoom.hostLevel})
-            </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.25rem' }}>⚔️ PvP Battle in Progress</h3>
+              <p style={{ margin: '0.25rem 0 0 0', opacity: 0.9 }}>
+                {opponent ? `vs. ${opponent.name} (Lv. ${opponent.level})` : `Room: ${currentRoom.hostName} (Lv. ${currentRoom.hostLevel})`}
+              </p>
+            </div>
+            {opponent && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                background: 'rgba(255, 255, 255, 0.1)',
+                padding: '0.5rem 1rem',
+                borderRadius: '0.5rem'
+              }}>
+                {opponent.photoURL ? (
+                  <img 
+                    src={opponent.photoURL} 
+                    alt={opponent.name}
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      objectFit: 'cover',
+                      border: '2px solid white'
+                    }}
+                  />
+                ) : (
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    background: 'rgba(255, 255, 255, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    fontWeight: 'bold'
+                  }}>
+                    {opponent.name[0]?.toUpperCase() || 'O'}
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>PP: {opponent.currentPP}/{opponent.maxPP}</div>
+                  <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>🛡️ {opponent.shieldStrength}/{opponent.maxShieldStrength}</div>
+                </div>
+              </div>
+            )}
           </div>
           <button
             onClick={leaveBattleRoom}
@@ -218,7 +759,14 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           </button>
         </div>
         
-        <BattleEngine onBattleEnd={handleBattleEnd} />
+        <BattleEngine 
+          onBattleEnd={(result, winnerId, loserId) => {
+            handleBattleEnd(result, winnerId, loserId);
+          }}
+          opponent={opponent || undefined}
+          isPvP={true}
+          battleRoom={currentRoom}
+        />
       </div>
     );
   }
@@ -280,25 +828,74 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🏠</div>
           <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Create Battle Room</h3>
           <p style={{ opacity: 0.9, marginBottom: '1.5rem' }}>
-            Start a new battle room and wait for opponents to join
+            Choose your risk level and battle for PP!
           </p>
-          <button
-            onClick={createBattleRoom}
-            disabled={loading}
-            style={{
-              background: 'rgba(255, 255, 255, 0.2)',
-              border: '1px solid rgba(255, 255, 255, 0.3)',
-              color: 'white',
-              padding: '0.75rem 2rem',
-              borderRadius: '0.5rem',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              fontSize: '1rem',
-              fontWeight: '500',
-              opacity: loading ? 0.6 : 1
-            }}
-          >
-            {loading ? 'Creating...' : 'Create Room'}
-          </button>
+          {!showRiskSelection ? (
+            <button
+              onClick={() => setShowRiskSelection(true)}
+              disabled={loading}
+              style={{
+                background: 'rgba(255, 255, 255, 0.2)',
+                border: '1px solid rgba(255, 255, 255, 0.3)',
+                color: 'white',
+                padding: '0.75rem 2rem',
+                borderRadius: '0.5rem',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                fontSize: '1rem',
+                fontWeight: '500',
+                opacity: loading ? 0.6 : 1
+              }}
+            >
+              {loading ? 'Creating...' : 'Select Risk Level'}
+            </button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ fontSize: '0.875rem', opacity: 0.9, marginBottom: '0.5rem' }}>
+                Choose your risk level:
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {(['easy', 'medium', 'high'] as RiskLevel[]).map((risk) => (
+                  <button
+                    key={risk}
+                    onClick={() => createBattleRoom(risk)}
+                    disabled={loading}
+                    style={{
+                      background: risk === 'easy' ? 'rgba(34, 197, 94, 0.3)' : risk === 'medium' ? 'rgba(251, 191, 36, 0.3)' : 'rgba(239, 68, 68, 0.3)',
+                      border: `2px solid ${risk === 'easy' ? '#22c55e' : risk === 'medium' ? '#fbbf24' : '#ef4444'}`,
+                      color: 'white',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '0.5rem',
+                      cursor: loading ? 'not-allowed' : 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      opacity: loading ? 0.6 : 1,
+                      textTransform: 'capitalize'
+                    }}
+                  >
+                    {risk === 'easy' ? '🟢 Easy (10% at risk)' : risk === 'medium' ? '🟡 Medium (20% at risk)' : '🔴 High (25% at risk)'}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  setShowRiskSelection(false);
+                  setSelectedRiskLevel(null);
+                }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  color: 'white',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  marginTop: '0.5rem'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Join Room */}
@@ -314,28 +911,157 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           <p style={{ opacity: 0.9, marginBottom: '1.5rem' }}>
             Join an existing battle room to challenge other players
           </p>
-          <div style={{ fontSize: '0.875rem', opacity: 0.8 }}>
-            {battleRooms.length} room(s) available
+          <div style={{ 
+            fontSize: '1.125rem', 
+            fontWeight: 'bold',
+            padding: '0.75rem',
+            background: 'rgba(255, 255, 255, 0.1)',
+            borderRadius: '0.5rem',
+            marginBottom: '0.5rem'
+          }}>
+            {(() => {
+              const filteredCount = searchQuery.trim() 
+                ? battleRooms.filter(room => 
+                    (room.hostName || '').toLowerCase().includes(searchQuery.toLowerCase().trim())
+                  ).length
+                : battleRooms.length;
+              
+              return filteredCount > 0 ? (
+                <>
+                  {filteredCount} {filteredCount === 1 ? 'room' : 'rooms'} available
+                  {searchQuery && ` matching "${searchQuery}"`}
+                </>
+              ) : (
+                searchQuery ? `No rooms match "${searchQuery}"` : 'No rooms available yet'
+              );
+            })()}
           </div>
+          {battleRooms.length === 0 && (
+            <p style={{ fontSize: '0.875rem', opacity: 0.8, marginTop: '0.5rem' }}>
+              Create a room or wait for others to join
+            </p>
+          )}
         </div>
       </div>
 
       {/* Available Rooms */}
-      {battleRooms.length > 0 && (
+      {battleRooms.length > 0 && battleRooms.filter(room => {
+        if (!searchQuery.trim()) return true;
+        const queryLower = searchQuery.toLowerCase().trim();
+        const hostName = (room.hostName || '').toLowerCase();
+        return hostName.includes(queryLower);
+      }).length > 0 && (
         <div>
-          <h3 style={{
-            fontSize: '1.5rem',
-            fontWeight: 'bold',
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             marginBottom: '1rem',
-            color: '#374151'
+            gap: '1rem',
+            flexWrap: 'wrap'
           }}>
-            Available Battle Rooms
-          </h3>
+            <h3 style={{
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              color: '#374151',
+              margin: 0
+            }}>
+              Available Battle Rooms
+            </h3>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flex: 1,
+              maxWidth: '400px',
+              minWidth: '250px'
+            }}>
+              <input
+                type="text"
+                placeholder="🔍 Search by player name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: '2px solid #e5e7eb',
+                  fontSize: '0.875rem',
+                  outline: 'none',
+                  transition: 'all 0.2s',
+                  background: 'white'
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#3b82f6';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e5e7eb';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#dc2626';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = '#ef4444';
+                  }}
+                >
+                  ✕ Clear
+                </button>
+              )}
+            </div>
+          </div>
+          {searchQuery && (
+            <div style={{
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              background: '#f3f4f6',
+              borderRadius: '0.5rem',
+              fontSize: '0.875rem',
+              color: '#6b7280'
+            }}>
+              {battleRooms.filter(room => 
+                (room.hostName || '').toLowerCase().includes(searchQuery.toLowerCase().trim())
+              ).length > 0 ? (
+                <>
+                  Found <strong>{battleRooms.filter(room => 
+                    (room.hostName || '').toLowerCase().includes(searchQuery.toLowerCase().trim())
+                  ).length}</strong> room(s) matching "<strong>{searchQuery}</strong>"
+                </>
+              ) : (
+                <>
+                  No rooms found matching "<strong>{searchQuery}</strong>"
+                </>
+              )}
+            </div>
+          )}
           <div style={{
             display: 'grid',
             gap: '1rem'
           }}>
-            {battleRooms.map((room) => (
+            {battleRooms
+              .filter(room => {
+                if (!searchQuery.trim()) return true;
+                const queryLower = searchQuery.toLowerCase().trim();
+                const hostName = (room.hostName || '').toLowerCase();
+                return hostName.includes(queryLower);
+              })
+              .map((room) => (
               <div
                 key={room.id}
                 style={{
@@ -357,71 +1083,148 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
                   e.currentTarget.style.boxShadow = 'none';
                 }}
               >
-                <div>
+                <div style={{ flex: 1 }}>
                   <div style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.5rem',
-                    marginBottom: '0.5rem'
+                    gap: '0.75rem',
+                    marginBottom: '0.75rem'
                   }}>
-                    <span style={{ fontSize: '1.25rem' }}>⚔️</span>
-                    <h4 style={{
-                      fontSize: '1.125rem',
-                      fontWeight: 'bold',
-                      margin: 0,
-                      color: '#374151'
-                    }}>
-                      {room.hostName}
-                    </h4>
-                    <span style={{
-                      background: '#f3f4f6',
-                      color: '#6b7280',
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '0.25rem',
-                      fontSize: '0.75rem',
-                      fontWeight: '500'
-                    }}>
-                      Lv. {room.hostLevel}
-                    </span>
-                  </div>
-                  <div style={{
-                    fontSize: '0.875rem',
-                    color: '#6b7280'
-                  }}>
-                    {room.participants.length}/{room.maxParticipants} players • 
-                    Status: <span style={{
-                      color: room.status === 'waiting' ? '#10b981' : '#f59e0b',
-                      fontWeight: '500'
-                    }}>
-                      {room.status === 'waiting' ? 'Waiting' : 'In Progress'}
-                    </span>
+                    {room.hostPhotoURL ? (
+                      <img 
+                        src={room.hostPhotoURL} 
+                        alt={room.hostName}
+                        style={{
+                          width: '48px',
+                          height: '48px',
+                          borderRadius: '50%',
+                          objectFit: 'cover',
+                          border: '2px solid #e5e7eb'
+                        }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: '48px',
+                        height: '48px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.5rem',
+                        fontWeight: 'bold',
+                        color: '#6b7280'
+                      }}>
+                        {room.hostName[0]?.toUpperCase() || 'H'}
+                      </div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        marginBottom: '0.25rem'
+                      }}>
+                        <h4 style={{
+                          fontSize: '1.125rem',
+                          fontWeight: 'bold',
+                          margin: 0,
+                          color: '#374151'
+                        }}>
+                          {room.hostName}
+                        </h4>
+                        <span style={{
+                          background: '#f3f4f6',
+                          color: '#6b7280',
+                          padding: '0.25rem 0.5rem',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '500'
+                        }}>
+                          Lv. {room.hostLevel}
+                        </span>
+                      </div>
+                      <div style={{
+                        fontSize: '0.875rem',
+                        color: '#6b7280',
+                        marginBottom: '0.5rem'
+                      }}>
+                        {room.participants.length}/{room.maxParticipants} players • 
+                        Status: <span style={{
+                          color: room.status === 'waiting' ? '#10b981' : '#f59e0b',
+                          fontWeight: '500'
+                        }}>
+                          {room.status === 'waiting' ? 'Waiting' : 'In Progress'}
+                        </span>
+                        {room.participants.includes(currentUser?.uid || '') && (
+                          <span style={{
+                            marginLeft: '0.5rem',
+                            padding: '0.25rem 0.5rem',
+                            background: '#10b981',
+                            color: 'white',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: '600'
+                          }}>
+                            🔄 You're in this battle
+                          </span>
+                        )}
+                        {room.riskLevel && (
+                          <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem' }}>
+                            • Risk: <span style={{ 
+                              color: room.riskLevel === 'easy' ? '#22c55e' : room.riskLevel === 'medium' ? '#fbbf24' : '#ef4444',
+                              fontWeight: 'bold'
+                            }}>
+                              {room.riskLevel.toUpperCase()} ({room.riskPercentage}%)
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      {room.opponent && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          fontSize: '0.875rem',
+                          color: '#6b7280',
+                          background: '#f9fafb',
+                          padding: '0.5rem',
+                          borderRadius: '0.5rem'
+                        }}>
+                          <span>⚔️</span>
+                          <span>Opponent: {room.opponent.name} (Lv. {room.opponent.level})</span>
+                          <span style={{ marginLeft: 'auto' }}>
+                            PP: {room.opponent.currentPP}/{room.opponent.maxPP} • 
+                            🛡️ {room.opponent.shieldStrength}/{room.opponent.maxShieldStrength}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <button
                   onClick={() => joinBattleRoom(room.id)}
-                  disabled={loading || room.participants.includes(currentUser?.uid || '') || room.status === 'in-progress'}
+                  disabled={loading}
                   style={{
-                    background: room.participants.includes(currentUser?.uid || '') || room.status === 'in-progress'
-                      ? '#f3f4f6'
+                    background: room.participants.includes(currentUser?.uid || '')
+                      ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
                       : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                    color: room.participants.includes(currentUser?.uid || '') || room.status === 'in-progress'
-                      ? '#9ca3af'
-                      : 'white',
+                    color: 'white',
                     border: 'none',
                     padding: '0.75rem 1.5rem',
                     borderRadius: '0.5rem',
-                    cursor: room.participants.includes(currentUser?.uid || '') || room.status === 'in-progress'
-                      ? 'not-allowed'
-                      : 'pointer',
+                    cursor: loading ? 'not-allowed' : 'pointer',
                     fontSize: '0.875rem',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    opacity: loading ? 0.6 : 1
                   }}
                 >
-                  {room.participants.includes(currentUser?.uid || '') 
-                    ? 'Already Joined' 
-                    : room.status === 'in-progress' 
-                      ? 'In Progress' 
-                      : 'Join Battle'
+                  {loading ? 'Joining...' : 
+                    room.participants.includes(currentUser?.uid || '') 
+                      ? '🔄 Rejoin Battle' 
+                      : room.status === 'in-progress' 
+                        ? '❌ Battle Full' 
+                        : 'Join Battle'
                   }
                 </button>
               </div>
@@ -430,28 +1233,127 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         </div>
       )}
 
-      {battleRooms.length === 0 && (
+      {(battleRooms.length === 0 || (searchQuery && battleRooms.filter(room => 
+        (room.hostName || '').toLowerCase().includes(searchQuery.toLowerCase().trim())
+      ).length === 0)) && !showWaitingRoom && (
         <div style={{
           textAlign: 'center',
           padding: '3rem',
-          background: '#f9fafb',
+          background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
           borderRadius: '0.75rem',
-          border: '2px dashed #d1d5db'
+          border: '2px dashed #d1d5db',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.05)'
         }}>
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🏟️</div>
+          <div style={{ 
+            fontSize: '4rem', 
+            marginBottom: '1rem',
+            animation: 'pulse 2s infinite'
+          }}>🏟️</div>
           <h3 style={{
-            fontSize: '1.25rem',
+            fontSize: '1.5rem',
             fontWeight: 'bold',
             color: '#374151',
-            marginBottom: '0.5rem'
+            marginBottom: '0.75rem'
           }}>
-            No Battle Rooms Available
+            {searchQuery ? `No rooms found matching "${searchQuery}"` : 'No Battle Rooms Available'}
           </h3>
-          <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
-            Be the first to create a battle room and challenge other players!
+          <p style={{ 
+            color: '#6b7280', 
+            marginBottom: '1.5rem',
+            fontSize: '1.125rem'
+          }}>
+            {searchQuery 
+              ? 'Try a different search term or create your own battle room!'
+              : 'Be the first to create a battle room and challenge other players!'
+            }
           </p>
+          {!searchQuery && (
+            <div style={{
+              display: 'inline-block',
+              padding: '0.75rem 1.5rem',
+              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              color: 'white',
+              borderRadius: '0.5rem',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '1rem',
+              transition: 'all 0.2s',
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+            }}
+            onClick={() => setShowRiskSelection(true)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.3)';
+            }}
+            >
+              ➕ Create Your First Room
+            </div>
+          )}
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                color: 'white',
+                borderRadius: '0.5rem',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '1rem',
+                transition: 'all 0.2s',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                marginTop: '0.5rem'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'scale(1.05)';
+                e.currentTarget.style.boxShadow = '0 6px 16px rgba(59, 130, 246, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.3)';
+              }}
+            >
+              🔄 Clear Search
+            </button>
+          )}
+          <style>{`
+            @keyframes pulse {
+              0%, 100% { transform: scale(1); opacity: 1; }
+              50% { transform: scale(1.1); opacity: 0.8; }
+            }
+          `}</style>
         </div>
       )}
+
+      {/* Waiting Room Modal */}
+      {showWaitingRoom && currentRoom && (
+        <WaitingRoomModal
+          isOpen={showWaitingRoom}
+          onLeaveRoom={leaveBattleRoom}
+          currentRoom={currentRoom}
+          onOpponentJoined={handleOpponentJoined}
+          currentUserPhotoURL={currentUser?.photoURL || null}
+          currentUserName={currentUser?.displayName || currentUser?.email || 'You'}
+          currentUserLevel={userLevel}
+        />
+      )}
+
+      {/* Reward Spin Modal */}
+      <PvPRewardSpin
+        isOpen={showRewardSpin}
+        onClose={() => {
+          setShowRewardSpin(false);
+          setCurrentRoom(null);
+        }}
+        isWinner={isWinner}
+        baseReward={rewardAmount}
+        riskPercentage={currentRoom?.riskPercentage || 10}
+      />
     </div>
   );
 };

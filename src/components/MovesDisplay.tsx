@@ -13,7 +13,7 @@ interface MovesDisplayProps {
   movesRemaining: number;
   offlineMovesRemaining: number;
   maxOfflineMoves: number;
-  onUpgradeMove: (moveId: string) => void;
+  onUpgradeMove: (moveId: string) => Promise<void> | void;
   onResetMoveLevel?: (moveId: string) => void;
   onUnlockElementalMoves?: (elementalAffinity: string) => void;
   onForceUnlockAllMoves?: () => void;
@@ -51,6 +51,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
 }) => {
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [overridesLoaded, setOverridesLoaded] = useState(false);
+  const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
 
   // Load move overrides when component mounts
   useEffect(() => {
@@ -703,10 +704,23 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         {/* Ascend Button - Show if level is exactly 5 */}
         {canAscend && onUpgradeMove && (
           <button
-            onClick={() => {
-              if (window.confirm(`Ascend ${getMoveDataWithOverrides(move.name).name} beyond Level 5? This will unlock the Ascension path to Level 10!`)) {
-                onUpgradeMove(move.id);
-              }
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              
+              console.log('🔄 Ascend button clicked!', {
+                moveId: move.id,
+                moveName: move.name,
+                masteryLevel: move.masteryLevel,
+                canAscend,
+                onUpgradeMove: !!onUpgradeMove,
+                timestamp: new Date().toISOString()
+              });
+              
+              // Show custom confirmation modal instead of window.confirm (works better in Firefox)
+              const moveName = getMoveDataWithOverrides(move.name).name;
+              setAscendConfirm({ moveId: move.id, moveName });
             }}
             style={{
               background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
@@ -721,7 +735,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               marginBottom: '0.5rem',
               transition: 'all 0.2s',
               backdropFilter: 'blur(10px)',
-              boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)'
+              boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)',
+              position: 'relative',
+              zIndex: 10,
+              pointerEvents: 'auto'
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
@@ -1199,6 +1216,131 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 </button>
               </div>
             )}
+        </div>
+      )}
+
+      {/* Ascend Confirmation Modal */}
+      {ascendConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999
+        }}
+        onClick={() => setAscendConfirm(null)}
+        >
+          <div style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '500px',
+            width: '90%',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            zIndex: 10000
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              color: '#1f2937'
+            }}>
+              ⬆️ Ascend Move?
+            </h3>
+            <p style={{
+              fontSize: '1rem',
+              marginBottom: '1.5rem',
+              color: '#6b7280',
+              lineHeight: '1.5'
+            }}>
+              Ascend <strong>{ascendConfirm.moveName}</strong> beyond Level 5?
+            </p>
+            <p style={{
+              fontSize: '0.875rem',
+              marginBottom: '1rem',
+              color: '#9ca3af'
+            }}>
+              This will unlock the Ascension path to Level 10!
+            </p>
+            <div style={{
+              background: '#fef3c7',
+              border: '1px solid #fbbf24',
+              borderRadius: '0.5rem',
+              padding: '1rem',
+              marginBottom: '1.5rem'
+            }}>
+              <p style={{
+                fontSize: '0.875rem',
+                color: '#92400e',
+                margin: 0,
+                fontWeight: 'bold'
+              }}>
+                ⚡ Cost: 1600 PP
+              </p>
+            </div>
+            <div style={{
+              display: 'flex',
+              gap: '1rem',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={() => setAscendConfirm(null)}
+                style={{
+                  background: '#e5e7eb',
+                  color: '#374151',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    console.log(`✅ Proceeding with ascend for move: ${ascendConfirm.moveId} (${ascendConfirm.moveName})`);
+                    
+                    if (!onUpgradeMove) {
+                      throw new Error('onUpgradeMove function is not available');
+                    }
+                    
+                    await onUpgradeMove(ascendConfirm.moveId);
+                    console.log(`✅ Ascend completed for: ${ascendConfirm.moveId}`);
+                    
+                    setAscendConfirm(null);
+                  } catch (error) {
+                    console.error('❌ Error ascending move:', error);
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    alert(`Failed to ascend move: ${errorMessage}`);
+                    setAscendConfirm(null);
+                  }
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 6px rgba(245, 158, 11, 0.3)'
+                }}
+              >
+                ⬆️ Ascend (1600 PP)
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

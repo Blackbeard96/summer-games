@@ -843,18 +843,45 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Check and reset daily moves if needed
+  // Helper to get "day" start time (8am EST) for a given date
+  const getDayStartForDate = (date: Date): Date => {
+    // Convert to EST
+    const estOffset = -5; // EST is UTC-5
+    const estDate = new Date(date.getTime() + (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    
+    // Create 8am EST for that date
+    const dayStart = new Date(estDate);
+    dayStart.setHours(8, 0, 0, 0);
+    
+    // If time is before 8am EST, use previous day's 8am EST
+    if (estDate < dayStart) {
+      dayStart.setDate(dayStart.getDate() - 1);
+    }
+    
+    // Convert back to local time
+    return new Date(dayStart.getTime() - (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+  };
+
+  // Helper to get current "day" start time (8am EST)
+  const getCurrentDayStart = (): Date => {
+    return getDayStartForDate(new Date());
+  };
+
+  // Check and reset daily moves if needed (resets at 8am EST)
   const checkAndResetDailyMoves = (vaultData: Vault): Vault => {
     const now = new Date();
     const lastReset = vaultData.lastMoveReset instanceof Date ? vaultData.lastMoveReset : new Date(vaultData.lastMoveReset);
-    const daysSinceReset = Math.floor((now.getTime() - lastReset.getTime()) / (1000 * 60 * 60 * 24));
     
-    if (daysSinceReset >= 1) {
+    // Get current day start (8am EST)
+    const currentDayStart = getCurrentDayStart();
+    
+    // If last reset was before current day start, reset moves
+    if (lastReset < currentDayStart) {
       // Reset moves for new day
       return {
         ...vaultData,
         movesRemaining: vaultData.maxMovesPerDay,
-        lastMoveReset: now,
+        lastMoveReset: currentDayStart,
       };
     }
     return vaultData;
@@ -1096,6 +1123,21 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else if (nextLevel === 5) {
         // Level 4 → Level 5: base * 8
         upgradeCost = basePrice * 8;
+      } else if (nextLevel === 6) {
+        // Level 5 → Level 6 (Ascend): base * 16
+        upgradeCost = basePrice * 16;
+      } else if (nextLevel === 7) {
+        // Level 6 → Level 7: base * 32
+        upgradeCost = basePrice * 32;
+      } else if (nextLevel === 8) {
+        // Level 7 → Level 8: base * 64
+        upgradeCost = basePrice * 64;
+      } else if (nextLevel === 9) {
+        // Level 8 → Level 9: base * 128
+        upgradeCost = basePrice * 128;
+      } else if (nextLevel === 10) {
+        // Level 9 → Level 10: base * 256
+        upgradeCost = basePrice * 256;
       } else {
         upgradeCost = basePrice;
       }
@@ -2048,10 +2090,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       console.log('Executing vault siege attack:', { moveId, targetUserId, actionCardId });
       
-      // Sync target's student PP to match their vault PP before attack
-      await syncStudentPP(targetUserId);
-      
-      // Get target vault
+      // Get target vault first
       const targetVaultRef = doc(db, 'vaults', targetUserId);
       const targetVaultDoc = await getDoc(targetVaultRef);
       
@@ -2060,23 +2099,34 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       const targetVaultData = targetVaultDoc.data() as Vault;
-      console.log('🔥 Target vault data:', { 
-        overshield: targetVaultData.overshield, 
+      
+      // Get target student data to sync vault PP from student PP (student PP is the source of truth)
+      const targetStudentRef = doc(db, 'students', targetUserId);
+      const targetStudentDoc = await getDoc(targetStudentRef);
+      const targetStudentPP = targetStudentDoc.exists() ? (targetStudentDoc.data().powerPoints || 0) : 0;
+      
+      console.log('🔥 Target data before sync:', { 
+        vaultPP: targetVaultData.currentPP,
+        studentPP: targetStudentPP,
         shieldStrength: targetVaultData.shieldStrength,
-        currentPP: targetVaultData.currentPP 
+        overshield: targetVaultData.overshield
       });
       
-      // Also get target student data to compare
-      const targetStudentRef = doc(db, 'students', targetUserId);
-      const targetStudentDocForComparison = await getDoc(targetStudentRef);
-      const targetStudentPP = targetStudentDocForComparison.exists() ? (targetStudentDocForComparison.data().powerPoints || 0) : 0;
+      // Sync target vault PP FROM student PP (student PP is the source of truth)
+      // If vault PP doesn't match student PP, update vault to match student
+      if (targetVaultData.currentPP !== targetStudentPP) {
+        console.log(`🔄 Syncing target vault PP from ${targetVaultData.currentPP} to ${targetStudentPP} (from student PP)`);
+        await updateDoc(targetVaultRef, { currentPP: targetStudentPP });
+        targetVaultData.currentPP = targetStudentPP; // Update local copy for calculations
+      }
       
       console.log('🔍 COMPARISON - Target data sources:', {
         targetUserId,
         vaultPP: targetVaultData.currentPP,
         studentPP: targetStudentPP,
         vaultDocId: targetVaultDoc.id,
-        studentDocId: targetStudentDocForComparison.id
+        studentDocId: targetStudentDoc.id,
+        synced: targetVaultData.currentPP === targetStudentPP
       });
       
       console.log('🔍 Target vault data loaded:', {
@@ -2164,10 +2214,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           }
           
+          // Check for direct PP steal property on the move (e.g., Ember Jab has ppSteal: 7)
+          let directPPSteal = 0;
+          if (selectedMove.ppSteal && selectedMove.ppSteal > 0) {
+            // Use ppSteal directly - it's already been upgraded with boost multipliers in upgradeMove
+            // Don't apply mastery multiplier again here to avoid double-counting
+            directPPSteal = selectedMove.ppSteal;
+            console.log(`💰 Move ${selectedMove.name} has direct PP steal: ${directPPSteal} (already upgraded)`);
+          }
+
           if (totalDamage > 0) {
             console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage}`);
             console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
             console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
+            console.log(`💰 Direct PP steal from move property: ${directPPSteal}`);
             
             // Apply damage to shields first, then to PP
             if (targetVaultData.shieldStrength > 0) {
@@ -2176,37 +2236,75 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               const remainingDamage = totalDamage - shieldDamage;
               
               // Remaining damage goes to PP
+              let damageBasedPPSteal = 0;
               if (remainingDamage > 0) {
-                ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
-                message = `Used ${selectedMove.name} - Dealt ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP)`;
+                damageBasedPPSteal = Math.min(remainingDamage, targetVaultData.currentPP);
+              }
+              
+              // Use remaining damage as PP steal (don't add directPPSteal here - it's already part of damage)
+              ppStolen = damageBasedPPSteal;
+              
+              if (ppStolen > 0 || shieldDamage > 0) {
+                message = `Used ${selectedMove.name} - Dealt ${totalDamage} damage (${shieldDamage} to shields${ppStolen > 0 ? `, ${ppStolen} to PP` : ''})`;
               } else {
                 message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields`;
               }
             } else {
               // No shields, all damage goes to PP
+              // Use total damage as PP steal (don't use directPPSteal - it's already part of total damage)
               ppStolen = Math.min(totalDamage, targetVaultData.currentPP);
-              message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields)`;
+              
+              if (ppStolen > 0) {
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields)`;
+              } else {
+                message = `Used ${selectedMove.name} - Dealt 0 damage to PP (target has no PP to steal)`;
+              }
+              
+              console.log(`💰 No shields - Damage: ${totalDamage}, Final PP stolen: ${ppStolen}`);
             }
           } else {
-            console.log(`⚠️ No damage value found for move ${selectedMove.name}, using fallback damage`);
-            // Give a small amount of damage for moves that don't have damage values
-            const fallbackDamage = 5; // Minimum damage for any offensive move
-            
-            // Apply damage to shields first, then to PP
-            if (targetVaultData.shieldStrength > 0) {
-              shieldDamage = Math.min(fallbackDamage, targetVaultData.shieldStrength);
-              const remainingDamage = fallbackDamage - shieldDamage;
-              
-              if (remainingDamage > 0) {
-                ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
-                message = `Used ${selectedMove.name} - Dealt ${fallbackDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP) [fallback]`;
+            // No damage value found, but check if move has ppSteal property
+            if (directPPSteal > 0) {
+              // Move has direct PP steal but no damage - apply PP steal directly
+              if (targetVaultData.shieldStrength > 0) {
+                // Can still steal PP even if target has shields (but reduced)
+                ppStolen = Math.min(Math.floor(directPPSteal / 2), targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (reduced by shields)`;
               } else {
-                message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields [fallback]`;
+                // No shields, full PP steal
+                ppStolen = Math.min(directPPSteal, targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields)`;
               }
+              console.log(`💰 Using direct PP steal (no damage value): ${ppStolen}`);
             } else {
-              ppStolen = Math.min(fallbackDamage, targetVaultData.currentPP);
-              message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields) [fallback]`;
+              console.log(`⚠️ No damage value found for move ${selectedMove.name}, using fallback damage`);
+              // Give a small amount of damage for moves that don't have damage values
+              const fallbackDamage = 5; // Minimum damage for any offensive move
+              
+              // Apply damage to shields first, then to PP
+              if (targetVaultData.shieldStrength > 0) {
+                shieldDamage = Math.min(fallbackDamage, targetVaultData.shieldStrength);
+                const remainingDamage = fallbackDamage - shieldDamage;
+                
+                if (remainingDamage > 0) {
+                  ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
+                  message = `Used ${selectedMove.name} - Dealt ${fallbackDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP) [fallback]`;
+                } else {
+                  message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields [fallback]`;
+                }
+              } else {
+                ppStolen = Math.min(fallbackDamage, targetVaultData.currentPP);
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields) [fallback]`;
+              }
             }
+          }
+          
+          // Ensure ppStolen is set even if totalDamage was 0 but directPPSteal exists
+          // (This handles cases where damage lookup returns 0 but move has ppSteal)
+          if (ppStolen === 0 && directPPSteal > 0 && targetVaultData.shieldStrength === 0) {
+            ppStolen = Math.min(directPPSteal, targetVaultData.currentPP);
+            message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields, direct steal)`;
+            console.log(`💰 Applied direct PP steal after damage calculation: ${ppStolen}`);
           }
         }
       }
@@ -2258,7 +2356,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Get player names for notifications and attack records
       const attackerName = currentUser.displayName || 'Unknown';
-      const targetStudentDoc = await getDoc(doc(db, 'students', targetUserId));
+      // Reuse targetStudentDoc that was already fetched above for syncing
       const targetName = targetStudentDoc.exists() ? targetStudentDoc.data().displayName || 'Unknown' : 'Unknown';
       
       // Apply damage to target vault
@@ -2306,45 +2404,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Check if shields were completely broken (went from >0 to 0)
         if (originalShieldStrength > 0 && newShieldStrength === 0) {
           shieldsCracked = true;
-          
-          // When shields are broken, half of the remaining shield damage is deducted from PP
-          const excessDamage = shieldDamage - originalShieldStrength;
-          if (excessDamage > 0) {
-            const ppDamageFromShieldBreak = Math.floor(excessDamage / 2);
-            const additionalPPStolen = Math.min(ppDamageFromShieldBreak, targetVaultData.currentPP);
-            ppStolen += additionalPPStolen;
-            
-            console.log(`🛡️ Shields broken! Excess damage: ${excessDamage}`);
-            console.log(`💰 Half of excess damage (${ppDamageFromShieldBreak}) converted to PP theft`);
-            console.log(`💰 Additional PP stolen from shield break: ${additionalPPStolen}`);
-            console.log(`💰 Total PP stolen: ${ppStolen}`);
-            
-            // Update message to reflect the shield break conversion
-            if (selectedMove) {
-              message = message.replace(
-                `Used ${selectedMove.name} - Broke shields and stole ${ppStolen - additionalPPStolen} PP`,
-                `Used ${selectedMove.name} - Broke shields and stole ${ppStolen} PP (${additionalPPStolen} from shield break)`
-              );
-            }
-          }
-        } else if (originalShieldStrength === 0 && shieldDamage > 0) {
-          // Target has no shields, so all shield damage converts to PP theft
-          const ppDamageFromNoShields = Math.floor(shieldDamage / 2);
-          const additionalPPStolen = Math.min(ppDamageFromNoShields, targetVaultData.currentPP);
-          ppStolen += additionalPPStolen;
-          
-          console.log(`🛡️ Target has no shields! Shield damage: ${shieldDamage}`);
-          console.log(`💰 Half of shield damage (${ppDamageFromNoShields}) converted to PP theft`);
-          console.log(`💰 Additional PP stolen from no shields: ${additionalPPStolen}`);
-          console.log(`💰 Total PP stolen: ${ppStolen}`);
-          
-          // Update message to reflect the no-shields conversion
-          if (selectedMove) {
-            message = message.replace(
-              `Used ${selectedMove.name} - Stole ${ppStolen - additionalPPStolen} PP (no shields)`,
-              `Used ${selectedMove.name} - Stole ${ppStolen} PP (${additionalPPStolen} from shield damage)`
-            );
-          }
+          console.log(`🛡️ Shields broken! Original: ${originalShieldStrength}, Damage: ${shieldDamage}, New: ${newShieldStrength}`);
         } else {
           console.log(`Shield damage calculation: ${originalShieldStrength} - ${shieldDamage} = ${newShieldStrength}`);
         }
@@ -2405,11 +2465,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await updateDoc(targetVaultRef, updates);
         console.log('Target vault updated successfully');
         
+        // After updating target vault, ensure target student PP matches vault PP
+        // (vault PP is now the source after attack)
+        if (updates.currentPP !== undefined) {
+          await updateDoc(targetStudentRef, { powerPoints: updates.currentPP });
+          console.log(`🔄 Synced target student PP to vault PP after attack: ${updates.currentPP}`);
+        }
+        
         // Verify the update by reading the vault again
         const updatedVaultDoc = await getDoc(targetVaultRef);
         if (updatedVaultDoc.exists()) {
           const updatedVaultData = updatedVaultDoc.data() as Vault;
           console.log('Verified vault update - new shield strength:', updatedVaultData.shieldStrength);
+          console.log('Verified vault update - new PP:', updatedVaultData.currentPP);
           console.log('Verified vault update - new overshield:', updatedVaultData.overshield);
         }
       }
@@ -2610,8 +2678,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const getRemainingOfflineMoves = (): number => {
     if (!currentUser) return 0;
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get current day start (8am EST) instead of midnight
+    const today = getCurrentDayStart();
     
     // Count vault siege attacks from attackHistory (these consume offline moves)
     const todayVaultSiegeAttacks = attackHistory.filter(attack => {
@@ -2635,8 +2703,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return false;
         }
         
-        attackDate.setHours(0, 0, 0, 0);
-        return attackDate.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
+        // Compare dates using 8am EST day boundary
+        const attackDayStart = getDayStartForDate(attackDate);
+        return attackDayStart.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
       } catch (error) {
         console.error('Error processing attack timestamp:', error, attack);
         return false; // Skip attacks with invalid timestamps
@@ -2674,22 +2743,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return false;
         }
         
-        moveDate.setHours(0, 0, 0, 0);
-        const isToday = moveDate.getTime() === today.getTime();
+        // Compare dates using 8am EST day boundary
+        const moveDayStart = getDayStartForDate(moveDate);
+        const isToday = moveDayStart.getTime() === today.getTime();
         const isVaultAttack = move.type === 'vault_attack';
         const isCurrentUser = move.userId === currentUser.uid;
-        
-        // Debug logging commented out to reduce console noise
-        // logger.battle.debug('OfflineMoves Filter Debug:', {
-        //   moveId: move.id,
-        //   moveType: move.type,
-        //   moveDate: moveDate.toISOString(),
-        //   today: today.toISOString(),
-        //   isToday,
-        //   isVaultAttack,
-        //   isCurrentUser,
-        //   shouldInclude: isToday && isVaultAttack && isCurrentUser
-        // });
         
         return isToday && isVaultAttack && isCurrentUser;
       } catch (error) {
@@ -2734,8 +2792,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return false;
         }
         
-        moveDate.setHours(0, 0, 0, 0);
-        const isToday = moveDate.getTime() === today.getTime();
+        // Compare dates using 8am EST day boundary
+        const moveDayStart = getDayStartForDate(moveDate);
+        const isToday = moveDayStart.getTime() === today.getTime();
         const isMoveRestore = move.type === 'move_restore';
         
         // Debug logging commented out to reduce console noise
@@ -2811,11 +2870,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getCurrentDayStart(); // Use 8am EST day boundary
     
     console.log('🔥 Debug: Offline Moves Analysis');
-    console.log('🔥 Debug: Today:', today.toISOString());
+    console.log('🔥 Debug: Today (8am EST):', today.toISOString());
     console.log('🔥 Debug: Current user:', currentUser.uid);
     console.log('🔥 Debug: Total offline moves:', offlineMoves.length);
     console.log('🔥 Debug: Total attack history:', attackHistory.length);
@@ -2834,8 +2892,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return false;
         }
         
-        moveDate.setHours(0, 0, 0, 0);
-        return moveDate.getTime() === today.getTime() && move.userId === currentUser.uid;
+        // Compare dates using 8am EST day boundary
+        const moveDayStart = getDayStartForDate(moveDate);
+        return moveDayStart.getTime() === today.getTime() && move.userId === currentUser.uid;
       } catch (error) {
         return false;
       }
@@ -2862,8 +2921,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return false;
         }
         
-        attackDate.setHours(0, 0, 0, 0);
-        return attackDate.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
+        // Compare dates using 8am EST day boundary
+        const attackDayStart = getDayStartForDate(attackDate);
+        return attackDayStart.getTime() === today.getTime() && attack.attackerId === currentUser.uid;
       } catch (error) {
         return false;
       }

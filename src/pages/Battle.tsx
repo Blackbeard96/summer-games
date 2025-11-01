@@ -396,7 +396,7 @@ const Battle: React.FC = () => {
         marginBottom: '2rem'
       }}>
         {[
-          { id: 'battle', label: 'Visual Battle', icon: '⚔️' },
+          { id: 'battle', label: 'Player Battle', icon: '⚔️' },
           { id: 'vault', label: 'Vault Management', icon: '🏦' },
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
@@ -559,7 +559,7 @@ const Battle: React.FC = () => {
                 marginBottom: '0.5rem'
               }}>
                 <span style={{ fontSize: '1.2rem' }}>⚔️</span>
-                <strong style={{ color: '#1e40af' }}>Visual Battles</strong>
+                <strong style={{ color: '#1e40af' }}>Player Battles</strong>
               </div>
               <p style={{ 
                 fontSize: '0.875rem', 
@@ -567,7 +567,7 @@ const Battle: React.FC = () => {
                 margin: 0,
                 lineHeight: '1.4'
               }}>
-                Engage in epic visual battles with classmates! Choose from PvP battles, vault siege, or practice mode to hone your skills.
+                Engage in epic player battles with classmates! Choose from PvP battles, vault siege, or practice mode to hone your skills.
               </p>
             </div>
             
@@ -622,7 +622,7 @@ const Battle: React.FC = () => {
           }}>
             {activeTab === 'moves' 
               ? 'Focus on upgrading your most powerful moves first, then expand your move collection to have more strategic options in battle!'
-              : 'Monitor your vault stats and battle history to track your progress. Use quick actions to enhance your abilities before engaging in visual battles!'
+              : 'Monitor your vault stats and battle history to track your progress. Use quick actions to enhance your abilities before engaging in player battles!'
             }
           </p>
         </div>
@@ -632,7 +632,7 @@ const Battle: React.FC = () => {
       <div style={{ minHeight: '400px' }}>
         {activeTab === 'battle' && (
           <div>
-            {/* Enhanced Vault Stats - Now in Visual Battle */}
+            {/* Enhanced Vault Stats - Now in Player Battle */}
             <VaultStats
               vault={vault}
               moves={moves}

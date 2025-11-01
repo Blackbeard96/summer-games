@@ -1,19 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move } from '../types/battle';
 import { getMoveDamage, getMoveName } from '../utils/moveOverrides';
+import { doc, getDoc, updateDoc, collection, addDoc, onSnapshot, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   calculateDamageRange, 
   calculateShieldBoostRange, 
   calculateHealingRange,
   rollDamage, 
   rollShieldBoost, 
-  rollHealing 
+  rollHealing
 } from '../utils/damageCalculator';
 import { getLevelFromXP } from '../utils/leveling';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import BattleArena from './BattleArena';
 import BattleAnimations from './BattleAnimations';
 
@@ -28,10 +28,12 @@ interface Opponent {
 }
 
 interface BattleEngineProps {
-  onBattleEnd: (result: 'victory' | 'defeat' | 'escape') => void;
+  onBattleEnd: (result: 'victory' | 'defeat' | 'escape', winnerId?: string, loserId?: string) => void;
   onMoveConsumption?: () => Promise<boolean>;
   onExecuteVaultSiegeAttack?: (moveId: string, targetUserId: string) => Promise<{ success: boolean; message: string; ppStolen?: number; xpGained?: number; shieldDamage?: number; overshieldAbsorbed?: boolean } | undefined>;
   opponent?: Opponent;
+  isPvP?: boolean;
+  battleRoom?: any; // BattleRoom type from PvPBattle
 }
 
 interface BattleState {
@@ -46,7 +48,14 @@ interface BattleState {
 }
 
 
-const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumption, onExecuteVaultSiegeAttack, opponent: propOpponent }) => {
+const BattleEngine: React.FC<BattleEngineProps> = ({ 
+  onBattleEnd, 
+  onMoveConsumption, 
+  onExecuteVaultSiegeAttack, 
+  opponent: propOpponent,
+  isPvP = false,
+  battleRoom 
+}) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
@@ -107,6 +116,115 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
       });
     }
   }, [propOpponent?.id, propOpponent?.name]);
+
+  // Apply opponent move from Firestore
+  const applyOpponentMove = useCallback(async (moveData: any) => {
+    if (!vault || battleState.phase !== 'opponent_turn') return;
+
+    console.log('PvP: Applying opponent move:', moveData);
+    
+    const newLog = [...battleState.battleLog];
+    
+    // Add opponent's move to log
+    if (moveData.battleLog) {
+      newLog.push(moveData.battleLog);
+    }
+    
+    // Update opponent stats from the move data (opponent's stats after their move)
+    // moveData.playerStats contains the opponent's stats (they're the player who made the move)
+    if (moveData.playerStats) {
+      setOpponent(prev => ({
+        ...prev,
+        shieldStrength: moveData.playerStats.shieldStrength || prev.shieldStrength,
+        currentPP: moveData.playerStats.currentPP || prev.currentPP
+      }));
+    }
+    
+    // Apply damage/effects to player (current user)
+    // moveData.opponentStats contains the target's stats (current user's stats after being attacked)
+    if (moveData.opponentStats) {
+      const newShieldStrength = moveData.opponentStats.shieldStrength || vault.shieldStrength;
+      const newCurrentPP = moveData.opponentStats.currentPP || vault.currentPP;
+      
+      // Update vault
+      try {
+        await updateVault({
+          shieldStrength: newShieldStrength,
+          currentPP: newCurrentPP
+        });
+        
+        console.log('PvP: Player vault updated after opponent move');
+        
+        // Check for defeat
+        if (newCurrentPP <= 0) {
+          newLog.push('💀 Your vault has been completely drained!');
+          newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
+          setBattleState(prev => ({
+            ...prev,
+            phase: 'defeat',
+            battleLog: newLog,
+            isPlayerTurn: false
+          }));
+          
+          if (isPvP && currentUser) {
+            onBattleEnd('defeat', opponent.id, currentUser.uid);
+          }
+          return;
+        }
+      } catch (error) {
+        console.error('Error updating vault after opponent move:', error);
+      }
+    }
+    
+    // Update battle state to player's turn
+    newLog.push(`🔄 Turn ${battleState.turnCount + 1} begins!`);
+    setBattleState(prev => ({
+      ...prev,
+      phase: 'selection',
+      battleLog: newLog,
+      isPlayerTurn: true,
+      turnCount: prev.turnCount + 1
+    }));
+  }, [vault, battleState.phase, battleState.battleLog, battleState.turnCount, opponent, isPvP, currentUser, updateVault, onBattleEnd]);
+
+  // Listen for opponent moves in PvP battles
+  useEffect(() => {
+    if (!isPvP || !battleRoom || !currentUser || !vault || !opponent?.id) return;
+
+    const movesCollectionRef = collection(db, 'battleRooms', battleRoom.id, 'moves');
+    const q = query(
+      movesCollectionRef,
+      where('userId', '==', opponent.id),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const moveData = change.doc.data();
+          
+          // Only process moves that haven't been processed yet
+          if (!moveData.processedBy?.includes(currentUser.uid)) {
+            console.log('PvP: Received opponent move:', moveData);
+            
+            // Apply the opponent's move
+            applyOpponentMove(moveData);
+            
+            // Mark this move as processed by current user
+            updateDoc(doc(db, 'battleRooms', battleRoom.id, 'moves', change.doc.id), {
+              processedBy: [...(moveData.processedBy || []), currentUser.uid]
+            }).catch(error => {
+              console.error('Error marking move as processed:', error);
+            });
+          }
+        }
+      });
+    }, (error) => {
+      console.error('Error listening to opponent moves:', error);
+    });
+
+    return () => unsubscribe();
+  }, [isPvP, battleRoom?.id, opponent?.id, currentUser?.uid, vault, applyOpponentMove]);
 
   const availableMoves = moves.filter(move => move.unlocked && move.currentCooldown === 0);
   const availableTargets = [
@@ -349,11 +467,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
       }
     }
     
-    // Check for victory
+    // Check for victory (bankruptcy in PvP, or defeat)
     if (newOpponent.currentPP <= 0) {
       newLog.push(`💀 ${opponent.name} has been defeated!`);
-      newLog.push(`🎉 Victory! You have successfully raided ${opponent.name}'s vault!`);
-      newLog.push(`🏆 ${opponent.name} defeated! Great job!`);
+      if (isPvP) {
+        newLog.push(`💸 ${opponent.name}'s vault has been bankrupted!`);
+        newLog.push(`🏆 Victory! You won the PvP battle!`);
+      } else {
+        newLog.push(`🎉 Victory! You have successfully raided ${opponent.name}'s vault!`);
+      }
       setBattleState(prev => ({
         ...prev,
         phase: 'victory',
@@ -363,6 +485,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
         isAnimating: false
       }));
       setOpponent(newOpponent);
+      
+      // For PvP, pass winner/loser IDs
+      if (isPvP && currentUser) {
+        onBattleEnd('victory', currentUser.uid, opponent.id);
+      } else {
+        onBattleEnd('victory');
+      }
       return;
     }
     
@@ -378,10 +507,55 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
       isAnimating: false
     }));
     
-    // Start opponent turn after a delay
-    setTimeout(() => {
-      executeOpponentTurn(newLog, newOpponent);
-    }, 2000);
+    // For PvP battles, store the move in Firestore and wait for opponent
+    // For CPU battles, execute opponent turn automatically
+    if (isPvP && battleRoom && currentUser) {
+      // Store player move in Firestore
+      try {
+        const moveData = {
+          userId: currentUser.uid,
+          moveId: move.id,
+          moveName: move.name,
+          damage: damage - shieldDamage, // Actual PP damage (after shield absorption)
+          shieldDamage: shieldDamage,
+          ppStolen: ppStolen,
+          playerShieldBoost: playerShieldBoost,
+          playerHealing: playerHealing,
+          targetId: opponent.id,
+          turnNumber: battleState.turnCount,
+          timestamp: serverTimestamp(),
+          battleLog: newLog.slice(-1)[0], // Last log message
+          opponentStats: {
+            shieldStrength: newOpponent.shieldStrength,
+            currentPP: newOpponent.currentPP
+          },
+          playerStats: {
+            shieldStrength: newVault.shieldStrength,
+            currentPP: newVault.currentPP
+          },
+          processedBy: []
+        };
+
+        await addDoc(collection(db, 'battleRooms', battleRoom.id, 'moves'), moveData);
+        console.log('PvP: Player move stored in Firestore');
+        
+        // PvP: Wait for opponent's move
+        newLog.push(`⏳ Waiting for ${opponent.name} to make their move...`);
+        setBattleState(prev => ({
+          ...prev,
+          battleLog: newLog,
+          phase: 'opponent_turn',
+          isPlayerTurn: false
+        }));
+      } catch (error) {
+        console.error('Error storing player move:', error);
+      }
+    } else {
+      // CPU: Start opponent turn after a delay
+      setTimeout(() => {
+        executeOpponentTurn(newLog, newOpponent);
+      }, 2000);
+    }
   };
 
   const executeOpponentTurn = async (currentLog: string[], currentOpponent: any) => {
@@ -492,13 +666,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
     // Check for defeat
     if (newCurrentPP <= 0) {
       newLog.push('💀 Your vault has been completely drained!');
-      newLog.push(`💀 Defeat! ${opponent.name} has successfully raided your vault!`);
+      if (isPvP) {
+        newLog.push(`💸 Your vault has been bankrupted!`);
+        newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
+      } else {
+        newLog.push(`💀 Defeat! ${opponent.name} has successfully raided your vault!`);
+      }
       setBattleState(prev => ({
         ...prev,
         phase: 'defeat',
         battleLog: newLog,
         isPlayerTurn: false
       }));
+      
+      // For PvP, pass winner/loser IDs
+      if (isPvP && currentUser) {
+        onBattleEnd('defeat', opponent.id, currentUser.uid);
+      } else {
+        onBattleEnd('defeat');
+      }
       return;
     }
     
@@ -538,14 +724,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({ onBattleEnd, onMoveConsumpt
     }
   }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove]);
 
-  // Handle battle end
+  // Handle battle end (non-PvP battles only - PvP battles call onBattleEnd immediately)
   useEffect(() => {
-    if (battleState.phase === 'victory') {
-      setTimeout(() => onBattleEnd('victory'), 3000);
-    } else if (battleState.phase === 'defeat') {
-      setTimeout(() => onBattleEnd('defeat'), 3000);
+    if (!isPvP) {
+      if (battleState.phase === 'victory') {
+        setTimeout(() => onBattleEnd('victory'), 3000);
+      } else if (battleState.phase === 'defeat') {
+        setTimeout(() => onBattleEnd('defeat'), 3000);
+      }
     }
-  }, [battleState.phase, onBattleEnd]);
+  }, [battleState.phase, onBattleEnd, isPvP]);
 
   // Handle escape
   const handleEscape = () => {

@@ -28,18 +28,88 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 }) => {
   console.log('VaultStats: Received remainingOfflineMoves:', remainingOfflineMoves, 'maxOfflineMoves:', maxOfflineMoves);
   const { currentUser } = useAuth();
-  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData } = useBattle();
+  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData, offlineMoves } = useBattle();
   const [userXP, setUserXP] = useState<number>(0);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [restoreCost, setRestoreCost] = useState<number>(100);
 
-  // Function to restore a move for 20 PP
+  // Helper to get "day" start time (8am EST) for a given date
+  const getDayStartForDate = (date: Date): Date => {
+    // Convert to EST
+    const estOffset = -5; // EST is UTC-5
+    const estDate = new Date(date.getTime() + (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    
+    // Create 8am EST for that date
+    const dayStart = new Date(estDate);
+    dayStart.setHours(8, 0, 0, 0);
+    
+    // If time is before 8am EST, use previous day's 8am EST
+    if (estDate < dayStart) {
+      dayStart.setDate(dayStart.getDate() - 1);
+    }
+    
+    // Convert back to local time
+    return new Date(dayStart.getTime() - (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+  };
+
+  // Helper to get current "day" start time (8am EST)
+  const getCurrentDayStart = (): Date => {
+    return getDayStartForDate(new Date());
+  };
+
+  // Calculate restore cost based on restores purchased today
+  const calculateRestoreCost = (): number => {
+    if (!currentUser || !offlineMoves) return 100;
+    
+    // Get current day start (8am EST)
+    const today = getCurrentDayStart();
+    
+    // Count move restores today (using 8am EST day boundary)
+    const todayRestores = offlineMoves.filter(move => {
+      if (!move.createdAt || move.type !== 'move_restore' || move.userId !== currentUser.uid) {
+        return false;
+      }
+      
+      try {
+        let moveDate: Date;
+        if (move.createdAt && typeof move.createdAt === 'object' && 'toDate' in move.createdAt) {
+          moveDate = (move.createdAt as any).toDate();
+        } else if (move.createdAt instanceof Date) {
+          moveDate = move.createdAt;
+        } else if (typeof move.createdAt === 'string') {
+          moveDate = new Date(move.createdAt);
+        } else {
+          return false;
+        }
+        
+        const moveDayStart = getDayStartForDate(moveDate);
+        return moveDayStart.getTime() === today.getTime();
+      } catch (error) {
+        return false;
+      }
+    });
+    
+    // Cost starts at 100 PP and increases by 100 PP for each restore today
+    const cost = 100 + (todayRestores.length * 100);
+    return cost;
+  };
+
+  // Update restore cost when offline moves change
+  useEffect(() => {
+    const cost = calculateRestoreCost();
+    setRestoreCost(cost);
+  }, [offlineMoves, currentUser]);
+
+  // Function to restore a move (dynamic cost based on purchases today)
   const handleRestoreMove = async () => {
     console.log('VaultStats: handleRestoreMove function called!');
     
     if (!currentUser || !vault) return;
     
-    if (vault.currentPP < 20) {
-      alert('Not enough PP! You need 20 PP to restore a move.');
+    const cost = calculateRestoreCost();
+    
+    if (vault.currentPP < cost) {
+      alert(`Not enough PP! You need ${cost} PP to restore a move.`);
       return;
     }
 
@@ -47,8 +117,8 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       setRestoreLoading(true);
       
       // Update vault PP
-      const newPP = vault.currentPP - 20;
-      console.log('VaultStats: PP deduction - current:', vault.currentPP, 'new:', newPP);
+      const newPP = vault.currentPP - cost;
+      console.log('VaultStats: PP deduction - current:', vault.currentPP, 'new:', newPP, 'cost:', cost);
       
       // Create a move_restore record to track the restoration
       const restoreMoveData = {
@@ -75,7 +145,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       // Force refresh of vault data
       await refreshVaultData();
       
-      alert('Move restored! Spent 20 PP.');
+      alert(`Move restored! Spent ${cost} PP.`);
     } catch (error) {
       console.error('Error restoring move:', error);
       alert('Failed to restore move. Please try again.');
@@ -90,6 +160,62 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   const [showPPNotification, setShowPPNotification] = useState(false);
   const [showOfflineMovesNotification, setShowOfflineMovesNotification] = useState(false);
   const [previousOfflineMoves, setPreviousOfflineMoves] = useState<number>(remainingOfflineMoves);
+  const [resetTimer, setResetTimer] = useState<string>('');
+
+  // Calculate next reset time (8am EST each day)
+  // Note: 8am EST = 13:00 UTC (EST is UTC-5)
+  const getNextResetTime = (): Date => {
+    const now = new Date();
+    
+    // Get current UTC time
+    const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const utcDate = new Date(utcNow);
+    
+    // Get today's date components in UTC
+    const utcYear = utcDate.getUTCFullYear();
+    const utcMonth = utcDate.getUTCMonth();
+    const utcDay = utcDate.getUTCDate();
+    
+    // Create today's 8am EST (13:00 UTC) in UTC milliseconds
+    const today8amEST_UTC = Date.UTC(utcYear, utcMonth, utcDay, 13, 0, 0, 0);
+    
+    // If current time is already past today's 8am EST, use tomorrow's 8am EST
+    let target8amEST_UTC = today8amEST_UTC;
+    if (utcNow >= today8amEST_UTC) {
+      // Add 24 hours to get tomorrow's 8am EST
+      target8amEST_UTC = today8amEST_UTC + (24 * 60 * 60 * 1000);
+    }
+    
+    // Convert UTC time to local time for the Date object
+    const localResetTime = new Date(target8amEST_UTC - (now.getTimezoneOffset() * 60000));
+    
+    return localResetTime;
+  };
+
+  // Update reset timer every second
+  useEffect(() => {
+    const updateTimer = () => {
+      const nextReset = getNextResetTime();
+      const now = new Date();
+      const diff = nextReset.getTime() - now.getTime();
+      
+      if (diff <= 0) {
+        setResetTimer('Resetting now...');
+        return;
+      }
+      
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      
+      setResetTimer(`${hours}h ${minutes}m ${seconds}s`);
+    };
+    
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
   // Check for offline moves changes and show notification
   useEffect(() => {
@@ -701,10 +827,22 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             alignItems: 'center',
             fontSize: '0.875rem',
             color: '#6b7280',
-            marginBottom: '1rem'
+            marginBottom: '0.5rem'
           }}>
             <span>{getStatusIcon(offlineMovesPercentage)} Daily Remaining</span>
-            <span>Resets Daily</span>
+            <span>Resets at 8:00 AM EST</span>
+          </div>
+          <div style={{
+            fontSize: '0.875rem',
+            color: '#f59e0b',
+            fontWeight: '600',
+            textAlign: 'center',
+            padding: '0.5rem',
+            background: '#fef3c7',
+            borderRadius: '0.375rem',
+            marginBottom: '1rem'
+          }}>
+            ⏰ Next Reset: {resetTimer || 'Calculating...'}
           </div>
           
           {/* Restore Move Button */}
@@ -724,7 +862,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               transition: 'all 0.2s ease'
             }}
           >
-            {restoreLoading ? 'Restoring...' : '⚡ Restore Move (20 PP)'}
+            {restoreLoading ? 'Restoring...' : `⚡ Restore Move (${restoreCost} PP)`}
           </button>
         </div>
 

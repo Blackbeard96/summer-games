@@ -33,6 +33,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const [players, setPlayers] = useState<Player[]>([]);
   const [filteredPlayers, setFilteredPlayers] = useState<Player[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [filterType, setFilterType] = useState<string>('none'); // 'none', 'most-vulnerable', 'lowest-shield', 'highest-pp'
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
   const [selectedActionCards, setSelectedActionCards] = useState<string[]>([]);
@@ -63,16 +64,91 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     console.log('VaultSiegeModal: Updated remaining moves:', moves);
   }, [offlineMoves, attackHistory, getRemainingOfflineMoves]);
 
-  // Function to restore a move for 20 PP
+  // Debug attackResults changes
+  useEffect(() => {
+    console.log('🔄 attackResults state changed:', attackResults);
+    if (attackResults) {
+      console.log('✅ Attack results popup should be visible:', {
+        success: attackResults.success,
+        message: attackResults.message,
+        hasPopup: !!attackResults,
+        timestamp: new Date().toISOString()
+      });
+      // Log when popup should render
+      setTimeout(() => {
+        const popupElement = document.querySelector('[data-attack-results-popup]');
+        console.log('🔍 Checking if popup DOM element exists:', !!popupElement);
+        if (popupElement) {
+          console.log('✅ Popup DOM element found!', popupElement);
+        } else {
+          console.log('❌ Popup DOM element NOT found in document!');
+        }
+      }, 100);
+    } else {
+      console.log('❌ Attack results cleared');
+    }
+  }, [attackResults]);
+
+  // Helper to get "day" start time (8am EST) for a given date
+  const getDayStartForDate = (date: Date): Date => {
+    const estOffset = -5; // EST is UTC-5
+    const estDate = new Date(date.getTime() + (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    const dayStart = new Date(estDate);
+    dayStart.setHours(8, 0, 0, 0);
+    if (estDate < dayStart) {
+      dayStart.setDate(dayStart.getDate() - 1);
+    }
+    return new Date(dayStart.getTime() - (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+  };
+
+  const getCurrentDayStart = (): Date => {
+    return getDayStartForDate(new Date());
+  };
+
+  // Calculate restore cost based on restores purchased today
+  const calculateRestoreCost = (): number => {
+    if (!currentUser || !offlineMoves) return 100;
+    
+    const today = getCurrentDayStart();
+    const todayRestores = offlineMoves.filter(move => {
+      if (!move.createdAt || move.type !== 'move_restore' || move.userId !== currentUser.uid) {
+        return false;
+      }
+      
+      try {
+        let moveDate: Date;
+        if (move.createdAt && typeof move.createdAt === 'object' && 'toDate' in move.createdAt) {
+          moveDate = (move.createdAt as any).toDate();
+        } else if (move.createdAt instanceof Date) {
+          moveDate = move.createdAt;
+        } else if (typeof move.createdAt === 'string') {
+          moveDate = new Date(move.createdAt);
+        } else {
+          return false;
+        }
+        
+        const moveDayStart = getDayStartForDate(moveDate);
+        return moveDayStart.getTime() === today.getTime();
+      } catch (error) {
+        return false;
+      }
+    });
+    
+    return 100 + (todayRestores.length * 100);
+  };
+
+  // Function to restore a move (dynamic cost based on purchases today)
   const handleRestoreMove = async () => {
     console.log('VaultSiegeModal: handleRestoreMove function called!');
     
     if (!currentUser || !vault) return;
     
-    if (vault.currentPP < 20) {
+    const cost = calculateRestoreCost();
+    
+    if (vault.currentPP < cost) {
       setAttackResults({
         success: false,
-        message: 'Not enough PP! You need 20 PP to restore a move.',
+        message: `Not enough PP! You need ${cost} PP to restore a move.`,
       });
       return;
     }
@@ -81,8 +157,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       setLoading(true);
       
       // Update vault PP
-      const newPP = vault.currentPP - 20;
-      console.log('VaultSiegeModal: PP deduction - current:', vault.currentPP, 'new:', newPP);
+      const newPP = vault.currentPP - cost;
+      console.log('VaultSiegeModal: PP deduction - current:', vault.currentPP, 'new:', newPP, 'cost:', cost);
       
       // Create a move_restore record to track the restoration
       const restoreMoveData = {
@@ -118,8 +194,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       
       setAttackResults({
         success: true,
-        message: `Move restored! Spent 20 PP. You now have ${currentMovesRemaining} moves remaining.`,
-        ppSpent: 20,
+        message: `Move restored! Spent ${cost} PP. You now have ${currentMovesRemaining} moves remaining.`,
+        ppSpent: cost,
         movesRestored: 1,
       });
     } catch (error) {
@@ -133,30 +209,69 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     }
   };
 
-  // Reset selections when modal opens
+  // Reset selections when modal opens (but preserve attackResults if attack just completed)
+  const prevIsOpenRef = useRef(isOpen);
   useEffect(() => {
-    if (isOpen) {
+    // Only reset if modal is transitioning from closed to open
+    if (isOpen && !prevIsOpenRef.current) {
       setSelectedMoves([]);
       setSelectedActionCards([]);
       setSelectedTarget('');
       setSearchQuery('');
+      setFilterType('none');
+      // Only clear attackResults when modal FIRST opens (not on every render)
       setAttackResults(null);
+      console.log('VaultSiegeModal: Modal opened, resetting state');
     }
+    prevIsOpenRef.current = isOpen;
   }, [isOpen]);
 
-  // Filter players based on search query
+  // Filter and sort players based on search query and filter type
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredPlayers(players);
-    } else {
+    let filtered = [...players];
+    
+    // Apply search query filter
+    if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
-      const filtered = players.filter(player => 
+      filtered = filtered.filter(player => 
         player.displayName.toLowerCase().includes(query) ||
         player.uid.toLowerCase().includes(query) // This will match email if uid is email
       );
-      setFilteredPlayers(filtered);
     }
-  }, [players, searchQuery]);
+    
+    // Apply sorting/filtering based on filter type
+    switch (filterType) {
+      case 'most-vulnerable':
+        // Most vulnerable = lowest shield percentage + lowest PP
+        filtered.sort((a, b) => {
+          const aShieldPercent = ((a.shieldStrength || 0) / (a.maxShieldStrength || 50)) * 100;
+          const bShieldPercent = ((b.shieldStrength || 0) / (b.maxShieldStrength || 50)) * 100;
+          const aVulnerability = aShieldPercent + (a.powerPoints || 0) / 1000; // Normalize PP
+          const bVulnerability = bShieldPercent + (b.powerPoints || 0) / 1000;
+          return aVulnerability - bVulnerability; // Lower = more vulnerable
+        });
+        break;
+      case 'lowest-shield':
+        // Sort by lowest shield percentage first
+        filtered.sort((a, b) => {
+          const aShieldPercent = ((a.shieldStrength || 0) / (a.maxShieldStrength || 50)) * 100;
+          const bShieldPercent = ((b.shieldStrength || 0) / (b.maxShieldStrength || 50)) * 100;
+          return aShieldPercent - bShieldPercent;
+        });
+        break;
+      case 'highest-pp':
+        // Sort by highest PP first
+        filtered.sort((a, b) => {
+          return (b.powerPoints || 0) - (a.powerPoints || 0);
+        });
+        break;
+      default:
+        // No additional sorting
+        break;
+    }
+    
+    setFilteredPlayers(filtered);
+  }, [players, searchQuery, filterType]);
 
   // Load available players (excluding current user)
   useEffect(() => {
@@ -248,7 +363,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         const totalSelected = prev.length + selectedActionCards.length;
         const remainingOfflineMoves = getRemainingOfflineMoves();
         if (totalSelected >= remainingOfflineMoves) {
-          alert(`You only have ${remainingOfflineMoves} offline moves remaining today.`);
+          // Don't allow selecting more moves than available
           return prev;
         }
         return [...prev, moveId];
@@ -266,7 +381,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         const totalSelected = selectedMoves.length + prev.length;
         const remainingOfflineMoves = getRemainingOfflineMoves();
         if (totalSelected >= remainingOfflineMoves) {
-          alert(`You only have ${remainingOfflineMoves} offline moves remaining today.`);
+          // Don't allow selecting more action cards than available
           return prev;
         }
         return [...prev, cardId];
@@ -286,13 +401,13 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       });
       
       if (!selectedTarget || (!selectedMoves.length && !selectedActionCards.length)) {
-        alert('Please select a target and at least one move or action card.');
+        console.log('Please select a target and at least one move or action card.');
         return;
       }
 
       // Prevent attacking yourself
       if (selectedTarget === currentUser?.uid) {
-        alert('You cannot attack yourself! Please select a different target.');
+        console.log('You cannot attack yourself! Please select a different target.');
         return;
       }
 
@@ -301,7 +416,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       const remainingOfflineMoves = getRemainingOfflineMoves();
       
       if (totalMovesToUse > remainingOfflineMoves) {
-        alert(`Not enough offline moves! You have ${remainingOfflineMoves} moves remaining today, but trying to use ${totalMovesToUse} moves.`);
+        console.log(`Not enough offline moves! You have ${remainingOfflineMoves} moves remaining today, but trying to use ${totalMovesToUse} moves.`);
         return;
       }
 
@@ -321,6 +436,15 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         console.log('🔥 About to call executeVaultSiegeAttack with:', { moveId, selectedTarget });
         const result = await executeVaultSiegeAttack(moveId, selectedTarget);
         console.log('🔥 executeVaultSiegeAttack returned:', result);
+        console.log('🔥 Processing move result:', {
+          result,
+          hasSuccess: !!result?.success,
+          ppStolen: result?.ppStolen,
+          xpGained: result?.xpGained,
+          shieldDamage: result?.shieldDamage,
+          message: result?.message
+        });
+        
         if (result?.success) {
           totalPPStolen += result.ppStolen || 0;
           totalXP += result.xpGained || 0;
@@ -334,6 +458,20 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             const moveNameMatch = result.message.match(/Used ([^-]+) -/);
             if (moveNameMatch) {
               usedMoves.push(moveNameMatch[1].trim());
+            }
+          }
+        } else {
+          console.warn('⚠️ Move execution returned non-success:', result);
+          // Still record the attempt even if it failed, so user sees what happened
+          if (result?.message) {
+            allMessages.push(result.message || 'Move execution completed but no damage dealt');
+          } else {
+            // Try to get move name from moves array if message extraction fails
+            const move = moves.find(m => m.id === moveId);
+            if (move) {
+              const moveName = getMoveNameSync(move.name) || move.name;
+              allMessages.push(`Used ${moveName} - No effect`);
+              usedMoves.push(moveName);
             }
           }
         }
@@ -360,15 +498,35 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         }
       }
 
-      // Show success message with actual PP and XP gains
+      // Always show results, even if no PP was stolen (could be shield damage only)
       const targetName = filteredPlayers.find(p => p.uid === selectedTarget)?.displayName || 
                         players.find(p => p.uid === selectedTarget)?.displayName || 'Unknown';
-      const successMessage = totalPPStolen > 0 
-        ? `Attack successful! Stole ${totalPPStolen} PP and earned ${totalXP} XP from ${targetName}!`
-        : `Attack executed against ${targetName}! ${totalShieldDamage > 0 ? `Dealt ${totalShieldDamage} shield damage.` : ''}`;
+      
+      console.log('📊 Attack summary:', {
+        targetName,
+        totalPPStolen,
+        totalXP,
+        totalShieldDamage,
+        allMessages: allMessages.length,
+        usedMoves: usedMoves.length,
+        movesExecuted: selectedMoves.length
+      });
+      
+      // Determine if attack was successful (any damage dealt or PP stolen or XP earned)
+      const attackSuccessful = totalPPStolen > 0 || totalShieldDamage > 0 || totalXP > 0 || allMessages.length > 0;
+      
+      const successMessage = attackSuccessful
+        ? (totalPPStolen > 0 
+          ? `Attack successful! Stole ${totalPPStolen} PP and earned ${totalXP} XP from ${targetName}!`
+          : totalShieldDamage > 0
+          ? `Attack executed against ${targetName}! Dealt ${totalShieldDamage} shield damage.${totalXP > 0 ? ` Earned ${totalXP} XP.` : ''}`
+          : totalXP > 0
+          ? `Attack completed against ${targetName}! Earned ${totalXP} XP.`
+          : `Attack executed against ${targetName}!`)
+        : `Attack completed against ${targetName}.`;
 
-      setAttackResults({
-        success: true,
+      const results = {
+        success: attackSuccessful || selectedMoves.length > 0 || selectedActionCards.length > 0, // Always true if moves were used
         message: successMessage,
         movesUsed: selectedMoves.length,
         cardsUsed: selectedActionCards.length,
@@ -377,7 +535,31 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         shieldDamage: totalShieldDamage,
         details: allMessages.join(' • '),
         usedMoves: usedMoves
-      });
+      };
+      
+      console.log('✅ Setting attack results:', results);
+      console.log('✅ About to call setAttackResults with:', JSON.stringify(results, null, 2));
+      
+      // Set attackResults immediately - this will trigger the popup
+      console.log('✅ Setting attackResults NOW:', results);
+      setAttackResults(results);
+      
+      // Log after setting to verify
+      console.log('✅ setAttackResults called. Current attackResults state should be:', results);
+      
+      // Ensure it persists even after async operations
+      setTimeout(() => {
+        console.log('✅ Verifying attackResults persistence after delay...');
+        setAttackResults((prevResults: any) => {
+          if (prevResults) {
+            console.log('✅ attackResults persisted:', prevResults);
+            return prevResults; // Keep existing results
+          } else {
+            console.log('⚠️ attackResults was cleared! Restoring...');
+            return results; // Restore if somehow cleared
+          }
+        });
+      }, 100);
 
       // Show notification for actual gains
       console.log('🎉 Vault Siege Results:', {
@@ -387,31 +569,15 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         targetName: targetName
       });
       
-      if (overshieldBlocked) {
-        // Show overshield blocking message
-        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
-        alert(`✨ Attack blocked by overshield!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen}\n⚡ XP Earned: ${totalXP}\n🎯 Target: ${targetName}${movesUsedText}`);
-      } else if (totalPPStolen > 0 || totalXP > 0) {
-        // Show detailed results with move names
-        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
-        const resultMessage = `🎉 Attack Results:\n\n💰 PP Stolen: ${totalPPStolen}\n⚡ XP Earned: ${totalXP}\n🛡️ Shield Damage: ${totalShieldDamage}\n🎯 Target: ${targetName}${movesUsedText}`;
-        alert(resultMessage);
-      } else {
-        console.log('⚠️ Vault Siege completed but no gains - this might be because target has no PP to steal or attack was blocked');
-        const movesUsedText = usedMoves.length > 0 ? `\n⚔️ Move Used: ${usedMoves.join(', ')}` : '';
-        
-        // Determine the reason for no gains
-        let reasonText = '';
-        if (overshieldBlocked) {
-          reasonText = '(blocked by overshield)';
-        } else if (totalPPStolen === 0) {
-          reasonText = '(target had no PP)';
-        } else {
-          reasonText = '(no damage dealt)';
-        }
-        
-        alert(`⚠️ Attack completed against ${targetName}!\n\n🛡️ Shield Damage: ${totalShieldDamage}\n💰 PP Stolen: ${totalPPStolen} ${reasonText}\n⚡ XP Earned: ${totalXP}${movesUsedText}`);
-      }
+      // Results are already displayed in the custom modal via attackResults
+      // No need for additional alerts
+      console.log('Attack completed:', {
+        overshieldBlocked,
+        totalPPStolen,
+        totalXP,
+        totalShieldDamage,
+        targetName
+      });
 
       // Refresh vault data to show updated PP and XP
       await refreshVaultData();
@@ -443,10 +609,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         }
       }
 
-      // Reset selections
+      // Reset selections (but preserve attackResults for display)
       setSelectedMoves([]);
       setSelectedActionCards([]);
-      setSelectedTarget('');
+      // Keep selectedTarget temporarily so the success popup can show the target name
+      // It will be cleared when starting a new attack or closing modal
       
       // Notify parent component that attack is completed
       if (onAttackComplete) {
@@ -490,7 +657,213 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     }
   }, [isOpen, selectedTarget, selectedMoves, selectedActionCards, loading, currentUser]);
   
-  if (!isOpen) return null;
+  // Separate overlay popup for attack results - render even if modal is closed
+  // This allows the popup to persist after attack even if user closes the modal
+  const attackResultsPopup = attackResults ? (
+    <div
+      data-attack-results-popup="true"
+      onClick={(e) => {
+        // Close if clicking outside the popup
+        if (e.target === e.currentTarget) {
+          console.log('🎯 Clicked outside popup, closing...');
+          setAttackResults(null);
+        }
+      }}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999999,
+        animation: 'fadeIn 0.2s ease-out'
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: attackResults.success ? 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)' : 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)',
+          border: `4px solid ${attackResults.success ? '#10b981' : '#ef4444'}`,
+          color: attackResults.success ? '#065f46' : '#991b1b',
+          padding: '2rem',
+          borderRadius: '16px',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
+          maxWidth: '600px',
+          width: '90%',
+          position: 'relative',
+          animation: 'slideInUp 0.3s ease-out',
+          transform: 'scale(1)'
+        }}
+      >
+        {/* Close Button */}
+        <button
+          onClick={() => setAttackResults(null)}
+          style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '1rem',
+            background: 'rgba(255, 255, 255, 0.8)',
+            border: 'none',
+            fontSize: '1.5rem',
+            cursor: 'pointer',
+            color: attackResults.success ? '#065f46' : '#991b1b',
+            padding: '0.25rem',
+            width: '32px',
+            height: '32px',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.2s',
+            fontWeight: 'bold'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 1)';
+            e.currentTarget.style.transform = 'scale(1.1)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.8)';
+            e.currentTarget.style.transform = 'scale(1)';
+          }}
+        >
+          ×
+        </button>
+
+        {/* Popup Content */}
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>
+            {attackResults.success ? '🎉' : '❌'}
+          </div>
+          <h2 style={{ 
+            fontSize: '1.75rem',
+            fontWeight: 'bold',
+            marginBottom: '0.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem'
+          }}>
+            {attackResults.success ? '✅ Attack Successful!' : '❌ Attack Failed'}
+          </h2>
+          <p style={{ fontSize: '1.1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
+            {attackResults.message}
+          </p>
+        </div>
+
+        {attackResults.success && (
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.5)',
+            borderRadius: '12px',
+            padding: '1.5rem',
+            marginBottom: '1.5rem'
+          }}>
+            <p style={{ marginBottom: '1rem', fontSize: '1rem' }}>
+              Used <strong>{attackResults.movesUsed}</strong> moves and <strong>{attackResults.cardsUsed}</strong> action cards.
+            </p>
+            
+            {attackResults.usedMoves && attackResults.usedMoves.length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <p style={{ color: '#7c3aed', fontWeight: 'bold', fontSize: '1rem', marginBottom: '0.5rem' }}>
+                  ⚔️ Moves Used:
+                </p>
+                <p style={{ color: '#7c3aed', fontSize: '0.95rem' }}>
+                  {attackResults.usedMoves.join(', ')}
+                </p>
+              </div>
+            )}
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+              {attackResults.ppGained > 0 && (
+                <div style={{
+                  background: 'rgba(5, 150, 105, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>💰</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#059669' }}>
+                    {attackResults.ppGained} PP
+                  </div>
+                  <div style={{ fontSize: '0.875rem', color: '#065f46' }}>Stolen</div>
+                </div>
+              )}
+              
+              {attackResults.xpGained > 0 && (
+                <div style={{
+                  background: 'rgba(251, 191, 36, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>⚡</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#fbbf24' }}>
+                    {attackResults.xpGained} XP
+                  </div>
+                  <div style={{ fontSize: '0.875rem', color: '#92400e' }}>Earned</div>
+                </div>
+              )}
+              
+              {attackResults.shieldDamage > 0 && (
+                <div style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🛡️</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#ef4444' }}>
+                    {attackResults.shieldDamage}
+                  </div>
+                  <div style={{ fontSize: '0.875rem', color: '#991b1b' }}>Shield Damage</div>
+                </div>
+              )}
+            </div>
+
+            {attackResults.details && (
+              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(0, 0, 0, 0.1)' }}>
+                <p style={{ fontSize: '0.875rem', color: '#6b7280', fontStyle: 'italic' }}>
+                  {attackResults.details}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+          <button
+            onClick={() => setAttackResults(null)}
+            style={{
+              background: attackResults.success ? '#10b981' : '#ef4444',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem 2rem',
+              borderRadius: '8px',
+              fontSize: '1rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 6px 8px rgba(0, 0, 0, 0.2)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+            }}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const modalContent = (
     <>
@@ -578,41 +951,44 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     console.log('VaultSiegeModal: Restore Move button clicked!');
                     console.log('VaultSiegeModal: Current vault PP:', vault?.currentPP);
                     console.log('VaultSiegeModal: Loading state:', loading);
-                    console.log('VaultSiegeModal: Button disabled state:', loading || !vault || vault.currentPP < 20);
-                    if (!loading && vault && vault.currentPP >= 20) {
+                  const cost = calculateRestoreCost();
+                  console.log('VaultSiegeModal: Button disabled state:', loading || !vault || vault.currentPP < cost);
+                  if (!loading && vault && vault.currentPP >= cost) {
                       handleRestoreMove();
                     } else {
                       console.log('VaultSiegeModal: Button is disabled or conditions not met');
                     }
                   }}
-                  disabled={loading || !vault || vault.currentPP < 20}
-                  style={{
-                    background: vault && vault.currentPP >= 20 ? '#10b981' : '#9ca3af',
-                    color: 'white',
-                    border: 'none',
-                    padding: '0.5rem 1rem',
-                    borderRadius: '0.5rem',
-                    cursor: vault && vault.currentPP >= 20 ? 'pointer' : 'not-allowed',
-                    fontSize: '0.875rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.25rem',
-                    fontWeight: 'bold',
-                    transition: 'all 0.2s ease'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (vault && vault.currentPP >= 20) {
-                      e.currentTarget.style.transform = 'scale(1.05)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (vault && vault.currentPP >= 20) {
-                      e.currentTarget.style.transform = 'scale(1)';
-                    }
-                  }}
-                >
-                  ⚡ Restore Move (20 PP)
-                </button>
+                disabled={loading || !vault || vault.currentPP < calculateRestoreCost()}
+                style={{
+                  background: vault && vault.currentPP >= calculateRestoreCost() ? '#10b981' : '#9ca3af',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  cursor: vault && vault.currentPP >= calculateRestoreCost() ? 'pointer' : 'not-allowed',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  fontWeight: 'bold',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  const cost = calculateRestoreCost();
+                  if (vault && vault.currentPP >= cost) {
+                    e.currentTarget.style.transform = 'scale(1.05)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  const cost = calculateRestoreCost();
+                  if (vault && vault.currentPP >= cost) {
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }
+                }}
+              >
+                ⚡ Restore Move ({calculateRestoreCost()} PP)
+              </button>
 
               </div>
               
@@ -633,18 +1009,35 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           </button>
         </div>
 
+        {/* Inline recap (still visible in modal) */}
         {attackResults && (
-          <div style={{
-            background: attackResults.success ? '#d1fae5' : '#fee2e2',
-            border: `1px solid ${attackResults.success ? '#10b981' : '#ef4444'}`,
-            color: attackResults.success ? '#065f46' : '#991b1b',
-            padding: '1rem',
-            borderRadius: '8px',
-            marginBottom: '1.5rem',
-          }}>
+          <div 
+            key={`attack-result-popup-${Date.now()}`}
+            style={{
+              background: attackResults.success ? '#d1fae5' : '#fee2e2',
+              border: `3px solid ${attackResults.success ? '#10b981' : '#ef4444'}`,
+              color: attackResults.success ? '#065f46' : '#991b1b',
+              padding: '1.5rem',
+              borderRadius: '12px',
+              marginBottom: '1.5rem',
+              marginTop: '1rem',
+              boxShadow: '0 8px 16px rgba(0, 0, 0, 0.2)',
+              position: 'relative',
+              zIndex: 1000,
+              animation: 'slideIn 0.3s ease-out'
+            }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h3 style={{ marginBottom: '0.5rem' }}>{attackResults.success ? '✅ Attack Successful!' : '❌ Attack Failed'}</h3>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ 
+                  marginBottom: '0.5rem', 
+                  fontSize: '1.25rem',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  {attackResults.success ? '✅ Attack Successful!' : '❌ Attack Failed'}
+                </h3>
                 <p>{attackResults.message}</p>
                 {attackResults.success && (
                   <div>
@@ -677,25 +1070,58 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   </div>
                 )}
               </div>
+              <button
+                onClick={() => {
+                  console.log('Closing attack results popup');
+                  setAttackResults(null);
+                }}
+                style={{
+                  position: 'absolute',
+                  top: '0.75rem',
+                  right: '0.75rem',
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: attackResults.success ? '#065f46' : '#991b1b',
+                  padding: '0.25rem',
+                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '50%',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(0, 0, 0, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                ×
+              </button>
               {attackResults.success && (
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
                   <button
                     onClick={handleRestoreMove}
-                    disabled={loading || !vault || vault.currentPP < 20}
+                    disabled={loading || !vault || vault.currentPP < calculateRestoreCost()}
                     style={{
-                      background: vault && vault.currentPP >= 20 ? '#10b981' : '#9ca3af',
+                      background: vault && vault.currentPP >= calculateRestoreCost() ? '#10b981' : '#9ca3af',
                       color: 'white',
                       border: 'none',
                       padding: '0.5rem 1rem',
                       borderRadius: '4px',
-                      cursor: vault && vault.currentPP >= 20 ? 'pointer' : 'not-allowed',
+                      cursor: vault && vault.currentPP >= calculateRestoreCost() ? 'pointer' : 'not-allowed',
                       fontSize: '0.875rem',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '0.25rem',
                     }}
                   >
-                    ⚡ Restore Move (20 PP)
+                    ⚡ Restore Move ({calculateRestoreCost()} PP)
                   </button>
                   <button
                     onClick={syncVaultPP}
@@ -729,15 +1155,98 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               gap: '0.5rem'
             }}>
               <span>Players: {filteredPlayers.length}</span>
+              {filterType !== 'none' && (
+                <>
+                  <span>•</span>
+                  <span>
+                    {filterType === 'most-vulnerable' && 'Most Vulnerable'}
+                    {filterType === 'lowest-shield' && 'Lowest Shield'}
+                    {filterType === 'highest-pp' && 'Highest PP'}
+                  </span>
+                </>
+              )}
               {searchQuery && (
                 <>
                   <span>•</span>
-                  <span>Filtered by: "{searchQuery}"</span>
+                  <span>Search: "{searchQuery}"</span>
                 </>
               )}
             </div>
           </div>
           
+          {/* Filter Buttons */}
+          <div style={{ 
+            display: 'flex', 
+            gap: '0.5rem', 
+            marginBottom: '1rem',
+            flexWrap: 'wrap'
+          }}>
+            <button
+              onClick={() => setFilterType('none')}
+              style={{
+                padding: '0.5rem 1rem',
+                border: '2px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: filterType === 'none' ? '#4f46e5' : 'white',
+                color: filterType === 'none' ? 'white' : '#374151',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              All Players
+            </button>
+            <button
+              onClick={() => setFilterType('most-vulnerable')}
+              style={{
+                padding: '0.5rem 1rem',
+                border: '2px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: filterType === 'most-vulnerable' ? '#dc2626' : 'white',
+                color: filterType === 'most-vulnerable' ? 'white' : '#374151',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              🛡️ Most Vulnerable
+            </button>
+            <button
+              onClick={() => setFilterType('lowest-shield')}
+              style={{
+                padding: '0.5rem 1rem',
+                border: '2px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: filterType === 'lowest-shield' ? '#f59e0b' : 'white',
+                color: filterType === 'lowest-shield' ? 'white' : '#374151',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              🛡️ Lowest Shield
+            </button>
+            <button
+              onClick={() => setFilterType('highest-pp')}
+              style={{
+                padding: '0.5rem 1rem',
+                border: '2px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: filterType === 'highest-pp' ? '#10b981' : 'white',
+                color: filterType === 'highest-pp' ? 'white' : '#374151',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              ⚡ Highest PP
+            </button>
+          </div>
+
           {/* Search Input */}
           <div style={{ marginBottom: '1rem', position: 'relative' }}>
             <input
@@ -1596,7 +2105,51 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     </>
   );
 
-  return createPortal(modalContent, document.body);
+  // Always render popup portal if attackResults exists, even if modal is closed
+  // This ensures the popup shows even if the modal closes after attack
+  const popupPortal = attackResults && attackResultsPopup ? createPortal(
+    <>
+      <style>
+        {`
+          @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          @keyframes slideInUp {
+            from {
+              opacity: 0;
+              transform: translateY(30px) scale(0.95);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+            }
+          }
+        `}
+      </style>
+      {attackResultsPopup}
+    </>,
+    document.body
+  ) : null;
+
+  // If modal is closed and no attack results, return null
+  // Otherwise, render modal and/or popup
+  if (!isOpen && !attackResults) {
+    return null;
+  }
+
+  console.log('🎯 Rendering VaultSiegeModal:', {
+    isOpen,
+    hasAttackResults: !!attackResults,
+    hasPopup: !!popupPortal
+  });
+
+  return (
+    <>
+      {isOpen && createPortal(modalContent, document.body)}
+      {popupPortal}
+    </>
+  );
 };
 
 export default VaultSiegeModal; 

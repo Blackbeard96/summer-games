@@ -291,11 +291,27 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
     
-    // Battle Rooms collection - allow authenticated users to create, participants to read/write
+    // Battle Rooms collection - allow all authenticated users to read waiting rooms to join them
     match /battleRooms/{roomId} {
-      allow read: if request.auth != null && (resource.data.hostId == request.auth.uid || request.auth.uid in resource.data.participants);
+      // Allow reading if user is host, participant, or room is waiting/in-progress (so they can join or rejoin)
+      // Simplified rule to work better with collection queries
+      allow read: if request.auth != null && (
+        resource.data.hostId == request.auth.uid || 
+        request.auth.uid in resource.data.participants ||
+        resource.data.status == 'waiting' ||
+        (resource.data.status == 'in-progress' && request.auth.uid in resource.data.participants)
+      );
       allow create: if request.auth != null;
-      allow update: if request.auth != null && (resource.data.hostId == request.auth.uid || request.auth.uid in resource.data.participants);
+      allow update: if request.auth != null && (
+        resource.data.hostId == request.auth.uid || 
+        request.auth.uid in resource.data.participants
+      );
+      
+      // Moves subcollection - allow participants to read/write moves
+      match /moves/{moveId} {
+        allow read, write: if request.auth != null && 
+          request.auth.uid in get(/databases/$(database)/documents/battleRooms/$(roomId)).data.participants;
+      }
     }
     
     // Story progress collection - allow users to read/write their own progress
