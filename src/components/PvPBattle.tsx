@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { doc, getDoc, getDocs, updateDoc, addDoc, collection, onSnapshot, query, where, orderBy, serverTimestamp, deleteDoc, Timestamp } from 'firebase/firestore';
@@ -15,13 +16,15 @@ export interface BattleRoom {
   hostId: string;
   hostName: string;
   hostLevel: number;
-  status: 'waiting' | 'in-progress' | 'completed';
+  status: 'waiting' | 'in-progress' | 'completed' | 'left';
   createdAt: any;
   participants: string[];
   maxParticipants: number;
   hostPhotoURL?: string;
   riskLevel?: RiskLevel;
   riskPercentage?: number; // 10, 20, or 25
+  leftBy?: string; // User ID who left
+  leftAt?: any; // Timestamp when left
 }
 
 interface OpponentData {
@@ -51,7 +54,7 @@ interface PvPBattleProps {
 
 const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   const { currentUser } = useAuth();
-  const { vault, moves } = useBattle();
+  const { vault, moves, syncVaultPP } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
   const [battleRooms, setBattleRooms] = useState<RoomWithOpponent[]>([]);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
@@ -66,6 +69,8 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   const [rewardAmount, setRewardAmount] = useState(0);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [hasIntentionallyLeft, setHasIntentionallyLeft] = useState(false);
 
   // Fetch user level and restore battle if user is in one
   useEffect(() => {
@@ -88,7 +93,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
 
     // Check if user is in an active battle room and restore it
     const restoreActiveBattle = async () => {
-      if (!currentUser) return;
+      if (!currentUser || hasIntentionallyLeft) return;
 
       try {
         // Query for rooms where user is a participant and status is in-progress
@@ -105,10 +110,22 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           const activeRoom = snapshot.docs[0];
           const roomData = { id: activeRoom.id, ...activeRoom.data() } as BattleRoom;
           
-          console.log('PvP Battle: Restoring active battle on mount', roomData.id);
-          setCurrentRoom(roomData);
-          await fetchOpponentData(roomData);
-          setShowBattleEngine(true);
+          // Don't restore if opponent left (status would be 'left')
+          if (roomData.status !== 'left') {
+            console.log('PvP Battle: Restoring active battle on mount', roomData.id);
+            // Sync vault PP from student PP before restoring battle
+            try {
+              await syncVaultPP();
+              console.log('PvP Battle: Synced vault PP from student PP before restoring battle on mount');
+            } catch (error) {
+              console.error('Error syncing vault PP before restoring battle on mount:', error);
+            }
+            setCurrentRoom(roomData);
+            await fetchOpponentData(roomData);
+            setShowBattleEngine(true);
+          } else {
+            console.log('PvP Battle: Not restoring battle - opponent left');
+          }
         }
       } catch (error) {
         console.error('Error restoring active battle:', error);
@@ -117,7 +134,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
 
     restoreActiveBattle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser]);
+  }, [currentUser, hasIntentionallyLeft]);
 
   // Fetch opponent and vault data for rooms
   useEffect(() => {
@@ -327,10 +344,22 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           const inProgressRoom = roomsUserIsIn.find(room => room.status === 'in-progress');
           if (inProgressRoom) {
             // User is in an in-progress battle - restore it
-            console.log('PvP Battle: Restoring battle room from polling', inProgressRoom.id);
-            setCurrentRoom({ ...inProgressRoom, id: inProgressRoom.id } as BattleRoom);
-            await fetchOpponentData(inProgressRoom);
-            setShowBattleEngine(true);
+            // But don't restore if opponent left (status would be 'left')
+            if (inProgressRoom.status !== 'left') {
+              console.log('PvP Battle: Restoring battle room from polling', inProgressRoom.id);
+              // Sync vault PP from student PP before restoring battle
+              try {
+                await syncVaultPP();
+                console.log('PvP Battle: Synced vault PP from student PP before restoring battle');
+              } catch (error) {
+                console.error('Error syncing vault PP before restoring battle:', error);
+              }
+              setCurrentRoom({ ...inProgressRoom, id: inProgressRoom.id } as BattleRoom);
+              await fetchOpponentData(inProgressRoom);
+              setShowBattleEngine(true);
+            } else {
+              console.log('PvP Battle: Not restoring battle - opponent left');
+            }
           }
         }
 
@@ -384,6 +413,55 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
     };
   }, [currentUser]);
 
+  // Listen for room status changes to detect when opponent leaves
+  useEffect(() => {
+    if (!currentRoom || !currentUser || !showBattleEngine) return;
+    if (hasIntentionallyLeft) return; // Don't check if we intentionally left
+
+    let isMounted = true;
+    let unsubscribe: (() => void) | null = null;
+
+    const setupListener = async () => {
+      try {
+        const roomRef = doc(db, 'battleRooms', currentRoom.id);
+        
+        unsubscribe = onSnapshot(roomRef, (docSnapshot) => {
+          if (!isMounted || !docSnapshot.exists()) return;
+          
+          const updatedRoom = { id: docSnapshot.id, ...docSnapshot.data() } as BattleRoom;
+          
+          // Check if room status changed to 'left' and it wasn't us who left
+          if (updatedRoom.status === 'left' && updatedRoom.leftBy !== currentUser.uid) {
+            console.log('PvP Battle: Opponent left the battle, ending battle for current player');
+            
+            // End the battle for the current player
+            setShowBattleEngine(false);
+            setShowWaitingRoom(false);
+            setOpponent(null);
+            setCurrentRoom(null);
+            setHasIntentionallyLeft(true); // Prevent restore
+            
+            // Show a message that opponent left
+            alert(`${opponent?.name || 'Your opponent'} left the battle. The battle has ended.`);
+          }
+        }, (error) => {
+          console.error('Error listening to room status:', error);
+        });
+      } catch (error) {
+        console.error('Error setting up room status listener:', error);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      isMounted = false;
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [currentRoom, currentUser, showBattleEngine, hasIntentionallyLeft, opponent]);
+
   const createBattleRoom = async (riskLevel: RiskLevel) => {
     if (!currentUser || !vault) return;
 
@@ -413,6 +491,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
       const roomDoc = await getDoc(docRef);
       if (roomDoc.exists()) {
         const room = { id: docRef.id, ...roomDoc.data() } as BattleRoom;
+        setHasIntentionallyLeft(false); // Reset flag when creating new room
         setCurrentRoom(room);
         setShowRiskSelection(false);
         setSelectedRiskLevel(null);
@@ -443,6 +522,16 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
       
       if (room.participants.includes(currentUser.uid)) {
         // User is already in room, restore battle state
+        setHasIntentionallyLeft(false); // Reset flag when rejoining
+        // Sync vault PP from student PP before restoring battle
+        if (room.status === 'in-progress') {
+          try {
+            await syncVaultPP();
+            console.log('PvP Battle: Synced vault PP from student PP before rejoining battle');
+          } catch (error) {
+            console.error('Error syncing vault PP before rejoining battle:', error);
+          }
+        }
         setCurrentRoom(room);
         await fetchOpponentData(room);
         if (room.status === 'in-progress') {
@@ -477,11 +566,19 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         participants: updatedParticipants, 
         status: (isRoomFull ? 'in-progress' : 'waiting') as 'waiting' | 'in-progress' | 'completed'
       };
+      setHasIntentionallyLeft(false); // Reset flag when joining new room
       setCurrentRoom(updatedRoom);
       await fetchOpponentData(updatedRoom);
       
       // If room is now full (2 participants), start battle immediately
       if (isRoomFull) {
+        // Sync vault PP from student PP before starting battle
+        try {
+          await syncVaultPP();
+          console.log('PvP Battle: Synced vault PP from student PP before battle start');
+        } catch (error) {
+          console.error('Error syncing vault PP before battle:', error);
+        }
         setShowBattleEngine(true);
         setShowWaitingRoom(false);
         // Notify the room creator that opponent joined (triggers battle for them too)
@@ -549,28 +646,81 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   };
 
   const leaveBattleRoom = async () => {
-    if (!currentUser || !currentRoom) return;
+    console.log('PvP Battle: leaveBattleRoom called', { currentUser: !!currentUser, currentRoom: !!currentRoom });
+    
+    // Immediately exit without confirmation - user wants to leave
+    const roomId = currentRoom?.id;
+    
+    // Mark that user intentionally left to prevent restore
+    setHasIntentionallyLeft(true);
+    
+    // Update room status to indicate user left
+    if (roomId && currentUser) {
+      try {
+        await updateDoc(doc(db, 'battleRooms', roomId), {
+          status: 'left',
+          leftBy: currentUser.uid,
+          leftAt: serverTimestamp()
+        }).catch(error => {
+          console.error('Error updating room status:', error);
+        });
+      } catch (updateError) {
+        console.error('Error updating room status:', updateError);
+      }
+    }
+    
+    // Immediately clear all state - don't wait
+    setShowBattleEngine(false);
+    setShowWaitingRoom(false);
+    setOpponent(null);
+    setCurrentRoom(null);
+    setShowLeaveConfirm(false);
+    
+    console.log('PvP Battle: Exited battle immediately');
+  };
 
-    const confirmLeave = window.confirm(
-      'Are you sure you want to leave the battle? You can rejoin later, but your opponent may continue.'
-    );
+  const confirmLeaveBattle = async () => {
+    if (!currentUser || !currentRoom) {
+      setShowLeaveConfirm(false);
+      return;
+    }
 
-    if (!confirmLeave) return;
+    console.log('PvP Battle: confirmLeaveBattle called', currentRoom.id);
+    const roomId = currentRoom.id;
 
     try {
-      const roomRef = doc(db, 'battleRooms', currentRoom.id);
+      // Mark that user intentionally left to prevent restore
+      setHasIntentionallyLeft(true);
       
-      // Don't remove participant from room - allow rejoin
-      // Just hide the battle UI locally
-      // Room stays active so player can rejoin
+      // Update room status to indicate user left
+      try {
+        await updateDoc(doc(db, 'battleRooms', roomId), {
+          status: 'left',
+          leftBy: currentUser.uid,
+          leftAt: serverTimestamp()
+        });
+      } catch (updateError) {
+        console.error('Error updating room status:', updateError);
+        // Continue anyway - we'll still clear the UI
+      }
       
-      setCurrentRoom(null);
+      // Immediately clear all state - don't wait
       setShowBattleEngine(false);
       setShowWaitingRoom(false);
+      setOpponent(null);
+      setCurrentRoom(null);
+      setShowLeaveConfirm(false);
       
-      console.log('PvP Battle: Left room (can rejoin)', currentRoom.id);
+      console.log('PvP Battle: Left room (can rejoin)', roomId);
     } catch (error) {
       console.error('Error leaving battle room:', error);
+      // Even on error, clear the UI
+      setHasIntentionallyLeft(true);
+      setShowBattleEngine(false);
+      setShowWaitingRoom(false);
+      setOpponent(null);
+      setCurrentRoom(null);
+      setShowLeaveConfirm(false);
     }
   };
 
@@ -602,11 +752,42 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   };
 
   const handleBattleEnd = async (result: 'victory' | 'defeat' | 'escape', winnerId?: string, loserId?: string) => {
+    console.log('PvP Battle: handleBattleEnd called', { result, winnerId, loserId });
+    
+    // Immediately clear battle engine to stop listeners
     setShowBattleEngine(false);
     
     if (result === 'escape') {
+      // Clear all battle state immediately when escaping
+      console.log('PvP Battle: Handling escape - clearing all state');
+      const roomId = currentRoom?.id;
+      
+      // Mark that user intentionally left to prevent restore
+      setHasIntentionallyLeft(true);
+      
+      // Update room status to indicate user escaped
+      if (roomId && currentUser) {
+        try {
+          await updateDoc(doc(db, 'battleRooms', roomId), {
+            status: 'left',
+            leftBy: currentUser.uid,
+            leftAt: serverTimestamp()
+          }).catch(error => {
+            console.error('Error updating room status on escape:', error);
+          });
+        } catch (updateError) {
+          console.error('Error updating room status on escape:', updateError);
+        }
+      }
+      
+      // Immediately clear all state - don't wait
+      setShowBattleEngine(false);
+      setShowWaitingRoom(false);
+      setOpponent(null);
       setCurrentRoom(null);
-      alert('🏃 You escaped from battle!');
+      setShowLeaveConfirm(false);
+      
+      console.log('🏃 You escaped from battle!');
       return;
     }
 
@@ -744,7 +925,14 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
             )}
           </div>
           <button
-            onClick={leaveBattleRoom}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.nativeEvent?.stopImmediatePropagation?.();
+              console.log('PvP Battle: Leave Battle button clicked - exiting immediately');
+              leaveBattleRoom();
+            }}
             style={{
               background: 'rgba(255, 255, 255, 0.2)',
               border: '1px solid rgba(255, 255, 255, 0.3)',
@@ -752,7 +940,10 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
               padding: '0.5rem 1rem',
               borderRadius: '0.5rem',
               cursor: 'pointer',
-              fontSize: '0.875rem'
+              fontSize: '0.875rem',
+              zIndex: 10000,
+              position: 'relative',
+              pointerEvents: 'auto'
             }}
           >
             Leave Battle
@@ -1354,6 +1545,124 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         baseReward={rewardAmount}
         riskPercentage={currentRoom?.riskPercentage || 10}
       />
+
+      {/* Leave Battle Confirmation Modal */}
+      {showLeaveConfirm && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999999,
+            animation: 'fadeIn 0.2s ease-in'
+          }}
+          onClick={() => {
+            console.log('PvP Battle: Modal backdrop clicked, closing modal');
+            setShowLeaveConfirm(false);
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '1rem',
+              padding: '2rem',
+              maxWidth: '500px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
+              zIndex: 10000000,
+              animation: 'slideInUp 0.3s ease-out'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              color: '#1f2937'
+            }}>
+              🚪 Leave Battle?
+            </h3>
+            <p style={{
+              fontSize: '1rem',
+              marginBottom: '1.5rem',
+              color: '#6b7280',
+              lineHeight: '1.5'
+            }}>
+              Are you sure you want to leave the battle? You can rejoin later, but your opponent may continue.
+            </p>
+            <div style={{
+              display: 'flex',
+              gap: '1rem',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  background: '#f3f4f6',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '0.5rem',
+                  color: '#374151',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#e5e7eb';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#f3f4f6';
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmLeaveBattle}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  transition: 'all 0.2s',
+                  boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(239, 68, 68, 0.4)';
+                  e.currentTarget.style.transform = 'scale(1.02)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.3)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+              >
+                Leave Battle
+              </button>
+            </div>
+          </div>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes slideInUp {
+              from { transform: translateY(20px); opacity: 0; }
+              to { transform: translateY(0); opacity: 1; }
+            }
+          `}</style>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

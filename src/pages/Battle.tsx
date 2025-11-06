@@ -652,8 +652,11 @@ const Battle: React.FC = () => {
               <PvPBattle onBack={() => setSelectedBattleMode(null)} />
             ) : selectedBattleMode === 'offline' ? (
               <VaultSiegeModal 
-                isOpen={true} 
-                onClose={() => setSelectedBattleMode(null)} 
+                isOpen={showVaultSiegeModal} 
+                onClose={() => {
+                  setShowVaultSiegeModal(false);
+                  setSelectedBattleMode(null);
+                }} 
                 onAttackComplete={() => {
                   // Refresh data after attack
                   syncVaultPP();

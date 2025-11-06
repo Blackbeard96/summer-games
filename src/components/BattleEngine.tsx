@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move } from '../types/battle';
 import { getMoveDamage, getMoveName } from '../utils/moveOverrides';
-import { doc, getDoc, updateDoc, collection, addDoc, onSnapshot, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   calculateDamageRange, 
@@ -119,15 +119,46 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Apply opponent move from Firestore
   const applyOpponentMove = useCallback(async (moveData: any) => {
-    if (!vault || battleState.phase !== 'opponent_turn') return;
+    if (!vault) return;
+    
+    // Don't apply if we're in victory or defeat phase
+    if (battleState.phase === 'victory' || battleState.phase === 'defeat') return;
 
     console.log('PvP: Applying opponent move:', moveData);
     
     const newLog = [...battleState.battleLog];
     
-    // Add opponent's move to log
+    // Add ALL opponent's move log messages to ensure both players see the same logs
     if (moveData.battleLog) {
-      newLog.push(moveData.battleLog);
+      if (Array.isArray(moveData.battleLog)) {
+        // If battleLog is an array, add all messages in order
+        moveData.battleLog.forEach((logMessage: string) => {
+          if (logMessage && typeof logMessage === 'string') {
+            // Check if message already exists to avoid duplicates
+            if (!newLog.includes(logMessage)) {
+              newLog.push(logMessage);
+            }
+          }
+        });
+        console.log('PvP: Added opponent move log messages:', moveData.battleLog);
+      } else {
+        // If battleLog is a single string, add it
+        if (typeof moveData.battleLog === 'string' && !newLog.includes(moveData.battleLog)) {
+          newLog.push(moveData.battleLog);
+          console.log('PvP: Added opponent move log message:', moveData.battleLog);
+        }
+      }
+    } else {
+      // Fallback: create a log message from move data
+      const moveName = moveData.moveName || 'Unknown Move';
+      const damage = moveData.damage || 0;
+      const shieldDamage = moveData.shieldDamage || 0;
+      if (shieldDamage > 0) {
+        newLog.push(`⚔️ ${opponent.name} attacked you with ${moveName} for ${shieldDamage} damage to shields!`);
+      }
+      if (damage > 0) {
+        newLog.push(`💥 ${opponent.name} dealt ${damage} damage to your PP!`);
+      }
     }
     
     // Update opponent stats from the move data (opponent's stats after their move)
@@ -135,16 +166,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (moveData.playerStats) {
       setOpponent(prev => ({
         ...prev,
-        shieldStrength: moveData.playerStats.shieldStrength || prev.shieldStrength,
-        currentPP: moveData.playerStats.currentPP || prev.currentPP
+        shieldStrength: moveData.playerStats.shieldStrength ?? prev.shieldStrength,
+        currentPP: moveData.playerStats.currentPP ?? prev.currentPP
       }));
     }
     
     // Apply damage/effects to player (current user)
     // moveData.opponentStats contains the target's stats (current user's stats after being attacked)
     if (moveData.opponentStats) {
-      const newShieldStrength = moveData.opponentStats.shieldStrength || vault.shieldStrength;
-      const newCurrentPP = moveData.opponentStats.currentPP || vault.currentPP;
+      const newShieldStrength = moveData.opponentStats.shieldStrength ?? vault.shieldStrength;
+      const newCurrentPP = moveData.opponentStats.currentPP ?? vault.currentPP;
+      
+      console.log('PvP: Updating player stats after opponent move:', {
+        oldShield: vault.shieldStrength,
+        newShield: newShieldStrength,
+        oldPP: vault.currentPP,
+        newPP: newCurrentPP
+      });
       
       // Update vault
       try {
@@ -177,7 +215,27 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Update battle state to player's turn
-    newLog.push(`🔄 Turn ${battleState.turnCount + 1} begins!`);
+    // Add turn messages only if they're not already in the log (to avoid duplicates)
+    const turnMessage = `🔄 Turn ${battleState.turnCount + 1} begins!`;
+    const yourTurnMessage = `✅ It's your turn! Select a move to attack ${opponent.name}!`;
+    
+    // Add "Waiting" message if not already present (shows that opponent just made their move)
+    const waitingMessage = `⏳ Waiting for ${opponent.name} to make their move...`;
+    if (newLog.includes(waitingMessage)) {
+      // Remove waiting message since opponent just made their move
+      const waitingIndex = newLog.indexOf(waitingMessage);
+      if (waitingIndex !== -1) {
+        newLog.splice(waitingIndex, 1);
+      }
+    }
+    
+    if (!newLog.includes(turnMessage)) {
+      newLog.push(turnMessage);
+    }
+    if (!newLog.includes(yourTurnMessage)) {
+      newLog.push(yourTurnMessage);
+    }
+    
     setBattleState(prev => ({
       ...prev,
       phase: 'selection',
@@ -187,47 +245,97 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }));
   }, [vault, battleState.phase, battleState.battleLog, battleState.turnCount, opponent, isPvP, currentUser, updateVault, onBattleEnd]);
 
-  // Listen for opponent moves in PvP battles
+  // Poll for opponent moves in PvP battles (instead of onSnapshot to avoid Firestore internal errors)
   useEffect(() => {
+    // Don't set up polling if battle is ending or not properly initialized
     if (!isPvP || !battleRoom || !currentUser || !vault || !opponent?.id) return;
+    if (!battleRoom.id || battleState.phase === 'victory' || battleState.phase === 'defeat') {
+      return;
+    }
 
-    const movesCollectionRef = collection(db, 'battleRooms', battleRoom.id, 'moves');
-    const q = query(
-      movesCollectionRef,
-      where('userId', '==', opponent.id),
-      orderBy('timestamp', 'desc')
-    );
+    let isMounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const moveData = change.doc.data();
+    const pollForOpponentMoves = async () => {
+      if (!isMounted || !battleRoom || !currentUser || !opponent?.id) return;
+      if (battleState.phase === 'victory' || battleState.phase === 'defeat') {
+        return;
+      }
+
+      try {
+        const movesCollectionRef = collection(db, 'battleRooms', battleRoom.id, 'moves');
+        // Query without orderBy to avoid index requirement - we'll sort client-side
+        const q = query(
+          movesCollectionRef,
+          where('userId', '==', opponent.id)
+        );
+
+        const snapshot = await getDocs(q);
+        
+        // Sort by timestamp client-side (newest first)
+        const sortedDocs = snapshot.docs.sort((a, b) => {
+          const aTime = a.data().timestamp?.toMillis?.() || 0;
+          const bTime = b.data().timestamp?.toMillis?.() || 0;
+          return bTime - aTime; // Descending order
+        });
+        
+        sortedDocs.forEach((docSnapshot) => {
+          const moveData = docSnapshot.data();
           
           // Only process moves that haven't been processed yet
           if (!moveData.processedBy?.includes(currentUser.uid)) {
             console.log('PvP: Received opponent move:', moveData);
+            console.log('PvP: Current battle phase:', battleState.phase);
+            console.log('PvP: Move data details:', {
+              userId: moveData.userId,
+              opponentId: opponent.id,
+              moveName: moveData.moveName,
+              damage: moveData.damage,
+              shieldDamage: moveData.shieldDamage,
+              battleLog: moveData.battleLog,
+              opponentStats: moveData.opponentStats,
+              playerStats: moveData.playerStats
+            });
             
-            // Apply the opponent's move
+            // Apply the opponent's move (will check phase internally)
             applyOpponentMove(moveData);
             
             // Mark this move as processed by current user
-            updateDoc(doc(db, 'battleRooms', battleRoom.id, 'moves', change.doc.id), {
+            updateDoc(doc(db, 'battleRooms', battleRoom.id, 'moves', docSnapshot.id), {
               processedBy: [...(moveData.processedBy || []), currentUser.uid]
             }).catch(error => {
               console.error('Error marking move as processed:', error);
             });
           }
+        });
+      } catch (error: any) {
+        // Silently handle Firestore errors - they're often transient
+        if (error?.code === 'failed-precondition' || error?.code === 'unimplemented') {
+          console.warn('Firestore index may be missing for battle moves query');
+        } else if (error?.code === 'internal' || error?.message?.includes('INTERNAL ASSERTION')) {
+          // Silently ignore Firestore internal assertion errors
+          return;
+        } else {
+          console.error('Error polling for opponent moves:', error);
         }
-      });
-    }, (error) => {
-      console.error('Error listening to opponent moves:', error);
-    });
+      }
+    };
 
-    return () => unsubscribe();
-  }, [isPvP, battleRoom?.id, opponent?.id, currentUser?.uid, vault, applyOpponentMove]);
+    // Poll every 1 second for opponent moves (faster for better real-time feel)
+    pollInterval = setInterval(pollForOpponentMoves, 1000);
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [isPvP, battleRoom?.id, opponent?.id, currentUser?.uid, vault, battleState.phase, applyOpponentMove]);
 
   const availableMoves = moves.filter(move => move.unlocked && move.currentCooldown === 0);
-  const availableTargets = [
+  
+  // Create availableTargets from current opponent state - this will update when opponent changes
+  const availableTargets = useMemo(() => [
     {
       id: opponent.id,
       name: opponent.name,
@@ -237,7 +345,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       maxPP: opponent.maxPP,
       maxShieldStrength: opponent.maxShieldStrength
     }
-  ];
+  ], [opponent.id, opponent.name, opponent.currentPP, opponent.shieldStrength, opponent.maxPP, opponent.maxShieldStrength]);
 
   const executePlayerMove = useCallback(async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
@@ -291,6 +399,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
     
     // Add move execution to battle log
+    // Track the starting length to identify new messages later
+    const startingLogLength = battleState.battleLog.length;
     const newLog = [...battleState.battleLog];
     const playerName = currentUser?.displayName || 'Player';
     
@@ -512,6 +622,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (isPvP && battleRoom && currentUser) {
       // Store player move in Firestore
       try {
+        // Store all new log messages from this turn (not just the last one)
+        // Get only the messages that were added during this move execution
+        const newLogMessages = newLog.slice(startingLogLength);
+        
         const moveData = {
           userId: currentUser.uid,
           moveId: move.id,
@@ -524,7 +638,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           targetId: opponent.id,
           turnNumber: battleState.turnCount,
           timestamp: serverTimestamp(),
-          battleLog: newLog.slice(-1)[0], // Last log message
+          battleLog: newLogMessages, // Store ALL new log messages from this move
           opponentStats: {
             shieldStrength: newOpponent.shieldStrength,
             currentPP: newOpponent.currentPP
@@ -537,10 +651,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         };
 
         await addDoc(collection(db, 'battleRooms', battleRoom.id, 'moves'), moveData);
-        console.log('PvP: Player move stored in Firestore');
+        console.log('PvP: Player move stored in Firestore with log messages:', newLogMessages);
         
         // PvP: Wait for opponent's move
-        newLog.push(`⏳ Waiting for ${opponent.name} to make their move...`);
+        // Don't add "Waiting" message here - it will be added when opponent's move is received
+        // This ensures both players see the same sequence of messages
         setBattleState(prev => ({
           ...prev,
           battleLog: newLog,
@@ -737,16 +852,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Handle escape
   const handleEscape = () => {
-    // Add escape message to battle log
-    setBattleState(prev => ({
-      ...prev,
-      battleLog: [...prev.battleLog, 'You chose to run away from the battle!']
-    }));
+    console.log('BattleEngine: handleEscape called');
     
-    // End battle with escape result after a short delay
-    setTimeout(() => {
-      onBattleEnd('escape');
-    }, 1000);
+    // Immediately call onBattleEnd - don't wait
+    onBattleEnd('escape');
   };
 
   if (!vault) {

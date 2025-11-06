@@ -2144,9 +2144,14 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     hasPopup: !!popupPortal
   });
 
+  // Only render modal if isOpen is explicitly true
+  if (!isOpen) {
+    return popupPortal || null;
+  }
+
   return (
     <>
-      {isOpen && createPortal(modalContent, document.body)}
+      {createPortal(modalContent, document.body)}
       {popupPortal}
     </>
   );

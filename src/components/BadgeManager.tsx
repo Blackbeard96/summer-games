@@ -16,6 +16,7 @@ interface Badge {
 interface Student {
   id: string;
   displayName: string;
+  email?: string;
   badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
 }
 
@@ -24,9 +25,11 @@ const BadgeManager: React.FC = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState<string>('');
+  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [selectedBadge, setSelectedBadge] = useState<string>('');
   const [uploading, setUploading] = useState(false);
+  const [issuing, setIssuing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Form state for creating new badges
   const [newBadge, setNewBadge] = useState({
@@ -117,26 +120,57 @@ const BadgeManager: React.FC = () => {
     }
   };
 
+  const handleStudentToggle = (studentId: string) => {
+    setSelectedStudents(prev => 
+      prev.includes(studentId)
+        ? prev.filter(id => id !== studentId)
+        : [...prev, studentId]
+    );
+  };
+
+  const handleSelectAll = () => {
+    // Filter students based on search query for "Select All"
+    const filteredStudents = students.filter(student => {
+      if (!searchQuery.trim()) return true;
+      const query = searchQuery.toLowerCase().trim();
+      const name = (student.displayName || '').toLowerCase();
+      const email = (student.email || '').toLowerCase();
+      return name.includes(query) || email.includes(query);
+    });
+
+    const filteredStudentIds = filteredStudents.map(s => s.id);
+    const allFilteredSelected = filteredStudentIds.length > 0 && 
+      filteredStudentIds.every(id => selectedStudents.includes(id));
+    
+    if (allFilteredSelected) {
+      // Deselect all filtered students
+      setSelectedStudents(prev => prev.filter(id => !filteredStudentIds.includes(id)));
+    } else {
+      // Select all filtered students (merge with existing selections)
+      setSelectedStudents(prev => {
+        const newSelection = [...prev];
+        filteredStudentIds.forEach(id => {
+          if (!newSelection.includes(id)) {
+            newSelection.push(id);
+          }
+        });
+        return newSelection;
+      });
+    }
+  };
+
   const issueBadgeToStudent = async () => {
-    if (!selectedStudent || !selectedBadge) {
-      alert('Please select both a student and a badge.');
+    if (selectedStudents.length === 0 || !selectedBadge) {
+      alert('Please select at least one student and a badge.');
       return;
     }
 
+    setIssuing(true);
     try {
       const badge = badges.find(b => b.id === selectedBadge);
-      if (!badge) return;
-
-      const studentRef = doc(db, 'students', selectedStudent);
-      const student = students.find(s => s.id === selectedStudent);
-      
-      if (!student) return;
-
-      const currentBadges = student.badges || [];
-      const badgeAlreadyEarned = currentBadges.some(b => b.id === selectedBadge);
-      
-      if (badgeAlreadyEarned) {
-        alert('This student already has this badge!');
+      if (!badge) {
+        alert('Badge not found.');
+        setIssuing(false);
         return;
       }
 
@@ -148,23 +182,72 @@ const BadgeManager: React.FC = () => {
         earnedAt: new Date()
       };
 
-      await updateDoc(studentRef, {
-        badges: [...currentBadges, newBadgeEntry]
-      });
+      let successCount = 0;
+      let skippedCount = 0;
+      const errors: string[] = [];
 
-      // Update local state
-      setStudents(prev => prev.map(s => 
-        s.id === selectedStudent 
-          ? { ...s, badges: [...(s.badges || []), newBadgeEntry] }
-          : s
-      ));
+      // Issue badge to all selected students
+      for (const studentId of selectedStudents) {
+        try {
+          const student = students.find(s => s.id === studentId);
+          if (!student) {
+            errors.push(`Student ${studentId} not found`);
+            continue;
+          }
 
-      setSelectedStudent('');
+          const currentBadges = student.badges || [];
+          const badgeAlreadyEarned = currentBadges.some(b => b.id === selectedBadge);
+          
+          if (badgeAlreadyEarned) {
+            skippedCount++;
+            continue;
+          }
+
+          const studentRef = doc(db, 'students', studentId);
+          await updateDoc(studentRef, {
+            badges: [...currentBadges, newBadgeEntry]
+          });
+
+          // Update local state
+          setStudents(prev => prev.map(s => 
+            s.id === studentId 
+              ? { ...s, badges: [...(s.badges || []), newBadgeEntry] }
+              : s
+          ));
+
+          successCount++;
+        } catch (error) {
+          console.error(`Error issuing badge to student ${studentId}:`, error);
+          const studentName = students.find(s => s.id === studentId)?.displayName || studentId;
+          errors.push(`Failed to issue badge to ${studentName}`);
+        }
+      }
+
+      // Show results
+      let message = '';
+      if (successCount > 0) {
+        message = `Badge issued successfully to ${successCount} student${successCount > 1 ? 's' : ''}.`;
+      }
+      if (skippedCount > 0) {
+        message += ` ${skippedCount} student${skippedCount > 1 ? 's' : ''} already had this badge.`;
+      }
+      if (errors.length > 0) {
+        message += ` ${errors.length} error${errors.length > 1 ? 's' : ''} occurred.`;
+        console.error('Errors:', errors);
+      }
+      
+      if (message) {
+        alert(message);
+      }
+
+      // Clear selections
+      setSelectedStudents([]);
       setSelectedBadge('');
-      alert('Badge issued successfully!');
     } catch (error) {
       console.error('Error issuing badge:', error);
       alert('Failed to issue badge. Please try again.');
+    } finally {
+      setIssuing(false);
     }
   };
 
@@ -300,53 +383,182 @@ const BadgeManager: React.FC = () => {
 
       {/* Issue Badge Section */}
       <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>Issue Badge to Student</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '1.5rem' }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Select Student</label>
-            <select
-              value={selectedStudent}
-              onChange={(e) => setSelectedStudent(e.target.value)}
-              style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>Issue Badge to Students</h2>
+        
+        <div style={{ marginBottom: '1.5rem' }}>
+          <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Select Badge</label>
+          <select
+            value={selectedBadge}
+            onChange={(e) => setSelectedBadge(e.target.value)}
+            style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem', marginBottom: '1rem' }}
+          >
+            <option value="">Choose a badge...</option>
+            {badges.map(badge => (
+              <option key={badge.id} value={badge.id}>
+                {badge.name} ({badge.rarity})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <label style={{ display: 'block', fontWeight: 'bold' }}>Select Students</label>
+            <button
+              onClick={handleSelectAll}
+              style={{
+                backgroundColor: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                padding: '0.375rem 0.75rem',
+                fontSize: '0.875rem',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
             >
-              <option value="">Choose a student...</option>
-              {students.map(student => (
-                <option key={student.id} value={student.id}>
-                  {student.displayName || 'Unnamed Student'}
-                </option>
-              ))}
-            </select>
+              {(() => {
+                const filteredStudents = students.filter(student => {
+                  if (!searchQuery.trim()) return true;
+                  const query = searchQuery.toLowerCase().trim();
+                  const name = (student.displayName || '').toLowerCase();
+                  const email = (student.email || '').toLowerCase();
+                  return name.includes(query) || email.includes(query);
+                });
+                const filteredStudentIds = filteredStudents.map(s => s.id);
+                const allFilteredSelected = filteredStudentIds.length > 0 && 
+                  filteredStudentIds.every(id => selectedStudents.includes(id));
+                return allFilteredSelected ? 'Deselect All' : 'Select All';
+              })()}
+            </button>
           </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Select Badge</label>
-            <select
-              value={selectedBadge}
-              onChange={(e) => setSelectedBadge(e.target.value)}
-              style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
-            >
-              <option value="">Choose a badge...</option>
-              {badges.map(badge => (
-                <option key={badge.id} value={badge.id}>
-                  {badge.name} ({badge.rarity})
-                </option>
-              ))}
-            </select>
+          
+          {/* Search Bar */}
+          <div style={{ marginBottom: '0.75rem' }}>
+            <input
+              type="text"
+              placeholder="🔍 Search by name or email..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.5rem 0.75rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '0.375rem',
+                fontSize: '0.875rem',
+                outline: 'none',
+                transition: 'all 0.2s'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#4f46e5';
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#d1d5db';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            />
+          </div>
+
+          {selectedStudents.length > 0 && (
+            <div style={{ marginBottom: '0.5rem', fontSize: '0.875rem', color: '#4f46e5', fontWeight: 'bold' }}>
+              {selectedStudents.length} student{selectedStudents.length > 1 ? 's' : ''} selected
+            </div>
+          )}
+          <div style={{ 
+            maxHeight: '300px', 
+            overflowY: 'auto', 
+            border: '1px solid #d1d5db', 
+            borderRadius: '0.375rem', 
+            padding: '0.5rem',
+            backgroundColor: '#f9fafb'
+          }}>
+            {(() => {
+              // Filter students based on search query
+              const filteredStudents = students.filter(student => {
+                if (!searchQuery.trim()) return true;
+                const query = searchQuery.toLowerCase().trim();
+                const name = (student.displayName || '').toLowerCase();
+                const email = (student.email || '').toLowerCase();
+                return name.includes(query) || email.includes(query);
+              });
+
+              if (filteredStudents.length === 0) {
+                return (
+                  <div style={{ padding: '1rem', textAlign: 'center', color: '#6b7280' }}>
+                    {searchQuery.trim() ? 'No students found matching your search' : 'No students found'}
+                  </div>
+                );
+              }
+
+              return filteredStudents.map(student => {
+                const isSelected = selectedStudents.includes(student.id);
+                const hasBadge = selectedBadge && student.badges?.some(b => b.id === selectedBadge);
+                return (
+                  <div
+                    key={student.id}
+                    onClick={() => handleStudentToggle(student.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '0.75rem',
+                      marginBottom: '0.25rem',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      backgroundColor: isSelected ? '#eef2ff' : 'white',
+                      border: isSelected ? '2px solid #4f46e5' : '1px solid #e5e7eb',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleStudentToggle(student.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginRight: '0.75rem', width: '18px', height: '18px', cursor: 'pointer' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                        {student.displayName || 'Unnamed Student'}
+                        {hasBadge && (
+                          <span style={{ 
+                            marginLeft: '0.5rem', 
+                            fontSize: '0.75rem', 
+                            color: '#10b981',
+                            fontWeight: 'normal'
+                          }}>
+                            (Already has this badge)
+                          </span>
+                        )}
+                      </div>
+                      {student.email && (
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                          {student.email}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
+
         <button
           onClick={issueBadgeToStudent}
-          disabled={!selectedStudent || !selectedBadge}
+          disabled={selectedStudents.length === 0 || !selectedBadge || issuing}
           style={{
-            backgroundColor: (!selectedStudent || !selectedBadge) ? '#9ca3af' : '#4f46e5',
+            backgroundColor: (selectedStudents.length === 0 || !selectedBadge || issuing) ? '#9ca3af' : '#4f46e5',
             color: 'white',
             border: 'none',
             borderRadius: '0.5rem',
             padding: '0.75rem 1.5rem',
             fontWeight: 'bold',
-            cursor: (!selectedStudent || !selectedBadge) ? 'not-allowed' : 'pointer'
+            cursor: (selectedStudents.length === 0 || !selectedBadge || issuing) ? 'not-allowed' : 'pointer',
+            width: '100%'
           }}
         >
-          Issue Badge
+          {issuing ? 'Issuing Badge...' : `Issue Badge to ${selectedStudents.length} Student${selectedStudents.length !== 1 ? 's' : ''}`}
         </button>
       </div>
 

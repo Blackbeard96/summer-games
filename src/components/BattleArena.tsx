@@ -149,8 +149,17 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   };
 
   const handleEscape = () => {
+    console.log('BattleArena: handleEscape called', { hasOnEscape: !!onEscape });
     if (onEscape) {
-      onEscape();
+      console.log('BattleArena: Calling onEscape handler immediately');
+      // Call immediately - don't wait
+      try {
+        onEscape();
+      } catch (error) {
+        console.error('BattleArena: Error calling onEscape:', error);
+      }
+    } else {
+      console.warn('BattleArena: onEscape handler not provided');
     }
   };
 
@@ -690,18 +699,26 @@ const BattleArena: React.FC<BattleArenaProps> = ({
       )}
 
       {/* Action Buttons */}
-      {!showMoveMenu && !showTargetMenu && isPlayerTurn && (
-        <div style={{
-          position: 'absolute',
-          bottom: '20px',
-          right: '20px',
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: '0.5rem',
-          width: '200px'
-        }}>
+      <div style={{
+        position: 'absolute',
+        bottom: '20px',
+        right: '20px',
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: '0.5rem',
+        width: '200px',
+        zIndex: 1000,
+        pointerEvents: 'auto'
+      }}>
+        {/* FIGHT button - only show when not in menus and player's turn */}
+        {!showMoveMenu && !showTargetMenu && isPlayerTurn && (
           <button
-            onClick={() => setShowMoveMenu(true)}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowMoveMenu(true);
+            }}
             style={{
               background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
               color: 'white',
@@ -724,8 +741,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           >
             ⚔️ FIGHT
           </button>
+        )}
+        {/* BAG button - only show when not in menus */}
+        {!showMoveMenu && !showTargetMenu && (
           <button
-            onClick={() => {/* TODO: Implement bag/items */}}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              {/* TODO: Implement bag/items */}
+            }}
             style={{
               background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
               color: 'white',
@@ -748,8 +773,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           >
             🎒 BAG
           </button>
+        )}
+        {/* VAULT button - only show when not in menus */}
+        {!showMoveMenu && !showTargetMenu && (
           <button
-            onClick={() => {/* TODO: Implement vault management */}}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              {/* TODO: Implement vault management */}
+            }}
             style={{
               background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
               color: 'white',
@@ -772,8 +805,18 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           >
             🏦 VAULT
           </button>
+        )}
+        {/* RUN button - ALWAYS visible when onEscape is provided */}
+        {onEscape && (
           <button
-            onClick={handleEscape}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.nativeEvent?.stopImmediatePropagation?.();
+              console.log('BattleArena: Run button clicked - exiting immediately');
+              handleEscape();
+            }}
             style={{
               background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
               color: 'white',
@@ -783,7 +826,10 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               fontSize: '0.875rem',
               fontWeight: 'bold',
               cursor: 'pointer',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              zIndex: 1001,
+              position: 'relative',
+              pointerEvents: 'auto'
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.transform = 'scale(1.05)';
@@ -796,8 +842,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           >
             🏃 RUN
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
 
       {/* CSS Animations */}
