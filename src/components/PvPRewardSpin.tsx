@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +24,18 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<number | null>(null);
   const [finalReward, setFinalReward] = useState<number | null>(null);
+  const [wheelRotation, setWheelRotation] = useState(0);
+  const [selectedMultiplier, setSelectedMultiplier] = useState<number | null>(null);
+
+  // Multiplier options in 10% intervals (0% to 100%)
+  // For winners: 10% to 100% bonus multiplier
+  // For losers: 0% to 100% recovery percentage
+  // Use useMemo to recalculate when isWinner changes
+  const multiplierOptions = useMemo(() => {
+    return isWinner 
+      ? [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00] // Winners: 10-100%
+      : [0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]; // Losers: 0-100%
+  }, [isWinner]);
 
   if (!isOpen) return null;
 
@@ -34,19 +46,24 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
     setSpinResult(null);
     setFinalReward(null);
 
-    // Generate random multiplier
-    let multiplier: number;
-    if (isWinner) {
-      // Winner: 10% to 50% multiplier
-      multiplier = 0.10 + Math.random() * 0.40; // 0.10 to 0.50
-    } else {
-      // Loser: 10% to 100% recovery
-      multiplier = 0.10 + Math.random() * 0.90; // 0.10 to 1.00
-    }
+    // Generate random multiplier in 10% intervals
+    const multiplier = multiplierOptions[Math.floor(Math.random() * multiplierOptions.length)];
+    const selectedIndex = multiplierOptions.indexOf(multiplier);
+    
+    // Calculate rotation: each segment is 36 degrees (360 / 10), plus multiple full rotations
+    const segmentAngle = 360 / multiplierOptions.length;
+    const baseRotation = selectedIndex * segmentAngle;
+    // Add multiple full rotations (5-8 full spins) plus a bit more for visual effect
+    const fullRotations = 5 + Math.random() * 3; // 5-8 full rotations
+    const finalRotation = wheelRotation + (fullRotations * 360) + (360 - baseRotation);
+    
+    setSelectedMultiplier(null);
+    setWheelRotation(finalRotation);
 
     // Simulate spin animation (2-3 seconds)
     const spinDuration = 2000 + Math.random() * 1000;
     const startTime = Date.now();
+    const startRotation = wheelRotation;
 
     const animateSpin = () => {
       const elapsed = Date.now() - startTime;
@@ -54,11 +71,15 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
       
       // Easing function for smooth deceleration
       const easeOut = 1 - Math.pow(1 - progress, 3);
+      const currentRotation = startRotation + (finalRotation - startRotation) * easeOut;
+      setWheelRotation(currentRotation);
       
       if (progress < 1) {
         requestAnimationFrame(animateSpin);
       } else {
         // Spin complete
+        setWheelRotation(finalRotation);
+        setSelectedMultiplier(multiplier);
         setSpinResult(multiplier);
         
         if (isWinner) {
@@ -172,7 +193,10 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
                 Base Reward Received: <strong>{baseReward.toLocaleString()} PP</strong>
               </div>
               <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>
-                Spin for a <strong>10% - 50%</strong> bonus multiplier on top!
+                Spin for a <strong>10% - 100%</strong> bonus multiplier on top of your base reward!
+              </div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.5rem', fontStyle: 'italic' }}>
+                Example: {baseReward} PP base + 50% spin = +{Math.floor(baseReward * 0.5)} PP bonus
               </div>
             </>
           ) : (
@@ -181,7 +205,10 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
                 Points Lost: <strong>{baseReward.toLocaleString()} PP</strong>
               </div>
               <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>
-                Spin to recover <strong>10% - 100%</strong> of your lost points!
+                Spin to recover <strong>0% - 100%</strong> of your lost points!
+              </div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.5rem', fontStyle: 'italic' }}>
+                Example: {baseReward} PP lost + 50% spin = +{Math.floor(baseReward * 0.5)} PP recovered
               </div>
             </>
           )}
@@ -190,19 +217,96 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
         {!spinResult ? (
           <>
             <div style={{
-              width: '200px',
-              height: '200px',
+              position: 'relative',
+              width: '300px',
+              height: '300px',
               margin: '0 auto 1.5rem',
-              borderRadius: '50%',
-              background: 'rgba(255, 255, 255, 0.2)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '3rem',
-              border: '4px solid rgba(255, 255, 255, 0.3)',
-              animation: spinning ? 'spin 2s linear infinite' : 'none'
+              justifyContent: 'center'
             }}>
-              🎰
+              {/* Pointer/Indicator - Fixed at top */}
+              <div style={{
+                position: 'absolute',
+                top: '-10px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 0,
+                height: 0,
+                borderLeft: '15px solid transparent',
+                borderRight: '15px solid transparent',
+                borderTop: '30px solid rgba(255, 255, 255, 0.9)',
+                zIndex: 30,
+                filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5))'
+              }} />
+              
+              {/* Wheel Container */}
+              <div style={{
+                position: 'relative',
+                width: '300px',
+                height: '300px',
+                borderRadius: '50%',
+                background: 'conic-gradient(from 0deg, rgba(255, 255, 255, 0.3) 0deg 36deg, rgba(255, 255, 255, 0.1) 36deg 72deg, rgba(255, 255, 255, 0.3) 72deg 108deg, rgba(255, 255, 255, 0.1) 108deg 144deg, rgba(255, 255, 255, 0.3) 144deg 180deg, rgba(255, 255, 255, 0.1) 180deg 216deg, rgba(255, 255, 255, 0.3) 216deg 252deg, rgba(255, 255, 255, 0.1) 252deg 288deg, rgba(255, 255, 255, 0.3) 288deg 324deg, rgba(255, 255, 255, 0.1) 324deg 360deg)',
+                border: '4px solid rgba(255, 255, 255, 0.3)',
+                transform: `rotate(${wheelRotation}deg)`,
+                transition: spinning ? 'none' : 'transform 0.1s ease-out',
+                overflow: 'hidden'
+              }}>
+                {/* Multiplier Labels */}
+                {multiplierOptions.map((multiplier, index) => {
+                  const segmentAngle = 360 / multiplierOptions.length;
+                  const rotation = index * segmentAngle;
+                  const labelRadius = 110;
+                  const labelX = Math.cos((rotation - 90) * Math.PI / 180) * labelRadius;
+                  const labelY = Math.sin((rotation - 90) * Math.PI / 180) * labelRadius;
+                  const isHighlighted = selectedMultiplier === multiplier;
+                  
+                  return (
+                    <div
+                      key={index}
+                      style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: `translate(${labelX}px, ${labelY}px) translate(-50%, -50%)`,
+                        fontSize: isHighlighted ? '1.5rem' : '1.1rem',
+                        fontWeight: isHighlighted ? 'bold' : 'bold',
+                        color: isHighlighted ? '#ffeb3b' : 'white',
+                        textShadow: isHighlighted 
+                          ? '0 0 10px rgba(255, 235, 59, 0.8), 0 0 20px rgba(255, 235, 59, 0.6)' 
+                          : '2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 8px rgba(0, 0, 0, 0.5)',
+                        zIndex: isHighlighted ? 10 : 1,
+                        transition: 'all 0.3s ease',
+                        pointerEvents: 'none'
+                      }}
+                    >
+                      {Math.round(multiplier * 100)}%
+                    </div>
+                  );
+                })}
+                
+                {/* Center Circle */}
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '80px',
+                  height: '80px',
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.3)',
+                  border: '3px solid rgba(255, 255, 255, 0.5)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.5rem',
+                  fontWeight: 'bold',
+                  zIndex: 20,
+                  pointerEvents: 'none'
+                }}>
+                  🎰
+                </div>
+              </div>
             </div>
             <button
               onClick={spin}
@@ -236,13 +340,19 @@ const PvPRewardSpin: React.FC<PvPRewardSpinProps> = ({
               </div>
               <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
                 {isWinner 
-                  ? `+${(spinResult * 100).toFixed(0)}% Multiplier`
+                  ? `+${(spinResult * 100).toFixed(0)}% Bonus Multiplier`
                   : `${(spinResult * 100).toFixed(0)}% Recovered`
+                }
+              </div>
+              <div style={{ fontSize: '1.25rem', marginBottom: '0.5rem', opacity: 0.9 }}>
+                {isWinner 
+                  ? `Base: ${baseReward.toLocaleString()} PP + Bonus: ${finalReward?.toLocaleString()} PP`
+                  : `Lost: ${baseReward.toLocaleString()} PP × ${(spinResult * 100).toFixed(0)}% = ${finalReward?.toLocaleString()} PP Recovered`
                 }
               </div>
               <div style={{ fontSize: '2rem', fontWeight: 'bold', marginTop: '1rem' }}>
                 {isWinner 
-                  ? `+${finalReward?.toLocaleString()} PP Bonus`
+                  ? `Total: ${(baseReward + (finalReward || 0)).toLocaleString()} PP`
                   : `+${finalReward?.toLocaleString()} PP Recovered`
                 }
               </div>

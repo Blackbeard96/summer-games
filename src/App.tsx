@@ -14,6 +14,7 @@ import {
 import NavBar from './components/NavBar';
 import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
+import BadgeRewardNotifier from './components/BadgeRewardNotifier';
 
 // Context providers
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -288,6 +289,7 @@ const AppContent = () => {
       {/* Global Components */}
       <TutorialManager />
       <InvitationManager />
+      <BadgeRewardNotifier />
       
       {/* Development Components */}
       {process.env.NODE_ENV === 'development' && <FirebaseStatus />}

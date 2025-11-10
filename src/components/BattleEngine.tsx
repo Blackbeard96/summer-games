@@ -525,10 +525,37 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     newOpponent.shieldStrength = Math.max(0, opponent.shieldStrength - shieldDamage);
     newOpponent.currentPP = Math.max(0, opponent.currentPP - (damage - shieldDamage) - ppStolen);
     
+    // Update opponent's vault and student documents in Firestore immediately
+    if (isPvP && opponent.id) {
+      try {
+        const opponentVaultRef = doc(db, 'vaults', opponent.id);
+        const opponentStudentRef = doc(db, 'students', opponent.id);
+        
+        await Promise.all([
+          updateDoc(opponentVaultRef, {
+            currentPP: newOpponent.currentPP,
+            shieldStrength: newOpponent.shieldStrength
+          }),
+          updateDoc(opponentStudentRef, {
+            powerPoints: newOpponent.currentPP
+          })
+        ]);
+        
+        console.log('✅ Opponent PP and shields updated in Firestore:', {
+          opponentId: opponent.id,
+          newPP: newOpponent.currentPP,
+          newShield: newOpponent.shieldStrength
+        });
+      } catch (error) {
+        console.error('❌ Error updating opponent PP in Firestore:', error);
+      }
+    }
+    
     // Update player vault
     const newVault = { ...vault };
+    const vaultCapacity = vault.capacity || 1000;
     if (ppStolen > 0) {
-      newVault.currentPP = Math.min(1000, vault.currentPP + ppStolen);
+      newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + ppStolen);
       newLog.push(`You gained ${ppStolen} PP!`);
     }
     if (playerShieldBoost > 0) {
@@ -542,7 +569,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     }
     if (playerHealing > 0) {
-      newVault.currentPP = Math.min(1000, vault.currentPP + playerHealing);
+      newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + playerHealing);
     }
     
     // Execute the actual vault siege attack in the database
@@ -944,8 +971,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         </div>
       </div>
 
-      {/* Victory Overlay */}
-      {battleState.phase === 'victory' && (
+      {/* Victory Overlay - Only show for non-PvP battles (PvP uses reward spin modal) */}
+      {battleState.phase === 'victory' && !isPvP && (
         <div style={{
           position: 'fixed',
           top: 0,

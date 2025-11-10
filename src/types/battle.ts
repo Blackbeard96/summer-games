@@ -16,6 +16,9 @@ export interface Vault {
   movesRemaining: number; // Daily moves remaining
   maxMovesPerDay: number; // Maximum moves per day
   lastMoveReset: Date; // When moves were last reset
+  capacityUpgrades?: number; // Number of capacity upgrades purchased
+  shieldUpgrades?: number; // Number of shield upgrades purchased
+  firewallUpgrades?: number; // Number of firewall upgrades purchased
 }
 
 export interface Move {

@@ -110,8 +110,8 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           const activeRoom = snapshot.docs[0];
           const roomData = { id: activeRoom.id, ...activeRoom.data() } as BattleRoom;
           
-          // Don't restore if opponent left (status would be 'left')
-          if (roomData.status !== 'left') {
+          // Don't restore if opponent left (status would be 'left'), battle is completed, or reward spin is showing
+          if (roomData.status !== 'left' && roomData.status !== 'completed' && !showRewardSpin) {
             console.log('PvP Battle: Restoring active battle on mount', roomData.id);
             // Sync vault PP from student PP before restoring battle
             try {
@@ -124,7 +124,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
             await fetchOpponentData(roomData);
             setShowBattleEngine(true);
           } else {
-            console.log('PvP Battle: Not restoring battle - opponent left');
+            console.log('PvP Battle: Not restoring battle - status is', roomData.status, 'or reward spin showing:', showRewardSpin);
           }
         }
       } catch (error) {
@@ -339,13 +339,13 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         });
 
         // For rooms user is in, check if battle should be restored
-        // Only restore if not already showing a battle
-        if (roomsUserIsIn.length > 0 && !showBattleEngine && !currentRoom) {
+        // Only restore if not already showing a battle and not showing reward spin
+        if (roomsUserIsIn.length > 0 && !showBattleEngine && !currentRoom && !showRewardSpin) {
           const inProgressRoom = roomsUserIsIn.find(room => room.status === 'in-progress');
           if (inProgressRoom) {
             // User is in an in-progress battle - restore it
-            // But don't restore if opponent left (status would be 'left')
-            if (inProgressRoom.status !== 'left') {
+            // But don't restore if opponent left (status would be 'left') or battle is completed
+            if (inProgressRoom.status !== 'left' && inProgressRoom.status !== 'completed') {
               console.log('PvP Battle: Restoring battle room from polling', inProgressRoom.id);
               // Sync vault PP from student PP before restoring battle
               try {
@@ -358,7 +358,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
               await fetchOpponentData(inProgressRoom);
               setShowBattleEngine(true);
             } else {
-              console.log('PvP Battle: Not restoring battle - opponent left');
+              console.log('PvP Battle: Not restoring battle - status is', inProgressRoom.status);
             }
           }
         }
@@ -411,7 +411,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         clearInterval(intervalId);
       }
     };
-  }, [currentUser]);
+  }, [currentUser, showRewardSpin, showBattleEngine, currentRoom]);
 
   // Listen for room status changes to detect when opponent leaves
   useEffect(() => {
@@ -810,23 +810,42 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const loserVault = loserVaultDoc.data();
         const winnerVault = winnerVaultDoc.data();
         const loserTotalPP = loserVault.capacity || 1000;
+        const loserCurrentPP = loserVault.currentPP || 0;
         
-        // Amount at risk (percentage of loser's total PP)
+        // Amount at risk (percentage of loser's total PP capacity)
         const ppAtRisk = Math.floor(loserTotalPP * (riskPercentage / 100));
         
-        // Calculate actual loss (loser's current PP or PP at risk, whichever is less)
-        const actualLoss = Math.min(ppAtRisk, loserVault.currentPP || 0);
+        // Calculate base reward: risk percentage of loser's capacity, but capped at what they actually have
+        // This is the BASE amount that the loser loses and winner receives
+        // We MUST use the loser's actual current PP to ensure we don't take more than they have
+        // The base reward should be the minimum of: (risk % of capacity) and (loser's actual PP)
+        const baseReward = Math.min(ppAtRisk, loserCurrentPP);
         
-        // Transfer PP from loser to winner immediately (base amount)
+        // Always use the actual baseReward for display (the amount actually transferred)
+        // This ensures accuracy - if opponent has 100 PP, we show 100 PP (or less if risk % is lower)
+        const displayBaseReward = baseReward;
+        
+        console.log('PvP Battle: Calculating base reward:', {
+          loserTotalPP,
+          loserCurrentPP,
+          riskPercentage,
+          ppAtRisk,
+          baseReward,
+          displayBaseReward
+        });
+        
+        // Transfer PP from loser to winner immediately (base amount only)
+        // Loser loses the base amount, winner receives the base amount
+        // The wheel spin bonus will be added on top for the winner later
         const loserRef = doc(db, 'vaults', loserId);
         const winnerRef = doc(db, 'vaults', winnerId);
         
-        const newLoserPP = Math.max(0, (loserVault.currentPP || 0) - actualLoss);
+        const newLoserPP = Math.max(0, (loserVault.currentPP || 0) - baseReward);
         const winnerCurrentPP = winnerVault.currentPP || 0;
         const winnerCapacity = winnerVault.capacity || 1000;
-        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + actualLoss);
+        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + baseReward);
         
-        // Update both vaults
+        // Update both vaults with base transfer (loser loses base, winner gets base)
         await Promise.all([
           updateDoc(loserRef, { currentPP: newLoserPP }),
           updateDoc(winnerRef, { currentPP: newWinnerPP })
@@ -838,18 +857,55 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           updateDoc(doc(db, 'students', winnerId), { currentPP: newWinnerPP })
         ]);
         
+        // Mark battle as completed in Firestore to prevent restoration
+        const roomId = currentRoom.id;
+        try {
+          await updateDoc(doc(db, 'battleRooms', roomId), {
+            status: 'completed',
+            completedAt: serverTimestamp(),
+            winnerId: winnerId,
+            loserId: loserId
+          });
+          console.log('PvP Battle: Room marked as completed', roomId);
+        } catch (updateError) {
+          console.error('Error updating room status to completed:', updateError);
+        }
+        
+        // Mark that user intentionally finished the battle to prevent restore
+        setHasIntentionallyLeft(true);
+        
         // Show reward spin for winner or loser
         if (winnerId === currentUser.uid) {
           // Player won - show winner spin for bonus multiplier
+          // displayBaseReward is the amount based on risk percentage (for display)
+          // baseReward is the actual amount transferred (may be less if loser had no PP)
+          // The wheel spin will add a bonus multiplier on top of the base reward
+          console.log('PvP Battle: Setting reward amount for winner:', {
+            displayBaseReward,
+            actualBaseReward: baseReward,
+            ppAtRisk
+          });
           setIsWinner(true);
-          setRewardAmount(actualLoss);
+          setRewardAmount(displayBaseReward); // Use display amount so user sees the risk percentage
           setShowBattleEngine(false);
+          setShowWaitingRoom(false);
+          setOpponent(null);
           setShowRewardSpin(true);
         } else {
           // Player lost - show recovery spin
+          // displayBaseReward is the amount based on risk percentage (for display)
+          // baseReward is the actual amount lost (may be less if they had no PP)
+          // The wheel spin can recover a percentage of this lost amount
+          console.log('PvP Battle: Setting reward amount for loser:', {
+            displayBaseReward,
+            actualBaseReward: baseReward,
+            ppAtRisk
+          });
           setIsWinner(false);
-          setRewardAmount(actualLoss);
+          setRewardAmount(displayBaseReward); // Use display amount so user sees the risk percentage
           setShowBattleEngine(false);
+          setShowWaitingRoom(false);
+          setOpponent(null);
           setShowRewardSpin(true);
         }
       }
@@ -858,10 +914,12 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
       alert('Error processing battle rewards. Please try again.');
     }
     
-    setCurrentRoom(null);
+    // Don't clear currentRoom immediately - let the reward spin modal handle it
+    // setCurrentRoom(null);
   };
 
-  if (showBattleEngine && currentRoom) {
+  // Don't show battle engine if reward spin is showing
+  if (showBattleEngine && currentRoom && !showRewardSpin) {
     return (
       <div>
         <div style={{
@@ -1540,6 +1598,10 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         onClose={() => {
           setShowRewardSpin(false);
           setCurrentRoom(null);
+          setOpponent(null);
+          setShowBattleEngine(false);
+          setShowWaitingRoom(false);
+          setHasIntentionallyLeft(false); // Reset flag so user can start new battles
         }}
         isWinner={isWinner}
         baseReward={rewardAmount}

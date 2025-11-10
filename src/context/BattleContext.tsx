@@ -586,9 +586,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const upgradeVaultCapacity = async () => {
     if (!currentUser || !vault) return;
     
-    const upgradeCost = 200;
+    // Calculate upgrade count (default to 0 if not set)
+    const upgradeCount = vault.capacityUpgrades || 0;
+    // Base price is 200, doubles for each upgrade: 200 * (2 ^ upgradeCount)
+    const basePrice = 200;
+    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
+    
     if (vault.currentPP < upgradeCost) {
-      setError('Insufficient PP for capacity upgrade');
+      setError(`Insufficient PP for capacity upgrade. Need ${upgradeCost} PP.`);
       return;
     }
     
@@ -596,10 +601,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       const newCapacity = vault.capacity + 200;
       const newPP = vault.currentPP - upgradeCost;
+      const newUpgradeCount = upgradeCount + 1;
       
       await updateDoc(vaultRef, {
         capacity: newCapacity,
-        currentPP: newPP
+        currentPP: newPP,
+        capacityUpgrades: newUpgradeCount
       });
       
       // Also update student PP
@@ -609,10 +616,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setVault(prevVault => prevVault ? { 
         ...prevVault, 
         capacity: newCapacity,
-        currentPP: newPP
+        currentPP: newPP,
+        capacityUpgrades: newUpgradeCount
       } : null);
       
-      setSuccess('Vault capacity upgraded! +200 PP capacity');
+      setSuccess(`Vault capacity upgraded! +200 PP capacity (Cost: ${upgradeCost} PP)`);
     } catch (error) {
       console.error('Error upgrading vault capacity:', error);
       setError('Failed to upgrade vault capacity');
@@ -622,9 +630,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const upgradeVaultShields = async () => {
     if (!currentUser || !vault) return;
     
-    const upgradeCost = 75;
+    // Calculate upgrade count (default to 0 if not set)
+    const upgradeCount = vault.shieldUpgrades || 0;
+    // Base price is 75, doubles for each upgrade: 75 * (2 ^ upgradeCount)
+    const basePrice = 75;
+    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
+    
     if (vault.currentPP < upgradeCost) {
-      setError('Insufficient PP for shield upgrade');
+      setError(`Insufficient PP for shield upgrade. Need ${upgradeCost} PP.`);
       return;
     }
     
@@ -632,10 +645,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       const newMaxShields = vault.maxShieldStrength + 25;
       const newPP = vault.currentPP - upgradeCost;
+      const newUpgradeCount = upgradeCount + 1;
       
       await updateDoc(vaultRef, {
         maxShieldStrength: newMaxShields,
-        currentPP: newPP
+        currentPP: newPP,
+        shieldUpgrades: newUpgradeCount
       });
       
       // Also update student PP
@@ -645,10 +660,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setVault(prevVault => prevVault ? { 
         ...prevVault, 
         maxShieldStrength: newMaxShields,
-        currentPP: newPP
+        currentPP: newPP,
+        shieldUpgrades: newUpgradeCount
       } : null);
       
-      setSuccess('Vault shields upgraded! +25 max shield strength');
+      setSuccess(`Vault shields upgraded! +25 max shield strength (Cost: ${upgradeCost} PP)`);
     } catch (error) {
       console.error('Error upgrading vault shields:', error);
       setError('Failed to upgrade vault shields');
@@ -658,9 +674,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const upgradeVaultFirewall = async () => {
     if (!currentUser || !vault) return;
     
-    const upgradeCost = 50;
+    // Calculate upgrade count (default to 0 if not set)
+    const upgradeCount = vault.firewallUpgrades || 0;
+    // Base price is 50, doubles for each upgrade: 50 * (2 ^ upgradeCount)
+    const basePrice = 50;
+    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
+    
     if (vault.currentPP < upgradeCost) {
-      setError('Insufficient PP for firewall upgrade');
+      setError(`Insufficient PP for firewall upgrade. Need ${upgradeCost} PP.`);
       return;
     }
     
@@ -668,10 +689,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       const newFirewall = Math.min(100, vault.firewall + 15); // Cap at 100%
       const newPP = vault.currentPP - upgradeCost;
+      const newUpgradeCount = upgradeCount + 1;
       
       await updateDoc(vaultRef, {
         firewall: newFirewall,
-        currentPP: newPP
+        currentPP: newPP,
+        firewallUpgrades: newUpgradeCount
       });
       
       // Also update student PP
@@ -681,10 +704,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setVault(prevVault => prevVault ? { 
         ...prevVault, 
         firewall: newFirewall,
-        currentPP: newPP
+        currentPP: newPP,
+        firewallUpgrades: newUpgradeCount
       } : null);
       
-      setSuccess('Vault firewall upgraded! +15% attack resistance');
+      setSuccess(`Vault firewall upgraded! +15% attack resistance (Cost: ${upgradeCost} PP)`);
     } catch (error) {
       console.error('Error upgrading vault firewall:', error);
       setError('Failed to upgrade vault firewall');

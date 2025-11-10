@@ -32,7 +32,7 @@ const artifacts: Artifact[] = [
     id: 'shield',
     name: 'Shield', 
     description: 'Block the next incoming attack on your vault', 
-    price: 25, 
+    price: 50, 
     icon: '🛡️', 
     image: '/images/Shield Item.jpeg',
     category: 'protection',
@@ -42,11 +42,21 @@ const artifacts: Artifact[] = [
     id: 'lunch-mosley',
     name: 'Lunch on Mosley', 
     description: 'Enjoy a special lunch with Mr. Mosley', 
-    price: 999, 
+    price: 3600, 
     icon: '🍽️', 
     image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'food',
     rarity: 'epic'
+  },
+  { 
+    id: 'forge-token',
+    name: 'Forge Token', 
+    description: 'Redeem for any custom item you want printed from The Forge (3D Printer)', 
+    price: 1000, 
+    icon: '🛠️', 
+    image: '/images/Forge Token.png',
+    category: 'special',
+    rarity: 'legendary'
   },
   { 
     id: 'uxp-credit',

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
-import { collection, addDoc, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, doc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface Badge {
@@ -11,13 +11,17 @@ interface Badge {
   criteria?: string;
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   category: 'challenge' | 'achievement' | 'special' | 'admin';
+  xpReward?: number;
+  ppReward?: number;
 }
 
 interface Student {
   id: string;
   displayName: string;
   email?: string;
-  badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date }>;
+  badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date; xpReward?: number; ppReward?: number }>;
+  xp?: number;
+  powerPoints?: number;
 }
 
 const BadgeManager: React.FC = () => {
@@ -38,7 +42,9 @@ const BadgeManager: React.FC = () => {
     criteria: '',
     rarity: 'common' as const,
     category: 'achievement' as const,
-    imageFile: null as File | null
+    imageFile: null as File | null,
+    xpReward: 0,
+    ppReward: 0
   });
 
   useEffect(() => {
@@ -80,6 +86,9 @@ const BadgeManager: React.FC = () => {
       return;
     }
 
+    const xpReward = Number(newBadge.xpReward) || 0;
+    const ppReward = Number(newBadge.ppReward) || 0;
+
     setUploading(true);
     try {
       // Upload image to Firebase Storage
@@ -95,6 +104,8 @@ const BadgeManager: React.FC = () => {
         rarity: newBadge.rarity,
         category: newBadge.category,
         imageUrl,
+        xpReward,
+        ppReward,
         createdAt: new Date()
       };
 
@@ -107,7 +118,9 @@ const BadgeManager: React.FC = () => {
         criteria: '',
         rarity: 'common',
         category: 'achievement',
-        imageFile: null
+        imageFile: null,
+        xpReward: 0,
+        ppReward: 0
       });
       setShowCreateForm(false);
       await fetchBadges();
@@ -174,16 +187,23 @@ const BadgeManager: React.FC = () => {
         return;
       }
 
+      const xpReward = badge.xpReward ?? 0;
+      const ppReward = badge.ppReward ?? 0;
+
       const newBadgeEntry = {
         id: badge.id,
         name: badge.name,
         imageUrl: badge.imageUrl,
         description: badge.description,
-        earnedAt: new Date()
+        earnedAt: new Date(),
+        xpReward,
+        ppReward
       };
 
       let successCount = 0;
       let skippedCount = 0;
+      let totalXpAwarded = 0;
+      let totalPPAwarded = 0;
       const errors: string[] = [];
 
       // Issue badge to all selected students
@@ -204,18 +224,49 @@ const BadgeManager: React.FC = () => {
           }
 
           const studentRef = doc(db, 'students', studentId);
+          const userRef = doc(db, 'users', studentId);
+
           await updateDoc(studentRef, {
-            badges: [...currentBadges, newBadgeEntry]
+            badges: [...currentBadges, newBadgeEntry],
+            xp: increment(xpReward),
+            powerPoints: increment(ppReward)
+          });
+
+          try {
+            await updateDoc(userRef, {
+              xp: increment(xpReward),
+              powerPoints: increment(ppReward)
+            });
+          } catch (userUpdateError) {
+            console.warn(`BadgeManager: Unable to update user doc for ${studentId}`, userUpdateError);
+          }
+
+          await addDoc(collection(db, 'students', studentId, 'badgeNotifications'), {
+            badgeId: badge.id,
+            badgeName: badge.name,
+            description: badge.description,
+            imageUrl: badge.imageUrl,
+            xpReward,
+            ppReward,
+            awardedAt: serverTimestamp(),
+            read: false
           });
 
           // Update local state
           setStudents(prev => prev.map(s => 
             s.id === studentId 
-              ? { ...s, badges: [...(s.badges || []), newBadgeEntry] }
+              ? { 
+                  ...s, 
+                  badges: [...(s.badges || []), newBadgeEntry],
+                  xp: (s.xp || 0) + xpReward,
+                  powerPoints: (s.powerPoints || 0) + ppReward
+                }
               : s
           ));
 
           successCount++;
+          totalXpAwarded += xpReward;
+          totalPPAwarded += ppReward;
         } catch (error) {
           console.error(`Error issuing badge to student ${studentId}:`, error);
           const studentName = students.find(s => s.id === studentId)?.displayName || studentId;
@@ -231,13 +282,19 @@ const BadgeManager: React.FC = () => {
       if (skippedCount > 0) {
         message += ` ${skippedCount} student${skippedCount > 1 ? 's' : ''} already had this badge.`;
       }
+      if (totalXpAwarded > 0 || totalPPAwarded > 0) {
+        const rewardsParts = [] as string[];
+        if (totalXpAwarded > 0) rewardsParts.push(`${totalXpAwarded} XP`);
+        if (totalPPAwarded > 0) rewardsParts.push(`${totalPPAwarded} PP`);
+        message += ` Awarded ${rewardsParts.join(' and ')} in total.`;
+      }
       if (errors.length > 0) {
         message += ` ${errors.length} error${errors.length > 1 ? 's' : ''} occurred.`;
         console.error('Errors:', errors);
       }
       
       if (message) {
-        alert(message);
+        alert(message.trim());
       }
 
       // Clear selections
@@ -264,6 +321,8 @@ const BadgeManager: React.FC = () => {
   if (loading) {
     return <div style={{ padding: '1rem', textAlign: 'center' }}>Loading badge manager...</div>;
   }
+
+  const selectedBadgeDetails = badges.find(badge => badge.id === selectedBadge);
 
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
@@ -351,6 +410,30 @@ const BadgeManager: React.FC = () => {
                   <option value="admin">Admin</option>
                 </select>
               </div>
+              <div style={{ marginBottom: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>XP Reward</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newBadge.xpReward}
+                    onChange={(e) => setNewBadge(prev => ({ ...prev, xpReward: Number(e.target.value) }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>PP Reward</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newBadge.ppReward}
+                    onChange={(e) => setNewBadge(prev => ({ ...prev, ppReward: Number(e.target.value) }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                    placeholder="0"
+                  />
+                </div>
+              </div>
               <div style={{ marginBottom: '1rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Badge Image *</label>
                 <input
@@ -399,6 +482,21 @@ const BadgeManager: React.FC = () => {
               </option>
             ))}
           </select>
+          {selectedBadgeDetails && (
+            <div style={{
+              backgroundColor: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1rem',
+              fontSize: '0.875rem',
+              color: '#312e81'
+            }}>
+              <strong>Rewards:</strong>{' '}
+              {((selectedBadgeDetails.xpReward ?? 0) > 0 || (selectedBadgeDetails.ppReward ?? 0) > 0)
+                ? `+${selectedBadgeDetails.xpReward ?? 0} XP • +${selectedBadgeDetails.ppReward ?? 0} PP`
+                : 'No XP or PP rewards'}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: '1.5rem' }}>
@@ -589,6 +687,15 @@ const BadgeManager: React.FC = () => {
                 </div>
               </div>
               <p style={{ color: '#6b7280', fontSize: '0.875rem', marginBottom: '0.5rem' }}>{badge.description}</p>
+              {(badge.xpReward ?? 0) > 0 || (badge.ppReward ?? 0) > 0 ? (
+                <p style={{ color: '#4b5563', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                  Rewards: +{badge.xpReward ?? 0} XP • +{badge.ppReward ?? 0} PP
+                </p>
+              ) : (
+                <p style={{ color: '#9ca3af', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
+                  Rewards: None
+                </p>
+              )}
               {badge.criteria && (
                 <p style={{ color: '#9ca3af', fontSize: '0.75rem', fontStyle: 'italic' }}>
                   Criteria: {badge.criteria}

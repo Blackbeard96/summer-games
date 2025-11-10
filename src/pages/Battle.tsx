@@ -73,6 +73,15 @@ const Battle: React.FC = () => {
   const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
 
+  const handleBattleModeSelect = (mode: 'pvp' | 'offline' | 'practice') => {
+    setSelectedBattleMode(mode);
+    if (mode === 'offline') {
+      setShowVaultSiegeModal(true);
+    } else {
+      setShowVaultSiegeModal(false);
+    }
+  };
+
   // Fetch user's element from profile
   useEffect(() => {
     const fetchUserElement = async () => {
@@ -178,6 +187,7 @@ const Battle: React.FC = () => {
 
   const handleCreateBattle = async (type: 'live' | 'vault_siege') => {
     if (type === 'vault_siege') {
+      setSelectedBattleMode('offline');
       setShowVaultSiegeModal(true);
       return;
     }
@@ -647,21 +657,66 @@ const Battle: React.FC = () => {
             {/* Battle Mode Selection */}
             <div style={{ marginTop: '2rem' }}>
             {!selectedBattleMode ? (
-              <BattleModeSelector onModeSelect={setSelectedBattleMode} />
+              <BattleModeSelector onModeSelect={handleBattleModeSelect} />
             ) : selectedBattleMode === 'pvp' ? (
               <PvPBattle onBack={() => setSelectedBattleMode(null)} />
             ) : selectedBattleMode === 'offline' ? (
-              <VaultSiegeModal 
-                isOpen={showVaultSiegeModal} 
-                onClose={() => {
-                  setShowVaultSiegeModal(false);
-                  setSelectedBattleMode(null);
-                }} 
-                onAttackComplete={() => {
-                  // Refresh data after attack
-                  syncVaultPP();
-                }}
-              />
+              <div style={{ 
+                background: '#fef3c7',
+                border: '1px solid #f59e0b',
+                borderRadius: '0.75rem',
+                padding: '1.5rem',
+                textAlign: 'center'
+              }}>
+                <h3 style={{ 
+                  fontSize: '1.25rem', 
+                  marginBottom: '0.75rem', 
+                  color: '#b45309' 
+                }}>
+                  Vault Siege Controls
+                </h3>
+                <p style={{ 
+                  color: '#92400e', 
+                  fontSize: '0.9rem', 
+                  marginBottom: '1.5rem' 
+                }}>
+                  The Vault Siege interface opens in a modal window so you can focus on the battle. 
+                  Use the button below to launch or reopen the siege controls.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setShowVaultSiegeModal(true)}
+                    style={{
+                      background: '#dc2626',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.75rem 1.5rem',
+                      borderRadius: '0.5rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Launch Vault Siege
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowVaultSiegeModal(false);
+                      setSelectedBattleMode(null);
+                    }}
+                    style={{
+                      background: '#6b7280',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.75rem 1.5rem',
+                      borderRadius: '0.5rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Back to Battle Modes
+                  </button>
+                </div>
+              </div>
             ) : selectedBattleMode === 'practice' ? (
               <PracticeModeBattle onBack={() => setSelectedBattleMode(null)} />
             ) : null}
@@ -770,7 +825,11 @@ const Battle: React.FC = () => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = 'none';
                   }}>
-                  💰 Upgrade (200 PP)
+                  💰 Upgrade ({(() => {
+                    const upgradeCount = vault?.capacityUpgrades || 0;
+                    const basePrice = 200;
+                    return basePrice * Math.pow(2, upgradeCount);
+                  })()} PP)
                 </button>
               </div>
               
@@ -856,7 +915,11 @@ const Battle: React.FC = () => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = 'none';
                   }}>
-                  🛡️ Upgrade (75 PP)
+                  🛡️ Upgrade ({(() => {
+                    const upgradeCount = vault?.shieldUpgrades || 0;
+                    const basePrice = 75;
+                    return basePrice * Math.pow(2, upgradeCount);
+                  })()} PP)
                 </button>
               </div>
               
@@ -942,7 +1005,11 @@ const Battle: React.FC = () => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = 'none';
                   }}>
-                  🔥 Upgrade (50 PP)
+                  🔥 Upgrade ({(() => {
+                    const upgradeCount = vault?.firewallUpgrades || 0;
+                    const basePrice = 50;
+                    return basePrice * Math.pow(2, upgradeCount);
+                  })()} PP)
                 </button>
               </div>
             </div>
@@ -1652,10 +1719,14 @@ const Battle: React.FC = () => {
       {/* Vault Siege Modal */}
       <VaultSiegeModal
         isOpen={showVaultSiegeModal}
-        onClose={() => setShowVaultSiegeModal(false)}
+        onClose={() => {
+          setShowVaultSiegeModal(false);
+          setSelectedBattleMode(null);
+        }}
         onAttackComplete={() => {
           console.log('Battle: Attack completed, forcing immediate refresh');
           handleRefreshOfflineMoves();
+          syncVaultPP();
         }}
       />
     </div>
