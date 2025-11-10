@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
-import { BATTLE_CONSTANTS, MOVE_PP_RANGES, MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
+import { BATTLE_CONSTANTS, ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange,
   formatDamageRange 
@@ -12,14 +12,11 @@ import AttackHistory from '../components/AttackHistory';
 import VaultStats from '../components/VaultStats';
 import MovesDisplay from '../components/MovesDisplay';
 import DashboardActionCards from '../components/DashboardActionCards';
-import BattleEngine from '../components/BattleEngine';
 import BattleModeSelector from '../components/BattleModeSelector';
 import PvPBattle from '../components/PvPBattle';
-import OfflineMoveBattle from '../components/OfflineMoveBattle';
 import PracticeModeBattle from '../components/PracticeModeBattle';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { collection, addDoc } from 'firebase/firestore';
 
 const Battle: React.FC = () => {
   const { currentUser } = useAuth();
@@ -70,7 +67,6 @@ const Battle: React.FC = () => {
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
   const [userElement, setUserElement] = useState<string>('fire'); // Default to fire, will be updated
-  const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
 
   const handleBattleModeSelect = (mode: 'pvp' | 'offline' | 'practice') => {
