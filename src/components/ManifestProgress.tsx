@@ -1,19 +1,21 @@
 import React from 'react';
 import { MANIFESTS, PlayerManifest } from '../types/manifest';
-import { trackAbilityUsage, getMilestoneProgress } from '../utils/manifestTracking';
+import { trackAbilityUsage, getMilestoneProgress, getMoveUsageCount } from '../utils/manifestTracking';
 
 interface ManifestProgressProps {
   playerManifest: PlayerManifest;
   onVeilBreak?: (veilId: string) => void;
   userId?: string;
   onAbilityUsed?: () => void; // Callback to refresh data after ability usage
+  moves?: Array<{ name: string; icon?: string; description?: string }>; // Player's moves
 }
 
 const ManifestProgress: React.FC<ManifestProgressProps> = ({ 
   playerManifest, 
   onVeilBreak, 
   userId, 
-  onAbilityUsed 
+  onAbilityUsed,
+  moves = []
 }) => {
   const manifest = MANIFESTS.find(m => m.id === playerManifest.manifestId);
   
@@ -171,51 +173,60 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
             Ability Usage & Milestones
           </h4>
           <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-            {manifest.levels.map((level) => {
-              const isUnlocked = playerManifest.unlockedLevels.includes(level.level);
-              const usageCount = playerManifest.abilityUsage?.[level.level] || 0;
-              const milestones = [20, 50, 100];
-              const milestoneProgress = getMilestoneProgress(usageCount);
-              
-              return (
-                <div
-                  key={level.level}
-                  style={{
-                    padding: '0.75rem',
-                    background: isUnlocked 
-                      ? `rgba(${manifest.color.replace('#', '')}20, 0.3)`
-                      : 'rgba(255,255,255,0.05)',
-                    border: isUnlocked
-                      ? `1px solid ${manifest.color}`
-                      : '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '0.5rem',
-                    opacity: isUnlocked ? 1 : 0.4,
-                    marginBottom: '0.75rem'
-                  }}
-                >
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '0.5rem'
-                  }}>
-                    <span style={{ 
-                      fontWeight: 'bold', 
-                      fontSize: '0.9rem',
-                      color: isUnlocked ? manifest.color : 'rgba(255,255,255,0.6)'
+            {moves.length > 0 ? (
+              // Show move-specific usage
+              moves.map((move) => {
+                const usageCount = getMoveUsageCount(playerManifest, move.name);
+                const milestones = [20, 50, 100];
+                const milestoneProgress = getMilestoneProgress(usageCount);
+                const reachedMilestones = milestones.filter(m => usageCount >= m);
+                
+                return (
+                  <div
+                    key={move.name}
+                    style={{
+                      padding: '0.75rem',
+                      background: `rgba(${manifest.color.replace('#', '')}20, 0.3)`,
+                      border: `1px solid ${manifest.color}`,
+                      borderRadius: '0.5rem',
+                      marginBottom: '0.75rem'
+                    }}
+                  >
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem'
                     }}>
-                      Level {level.level}: {level.scale}
-                    </span>
-                    <span style={{ 
-                      fontSize: '0.8rem', 
-                      fontWeight: 'bold',
-                      color: isUnlocked ? manifest.color : 'rgba(255,255,255,0.6)'
-                    }}>
-                      {usageCount} uses
-                    </span>
-                  </div>
-                  
-                  {isUnlocked && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {move.icon && <span style={{ fontSize: '1rem' }}>{move.icon}</span>}
+                        <span style={{ 
+                          fontWeight: 'bold', 
+                          fontSize: '0.9rem',
+                          color: manifest.color
+                        }}>
+                          {move.name}
+                        </span>
+                      </div>
+                      <span style={{ 
+                        fontSize: '0.8rem', 
+                        fontWeight: 'bold',
+                        color: manifest.color
+                      }}>
+                        {usageCount} uses
+                      </span>
+                    </div>
+                    
+                    {move.description && (
+                      <div style={{ 
+                        fontSize: '0.7rem', 
+                        opacity: 0.8,
+                        marginBottom: '0.5rem'
+                      }}>
+                        {move.description}
+                      </div>
+                    )}
+                    
                     <div style={{ marginBottom: '0.5rem' }}>
                       <div style={{ 
                         fontSize: '0.7rem', 
@@ -244,7 +255,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                                 border: `1px solid ${isReached ? manifest.color : 'rgba(255,255,255,0.2)'}`
                               }}
                             >
-                              {milestone} ✓
+                              {milestone} {isReached ? '✓' : ''}
                             </div>
                           );
                         })}
@@ -276,35 +287,147 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                           </div>
                         </div>
                       )}
-                      
-                      <button
-                        onClick={() => handleAbilityUsage(level.level)}
-                        style={{
-                          padding: '0.5rem 1rem',
-                          background: manifest.color,
-                          border: 'none',
-                          borderRadius: '0.25rem',
-                          color: 'white',
-                          cursor: 'pointer',
-                          fontSize: '0.7rem',
-                          fontWeight: 'bold',
-                          width: '100%',
-                          transition: 'opacity 0.2s ease'
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
-                        onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
-                      >
-                        Use Ability
-                      </button>
                     </div>
-                  )}
-                  
-                  <div style={{ fontSize: '0.7rem', opacity: 0.8 }}>
-                    {level.example}
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            ) : (
+              // Fallback: Show level-based usage if no moves
+              manifest.levels.map((level) => {
+                const isUnlocked = playerManifest.unlockedLevels.includes(level.level);
+                const usageCount = playerManifest.abilityUsage?.[level.level] || 0;
+                const milestones = [20, 50, 100];
+                const milestoneProgress = getMilestoneProgress(usageCount);
+                
+                return (
+                  <div
+                    key={level.level}
+                    style={{
+                      padding: '0.75rem',
+                      background: isUnlocked 
+                        ? `rgba(${manifest.color.replace('#', '')}20, 0.3)`
+                        : 'rgba(255,255,255,0.05)',
+                      border: isUnlocked
+                        ? `1px solid ${manifest.color}`
+                        : '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '0.5rem',
+                      opacity: isUnlocked ? 1 : 0.4,
+                      marginBottom: '0.75rem'
+                    }}
+                  >
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem'
+                    }}>
+                      <span style={{ 
+                        fontWeight: 'bold', 
+                        fontSize: '0.9rem',
+                        color: isUnlocked ? manifest.color : 'rgba(255,255,255,0.6)'
+                      }}>
+                        Level {level.level}: {level.scale}
+                      </span>
+                      <span style={{ 
+                        fontSize: '0.8rem', 
+                        fontWeight: 'bold',
+                        color: isUnlocked ? manifest.color : 'rgba(255,255,255,0.6)'
+                      }}>
+                        {usageCount} uses
+                      </span>
+                    </div>
+                    
+                    {isUnlocked && (
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <div style={{ 
+                          fontSize: '0.7rem', 
+                          marginBottom: '0.25rem',
+                          color: 'rgba(255,255,255,0.8)'
+                        }}>
+                          Milestones:
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                          {milestones.map((milestone) => {
+                            const isReached = usageCount >= milestone;
+                            return (
+                              <div
+                                key={milestone}
+                                style={{
+                                  padding: '0.25rem 0.5rem',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 'bold',
+                                  background: isReached 
+                                    ? manifest.color 
+                                    : 'rgba(255,255,255,0.1)',
+                                  color: isReached 
+                                    ? 'white' 
+                                    : 'rgba(255,255,255,0.6)',
+                                  border: `1px solid ${isReached ? manifest.color : 'rgba(255,255,255,0.2)'}`
+                                }}
+                              >
+                                {milestone} ✓
+                              </div>
+                            );
+                          })}
+                        </div>
+                        
+                        {/* Next Milestone Progress */}
+                        {milestoneProgress && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <div style={{ 
+                              fontSize: '0.7rem', 
+                              marginBottom: '0.25rem',
+                              color: 'rgba(255,255,255,0.8)'
+                            }}>
+                              Next: {milestoneProgress.milestone} uses
+                            </div>
+                            <div style={{
+                              width: '100%',
+                              height: '0.25rem',
+                              background: 'rgba(255,255,255,0.2)',
+                              borderRadius: '0.125rem',
+                              overflow: 'hidden'
+                            }}>
+                              <div style={{
+                                width: `${milestoneProgress.progress}%`,
+                                height: '100%',
+                                background: manifest.color,
+                                transition: 'width 0.3s ease'
+                              }} />
+                            </div>
+                          </div>
+                        )}
+                        
+                        <button
+                          onClick={() => handleAbilityUsage(level.level)}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            background: manifest.color,
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            cursor: 'pointer',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold',
+                            width: '100%',
+                            transition: 'opacity 0.2s ease'
+                          }}
+                          onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
+                          onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
+                        >
+                          Use Ability
+                        </button>
+                      </div>
+                    )}
+                    
+                    <div style={{ fontSize: '0.7rem', opacity: 0.8 }}>
+                      {level.example}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
 

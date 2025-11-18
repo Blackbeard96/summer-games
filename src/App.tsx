@@ -12,6 +12,7 @@ import {
 
 // Core components
 import NavBar from './components/NavBar';
+import Banner from './components/Banner';
 import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
 import BadgeRewardNotifier from './components/BadgeRewardNotifier';
@@ -204,6 +205,7 @@ const AppContent = () => {
   return (
     <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <NavBar />
+      <Banner />
       <main style={{ flex: 1 }}>
         <RouteTransition>
           <Routes>

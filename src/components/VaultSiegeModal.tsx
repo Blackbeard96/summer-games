@@ -7,6 +7,7 @@ import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/fi
 import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
 import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
+import { trackMoveUsage } from '../utils/manifestTracking';
 
 interface VaultSiegeModalProps {
   isOpen: boolean;
@@ -434,6 +435,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       // Execute each selected move
       for (const moveId of selectedMoves) {
         console.log('🔥 About to call executeVaultSiegeAttack with:', { moveId, selectedTarget });
+        // Get move name before execution for tracking
+        const move = moves.find(m => m.id === moveId);
+        const moveName = move ? (getMoveNameSync(move.name) || move.name) : null;
+        
         const result = await executeVaultSiegeAttack(moveId, selectedTarget);
         console.log('🔥 executeVaultSiegeAttack returned:', result);
         console.log('🔥 Processing move result:', {
@@ -445,6 +450,13 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           message: result?.message
         });
         
+        // Track move usage if we have a move name
+        if (moveName && currentUser?.uid) {
+          trackMoveUsage(currentUser.uid, moveName).catch(err => {
+            console.error('Error tracking move usage:', err);
+          });
+        }
+        
         if (result?.success) {
           totalPPStolen += result.ppStolen || 0;
           totalXP += result.xpGained || 0;
@@ -454,25 +466,32 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           }
           if (result.message) {
             allMessages.push(result.message);
-            // Extract move name from the message (format: "Used MoveName - ...")
+            // Extract move name from the message (format: "Used MoveName - ...") as fallback
             const moveNameMatch = result.message.match(/Used ([^-]+) -/);
             if (moveNameMatch) {
-              usedMoves.push(moveNameMatch[1].trim());
+              const extractedMoveName = moveNameMatch[1].trim();
+              usedMoves.push(extractedMoveName);
+            } else if (moveName) {
+              usedMoves.push(moveName);
             }
+          } else if (moveName) {
+            usedMoves.push(moveName);
           }
         } else {
           console.warn('⚠️ Move execution returned non-success:', result);
           // Still record the attempt even if it failed, so user sees what happened
           if (result?.message) {
             allMessages.push(result.message || 'Move execution completed but no damage dealt');
-          } else {
-            // Try to get move name from moves array if message extraction fails
-            const move = moves.find(m => m.id === moveId);
-            if (move) {
-              const moveName = getMoveNameSync(move.name) || move.name;
-              allMessages.push(`Used ${moveName} - No effect`);
+            // Try to extract move name from message
+            const moveNameMatch = result.message.match(/Used ([^-]+) -/);
+            if (moveNameMatch) {
+              usedMoves.push(moveNameMatch[1].trim());
+            } else if (moveName) {
               usedMoves.push(moveName);
             }
+          } else if (moveName) {
+            allMessages.push(`Used ${moveName} - No effect`);
+            usedMoves.push(moveName);
           }
         }
       }

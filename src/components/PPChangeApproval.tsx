@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { 
   collection, 
   getDocs, 
+  getDoc,
   doc, 
   updateDoc, 
   serverTimestamp,
@@ -94,27 +95,69 @@ const PPChangeApproval: React.FC = () => {
       const request = changeRequests.find(r => r.id === requestId);
       if (!request) return;
 
+      // Store final PP values for notifications
+      const finalPPValues: { [studentId: string]: { originalPP: number; finalPP: number; changeAmount: number } } = {};
+      
       // Update student PP values in database
       for (const change of request.changes) {
-        // Apply PP boost if student has one active
-        let finalPP = change.newPP;
+        // Fetch current PP from database to ensure accuracy (student's PP may have changed since submission)
+        const studentRef = doc(db, 'students', change.studentId);
+        const studentDoc = await getDoc(studentRef);
+        
+        if (!studentDoc.exists()) {
+          logger.roster.error('PPChangeApproval: Student not found:', change.studentId);
+          continue;
+        }
+        
+        const currentPPFromDB = studentDoc.data().powerPoints || 0;
+        
+        // IMPORTANT: The stored changeAmount is now the original (unboosted) amount
+        // We should always apply boost during approval if boost is active
+        let changeAmountToApply = change.changeAmount;
+        
+        // Apply PP boost if student has one active and change is positive
         try {
           const activeBoost = await getActivePPBoost(change.studentId);
           if (activeBoost && change.changeAmount > 0) {
+            // Apply boost to the original change amount
             const boostedAmount = applyPPBoost(change.changeAmount, change.studentId, activeBoost);
-            finalPP = change.currentPP + boostedAmount;
-            logger.roster.info('PPChangeApproval: PP boost applied:', {
+            changeAmountToApply = boostedAmount;
+            logger.roster.info('PPChangeApproval: PP boost applied during approval:', {
               studentId: change.studentId,
               originalChange: change.changeAmount,
               boostedAmount,
-              finalPP
+              finalPP: currentPPFromDB + boostedAmount
             });
           }
         } catch (error) {
-          logger.roster.error('PPChangeApproval: Error applying PP boost:', error);
+          logger.roster.error('PPChangeApproval: Error checking/applying PP boost:', error);
         }
         
-        await updateDoc(doc(db, 'students', change.studentId), {
+        // Calculate final PP using current database value + change amount
+        // CRITICAL: Always use current database PP, not stored currentPP, because
+        // the student's PP may have changed between submission and approval
+        // This ensures accuracy even if the student's PP changed (e.g., from battles, purchases, etc.)
+        const finalPP = Math.max(0, currentPPFromDB + changeAmountToApply);
+        
+        // Store values for notifications
+        finalPPValues[change.studentId] = {
+          originalPP: currentPPFromDB,
+          finalPP: finalPP,
+          changeAmount: changeAmountToApply
+        };
+        
+        logger.roster.info('PPChangeApproval: Updating PP:', {
+          studentId: change.studentId,
+          studentName: change.studentName,
+          currentPPFromDB,
+          changeAmountToApply,
+          finalPP,
+          storedCurrentPP: change.currentPP,
+          storedChangeAmount: change.changeAmount,
+          storedNewPP: change.newPP
+        });
+        
+        await updateDoc(studentRef, {
           powerPoints: finalPP,
           lastUpdated: serverTimestamp()
         });
@@ -128,26 +171,20 @@ const PPChangeApproval: React.FC = () => {
       });
 
       // Create notifications for students whose PP was changed
+      // Use the stored final PP values from the approval loop
       for (const change of request.changes) {
         try {
-          // Calculate final PP for this specific change
-          let changeFinalPP = change.newPP;
-          try {
-            const activeBoost = await getActivePPBoost(change.studentId);
-            if (activeBoost && change.changeAmount > 0) {
-              const boostedAmount = applyPPBoost(change.changeAmount, change.studentId, activeBoost);
-              changeFinalPP = change.currentPP + boostedAmount;
-            }
-          } catch (error) {
-            // Use original newPP if boost calculation fails
-            changeFinalPP = change.newPP;
+          const ppData = finalPPValues[change.studentId];
+          if (!ppData) {
+            logger.roster.error('PPChangeApproval: Missing PP data for notification:', change.studentId);
+            continue;
           }
 
           await addDoc(collection(db, 'students', change.studentId, 'notifications'), {
             type: 'pp_change_approved',
-            message: `Your Power Points have been updated by ${change.changeAmount > 0 ? '+' : ''}${change.changeAmount}. New total: ${changeFinalPP}`,
-            changeAmount: change.changeAmount,
-            newTotal: changeFinalPP,
+            message: `Your Power Points have been updated by ${ppData.changeAmount > 0 ? '+' : ''}${ppData.changeAmount}. New total: ${ppData.finalPP}`,
+            changeAmount: ppData.changeAmount,
+            newTotal: ppData.finalPP,
             scorekeeperName: request.scorekeeperEmail,
             timestamp: serverTimestamp(),
             read: false

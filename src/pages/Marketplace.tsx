@@ -123,7 +123,7 @@ const artifacts: Artifact[] = [
 ];
 
 const Marketplace = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin: checkIsAdmin } = useAuth();
   const [powerPoints, setPowerPoints] = useState(0);
   const [inventory, setInventory] = useState<string[]>([]);
   const [artifactCounts, setArtifactCounts] = useState<Record<string, number>>({});
@@ -133,6 +133,7 @@ const Marketplace = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
+  const isAdmin = checkIsAdmin?.() ?? false;
 
   // Function to create admin notifications
   const createAdminNotification = async (notification: any) => {
@@ -913,7 +914,7 @@ const Marketplace = () => {
                   color: '#6b7280',
                   fontWeight: '500'
                 }}>
-                  Mystical System Technology
+                  Masters of Space and Time
                 </span>
               </div>
               <div style={{ position: 'relative', width: isMobile ? '100%' : '300px' }}>
@@ -957,79 +958,81 @@ const Marketplace = () => {
           </div>
           
           {/* Debug Section */}
-          <div style={{
-            backgroundColor: '#f3f4f6',
-            borderRadius: '0.5rem',
-            padding: '1rem',
-            marginBottom: '1rem',
-            border: '1px solid #d1d5db'
-          }}>
-            <h3 style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#374151' }}>
-              🔧 Debug Tools
-            </h3>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button
-                onClick={debugInventoryData}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#6b7280',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: '500'
-                }}
-              >
-                🔍 Debug Inventory Data
-              </button>
-              <button
-                onClick={cleanupInventoryData}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: '500'
-                }}
-              >
-                🧹 Clean Up Inventory
-              </button>
-              <button
-                onClick={forceSyncInventory}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#059669',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: '500'
-                }}
-              >
-                🔄 Force Sync Inventory
-              </button>
-              <button
-                onClick={clearPhantomShield}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: '500'
-                }}
-              >
-                🛡️ Clear Phantom Shield
-              </button>
-            </div>
+      {isAdmin && (
+        <div style={{
+          backgroundColor: '#f3f4f6',
+          borderRadius: '0.5rem',
+          padding: '1rem',
+          marginBottom: '1rem',
+          border: '1px solid #d1d5db'
+        }}>
+          <h3 style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#374151' }}>
+            🔧 Debug Tools
+          </h3>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={debugInventoryData}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: '500'
+              }}
+            >
+              🔍 Debug Inventory Data
+            </button>
+            <button
+              onClick={cleanupInventoryData}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: '500'
+              }}
+            >
+              🧹 Clean Up Inventory
+            </button>
+            <button
+              onClick={forceSyncInventory}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#059669',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: '500'
+              }}
+            >
+              🔄 Force Sync Inventory
+            </button>
+            <button
+              onClick={clearPhantomShield}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: '500'
+              }}
+            >
+              🛡️ Clear Phantom Shield
+            </button>
           </div>
+        </div>
+      )}
         </div>
       </div>
 

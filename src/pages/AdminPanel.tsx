@@ -22,6 +22,7 @@ import ScorekeeperInterface from '../components/ScorekeeperInterface';
 import PPChangeApproval from '../components/PPChangeApproval';
 import RoleSystemSetup from '../components/RoleSystemSetup';
 import ManifestAdmin from '../components/ManifestAdmin';
+import BannerManager from '../components/BannerManager';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -79,7 +80,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1795,6 +1796,23 @@ const AdminPanel: React.FC = () => {
         >
           🚀 Role Setup
         </button>
+        <button
+          onClick={() => setActiveTab('banner')}
+          style={{
+            backgroundColor: activeTab === 'banner' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'banner' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          📢 Banner Manager
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -1818,6 +1836,8 @@ const AdminPanel: React.FC = () => {
         <PPChangeApproval />
       ) : activeTab === 'role-setup' ? (
         <RoleSystemSetup />
+      ) : activeTab === 'banner' ? (
+        <BannerManager />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',
