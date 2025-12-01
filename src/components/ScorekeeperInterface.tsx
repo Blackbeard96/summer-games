@@ -42,6 +42,8 @@ const ScorekeeperInterface: React.FC = () => {
   const [ppInputValues, setPPInputValues] = useState<Record<string, number | undefined>>({});
   const [pendingChanges, setPendingChanges] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [ppBoostStatuses, setPpBoostStatuses] = useState<{ [studentId: string]: boolean }>({});
+  const [availableClassrooms, setAvailableClassrooms] = useState<Array<{ id: string; name: string }>>([]);
 
   // Check if current user is a scorekeeper and get assigned class
   useEffect(() => {
@@ -116,24 +118,63 @@ const ScorekeeperInterface: React.FC = () => {
               }
             }
           } else if (finalRole === 'admin') {
-            if (classId) {
-              setAssignedClassId(classId);
-              try {
-                const classDoc = await getDoc(doc(db, 'classrooms', classId));
-                if (classDoc.exists()) {
-                  const classData = classDoc.data();
-                  setClassName(classData.name || `Class ${classId}`);
-                } else {
-                  setClassName(`Class ${classId}`);
-                }
-              } catch (classError) {
-                logger.roles.warn('ScorekeeperInterface: Error loading class name:', classError);
-                setClassName(`Class ${classId}`);
+            // For admins, load all classrooms
+            try {
+              const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+              const classrooms = classroomsSnapshot.docs.map(doc => ({
+                id: doc.id,
+                name: doc.data().name || `Class ${doc.id}`
+              }));
+              setAvailableClassrooms(classrooms);
+              
+              // Set default to first classroom or 'admin-all-classes'
+              if (classrooms.length > 0) {
+                setAssignedClassId(classrooms[0].id);
+                setClassName(classrooms[0].name);
+              } else {
+                setAssignedClassId('admin-all-classes');
+                setClassName('All Classes (Admin Access)');
               }
-            } else {
-              // Admin users without assigned class get access to all students
+            } catch (error) {
+              logger.roles.error('ScorekeeperInterface: Error loading classrooms for admin:', error);
+              setAssignedClassId('admin-all-classes');
               setClassName('All Classes (Admin Access)');
-              setAssignedClassId('admin-all-classes'); // Special identifier for admin access
+            }
+          }
+          
+          // Also load classrooms if user is admin by email (even if role doc says otherwise)
+          const isAdminByEmailCheck = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                                     currentUser?.email === 'admin@mstgames.net' ||
+                                     currentUser?.email === 'edm21179@gmail.com' ||
+                                     currentUser?.email === 'eddymosley9@gmail.com' ||
+                                     currentUser?.email?.includes('eddymosley') ||
+                                     currentUser?.email?.includes('admin') ||
+                                     currentUser?.email?.includes('mstgames');
+          
+          if (isAdminByEmailCheck && availableClassrooms.length === 0) {
+            // Load classrooms for email-based admins
+            try {
+              const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+              const classrooms = classroomsSnapshot.docs.map(doc => ({
+                id: doc.id,
+                name: doc.data().name || `Class ${doc.id}`
+              }));
+              setAvailableClassrooms(classrooms);
+              
+              // Set default to first classroom or 'admin-all-classes'
+              if (classrooms.length > 0 && !assignedClassId) {
+                setAssignedClassId(classrooms[0].id);
+                setClassName(classrooms[0].name);
+              } else if (!assignedClassId) {
+                setAssignedClassId('admin-all-classes');
+                setClassName('All Classes (Admin Access)');
+              }
+            } catch (error) {
+              logger.roles.error('ScorekeeperInterface: Error loading classrooms for email-based admin:', error);
+              if (!assignedClassId) {
+                setAssignedClassId('admin-all-classes');
+                setClassName('All Classes (Admin Access)');
+              }
             }
           }
         } else {
@@ -159,6 +200,42 @@ const ScorekeeperInterface: React.FC = () => {
 
     checkUserRole();
   }, [currentUser]);
+
+  // Load classrooms for email-based admins if not already loaded
+  useEffect(() => {
+    const loadClassroomsForEmailAdmin = async () => {
+      if (!currentUser) return;
+      
+      const isAdminByEmailCheck = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                                   currentUser?.email === 'admin@mstgames.net' ||
+                                   currentUser?.email === 'edm21179@gmail.com' ||
+                                   currentUser?.email === 'eddymosley9@gmail.com' ||
+                                   currentUser?.email?.includes('eddymosley') ||
+                                   currentUser?.email?.includes('admin') ||
+                                   currentUser?.email?.includes('mstgames');
+      
+      if (isAdminByEmailCheck && availableClassrooms.length === 0) {
+        try {
+          const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+          const classrooms = classroomsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name || `Class ${doc.id}`
+          }));
+          setAvailableClassrooms(classrooms);
+          
+          // Set default to first classroom if not already set
+          if (classrooms.length > 0 && (!assignedClassId || assignedClassId === 'admin-all-classes')) {
+            setAssignedClassId(classrooms[0].id);
+            setClassName(classrooms[0].name);
+          }
+        } catch (error) {
+          console.error('Error loading classrooms for email-based admin:', error);
+        }
+      }
+    };
+    
+    loadClassroomsForEmailAdmin();
+  }, [currentUser, availableClassrooms.length, assignedClassId]);
 
   // Load students for the assigned class
   useEffect(() => {
@@ -221,12 +298,13 @@ const ScorekeeperInterface: React.FC = () => {
         });
 
         // Get classroom to filter students (skip for admin access to all classes)
+        let finalStudents: Student[] = [];
         if (assignedClassId === 'admin-all-classes') {
           // Admin access to all students
           logger.roster.info('ScorekeeperInterface: Admin access - showing all students:', {
             totalStudents: allStudents.length
           });
-          setStudents(allStudents);
+          finalStudents = allStudents;
         } else {
           try {
             const classDoc = await getDoc(doc(db, 'classrooms', assignedClassId));
@@ -246,18 +324,34 @@ const ScorekeeperInterface: React.FC = () => {
                 classStudentIds: classStudentIds
               });
               
-              setStudents(classStudents);
+              finalStudents = classStudents;
             } else {
               // If no classroom found, show all students for now
               logger.roster.warn('ScorekeeperInterface: No classroom found, showing all students');
-              setStudents(allStudents);
+              finalStudents = allStudents;
             }
           } catch (classError) {
             // If classroom access fails, show all students as fallback
             logger.roster.warn('ScorekeeperInterface: Classroom access failed, showing all students:', classError);
-            setStudents(allStudents);
+            finalStudents = allStudents;
           }
         }
+        
+        setStudents(finalStudents);
+        setFilteredStudents(finalStudents);
+        
+        // Load PP boost statuses for all students
+        const boostStatuses: { [studentId: string]: boolean } = {};
+        for (const student of finalStudents) {
+          try {
+            const activeBoost = await getActivePPBoost(student.id);
+            boostStatuses[student.id] = activeBoost !== null;
+          } catch (error) {
+            console.error(`Error checking PP boost for student ${student.id}:`, error);
+            boostStatuses[student.id] = false;
+          }
+        }
+        setPpBoostStatuses(boostStatuses);
       } catch (error) {
         logger.roster.error('ScorekeeperInterface: Error loading students:', error);
       }
@@ -537,13 +631,64 @@ const ScorekeeperInterface: React.FC = () => {
         }}>
           ⚡ Class Power Points Overview
         </h1>
-        <p style={{ 
-          fontSize: '1rem', 
-          color: '#6b7280', 
-          margin: 0 
-        }}>
-          {className} - Manage Power Points for all students
-        </p>
+        {/* Class Dropdown for Admins - Always show for admins */}
+        {(userRole === 'admin' || isAdminByEmail) ? (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+            marginBottom: '0.5rem'
+          }}>
+            <select
+              value={assignedClassId || 'admin-all-classes'}
+              onChange={(e) => {
+                const selectedClassId = e.target.value;
+                setAssignedClassId(selectedClassId);
+                const selectedClass = availableClassrooms.find(c => c.id === selectedClassId);
+                setClassName(selectedClass ? selectedClass.name : 'All Classes (Admin Access)');
+                // Clear pending changes when switching classes
+                setPendingChanges({});
+                setOriginalPendingChanges({});
+                setPPInputValues({});
+              }}
+              style={{
+                padding: '0.5rem 1rem',
+                fontSize: '1rem',
+                border: '2px solid #3b82f6',
+                borderRadius: '0.375rem',
+                backgroundColor: 'white',
+                color: '#1f2937',
+                cursor: 'pointer',
+                minWidth: '250px',
+                fontWeight: '500',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+              }}
+            >
+              <option value="admin-all-classes">All Classes</option>
+              {availableClassrooms.map((classroom) => (
+                <option key={classroom.id} value={classroom.id}>
+                  {classroom.name}
+                </option>
+              ))}
+            </select>
+            <span style={{ 
+              fontSize: '1rem', 
+              color: '#6b7280' 
+            }}>
+              - Manage Power Points for all students
+            </span>
+          </div>
+        ) : (
+          <p style={{ 
+            fontSize: '1rem', 
+            color: '#6b7280', 
+            margin: 0,
+            marginBottom: '0.5rem'
+          }}>
+            {className} - Manage Power Points for all students
+          </p>
+        )}
       </div>
 
       {/* Search Bar */}
@@ -780,15 +925,36 @@ const ScorekeeperInterface: React.FC = () => {
                   )}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <h3 style={{ 
-                    fontSize: '1.1rem', 
-                    fontWeight: '600', 
-                    margin: 0, 
-                    color: '#1f2937',
-                    marginBottom: '0.25rem'
-                  }}>
-                    {student.displayName}
-                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                    <h3 style={{ 
+                      fontSize: '1.1rem', 
+                      fontWeight: '600', 
+                      margin: 0, 
+                      color: '#1f2937'
+                    }}>
+                      {student.displayName}
+                    </h3>
+                    {/* PP Boost Indicator */}
+                    {ppBoostStatuses[student.id] && (
+                      <span
+                        style={{
+                          background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                          color: 'white',
+                          padding: '0.125rem 0.375rem',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.7rem',
+                          fontWeight: 'bold',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          boxShadow: '0 1px 2px rgba(251, 191, 36, 0.3)'
+                        }}
+                        title="Double PP Boost Active - This student will receive double PP"
+                      >
+                        ⚡ x2
+                      </span>
+                    )}
+                  </div>
                   <p style={{ 
                     fontSize: '0.875rem', 
                     color: '#6b7280', 

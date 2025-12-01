@@ -2,16 +2,25 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
 
+interface StatusEffect {
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'none';
+  duration: number;
+  intensity?: number;
+  damagePerTurn?: number;
+  ppLossPerTurn?: number;
+  ppStealPerTurn?: number;
+  healPerTurn?: number;
+  chance?: number;
+  successChance?: number;
+}
+
 interface MoveOverrideData {
   id: string;
   name: string;
   damage: number | { min: number; max: number };
   description?: string;
-  statusEffect?: {
-    type: 'burn' | 'freeze' | 'confuse' | 'none';
-    duration: number;
-    intensity?: number;
-  };
+  statusEffect?: StatusEffect; // Legacy support - single effect
+  statusEffects?: StatusEffect[]; // New - multiple effects
 }
 
 interface MoveOverrides {
@@ -167,19 +176,48 @@ export const getMoveDescriptionSync = (moveName: string): string => {
 };
 
 /**
- * Gets move status effect with overrides applied (async version)
+ * Gets move status effect(s) with overrides applied (async version)
+ * Returns an object with both statusEffect (legacy) and statusEffects (new) for compatibility
  */
 export const getMoveStatusEffect = async (moveName: string) => {
+  // "Read the Room" and "Emotional Read" should never have status effects
+  if (moveName === 'Read the Room' || moveName === 'Emotional Read') {
+    return {
+      statusEffect: null,
+      statusEffects: []
+    };
+  }
+  
   const overrides = await loadMoveOverrides();
-  return overrides[moveName]?.statusEffect || null;
+  const override = overrides[moveName];
+  if (override) {
+    return {
+      statusEffect: override.statusEffect || null,
+      statusEffects: override.statusEffects || null
+    };
+  }
+  return null;
 };
 
 /**
- * Gets move status effect with overrides applied (sync version)
+ * Gets move status effect(s) with overrides applied (sync version)
+ * Returns an object with both statusEffect (legacy) and statusEffects (new) for compatibility
  */
 export const getMoveStatusEffectSync = (moveName: string) => {
+  // "Read the Room" and "Emotional Read" should never have status effects
+  if (moveName === 'Read the Room' || moveName === 'Emotional Read') {
+    return {
+      statusEffect: null,
+      statusEffects: []
+    };
+  }
+  
   if (moveOverridesCache && moveOverridesCache[moveName]) {
-    return moveOverridesCache[moveName].statusEffect || null;
+    const override = moveOverridesCache[moveName];
+    return {
+      statusEffect: override.statusEffect || null,
+      statusEffects: override.statusEffects || null
+    };
   }
   
   return null;

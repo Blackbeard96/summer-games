@@ -32,6 +32,7 @@ import {
   MOVE_DAMAGE_VALUES
 } from '../types/battle';
 import { getMoveDamage } from '../utils/moveOverrides';
+import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 interface BattleContextType {
   // Vault Management
@@ -39,7 +40,9 @@ interface BattleContextType {
   updateVault: (updates: Partial<Vault>) => Promise<void>;
   upgradeVaultCapacity: () => Promise<void>;
   upgradeVaultShields: () => Promise<void>;
-  upgradeVaultFirewall: () => Promise<void>;
+  upgradeGenerator: () => Promise<void>;
+  collectGeneratorPP: () => Promise<void>;
+  getGeneratorRates: (level: number) => { ppPerDay: number; shieldsPerDay: number };
   restoreVaultShields: (amount: number, cost: number) => Promise<void>;
   payDues: () => Promise<void>;
   syncVaultPP: () => Promise<void>;
@@ -95,6 +98,12 @@ interface BattleContextType {
   consumeOfflineMove: () => Promise<boolean>;
   debugOfflineMoves: () => void;
   
+  // Inventory Management
+  inventory: string[];
+  artifacts: any[];
+  activateArtifact: (artifactName: string) => Promise<void>;
+  refreshInventory: () => Promise<void>;
+  
   // Loading States
   loading: boolean;
   error: string | null;
@@ -123,6 +132,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [battleLobbies, setBattleLobbies] = useState<BattleLobby[]>([]);
   const [offlineMoves, setOfflineMoves] = useState<OfflineMove[]>([]);
   const [attackHistory, setAttackHistory] = useState<VaultSiegeAttack[]>([]);
+  const [inventory, setInventory] = useState<string[]>([]);
+  const [artifacts, setArtifacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -144,14 +155,22 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const initializeBattleData = async () => {
       setLoading(true);
       try {
-        // Get player's current PP and manifest from student data
+        // Get player's current PP, manifest, and inventory from student data
         const studentRef = doc(db, 'students', currentUser.uid);
         const studentDoc = await getDoc(studentRef);
-        const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
-        const userManifest = studentDoc.exists() ? (studentDoc.data().manifest?.manifestId || studentDoc.data().manifestationType || 'reading') : 'reading';
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        const playerPP = studentData.powerPoints || 0;
+        const userManifest = studentData.manifest?.manifestId || studentData.manifestationType || 'reading';
+        const studentInventory = studentData.inventory || [];
+        const studentArtifacts = studentData.artifacts || [];
+        
+        // Set inventory and artifacts
+        setInventory(studentInventory);
+        setArtifacts(studentArtifacts);
         
         logger.battle.debug('Player PP from student data:', playerPP);
         logger.battle.debug('User manifest for move filtering:', userManifest);
+        logger.battle.debug('Player inventory:', studentInventory);
         
         // Initialize or fetch vault
         const vaultRef = doc(db, 'vaults', currentUser.uid);
@@ -159,15 +178,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         if (!vaultDoc.exists()) {
           // Create new vault with player's current PP
+          const initialCapacity = 1000;
+          const maxVaultHealth = Math.floor(initialCapacity * 0.1); // 10% of capacity
+          // Vault health is the minimum of current PP and max vault health
+          const initialVaultHealth = Math.min(playerPP, maxVaultHealth);
           const newVault: Vault = {
             id: currentUser.uid,
             ownerId: currentUser.uid,
-            capacity: 1000,
+            capacity: initialCapacity,
             currentPP: playerPP,
+            vaultHealth: initialVaultHealth,
+            maxVaultHealth: maxVaultHealth,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             overshield: 0,
-            firewall: 10,
+            generatorLevel: 1,
+            generatorPendingPP: 0,
+            generatorLastReset: new Date(),
             lastUpgrade: new Date(),
             debtStatus: false,
             debtAmount: 0,
@@ -183,26 +210,69 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const existingVaultData = vaultDoc.data();
           console.log('BattleContext: Existing vault PP:', existingVaultData.currentPP, 'Player PP:', playerPP);
           
-          // Migrate existing vault to include new move tracking fields
+          // Migrate existing vault to include new move tracking fields and generator
+          // Calculate vault health (10% of capacity) if not already set
+          const maxVaultHealth = existingVaultData.maxVaultHealth || Math.floor((existingVaultData.capacity || 1000) * 0.1);
+          // Vault health is the minimum of current PP and max vault health
+          const currentPP = existingVaultData.currentPP || playerPP;
+          const vaultHealth = existingVaultData.vaultHealth !== undefined 
+            ? existingVaultData.vaultHealth 
+            : Math.min(currentPP, maxVaultHealth); // Default to min of PP and max if not set
+          
           const existingVault: Vault = {
             ...existingVaultData,
+            vaultHealth: vaultHealth,
+            maxVaultHealth: maxVaultHealth,
             movesRemaining: existingVaultData.movesRemaining || BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             maxMovesPerDay: existingVaultData.maxMovesPerDay || BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             lastMoveReset: existingVaultData.lastMoveReset || new Date(),
+            // Migrate from firewall to generator if needed
+            generatorLevel: existingVaultData.generatorLevel || 1,
+            generatorPendingPP: existingVaultData.generatorPendingPP || 0,
+            generatorLastReset: existingVaultData.generatorLastReset || existingVaultData.lastMoveReset || new Date(),
+            generatorUpgrades: existingVaultData.generatorUpgrades || 0,
           } as Vault;
           
           // Check and reset daily moves if needed
-          const updatedVault = checkAndResetDailyMoves(existingVault);
+          let updatedVault = checkAndResetDailyMoves(existingVault);
+          
+          // Check and reset vault health cooldown if expired
+          updatedVault = checkAndResetVaultHealthCooldown(updatedVault);
+          
+          // Check and generate generator resources if needed
+          updatedVault = checkAndGenerateGeneratorResources(updatedVault);
           
           // Always update vault PP to match player's current PP
-          if (existingVault.currentPP !== playerPP || updatedVault.movesRemaining !== existingVault.movesRemaining) {
+          // When entering a new battle: if PP >= max health, reset vault health to max
+          // Otherwise, vault health should be min of PP and max vault health
+          const correctVaultHealth = playerPP >= updatedVault.maxVaultHealth
+            ? updatedVault.maxVaultHealth
+            : Math.min(playerPP, updatedVault.maxVaultHealth);
+          if (existingVault.currentPP !== playerPP || updatedVault.vaultHealth !== correctVaultHealth ||
+              updatedVault.movesRemaining !== existingVault.movesRemaining || 
+              updatedVault.generatorPendingPP !== existingVault.generatorPendingPP || 
+              updatedVault.shieldStrength !== existingVault.shieldStrength) {
             console.log('BattleContext: Syncing vault PP from', existingVault.currentPP, 'to', playerPP);
+            if (playerPP >= updatedVault.maxVaultHealth) {
+              console.log(`BattleContext: Resetting vault health to max (${updatedVault.maxVaultHealth}) because PP (${playerPP}) >= max health`);
+            } else {
+              console.log('BattleContext: Updating vault health to', correctVaultHealth);
+            }
             await updateDoc(vaultRef, { 
               currentPP: playerPP,
+              vaultHealth: correctVaultHealth,
               movesRemaining: updatedVault.movesRemaining,
-              lastMoveReset: updatedVault.lastMoveReset
+              lastMoveReset: updatedVault.lastMoveReset,
+              generatorPendingPP: updatedVault.generatorPendingPP,
+              generatorLastReset: updatedVault.generatorLastReset,
+              shieldStrength: updatedVault.shieldStrength,
+              vaultHealthCooldown: updatedVault.vaultHealthCooldown // Persist cooldown if active
             });
-            setVault({ ...updatedVault, currentPP: playerPP });
+            setVault({ 
+              ...updatedVault, 
+              currentPP: playerPP,
+              vaultHealth: correctVaultHealth // Update local state
+            });
           } else {
             setVault(updatedVault);
           }
@@ -322,15 +392,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (err instanceof Error && err.message.includes('INTERNAL ASSERTION FAILED')) {
           console.warn('BattleContext: Firestore internal assertion error - using defaults');
           // Set default values silently
+          const maxVaultHealth = Math.floor(1000 * 0.1);
           const defaultVault: Vault = {
             id: currentUser.uid,
             ownerId: currentUser.uid,
             capacity: 1000,
             currentPP: 0,
+            vaultHealth: Math.min(0, maxVaultHealth), // 0 PP means 0 vault health
+            maxVaultHealth: maxVaultHealth,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             overshield: 0,
-            firewall: 10,
+            generatorLevel: 1,
+            generatorPendingPP: 0,
+            generatorLastReset: new Date(),
             lastUpgrade: new Date(),
             debtStatus: false,
             debtAmount: 0,
@@ -347,15 +422,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setError('Failed to initialize battle data. Please refresh the page or try again later.');
         
         // Set default values to prevent complete failure
+        const maxVaultHealth = Math.floor(1000 * 0.1);
         const defaultVault: Vault = {
           id: currentUser.uid,
           ownerId: currentUser.uid,
           capacity: 1000,
           currentPP: 0,
+          vaultHealth: Math.min(0, maxVaultHealth), // 0 PP means 0 vault health
+          maxVaultHealth: maxVaultHealth,
           shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
           maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
           overshield: 0,
-          firewall: 10,
+          generatorLevel: 1,
+          generatorPendingPP: 0,
+          generatorLastReset: new Date(),
           lastUpgrade: new Date(),
           debtStatus: false,
           debtAmount: 0,
@@ -400,15 +480,36 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     });
 
-    const unsubscribeStudent = onSnapshot(studentRef, (studentDoc) => {
+    const unsubscribeStudent = onSnapshot(studentRef, async (studentDoc) => {
       if (studentDoc.exists()) {
-        // Just log the student data for debugging, don't sync
         const studentData = studentDoc.data();
-        // logger.battle.debug('Student data updated:', {
-        //   powerPoints: studentData.powerPoints,
-        //   xp: studentData.xp,
-        //   timestamp: new Date().toISOString()
-        // });
+        const studentPP = studentData.powerPoints || 0;
+        
+        // Update inventory and artifacts in real-time
+        setInventory(studentData.inventory || []);
+        setArtifacts(studentData.artifacts || []);
+        
+        // Sync vault PP with student PP in real-time
+        try {
+          const vaultRef = doc(db, 'vaults', currentUser.uid);
+          const vaultDoc = await getDoc(vaultRef);
+          
+          if (vaultDoc.exists()) {
+            const vaultData = vaultDoc.data();
+            const currentVaultPP = vaultData.currentPP || 0;
+            
+            // Only update if they differ to avoid unnecessary writes
+            if (currentVaultPP !== studentPP) {
+              await updateDoc(vaultRef, {
+                currentPP: studentPP,
+                lastUpdated: serverTimestamp()
+              });
+              console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
+            }
+          }
+        } catch (error) {
+          console.error('[BattleContext] Error syncing vault PP:', error);
+        }
       }
     });
 
@@ -583,6 +684,39 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // Vault upgrade functions
+  // Helper function to check and reset vault health cooldown
+  const checkAndResetVaultHealthCooldown = (vaultData: Vault): Vault => {
+    if (!vaultData.vaultHealthCooldown) {
+      // Even if no cooldown, ensure vault health doesn't exceed PP if PP is below threshold
+      const maxVaultHealth = vaultData.maxVaultHealth || Math.floor(vaultData.capacity * 0.1);
+      const correctVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
+      if (vaultData.vaultHealth !== correctVaultHealth) {
+        return {
+          ...vaultData,
+          vaultHealth: correctVaultHealth
+        };
+      }
+      return vaultData; // No cooldown active and health is correct
+    }
+    
+    const cooldownEndTime = new Date(vaultData.vaultHealthCooldown);
+    cooldownEndTime.setHours(cooldownEndTime.getHours() + 3); // 3-hour cooldown
+    const now = new Date();
+    
+    // If cooldown has expired, reset vault health to min of PP and max
+    if (now >= cooldownEndTime) {
+      const maxVaultHealth = vaultData.maxVaultHealth || Math.floor(vaultData.capacity * 0.1);
+      const resetVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
+      return {
+        ...vaultData,
+        vaultHealth: resetVaultHealth,
+        vaultHealthCooldown: undefined
+      };
+    }
+    
+    return vaultData; // Cooldown still active
+  };
+
   const upgradeVaultCapacity = async () => {
     if (!currentUser || !vault) return;
     
@@ -602,10 +736,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const newCapacity = vault.capacity + 200;
       const newPP = vault.currentPP - upgradeCost;
       const newUpgradeCount = upgradeCount + 1;
+      const newMaxVaultHealth = Math.floor(newCapacity * 0.1); // 10% of new capacity
+      // Vault health should be min of current PP and new max vault health
+      const newVaultHealth = Math.min(newPP, newMaxVaultHealth);
       
       await updateDoc(vaultRef, {
         capacity: newCapacity,
         currentPP: newPP,
+        maxVaultHealth: newMaxVaultHealth,
+        vaultHealth: newVaultHealth,
         capacityUpgrades: newUpgradeCount
       });
       
@@ -617,6 +756,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...prevVault, 
         capacity: newCapacity,
         currentPP: newPP,
+        maxVaultHealth: newMaxVaultHealth,
+        vaultHealth: newVaultHealth,
         capacityUpgrades: newUpgradeCount
       } : null);
       
@@ -671,30 +812,46 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const upgradeVaultFirewall = async () => {
+  // Calculate generator production rates based on level
+  const getGeneratorRates = (level: number) => {
+    // Level 1: 10 PP/day, 10 Shields/day
+    // Each level increases by 5 PP and 5 Shields
+    const basePP = 10;
+    const baseShields = 10;
+    const ppPerLevel = 5;
+    const shieldsPerLevel = 5;
+    
+    return {
+      ppPerDay: basePP + (level - 1) * ppPerLevel,
+      shieldsPerDay: baseShields + (level - 1) * shieldsPerLevel
+    };
+  };
+
+  const upgradeGenerator = async () => {
     if (!currentUser || !vault) return;
     
     // Calculate upgrade count (default to 0 if not set)
-    const upgradeCount = vault.firewallUpgrades || 0;
-    // Base price is 50, doubles for each upgrade: 50 * (2 ^ upgradeCount)
-    const basePrice = 50;
-    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
+    const upgradeCount = vault.generatorUpgrades || 0;
+    // Base price is 250, adds 250 for each upgrade: 250 + (250 * upgradeCount)
+    const basePrice = 250;
+    const upgradeCost = basePrice + (basePrice * upgradeCount);
     
     if (vault.currentPP < upgradeCost) {
-      setError(`Insufficient PP for firewall upgrade. Need ${upgradeCost} PP.`);
+      setError(`Insufficient PP for generator upgrade. Need ${upgradeCost} PP.`);
       return;
     }
     
     try {
       const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const newFirewall = Math.min(100, vault.firewall + 15); // Cap at 100%
+      const newGeneratorLevel = (vault.generatorLevel || 1) + 1;
       const newPP = vault.currentPP - upgradeCost;
       const newUpgradeCount = upgradeCount + 1;
+      const rates = getGeneratorRates(newGeneratorLevel);
       
       await updateDoc(vaultRef, {
-        firewall: newFirewall,
+        generatorLevel: newGeneratorLevel,
         currentPP: newPP,
-        firewallUpgrades: newUpgradeCount
+        generatorUpgrades: newUpgradeCount
       });
       
       // Also update student PP
@@ -703,15 +860,56 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       setVault(prevVault => prevVault ? { 
         ...prevVault, 
-        firewall: newFirewall,
+        generatorLevel: newGeneratorLevel,
         currentPP: newPP,
-        firewallUpgrades: newUpgradeCount
+        generatorUpgrades: newUpgradeCount
       } : null);
       
-      setSuccess(`Vault firewall upgraded! +15% attack resistance (Cost: ${upgradeCost} PP)`);
+      setSuccess(`Generator upgraded to Level ${newGeneratorLevel}! Now generates ${rates.ppPerDay} PP/day and ${rates.shieldsPerDay} Shields/day (Cost: ${upgradeCost} PP)`);
     } catch (error) {
-      console.error('Error upgrading vault firewall:', error);
-      setError('Failed to upgrade vault firewall');
+      console.error('Error upgrading generator:', error);
+      setError('Failed to upgrade generator');
+    }
+  };
+
+  // Collect generated PP
+  const collectGeneratorPP = async () => {
+    if (!currentUser || !vault) return;
+    
+    const pendingPP = vault.generatorPendingPP || 0;
+    if (pendingPP <= 0) {
+      setError('No PP available to collect');
+      return;
+    }
+    
+    try {
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Get current PP from student document to ensure accuracy
+      const studentDoc = await getDoc(studentRef);
+      const currentStudentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+      const newPP = Math.min(vault.capacity, currentStudentPP + pendingPP);
+      
+      await updateDoc(vaultRef, {
+        currentPP: newPP,
+        generatorPendingPP: 0
+      });
+      
+      await updateDoc(studentRef, {
+        powerPoints: newPP
+      });
+      
+      setVault(prevVault => prevVault ? { 
+        ...prevVault, 
+        currentPP: newPP,
+        generatorPendingPP: 0
+      } : null);
+      
+      setSuccess(`Collected ${pendingPP} PP from Generator!`);
+    } catch (error) {
+      console.error('Error collecting generator PP:', error);
+      setError('Failed to collect generator PP');
     }
   };
 
@@ -787,18 +985,34 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       console.log('🔄 Manual sync - Player PP:', playerPP, 'Vault PP:', vault.currentPP);
       
-      if (playerPP !== vault.currentPP) {
-        // Update vault PP to match player PP
+      const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+      // When entering a new battle: if PP >= max health, reset vault health to max
+      // Otherwise, vault health should be min of current PP and max vault health
+      const correctVaultHealth = playerPP >= maxVaultHealth 
+        ? maxVaultHealth 
+        : Math.min(playerPP, maxVaultHealth);
+      
+      if (playerPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth) {
+        // Update vault PP to match player PP and adjust vault health
         const vaultRef = doc(db, 'vaults', currentUser.uid);
-        await updateDoc(vaultRef, { currentPP: playerPP });
+        await updateDoc(vaultRef, { 
+          currentPP: playerPP,
+          vaultHealth: correctVaultHealth
+        });
         
         // Update local vault state
         setVault(prevVault => prevVault ? {
           ...prevVault,
-          currentPP: playerPP
+          currentPP: playerPP,
+          vaultHealth: correctVaultHealth
         } : null);
         
         console.log('✅ Vault PP synced to player PP:', playerPP);
+        if (playerPP >= maxVaultHealth) {
+          console.log(`✅ Vault health reset to max (${maxVaultHealth}) because PP (${playerPP}) >= max health`);
+        } else {
+          console.log('✅ Vault health updated to:', correctVaultHealth);
+        }
       } else {
         console.log('✅ Vault PP already in sync with player PP');
       }
@@ -848,7 +1062,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       if (vaultDoc.exists()) {
         const vaultData = vaultDoc.data() as Vault;
-        const processedVault = checkAndResetDailyMoves(vaultData);
+        let processedVault = checkAndResetDailyMoves(vaultData);
+        processedVault = checkAndGenerateGeneratorResources(processedVault);
+        
+        // Get current player PP to check if vault health should be reset to max
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : processedVault.currentPP;
+        
+        // Reset vault health to max if PP >= max health (when entering a new battle)
+        const maxVaultHealth = processedVault.maxVaultHealth || Math.floor(processedVault.capacity * 0.1);
+        if (playerPP >= maxVaultHealth && processedVault.vaultHealth !== maxVaultHealth) {
+          processedVault.vaultHealth = maxVaultHealth;
+          await updateDoc(vaultRef, {
+            vaultHealth: maxVaultHealth
+          });
+          console.log(`✅ Reset vault health to max (${maxVaultHealth}) because PP (${playerPP}) >= max health`);
+        }
+        
         setVault(processedVault);
         console.log('Vault data refreshed:', processedVault);
       }
@@ -867,23 +1098,96 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Helper to get "day" start time (8am EST) for a given date
+  // Helper to get "day" start time (8am Eastern Time) for a given date
+  // Properly handles EST (UTC-5) and EDT (UTC-4) automatically using America/New_York timezone
   const getDayStartForDate = (date: Date): Date => {
-    // Convert to EST
-    const estOffset = -5; // EST is UTC-5
-    const estDate = new Date(date.getTime() + (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    // Get current date/time in Eastern Time
+    const easternNow = date.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
     
-    // Create 8am EST for that date
-    const dayStart = new Date(estDate);
-    dayStart.setHours(8, 0, 0, 0);
+    // Parse the Eastern Time string
+    const parts = easternNow.split(', ');
+    const datePart = parts[0];
+    const timePart = parts[1];
+    const [month, day, year] = datePart.split('/');
+    const [hour] = timePart.split(':');
     
-    // If time is before 8am EST, use previous day's 8am EST
-    if (estDate < dayStart) {
-      dayStart.setDate(dayStart.getDate() - 1);
+    const yearNum = parseInt(year);
+    const monthNum = parseInt(month) - 1; // JS months are 0-indexed
+    const dayNum = parseInt(day);
+    const currentHour = parseInt(hour);
+    
+    // Determine which day's 8am to use
+    let targetYear = yearNum;
+    let targetMonth = monthNum;
+    let targetDay = dayNum;
+    
+    // If current Eastern time is before 8am, use previous day's 8am
+    if (currentHour < 8) {
+      const prevDate = new Date(yearNum, monthNum, dayNum - 1);
+      targetYear = prevDate.getFullYear();
+      targetMonth = prevDate.getMonth();
+      targetDay = prevDate.getDate();
     }
     
-    // Convert back to local time
-    return new Date(dayStart.getTime() - (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    // Find what UTC time corresponds to 8am Eastern on the target date
+    // Test both EST (13:00 UTC) and EDT (12:00 UTC) possibilities
+    // EST: 8am Eastern = 13:00 UTC (UTC-5)
+    // EDT: 8am Eastern = 12:00 UTC (UTC-4)
+    
+    // Try 13:00 UTC first (EST)
+    let testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 13, 0, 0));
+    let easternTimeStr = testUTC.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      hour12: false
+    });
+    let easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+    
+    if (easternHour === 8) {
+      // EST: 8am Eastern = 13:00 UTC
+      return testUTC;
+    }
+    
+    // Try 12:00 UTC (EDT)
+    testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 12, 0, 0));
+    easternTimeStr = testUTC.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      hour12: false
+    });
+    easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+    
+    if (easternHour === 8) {
+      // EDT: 8am Eastern = 12:00 UTC
+      return testUTC;
+    }
+    
+    // Fallback: if neither works, calculate dynamically
+    // Find the UTC hour that gives us 8am Eastern
+    for (let utcHour = 11; utcHour <= 14; utcHour++) {
+      testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, utcHour, 0, 0));
+      easternTimeStr = testUTC.toLocaleString('en-US', { 
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        hour12: false
+      });
+      easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+      if (easternHour === 8) {
+        return testUTC;
+      }
+    }
+    
+    // Ultimate fallback: use 13:00 UTC (EST)
+    return new Date(Date.UTC(targetYear, targetMonth, targetDay, 13, 0, 0));
   };
 
   // Helper to get current "day" start time (8am EST)
@@ -906,6 +1210,55 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...vaultData,
         movesRemaining: vaultData.maxMovesPerDay,
         lastMoveReset: currentDayStart,
+      };
+    }
+    return vaultData;
+  };
+
+  // Check and generate generator resources if needed (generates at 8am EST, same as offline moves)
+  const checkAndGenerateGeneratorResources = (vaultData: Vault): Vault => {
+    const generatorLevel = vaultData.generatorLevel || 1;
+    const rates = getGeneratorRates(generatorLevel);
+    
+    const lastGeneratorReset = vaultData.generatorLastReset instanceof Date 
+      ? vaultData.generatorLastReset 
+      : new Date(vaultData.generatorLastReset || vaultData.lastMoveReset || new Date());
+    
+    // Get current day start (8am EST)
+    const currentDayStart = getCurrentDayStart();
+    
+    // If last generator reset was before current day start, generate resources
+    if (lastGeneratorReset < currentDayStart) {
+      const pendingPP = (vaultData.generatorPendingPP || 0) + rates.ppPerDay;
+      
+      // Auto-add shields to shield strength (capped at max)
+      const newShieldStrength = Math.min(
+        vaultData.maxShieldStrength,
+        (vaultData.shieldStrength || 0) + rates.shieldsPerDay
+      );
+      
+      // Update Firestore asynchronously if shields were added
+      if (newShieldStrength !== vaultData.shieldStrength && currentUser) {
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        updateDoc(vaultRef, {
+          shieldStrength: newShieldStrength,
+          generatorPendingPP: pendingPP,
+          generatorLastReset: currentDayStart
+        }).catch(err => console.error('Error updating generator resources:', err));
+      } else if (pendingPP !== vaultData.generatorPendingPP && currentUser) {
+        // Only update pending PP if shields didn't change
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        updateDoc(vaultRef, {
+          generatorPendingPP: pendingPP,
+          generatorLastReset: currentDayStart
+        }).catch(err => console.error('Error updating generator PP:', err));
+      }
+      
+      return {
+        ...vaultData,
+        generatorPendingPP: pendingPP,
+        generatorLastReset: currentDayStart,
+        shieldStrength: newShieldStrength,
       };
     }
     return vaultData;
@@ -2122,15 +2475,50 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         throw new Error('Target vault not found');
       }
       
-      const targetVaultData = targetVaultDoc.data() as Vault;
+      let targetVaultData = targetVaultDoc.data() as Vault;
+      
+      // Check and reset vault health cooldown if expired
+      targetVaultData = checkAndResetVaultHealthCooldown(targetVaultData);
+      
+      // If vault health was reset, update Firestore
+      if (targetVaultData.vaultHealthCooldown === undefined && targetVaultDoc.data().vaultHealthCooldown) {
+        await updateDoc(targetVaultRef, {
+          vaultHealth: targetVaultData.vaultHealth,
+          vaultHealthCooldown: undefined
+        });
+      }
+      
+      // Check if target vault is on cooldown
+      if (targetVaultData.vaultHealthCooldown) {
+        const cooldownEndTime = new Date(targetVaultData.vaultHealthCooldown);
+        cooldownEndTime.setHours(cooldownEndTime.getHours() + 3); // 3-hour cooldown
+        const now = new Date();
+        
+        if (now < cooldownEndTime) {
+          const remainingMinutes = Math.ceil((cooldownEndTime.getTime() - now.getTime()) / (1000 * 60));
+          return { 
+            success: false, 
+            message: `Target vault is on cooldown. Cannot attack for another ${remainingMinutes} minutes.` 
+          };
+        }
+      }
       
       // Get target student data to sync vault PP from student PP (student PP is the source of truth)
       const targetStudentRef = doc(db, 'students', targetUserId);
       const targetStudentDoc = await getDoc(targetStudentRef);
       const targetStudentPP = targetStudentDoc.exists() ? (targetStudentDoc.data().powerPoints || 0) : 0;
       
+      // Initialize vault health if not set (migration for existing vaults)
+      if (targetVaultData.vaultHealth === undefined) {
+        const maxVaultHealth = Math.floor(targetVaultData.capacity * 0.1);
+        targetVaultData.vaultHealth = maxVaultHealth;
+        targetVaultData.maxVaultHealth = maxVaultHealth;
+      }
+      
       console.log('🔥 Target data before sync:', { 
         vaultPP: targetVaultData.currentPP,
+        vaultHealth: targetVaultData.vaultHealth,
+        maxVaultHealth: targetVaultData.maxVaultHealth,
         studentPP: targetStudentPP,
         shieldStrength: targetVaultData.shieldStrength,
         overshield: targetVaultData.overshield
@@ -2250,75 +2638,74 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (totalDamage > 0) {
             console.log(`⚔️ Move ${selectedMove.name} total damage: ${totalDamage}`);
             console.log(`🛡️ Target shield strength: ${targetVaultData.shieldStrength}`);
-            console.log(`💰 Target current PP: ${targetVaultData.currentPP}`);
+            console.log(`❤️ Target vault health: ${targetVaultData.vaultHealth}/${targetVaultData.maxVaultHealth}`);
             console.log(`💰 Direct PP steal from move property: ${directPPSteal}`);
             
-            // Apply damage to shields first, then to PP
+            // Apply damage to shields first, then to vault health
             if (targetVaultData.shieldStrength > 0) {
               // Damage shields first
               shieldDamage = Math.min(totalDamage, targetVaultData.shieldStrength);
               const remainingDamage = totalDamage - shieldDamage;
               
-              // Remaining damage goes to PP
-              let damageBasedPPSteal = 0;
+              // Remaining damage goes to vault health (not PP)
+              let vaultHealthDamage = 0;
               if (remainingDamage > 0) {
-                damageBasedPPSteal = Math.min(remainingDamage, targetVaultData.currentPP);
+                vaultHealthDamage = Math.min(remainingDamage, targetVaultData.vaultHealth);
               }
               
-              // Use remaining damage as PP steal (don't add directPPSteal here - it's already part of damage)
-              ppStolen = damageBasedPPSteal;
+              // Vault health damage is what gets stolen (converted to PP for attacker)
+              ppStolen = vaultHealthDamage;
               
               if (ppStolen > 0 || shieldDamage > 0) {
-                message = `Used ${selectedMove.name} - Dealt ${totalDamage} damage (${shieldDamage} to shields${ppStolen > 0 ? `, ${ppStolen} to PP` : ''})`;
+                message = `Used ${selectedMove.name} - Dealt ${totalDamage} damage (${shieldDamage} to shields${ppStolen > 0 ? `, ${ppStolen} to vault health` : ''})`;
               } else {
                 message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields`;
               }
             } else {
-              // No shields, all damage goes to PP
-              // Use total damage as PP steal (don't use directPPSteal - it's already part of total damage)
-              ppStolen = Math.min(totalDamage, targetVaultData.currentPP);
+              // No shields, all damage goes to vault health
+              ppStolen = Math.min(totalDamage, targetVaultData.vaultHealth);
               
               if (ppStolen > 0) {
-                message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields)`;
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to vault health (no shields)`;
               } else {
-                message = `Used ${selectedMove.name} - Dealt 0 damage to PP (target has no PP to steal)`;
+                message = `Used ${selectedMove.name} - Dealt 0 damage (vault health depleted)`;
               }
               
-              console.log(`💰 No shields - Damage: ${totalDamage}, Final PP stolen: ${ppStolen}`);
+              console.log(`❤️ No shields - Damage: ${totalDamage}, Vault health damage: ${ppStolen}`);
             }
           } else {
             // No damage value found, but check if move has ppSteal property
             if (directPPSteal > 0) {
-              // Move has direct PP steal but no damage - apply PP steal directly
+              // Move has direct PP steal but no damage - apply to vault health
               if (targetVaultData.shieldStrength > 0) {
-                // Can still steal PP even if target has shields (but reduced)
-                ppStolen = Math.min(Math.floor(directPPSteal / 2), targetVaultData.currentPP);
-                message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (reduced by shields)`;
+                // Can still damage vault health even if target has shields (but reduced)
+                ppStolen = Math.min(Math.floor(directPPSteal / 2), targetVaultData.vaultHealth);
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} vault health damage (reduced by shields)`;
               } else {
-                // No shields, full PP steal
-                ppStolen = Math.min(directPPSteal, targetVaultData.currentPP);
-                message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields)`;
+                // No shields, full vault health damage
+                ppStolen = Math.min(directPPSteal, targetVaultData.vaultHealth);
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} vault health damage (no shields)`;
               }
-              console.log(`💰 Using direct PP steal (no damage value): ${ppStolen}`);
+              console.log(`❤️ Using direct vault health damage (no damage value): ${ppStolen}`);
             } else {
               console.log(`⚠️ No damage value found for move ${selectedMove.name}, using fallback damage`);
               // Give a small amount of damage for moves that don't have damage values
               const fallbackDamage = 5; // Minimum damage for any offensive move
               
-              // Apply damage to shields first, then to PP
+              // Apply damage to shields first, then to vault health
               if (targetVaultData.shieldStrength > 0) {
                 shieldDamage = Math.min(fallbackDamage, targetVaultData.shieldStrength);
                 const remainingDamage = fallbackDamage - shieldDamage;
                 
                 if (remainingDamage > 0) {
-                  ppStolen = Math.min(remainingDamage, targetVaultData.currentPP);
-                  message = `Used ${selectedMove.name} - Dealt ${fallbackDamage} damage (${shieldDamage} to shields, ${ppStolen} to PP) [fallback]`;
+                  ppStolen = Math.min(remainingDamage, targetVaultData.vaultHealth);
+                  message = `Used ${selectedMove.name} - Dealt ${fallbackDamage} damage (${shieldDamage} to shields, ${ppStolen} to vault health) [fallback]`;
                 } else {
                   message = `Used ${selectedMove.name} - Dealt ${shieldDamage} damage to shields [fallback]`;
                 }
               } else {
-                ppStolen = Math.min(fallbackDamage, targetVaultData.currentPP);
-                message = `Used ${selectedMove.name} - Dealt ${ppStolen} damage to PP (no shields) [fallback]`;
+                ppStolen = Math.min(fallbackDamage, targetVaultData.vaultHealth);
+                message = `Used ${selectedMove.name} - Dealt ${ppStolen} vault health damage (no shields) [fallback]`;
               }
             }
           }
@@ -2326,9 +2713,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // Ensure ppStolen is set even if totalDamage was 0 but directPPSteal exists
           // (This handles cases where damage lookup returns 0 but move has ppSteal)
           if (ppStolen === 0 && directPPSteal > 0 && targetVaultData.shieldStrength === 0) {
-            ppStolen = Math.min(directPPSteal, targetVaultData.currentPP);
-            message = `Used ${selectedMove.name} - Stole ${ppStolen} PP (no shields, direct steal)`;
-            console.log(`💰 Applied direct PP steal after damage calculation: ${ppStolen}`);
+            ppStolen = Math.min(directPPSteal, targetVaultData.vaultHealth);
+            message = `Used ${selectedMove.name} - Dealt ${ppStolen} vault health damage (no shields, direct steal)`;
+            console.log(`❤️ Applied direct vault health damage after damage calculation: ${ppStolen}`);
           }
         }
       }
@@ -2368,8 +2755,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             message += ` • Used ${selectedCard.name} to restore shields (+${actualShieldRestored} shield strength)`;
             break;
           case 'teleport_pp':
-            ppStolen = Math.min(selectedCard.effect.strength, targetVaultData.currentPP);
-            message += ` • Used ${selectedCard.name} to steal PP`;
+            ppStolen = Math.min(selectedCard.effect.strength, targetVaultData.vaultHealth);
+            message += ` • Used ${selectedCard.name} to damage vault health`;
             break;
           default:
             message += ` • Used ${selectedCard.name}`;
@@ -2435,10 +2822,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       if (ppStolen > 0) {
-        console.log('💰 PP will be stolen, updating attacker and target PP');
-        updates.currentPP = Math.max(0, targetVaultData.currentPP - ppStolen);
-        // Add stolen PP to attacker's vault
-        const newAttackerPP = vault.currentPP + ppStolen;
+        console.log('❤️ Vault health will be damaged, updating attacker PP and target vault health');
+        
+        // Damage target's vault health (not PP)
+        const newVaultHealth = Math.max(0, targetVaultData.vaultHealth - ppStolen);
+        updates.vaultHealth = newVaultHealth;
+        
+        // Check if vault health reached 0 - set cooldown
+        if (newVaultHealth === 0 && targetVaultData.vaultHealth > 0) {
+          updates.vaultHealthCooldown = new Date();
+          console.log('⏰ Vault health depleted! Setting 3-hour cooldown.');
+        }
+        
+        // Apply PP boost if active before adding to attacker's vault
+        let finalPPStolen = ppStolen;
+        try {
+          const activeBoost = await getActivePPBoost(currentUser.uid);
+          if (activeBoost) {
+            finalPPStolen = applyPPBoost(ppStolen, currentUser.uid, activeBoost);
+            console.log(`⚡ PP Boost applied to vault attack: ${ppStolen} → ${finalPPStolen}`);
+          }
+        } catch (error) {
+          console.error('Error applying PP boost to vault attack:', error);
+        }
+
+        // Add stolen PP to attacker's vault (with boost if active)
+        // This is the actual PP the attacker gains, converted from vault health damage
+        const newAttackerPP = vault.currentPP + finalPPStolen;
         
         await updateDoc(doc(db, 'vaults', currentUser.uid), {
           currentPP: newAttackerPP
@@ -2449,10 +2859,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           powerPoints: newAttackerPP
         });
         
-        // Update target's student document to reflect PP loss
-        await updateDoc(doc(db, 'students', targetUserId), {
-          powerPoints: updates.currentPP
-        });
+        // Note: We don't update target's student PP - only vault health is affected
+        // The target's PP (currentPP) remains unchanged
         
         // Update local vault state to reflect PP gain
         setVault(prevVault => prevVault ? {
@@ -2460,13 +2868,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           currentPP: newAttackerPP
         } : null);
         
-        // Create notification for PP gain
+        // Create notification for PP gain (show boosted amount)
         try {
           await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
             type: 'pp_gain',
             title: 'PP Stolen!',
-            message: `+${ppStolen} PP stolen from vault attack`,
-            ppAmount: ppStolen,
+            message: `+${finalPPStolen} PP stolen from vault attack${finalPPStolen > ppStolen ? ' (Double PP Boost active!)' : ''}`,
+            ppAmount: finalPPStolen,
             timestamp: serverTimestamp(),
             read: false
           });
@@ -2474,13 +2882,16 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.error('Error creating PP notification:', notificationError);
         }
         
-        console.log('=== PP TRANSFER COMPLETED ===');
+        console.log('=== VAULT HEALTH DAMAGE COMPLETED ===');
         console.log('Attacker vault updated:', newAttackerPP);
         console.log('Attacker student doc updated:', newAttackerPP);
-        console.log('Target student doc updated:', updates.currentPP);
+        console.log('Target vault health updated:', updates.vaultHealth);
+        if (updates.vaultHealthCooldown) {
+          console.log('Target vault cooldown set:', updates.vaultHealthCooldown);
+        }
         console.log('Local vault state updated with new PP:', newAttackerPP);
       } else {
-        console.log('💰 No PP stolen, skipping PP updates');
+        console.log('❤️ No vault health damage, skipping updates');
       }
       
       // Update target vault
@@ -2489,50 +2900,61 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await updateDoc(targetVaultRef, updates);
         console.log('Target vault updated successfully');
         
-        // After updating target vault, ensure target student PP matches vault PP
-        // (vault PP is now the source after attack)
-        if (updates.currentPP !== undefined) {
-          await updateDoc(targetStudentRef, { powerPoints: updates.currentPP });
-          console.log(`🔄 Synced target student PP to vault PP after attack: ${updates.currentPP}`);
-        }
+        // Note: We don't update target student PP - only vault health is affected
         
         // Verify the update by reading the vault again
         const updatedVaultDoc = await getDoc(targetVaultRef);
         if (updatedVaultDoc.exists()) {
           const updatedVaultData = updatedVaultDoc.data() as Vault;
           console.log('Verified vault update - new shield strength:', updatedVaultData.shieldStrength);
-          console.log('Verified vault update - new PP:', updatedVaultData.currentPP);
+          console.log('Verified vault update - new vault health:', updatedVaultData.vaultHealth);
           console.log('Verified vault update - new overshield:', updatedVaultData.overshield);
+          if (updatedVaultData.vaultHealthCooldown) {
+            console.log('Verified vault update - cooldown active:', updatedVaultData.vaultHealthCooldown);
+          }
         }
       }
       
       // Player names already retrieved above for notifications
       
-      // Log PP transfer details if PP was stolen
+      // Log vault health damage details if damage was done
       if (ppStolen > 0) {
-        console.log('=== PP TRANSFER DETAILS ===');
-        console.log('Attacker (Eddy Mosley):', {
+        // Calculate final PP stolen (with boost if active) for logging
+        let finalPPStolenForLog = ppStolen;
+        try {
+          const activeBoost = await getActivePPBoost(currentUser.uid);
+          if (activeBoost) {
+            finalPPStolenForLog = applyPPBoost(ppStolen, currentUser.uid, activeBoost);
+          }
+        } catch (error) {
+          console.error('Error applying PP boost for logging:', error);
+        }
+        
+        console.log('=== VAULT HEALTH DAMAGE DETAILS ===');
+        console.log('Attacker:', {
           uid: currentUser.uid,
           name: attackerName,
           currentPP: vault.currentPP,
-          ppStolen: ppStolen,
-          newPP: vault.currentPP + ppStolen,
-          change: `+${ppStolen}`
+          vaultHealthDamage: ppStolen,
+          ppGained: finalPPStolenForLog,
+          newPP: vault.currentPP + finalPPStolenForLog,
+          change: `+${finalPPStolenForLog}`
         });
-        console.log('Target (Blackbeard):', {
+        console.log('Target:', {
           uid: targetUserId,
           name: targetName,
-          currentPP: targetVaultData.currentPP,
-          ppStolen: ppStolen,
-          newPP: targetVaultData.currentPP - ppStolen,
-          change: `-${ppStolen}`
+          vaultHealth: targetVaultData.vaultHealth,
+          vaultHealthDamage: ppStolen,
+          newVaultHealth: updates.vaultHealth || targetVaultData.vaultHealth - ppStolen,
+          change: `-${ppStolen}`,
+          cooldownSet: !!updates.vaultHealthCooldown
         });
         
-        // Award XP for stealing PP
+        // Award XP for damaging vault health (use original amount for XP calculation)
         if (ppStolen > 0) {
           const xpReward = calculateXpReward(ppStolen);
           if (xpReward > 0) {
-            await awardBattleXp(xpReward, `Stole ${ppStolen} PP from ${targetName}`);
+            await awardBattleXp(xpReward, `Dealt ${ppStolen} vault health damage to ${targetName}`);
           }
         }
       }
@@ -2578,11 +3000,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         timestamp: serverTimestamp(),
         targetVaultBefore: {
           currentPP: targetVaultData.currentPP,
+          vaultHealth: targetVaultData.vaultHealth || targetVaultData.maxVaultHealth || Math.floor(targetVaultData.capacity * 0.1),
           shieldStrength: targetVaultData.shieldStrength,
           overshield: targetVaultData.overshield || 0,
         },
         targetVaultAfter: {
-          currentPP: updates.currentPP !== undefined ? updates.currentPP : targetVaultData.currentPP,
+          currentPP: targetVaultData.currentPP, // PP doesn't change from attacks
+          vaultHealth: updates.vaultHealth !== undefined ? updates.vaultHealth : (targetVaultData.vaultHealth || targetVaultData.maxVaultHealth || Math.floor(targetVaultData.capacity * 0.1)),
           shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
           overshield: updates.overshield !== undefined ? updates.overshield : (targetVaultData.overshield || 0),
         },
@@ -2964,12 +3388,227 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // logger.battle.debug('Debug: Calculated remaining moves:', remainingMoves);
   };
 
+  // Refresh inventory from Firestore
+  const refreshInventory = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        setInventory(studentData.inventory || []);
+        setArtifacts(studentData.artifacts || []);
+      }
+    } catch (error) {
+      console.error('Error refreshing inventory:', error);
+    }
+  };
+
+  // Use an artifact during battle
+  const activateArtifact = async (artifactName: string) => {
+    if (!currentUser || !vault) return;
+
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      if (!studentDoc.exists()) {
+        throw new Error('Student data not found');
+      }
+
+      const studentData = studentDoc.data();
+      const currentInventory = studentData.inventory || [];
+      
+      // Check if artifact exists in inventory
+      if (!currentInventory.includes(artifactName)) {
+        throw new Error(`You don't have ${artifactName} in your inventory`);
+      }
+
+      // Handle specific artifacts - check if they can be used before consuming
+      if (artifactName === 'Health Potion (25)') {
+        // Restore 25 HP to vault health
+        const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+        const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
+        
+        // Check if vault health is already at max
+        if (currentVaultHealth >= maxVaultHealth) {
+          setSuccess(`🧪 Your vault health is already at maximum (${maxVaultHealth}/${maxVaultHealth})!`);
+          // Don't consume the potion if it can't be used
+          return;
+        }
+        
+        // Calculate how much health can be restored
+        const healthToRestore = Math.min(25, maxVaultHealth - currentVaultHealth);
+        const newVaultHealth = currentVaultHealth + healthToRestore;
+        
+        // Remove artifact from inventory (only if it can be used)
+        const updatedInventory = [...currentInventory];
+        const artifactIndex = updatedInventory.indexOf(artifactName);
+        if (artifactIndex > -1) {
+          updatedInventory.splice(artifactIndex, 1);
+        }
+        
+        // Update vault health
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        await updateDoc(vaultRef, {
+          vaultHealth: newVaultHealth
+        });
+        setVault({ ...vault, vaultHealth: newVaultHealth });
+        
+        // Update inventory
+        await updateDoc(studentRef, {
+          inventory: updatedInventory
+        });
+        setInventory(updatedInventory);
+        
+        // Update artifacts array in users collection
+        const usersRef = doc(db, 'users', currentUser.uid);
+        const usersSnap = await getDoc(usersRef);
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          const currentArtifacts = usersData.artifacts || [];
+          let foundOne = false;
+          const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+            if (foundOne) return artifact;
+            
+            if (typeof artifact === 'string') {
+              if (artifact === artifactName) {
+                foundOne = true;
+                return { 
+                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                  name: artifactName,
+                  used: true,
+                  usedAt: new Date(),
+                  isLegacy: true
+                };
+              }
+              return artifact;
+            } else {
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
+            }
+          });
+          
+          await updateDoc(usersRef, {
+            artifacts: updatedArtifacts
+          });
+        }
+        
+        setSuccess(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
+        return; // Exit early since we've handled everything
+      }
+
+      // Remove artifact from inventory for other artifacts
+      const updatedInventory = [...currentInventory];
+      const artifactIndex = updatedInventory.indexOf(artifactName);
+      if (artifactIndex > -1) {
+        updatedInventory.splice(artifactIndex, 1);
+      }
+
+      // Handle other specific artifacts
+      if (artifactName === 'Shield') {
+        // Add overshield to vault
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        await updateDoc(vaultRef, {
+          overshield: (vault.overshield || 0) + 1
+        });
+        setVault({ ...vault, overshield: (vault.overshield || 0) + 1 });
+        setSuccess('🛡️ Shield activated! Your next attack will be blocked.');
+      } else if (artifactName === 'Double PP Boost') {
+        // Activate PP boost immediately (no admin approval needed)
+        const { activatePPBoost } = await import('../utils/ppBoost');
+        const success = await activatePPBoost(currentUser.uid, artifactName);
+        if (success) {
+          const { getActivePPBoost, getPPBoostStatus } = await import('../utils/ppBoost');
+          const activeBoost = await getActivePPBoost(currentUser.uid);
+          const boostStatus = getPPBoostStatus(activeBoost);
+          const timeRemaining = boostStatus.isActive ? boostStatus.timeRemaining : '4:00';
+          setSuccess(`⚡ Double PP Boost activated! You'll receive double PP for the next 4 hours!\n\nTime remaining: ${timeRemaining}`);
+        } else {
+          setSuccess('Failed to activate PP boost. Please try again.');
+          return;
+        }
+      } else {
+        // For other artifacts, create admin notification
+        await addDoc(collection(db, 'adminNotifications'), {
+          type: 'artifact_usage',
+          title: 'Artifact Used in Battle',
+          message: `${currentUser.displayName || currentUser.email} used ${artifactName} during battle`,
+          data: {
+            userId: currentUser.uid,
+            userName: currentUser.displayName || currentUser.email,
+            artifactName: artifactName,
+            usageTime: new Date(),
+            location: 'Battle'
+          },
+          timestamp: serverTimestamp()
+        });
+        setSuccess(`✨ ${artifactName} used!`);
+      }
+
+      // Update inventory
+      await updateDoc(studentRef, {
+        inventory: updatedInventory
+      });
+
+      // Update local state
+      setInventory(updatedInventory);
+      
+      // Also update artifacts array in users collection
+      // IMPORTANT: Only mark ONE instance as used, not all of them
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersSnap = await getDoc(usersRef);
+      if (usersSnap.exists()) {
+        const usersData = usersSnap.data();
+        const currentArtifacts = usersData.artifacts || [];
+        let foundOne = false;
+        const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+          if (foundOne) return artifact;
+          
+          if (typeof artifact === 'string') {
+            if (artifact === artifactName) {
+              foundOne = true;
+              return { 
+                id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                name: artifactName,
+                used: true,
+                usedAt: new Date(),
+                isLegacy: true
+              };
+            }
+            return artifact;
+          } else {
+            // Only mark as used if it's not already used (check for used property explicitly)
+            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+            if (artifact.name === artifactName && isNotUsed) {
+              foundOne = true;
+              return { ...artifact, used: true, usedAt: new Date() };
+            }
+            return artifact;
+          }
+        });
+        await updateDoc(usersRef, {
+          artifacts: updatedArtifacts
+        });
+      }
+    } catch (error: any) {
+      console.error('Error using artifact:', error);
+      setError(error.message || 'Failed to use artifact');
+    }
+  };
+
   const value: BattleContextType = {
     vault,
     updateVault,
     upgradeVaultCapacity,
     upgradeVaultShields,
-    upgradeVaultFirewall,
+    upgradeGenerator,
+    collectGeneratorPP,
+    getGeneratorRates,
     restoreVaultShields,
     payDues,
     syncVaultPP,
@@ -3012,6 +3651,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     getRemainingOfflineMoves,
     consumeOfflineMove,
     debugOfflineMoves,
+    inventory,
+    artifacts,
+    activateArtifact,
+    refreshInventory,
     loading,
     error,
     success,

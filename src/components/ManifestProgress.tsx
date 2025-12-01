@@ -1,6 +1,6 @@
 import React from 'react';
 import { MANIFESTS, PlayerManifest } from '../types/manifest';
-import { trackAbilityUsage, getMilestoneProgress, getMoveUsageCount } from '../utils/manifestTracking';
+import { trackAbilityUsage, trackMoveUsage, getMilestoneProgress, getMoveUsageCount, claimMilestoneRewards } from '../utils/manifestTracking';
 
 interface ManifestProgressProps {
   playerManifest: PlayerManifest;
@@ -23,13 +23,182 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
     return <div>Manifest not found</div>;
   }
 
+  // Get default move name for a level based on manifest type (used when moves array is empty)
+  const getDefaultMoveNameForLevel = (level: number): string | null => {
+    const defaultMoveNames: { [key: string]: { [level: number]: string } } = {
+      'reading': {
+        1: 'Read the Room',
+        2: 'Pattern Shield',
+        3: 'Team Read',
+        4: 'Environment Read'
+      },
+      'writing': {
+        1: 'Reality Rewrite',
+        2: 'Narrative Barrier',
+        3: 'Story Weave',
+        4: 'World Rewrite'
+      },
+      'drawing': {
+        1: 'Illusion Strike',
+        2: 'Mirage Shield',
+        3: 'Visual Deception',
+        4: 'Reality Illusion'
+      },
+      'athletics': {
+        1: 'Flow Strike',
+        2: 'Rhythm Guard',
+        3: 'Team Flow',
+        4: 'Athletic Mastery'
+      },
+      'singing': {
+        1: 'Harmonic Blast',
+        2: 'Melody Shield',
+        3: 'Chorus Power',
+        4: 'Song of Power'
+      },
+      'gaming': {
+        1: 'Pattern Break',
+        2: 'Strategy Matrix',
+        3: 'Game Mastery',
+        4: 'Ultimate Strategy'
+      },
+      'observation': {
+        1: 'Precision Strike',
+        2: 'Memory Shield',
+        3: 'Perfect Observation',
+        4: 'Omniscient View'
+      },
+      'empathy': {
+        1: 'Emotional Resonance',
+        2: 'Empathic Barrier',
+        3: 'Group Empathy',
+        4: 'Universal Connection'
+      },
+      'creating': {
+        1: 'Tool Strike',
+        2: 'Construct Shield',
+        3: 'Creative Mastery',
+        4: 'Divine Creation'
+      },
+      'cooking': {
+        1: 'Energy Feast',
+        2: 'Nourishing Barrier',
+        3: 'Feast of Power',
+        4: 'Divine Nourishment'
+      }
+    };
+    
+    return defaultMoveNames[playerManifest.manifestId]?.[level] || null;
+  };
+
+  // Map manifest levels to their associated moves
+  // This mapping connects manifest levels to the moves that represent them
+  const getMoveForLevel = (level: number): string | null => {
+    if (moves.length === 0) {
+      // Return default move name when no moves are available
+      return getDefaultMoveNameForLevel(level);
+    }
+
+    // Define keywords/patterns for each manifest type and level
+    const manifestLevelPatterns: { [key: string]: { [level: number]: string[] } } = {
+      'reading': {
+        1: ['read the room', 'emotional read', 'read'],
+        2: ['pattern shield', 'shield'],
+        3: ['read', 'pattern'],
+        4: ['read', 'environment']
+      },
+      'writing': {
+        1: ['reality rewrite', 'rewrite'],
+        2: ['narrative barrier', 'barrier'],
+        3: ['narrative', 'rewrite'],
+        4: ['narrative', 'story']
+      },
+      'drawing': {
+        1: ['illusion strike', 'strike'],
+        2: ['mirage shield', 'shield'],
+        3: ['illusion', 'mirage'],
+        4: ['illusion', 'visual']
+      },
+      'athletics': {
+        1: ['flow strike', 'strike'],
+        2: ['rhythm guard', 'guard'],
+        3: ['flow', 'rhythm'],
+        4: ['flow', 'athletic']
+      },
+      'singing': {
+        1: ['harmonic blast', 'blast'],
+        2: ['melody shield', 'shield'],
+        3: ['harmonic', 'melody'],
+        4: ['harmonic', 'song']
+      },
+      'gaming': {
+        1: ['pattern break', 'break'],
+        2: ['strategy matrix', 'matrix'],
+        3: ['pattern', 'strategy'],
+        4: ['pattern', 'game']
+      },
+      'observation': {
+        1: ['precision strike', 'strike'],
+        2: ['memory shield', 'shield'],
+        3: ['precision', 'memory'],
+        4: ['precision', 'observe']
+      },
+      'empathy': {
+        1: ['emotional resonance', 'resonance'],
+        2: ['empathic barrier', 'barrier'],
+        3: ['emotional', 'empathic'],
+        4: ['emotional', 'empathy']
+      },
+      'creating': {
+        1: ['tool strike', 'strike'],
+        2: ['construct shield', 'shield'],
+        3: ['tool', 'construct'],
+        4: ['tool', 'create']
+      },
+      'cooking': {
+        1: ['energy feast', 'feast'],
+        2: ['nourishing barrier', 'barrier'],
+        3: ['energy', 'nourishing'],
+        4: ['energy', 'cook']
+      }
+    };
+
+    const patterns = manifestLevelPatterns[playerManifest.manifestId]?.[level] || [];
+    if (patterns.length === 0) return null;
+
+    // Find moves that match the patterns for this level
+    const matchingMoves = moves.filter(move => {
+      const moveNameLower = move.name.toLowerCase();
+      return patterns.some(pattern => moveNameLower.includes(pattern));
+    });
+
+    // For Level 1, prioritize the first attack/primary move
+    if (level === 1 && matchingMoves.length > 0) {
+      // Prefer moves that match the first pattern (usually the primary attack move)
+      const primaryMove = matchingMoves.find(m => 
+        m.name.toLowerCase().includes(patterns[0])
+      );
+      return primaryMove?.name || matchingMoves[0]?.name;
+    }
+
+    return matchingMoves[0]?.name || null;
+  };
+
   const handleAbilityUsage = async (level: number) => {
     if (!userId) {
       console.error('User ID not provided for ability tracking');
       return;
     }
 
+    // Track ability usage by level
     const success = await trackAbilityUsage(userId, playerManifest.manifestId, level);
+    
+    // Also track move usage if there's a matching move for this level
+    const moveName = getMoveForLevel(level);
+    if (moveName) {
+      await trackMoveUsage(userId, moveName);
+    }
+    
     if (success && onAbilityUsed) {
       onAbilityUsed(); // Refresh the data
     }
@@ -45,6 +214,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
       border: `2px solid ${manifest.color}`,
       borderRadius: '1rem',
       padding: '1.5rem',
+      marginTop: '1rem', // Add whitespace between title and container
       marginBottom: '1.5rem',
       color: 'white'
     }}>
@@ -141,7 +311,13 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                     marginBottom: '0.25rem'
                   }}>
                     <span style={{ fontWeight: 'bold', fontSize: '0.8rem' }}>
-                      Level {level.level}: {level.scale}
+                      {(() => {
+                        const moveName = getMoveForLevel(level.level);
+                        if (moveName) return `Level ${level.level}: ${moveName}`;
+                        // Show manifest name instead of "Self" for level 1
+                        if (level.scale === 'Self') return manifest.name;
+                        return `Level ${level.level}: ${level.scale}`;
+                      })()}
                     </span>
                     <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
                       {level.xpRequired} XP
@@ -180,6 +356,103 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                 const milestones = [20, 50, 100];
                 const milestoneProgress = getMilestoneProgress(usageCount);
                 const reachedMilestones = milestones.filter(m => usageCount >= m);
+                const unclaimedMilestones = playerManifest.unclaimedMilestones?.[move.name] || [];
+                
+                // Check which milestones have been reached
+                // A milestone is available to claim if: it's reached AND it's in unclaimedMilestones
+                // If reached but not in unclaimedMilestones, it was likely already claimed
+                const availableToClaim = milestones.filter(m => {
+                  const isReached = usageCount >= m;
+                  const isUnclaimed = unclaimedMilestones.includes(m);
+                  return isReached && isUnclaimed;
+                });
+                
+                const hasUnclaimedMilestones = availableToClaim.length > 0;
+                // Check if any milestones have been reached (for showing button)
+                const hasReachedMilestones = reachedMilestones.length > 0;
+                
+                // Find which level this move corresponds to by checking manifest patterns
+                const findLevelForMove = (moveName: string): number | null => {
+                  const moveNameLower = moveName.toLowerCase();
+                  const manifestLevelPatterns: { [key: string]: { [level: number]: string[] } } = {
+                    'reading': {
+                      1: ['read the room', 'emotional read', 'read'],
+                      2: ['pattern shield', 'shield'],
+                      3: ['read', 'pattern'],
+                      4: ['read', 'environment']
+                    },
+                    'writing': {
+                      1: ['reality rewrite', 'rewrite'],
+                      2: ['narrative barrier', 'barrier'],
+                      3: ['narrative', 'rewrite'],
+                      4: ['narrative', 'story']
+                    },
+                    'drawing': {
+                      1: ['illusion strike', 'strike'],
+                      2: ['mirage shield', 'shield'],
+                      3: ['illusion', 'mirage'],
+                      4: ['illusion', 'visual']
+                    },
+                    'athletics': {
+                      1: ['flow strike', 'strike'],
+                      2: ['rhythm guard', 'guard'],
+                      3: ['flow', 'rhythm'],
+                      4: ['flow', 'athletic']
+                    },
+                    'singing': {
+                      1: ['harmonic blast', 'blast'],
+                      2: ['melody shield', 'shield'],
+                      3: ['harmonic', 'melody'],
+                      4: ['harmonic', 'song']
+                    },
+                    'gaming': {
+                      1: ['pattern break', 'break'],
+                      2: ['strategy matrix', 'matrix'],
+                      3: ['pattern', 'strategy'],
+                      4: ['pattern', 'game']
+                    },
+                    'observation': {
+                      1: ['precision strike', 'strike'],
+                      2: ['memory shield', 'shield'],
+                      3: ['precision', 'memory'],
+                      4: ['precision', 'observe']
+                    },
+                    'empathy': {
+                      1: ['emotional resonance', 'resonance'],
+                      2: ['empathic barrier', 'barrier'],
+                      3: ['emotional', 'empathic'],
+                      4: ['emotional', 'empathy']
+                    },
+                    'creating': {
+                      1: ['tool strike', 'strike'],
+                      2: ['construct shield', 'shield'],
+                      3: ['tool', 'construct'],
+                      4: ['tool', 'create']
+                    },
+                    'cooking': {
+                      1: ['energy feast', 'feast'],
+                      2: ['nourishing barrier', 'barrier'],
+                      3: ['energy', 'nourishing'],
+                      4: ['energy', 'cook']
+                    }
+                  };
+                  
+                  const patterns = manifestLevelPatterns[playerManifest.manifestId];
+                  if (!patterns) return null;
+                  
+                  // Check each level, starting from 1
+                  for (let level = 1; level <= 4; level++) {
+                    const levelPatterns = patterns[level] || [];
+                    // Check if move name matches any pattern for this level
+                    if (levelPatterns.some(pattern => moveNameLower.includes(pattern))) {
+                      return level;
+                    }
+                  }
+                  return null;
+                };
+                
+                const moveLevel = findLevelForMove(move.name);
+                const displayName = moveLevel ? `Level ${moveLevel}: ${move.name}` : move.name;
                 
                 return (
                   <div
@@ -205,7 +478,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                           fontSize: '0.9rem',
                           color: manifest.color
                         }}>
-                          {move.name}
+                          {displayName}
                         </span>
                       </div>
                       <span style={{ 
@@ -287,6 +560,81 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                           </div>
                         </div>
                       )}
+                      
+                      {/* Claim Milestone Button - Replace "Use Ability" when milestones are reached */}
+                      {hasReachedMilestones && userId ? (
+                        <button
+                          onClick={async () => {
+                            if (hasUnclaimedMilestones) {
+                              // Use availableToClaim - these are reached and in unclaimedMilestones
+                              await claimMilestoneRewards(userId, move.name, availableToClaim);
+                              if (onAbilityUsed) {
+                                onAbilityUsed(); // Refresh the data
+                              }
+                            }
+                          }}
+                          disabled={!hasUnclaimedMilestones}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            background: hasUnclaimedMilestones ? '#fbbf24' : '#9ca3af',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            cursor: hasUnclaimedMilestones ? 'pointer' : 'not-allowed',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold',
+                            width: '100%',
+                            transition: 'all 0.2s ease',
+                            boxShadow: hasUnclaimedMilestones ? '0 2px 4px rgba(0,0,0,0.2)' : 'none',
+                            opacity: hasUnclaimedMilestones ? 1 : 0.6
+                          }}
+                          onMouseOver={(e) => {
+                            if (hasUnclaimedMilestones) {
+                              e.currentTarget.style.opacity = '0.9';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                            }
+                          }}
+                          onMouseOut={(e) => {
+                            if (hasUnclaimedMilestones) {
+                              e.currentTarget.style.opacity = '1';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }
+                          }}
+                        >
+                          {hasUnclaimedMilestones ? (
+                            <>🎁 Claim Milestone{availableToClaim.length > 1 ? 's' : ''} ({availableToClaim.length})</>
+                          ) : (
+                            <>✓ Milestone Claimed - Next: {milestoneProgress?.milestone || 'N/A'} uses</>
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (userId) {
+                              const moveLevel = findLevelForMove(move.name);
+                              if (moveLevel) {
+                                await handleAbilityUsage(moveLevel);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            background: manifest.color,
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            cursor: 'pointer',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold',
+                            width: '100%',
+                            transition: 'opacity 0.2s ease'
+                          }}
+                          onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
+                          onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
+                        >
+                          Use Ability
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -298,6 +646,21 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                 const usageCount = playerManifest.abilityUsage?.[level.level] || 0;
                 const milestones = [20, 50, 100];
                 const milestoneProgress = getMilestoneProgress(usageCount);
+                const moveName = getMoveForLevel(level.level) || getDefaultMoveNameForLevel(level.level);
+                const unclaimedMilestones = moveName ? (playerManifest.unclaimedMilestones?.[moveName] || []) : [];
+                const reachedMilestones = milestones.filter(m => usageCount >= m);
+                
+                // Check which milestones have been reached and are actually unclaimed
+                const availableToClaim = moveName ? milestones.filter(m => {
+                  const isReached = usageCount >= m;
+                  const isUnclaimed = unclaimedMilestones.includes(m);
+                  // If reached, it's available to claim
+                  // But only if it's in unclaimedMilestones (not already claimed)
+                  return isReached && isUnclaimed;
+                }) : [];
+                
+                const hasUnclaimedMilestones = availableToClaim.length > 0;
+                const hasReachedMilestones = reachedMilestones.length > 0;
                 
                 return (
                   <div
@@ -326,7 +689,21 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                         fontSize: '0.9rem',
                         color: isUnlocked ? manifest.color : 'rgba(255,255,255,0.6)'
                       }}>
-                        Level {level.level}: {level.scale}
+                        {(() => {
+                          // Always try to get the move name first, even if moves array is empty
+                          // This ensures we show "Level 1: Read the Room" instead of "Level 1: Self"
+                          const moveName = getMoveForLevel(level.level);
+                          if (moveName) {
+                            return `Level ${level.level}: ${moveName}`;
+                          }
+                          // If getMoveForLevel returns null, try the default move name
+                          const defaultMoveName = getDefaultMoveNameForLevel(level.level);
+                          if (defaultMoveName) {
+                            return `Level ${level.level}: ${defaultMoveName}`;
+                          }
+                          // Final fallback: show level with scale (but this should rarely happen)
+                          return `Level ${level.level}: ${level.scale}`;
+                        })()}
                       </span>
                       <span style={{ 
                         fontSize: '0.8rem', 
@@ -399,25 +776,73 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                           </div>
                         )}
                         
-                        <button
-                          onClick={() => handleAbilityUsage(level.level)}
-                          style={{
-                            padding: '0.5rem 1rem',
-                            background: manifest.color,
-                            border: 'none',
-                            borderRadius: '0.25rem',
-                            color: 'white',
-                            cursor: 'pointer',
-                            fontSize: '0.7rem',
-                            fontWeight: 'bold',
-                            width: '100%',
-                            transition: 'opacity 0.2s ease'
-                          }}
-                          onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
-                          onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
-                        >
-                          Use Ability
-                        </button>
+                        {/* Claim Milestone Button - Show if milestones are reached */}
+                        {hasReachedMilestones && userId && moveName ? (
+                          <button
+                            onClick={async () => {
+                              if (hasUnclaimedMilestones) {
+                                await claimMilestoneRewards(userId, moveName, availableToClaim);
+                                if (onAbilityUsed) {
+                                  onAbilityUsed(); // Refresh the data
+                                }
+                              }
+                            }}
+                            disabled={!hasUnclaimedMilestones}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              background: hasUnclaimedMilestones ? '#fbbf24' : '#9ca3af',
+                              border: 'none',
+                              borderRadius: '0.25rem',
+                              color: 'white',
+                              cursor: hasUnclaimedMilestones ? 'pointer' : 'not-allowed',
+                              fontSize: '0.8rem',
+                              fontWeight: 'bold',
+                              width: '100%',
+                              transition: 'all 0.2s ease',
+                              boxShadow: hasUnclaimedMilestones ? '0 2px 4px rgba(0,0,0,0.2)' : 'none',
+                              opacity: hasUnclaimedMilestones ? 1 : 0.6,
+                              marginBottom: '0.5rem'
+                            }}
+                            onMouseOver={(e) => {
+                              if (hasUnclaimedMilestones) {
+                                e.currentTarget.style.opacity = '0.9';
+                                e.currentTarget.style.transform = 'translateY(-1px)';
+                              }
+                            }}
+                            onMouseOut={(e) => {
+                              if (hasUnclaimedMilestones) {
+                                e.currentTarget.style.opacity = '1';
+                                e.currentTarget.style.transform = 'translateY(0)';
+                              }
+                            }}
+                          >
+                            {hasUnclaimedMilestones ? (
+                              <>🎁 Claim Milestone{availableToClaim.length > 1 ? 's' : ''} ({availableToClaim.length})</>
+                            ) : (
+                              <>✓ Milestone Claimed - Next: {milestoneProgress?.milestone || 'N/A'} uses</>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleAbilityUsage(level.level)}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              background: manifest.color,
+                              border: 'none',
+                              borderRadius: '0.25rem',
+                              color: 'white',
+                              cursor: 'pointer',
+                              fontSize: '0.7rem',
+                              fontWeight: 'bold',
+                              width: '100%',
+                              transition: 'opacity 0.2s ease'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
+                            onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
+                          >
+                            Use Ability
+                          </button>
+                        )}
                       </div>
                     )}
                     
@@ -449,7 +874,13 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
           </h4>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-              {currentLevel?.scale}
+              {(() => {
+                if (!currentLevel) return manifest.name;
+                const moveName = getMoveForLevel(currentLevel.level);
+                if (moveName) return `Level ${currentLevel.level}: ${moveName}`;
+                if (currentLevel.scale === 'Self') return manifest.name;
+                return currentLevel.scale;
+              })()}
             </div>
             <p style={{ fontSize: '0.85rem', opacity: 0.8, lineHeight: '1.4' }}>
               {currentLevel?.example}

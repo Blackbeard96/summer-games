@@ -164,3 +164,4 @@ const BadgeRewardNotifier: React.FC = () => {
 
 export default BadgeRewardNotifier;
 
+

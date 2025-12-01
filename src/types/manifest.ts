@@ -29,6 +29,7 @@ export interface PlayerManifest {
   lastAscension: Date | any; // Firestore timestamp or Date
   abilityUsage?: { [level: number]: number }; // Track usage count for each level
   moveUsage?: { [moveName: string]: number }; // Track usage count for each move by name
+  unclaimedMilestones?: { [moveName: string]: number[] }; // Track unclaimed milestones per move: { "Move Name": [20, 50, 100] }
 }
 
 export interface Veil {

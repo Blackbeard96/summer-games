@@ -15,6 +15,7 @@ import DashboardActionCards from '../components/DashboardActionCards';
 import BattleModeSelector from '../components/BattleModeSelector';
 import PvPBattle from '../components/PvPBattle';
 import PracticeModeBattle from '../components/PracticeModeBattle';
+import Mindforge from '../components/Mindforge';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -36,7 +37,9 @@ const Battle: React.FC = () => {
     updateVault,
     upgradeVaultCapacity,
     upgradeVaultShields,
-    upgradeVaultFirewall,
+    upgradeGenerator,
+    collectGeneratorPP,
+    getGeneratorRates,
     restoreVaultShields,
     upgradeMove,
     resetMoveLevel,
@@ -63,13 +66,13 @@ const Battle: React.FC = () => {
   const navigate = useNavigate();
   
   const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle'>('battle');
-  const [selectedBattleMode, setSelectedBattleMode] = useState<'pvp' | 'offline' | 'practice' | null>(null);
+  const [selectedBattleMode, setSelectedBattleMode] = useState<'pvp' | 'offline' | 'practice' | 'mindforge' | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
   const [userElement, setUserElement] = useState<string>('fire'); // Default to fire, will be updated
   const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
 
-  const handleBattleModeSelect = (mode: 'pvp' | 'offline' | 'practice') => {
+  const handleBattleModeSelect = (mode: 'pvp' | 'offline' | 'practice' | 'mindforge') => {
     setSelectedBattleMode(mode);
     if (mode === 'offline') {
       setShowVaultSiegeModal(true);
@@ -653,7 +656,168 @@ const Battle: React.FC = () => {
             {/* Battle Mode Selection */}
             <div style={{ marginTop: '2rem' }}>
             {!selectedBattleMode ? (
-              <BattleModeSelector onModeSelect={handleBattleModeSelect} />
+              <div>
+                <h2 style={{
+                  fontSize: '1.75rem',
+                  fontWeight: 'bold',
+                  color: '#1f2937',
+                  marginBottom: '1.5rem',
+                  textAlign: 'center'
+                }}>
+                  Battle Modes
+                </h2>
+                <div style={{
+                  display: 'flex',
+                  gap: '1.5rem',
+                  justifyContent: 'center',
+                  flexWrap: 'wrap'
+                }}>
+                  <button
+                    onClick={() => handleBattleModeSelect('pvp')}
+                    style={{
+                      padding: '1.5rem 2.5rem',
+                      fontSize: '1.25rem',
+                      fontWeight: 'bold',
+                      background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                      color: 'white',
+                      border: '3px solid #8B4513',
+                      borderRadius: '0.75rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      minWidth: '220px',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title="Challenge other players in real-time combat. Test your skills against live opponents!"
+                  >
+                    <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>⚔️</div>
+                    <div>PvP Battle</div>
+                    <div style={{
+                      fontSize: '0.875rem',
+                      opacity: 0.9,
+                      marginTop: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      Player vs Player
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleBattleModeSelect('offline')}
+                    style={{
+                      padding: '1.5rem 2.5rem',
+                      fontSize: '1.25rem',
+                      fontWeight: 'bold',
+                      background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                      color: 'white',
+                      border: '3px solid #8B4513',
+                      borderRadius: '0.75rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      minWidth: '220px',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title="Attack other players' vaults when they're offline. Use your daily offline moves strategically!"
+                  >
+                    <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🎯</div>
+                    <div>Offline Battle</div>
+                    <div style={{
+                      fontSize: '0.875rem',
+                      opacity: 0.9,
+                      marginTop: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      Attack Offline Players
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleBattleModeSelect('practice')}
+                    style={{
+                      padding: '1.5rem 2.5rem',
+                      fontSize: '1.25rem',
+                      fontWeight: 'bold',
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: 'white',
+                      border: '3px solid #8B4513',
+                      borderRadius: '0.75rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      minWidth: '220px',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title="Train your skills against CPU opponents. Unlock new challenges and master your moves!"
+                  >
+                    <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🏋️</div>
+                    <div>Practice Mode</div>
+                    <div style={{
+                      fontSize: '0.875rem',
+                      opacity: 0.9,
+                      marginTop: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      Train Against CPU
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleBattleModeSelect('mindforge')}
+                    style={{
+                      padding: '1.5rem 2.5rem',
+                      fontSize: '1.25rem',
+                      fontWeight: 'bold',
+                      background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                      color: 'white',
+                      border: '3px solid #8B4513',
+                      borderRadius: '0.75rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      minWidth: '220px',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title="Answer questions correctly to gain advantages in battle. Knowledge is power!"
+                  >
+                    <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🧠</div>
+                    <div>Mindforge</div>
+                    <div style={{
+                      fontSize: '0.875rem',
+                      opacity: 0.9,
+                      marginTop: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      Question-Based Combat
+                    </div>
+                  </button>
+                </div>
+              </div>
             ) : selectedBattleMode === 'pvp' ? (
               <PvPBattle onBack={() => setSelectedBattleMode(null)} />
             ) : selectedBattleMode === 'offline' ? (
@@ -715,6 +879,8 @@ const Battle: React.FC = () => {
               </div>
             ) : selectedBattleMode === 'practice' ? (
               <PracticeModeBattle onBack={() => setSelectedBattleMode(null)} />
+            ) : selectedBattleMode === 'mindforge' ? (
+              <Mindforge onBack={() => setSelectedBattleMode(null)} />
             ) : null}
             </div>
 
@@ -920,15 +1086,15 @@ const Battle: React.FC = () => {
               </div>
               
               <div style={{ 
-                background: 'linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)',
-                border: '2px solid #c4b5fd',
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                border: '2px solid #f59e0b',
                 borderRadius: '1rem',
                 padding: '1.5rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
                   <div style={{ 
-                    background: '#7c3aed',
+                    background: '#f59e0b',
                     color: 'white',
                     width: '40px',
                     height: '40px',
@@ -939,12 +1105,12 @@ const Battle: React.FC = () => {
                     fontSize: '1.25rem',
                     marginRight: '1rem'
                   }}>
-                    🔥
+                    ⚡
                   </div>
-                  <h4 style={{ fontSize: '1.25rem', color: '#1f2937', margin: 0 }}>Firewall Boost</h4>
+                  <h4 style={{ fontSize: '1.25rem', color: '#1f2937', margin: 0 }}>Generator</h4>
                 </div>
                 <p style={{ color: '#6b7280', marginBottom: '1rem', lineHeight: '1.5' }}>
-                  Improve your vault's attack resistance and reduce incoming damage
+                  Passively generates Power Points and Shield Strength over time
                 </p>
                 
                 {/* Current Stats */}
@@ -954,35 +1120,58 @@ const Battle: React.FC = () => {
                   borderRadius: '0.75rem',
                   marginBottom: '1rem'
                 }}>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Firewall</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#7c3aed' }}>
-                    {vault?.firewall || 10}%
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Level</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                    Level {vault?.generatorLevel || 1}
                   </div>
+                  {(() => {
+                    const rates = getGeneratorRates(vault?.generatorLevel || 1);
+                    return (
+                      <>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
+                          ⚡ {rates.ppPerDay} PP/day
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          🛡️ {rates.shieldsPerDay} Shields/day
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 
                 {/* Improvement Preview */}
                 <div style={{ 
-                  background: 'rgba(124, 58, 237, 0.1)',
+                  background: 'rgba(245, 158, 11, 0.1)',
                   padding: '1rem',
                   borderRadius: '0.75rem',
                   marginBottom: '1rem',
-                  border: '1px solid rgba(124, 58, 237, 0.2)'
+                  border: '1px solid rgba(245, 158, 11, 0.2)'
                 }}>
-                  <div style={{ fontSize: '0.875rem', color: '#7c3aed', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  <div style={{ fontSize: '0.875rem', color: '#f59e0b', marginBottom: '0.5rem', fontWeight: 'bold' }}>
                     ⬆️ After Upgrade
                   </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#7c3aed' }}>
-                    {(vault?.firewall || 10) + 15}%
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                    Level {(vault?.generatorLevel || 1) + 1}
                   </div>
-                  <div style={{ fontSize: '0.875rem', color: '#7c3aed' }}>
-                    +15% attack resistance
-                  </div>
+                  {(() => {
+                    const nextRates = getGeneratorRates((vault?.generatorLevel || 1) + 1);
+                    return (
+                      <>
+                        <div style={{ fontSize: '0.875rem', color: '#f59e0b' }}>
+                          ⚡ {nextRates.ppPerDay} PP/day (+{nextRates.ppPerDay - getGeneratorRates(vault?.generatorLevel || 1).ppPerDay})
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#f59e0b' }}>
+                          🛡️ {nextRates.shieldsPerDay} Shields/day (+{nextRates.shieldsPerDay - getGeneratorRates(vault?.generatorLevel || 1).shieldsPerDay})
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 
                 <button 
-                  onClick={upgradeVaultFirewall}
+                  onClick={upgradeGenerator}
                   style={{
-                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
                     color: 'white',
                     border: 'none',
                     padding: '1rem 1.5rem',
@@ -991,20 +1180,23 @@ const Battle: React.FC = () => {
                     fontSize: '1rem',
                     fontWeight: 'bold',
                     width: '100%',
-                    transition: 'all 0.2s'
+                    transform: 'translateY(0)',
+                    boxShadow: 'none',
+                    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    willChange: 'transform, box-shadow'
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(124, 58, 237, 0.3)';
+                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(245, 158, 11, 0.3)';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = 'none';
                   }}>
-                  🔥 Upgrade ({(() => {
-                    const upgradeCount = vault?.firewallUpgrades || 0;
-                    const basePrice = 50;
-                    return basePrice * Math.pow(2, upgradeCount);
+                  ⚡ Upgrade Generator ({(() => {
+                    const upgradeCount = vault?.generatorUpgrades || 0;
+                    const basePrice = 250;
+                    return basePrice + (basePrice * upgradeCount);
                   })()} PP)
                 </button>
               </div>

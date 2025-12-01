@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { activatePPBoost } from '../utils/ppBoost';
+import { useBattle } from '../context/BattleContext';
+import { activatePPBoost, getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 interface Artifact {
   id: string;
@@ -35,6 +36,16 @@ const artifacts: Artifact[] = [
     price: 50, 
     icon: '🛡️', 
     image: '/images/Shield Item.jpeg',
+    category: 'protection',
+    rarity: 'common'
+  },
+  { 
+    id: 'health-potion-25',
+    name: 'Health Potion (25)', 
+    description: 'Restore 25 HP to your vault health', 
+    price: 40, 
+    icon: '🧪', 
+    image: '/images/Health Potion - 25.png',
     category: 'protection',
     rarity: 'common'
   },
@@ -84,7 +95,7 @@ const artifacts: Artifact[] = [
     description: 'Double any PP you receive for the next 4 hours', 
     price: 75, 
     icon: '⚡', 
-    image: 'https://images.unsplash.com/photo-1559757148-5c350d0d3c56?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    image: '/images/Double PP.png',
     category: 'special',
     rarity: 'epic',
     originalPrice: 100,
@@ -96,7 +107,7 @@ const artifacts: Artifact[] = [
     description: 'Skip the line and be the next up to use the pass to leave', 
     price: 50, 
     icon: '🚀', 
-    image: 'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    image: '/images/Skip the Line.png',
     category: 'special',
     rarity: 'common'
   },
@@ -124,6 +135,7 @@ const artifacts: Artifact[] = [
 
 const Marketplace = () => {
   const { currentUser, isAdmin: checkIsAdmin } = useAuth();
+  const { vault, updateVault } = useBattle();
   const [powerPoints, setPowerPoints] = useState(0);
   const [inventory, setInventory] = useState<string[]>([]);
   const [artifactCounts, setArtifactCounts] = useState<Record<string, number>>({});
@@ -592,6 +604,89 @@ const Marketplace = () => {
       const userSnap = await getDoc(userRef);
       const currentUserData = userSnap.exists() ? userSnap.data() : {};
       
+      // Handle Health Potion (25) - check if it can be used before consuming
+      if (artifactName === 'Health Potion (25)') {
+        if (!vault) {
+          alert('❌ Vault not found. Please try again.');
+          return;
+        }
+        
+        const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+        const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
+        
+        // Check if vault health is already at max
+        if (currentVaultHealth >= maxVaultHealth) {
+          alert(`🧪 Your vault health is already at maximum (${maxVaultHealth}/${maxVaultHealth})!`);
+          return;
+        }
+        
+        // Calculate how much health can be restored
+        const healthToRestore = Math.min(25, maxVaultHealth - currentVaultHealth);
+        const newVaultHealth = currentVaultHealth + healthToRestore;
+        
+        // Remove one instance of the artifact from inventory
+        const updatedInventory = [...inventory];
+        const artifactIndex = updatedInventory.indexOf(artifactName);
+        if (artifactIndex > -1) {
+          updatedInventory.splice(artifactIndex, 1);
+        }
+        
+        // Restore health
+        await updateVault({ vaultHealth: newVaultHealth });
+        
+        // Update user's inventory in students collection
+        await updateDoc(userRef, {
+          inventory: updatedInventory
+        });
+
+        // Also update the users collection artifacts array to match Profile system
+        const usersRef = doc(db, 'users', currentUser.uid);
+        const usersSnap = await getDoc(usersRef);
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          const currentArtifacts = usersData.artifacts || [];
+          
+          let foundOne = false;
+          const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+            if (foundOne) return artifact;
+            
+            if (typeof artifact === 'string') {
+              if (artifact === artifactName) {
+                foundOne = true;
+                return { 
+                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                  name: artifactName,
+                  used: true,
+                  usedAt: new Date(),
+                  isLegacy: true
+                };
+              }
+              return artifact;
+            } else {
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
+            }
+          });
+          
+          await updateDoc(usersRef, {
+            artifacts: updatedArtifacts
+          });
+        }
+
+        // Update local state
+        setInventory(updatedInventory);
+        
+        // Refresh artifact counts
+        await updateAllArtifactCounts();
+        
+        alert(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
+        return;
+      }
+      
       // Remove one instance of the artifact from inventory
       const updatedInventory = [...inventory];
       const artifactIndex = updatedInventory.indexOf(artifactName);
@@ -601,10 +696,14 @@ const Marketplace = () => {
       
       // Handle special artifacts
       if (artifactName === 'Double PP Boost') {
-        // Activate PP boost immediately
+        // Activate PP boost immediately (no admin approval needed)
         const success = await activatePPBoost(currentUser.uid, artifactName);
         if (success) {
-          alert(`⚡ Double PP Boost activated! You'll receive double PP for the next 4 hours!`);
+          // Get the active boost to show countdown
+          const activeBoost = await getActivePPBoost(currentUser.uid);
+          const boostStatus = getPPBoostStatus(activeBoost);
+          const timeRemaining = boostStatus.isActive ? boostStatus.timeRemaining : '4:00';
+          alert(`⚡ Double PP Boost activated! You'll receive double PP for the next 4 hours!\n\nTime remaining: ${timeRemaining}`);
         } else {
           alert('Failed to activate PP boost. Please try again.');
           return;
@@ -663,28 +762,41 @@ const Marketplace = () => {
       });
 
       // Also update the users collection artifacts array to match Profile system
+      // IMPORTANT: Only mark ONE instance as used, not all of them
       const usersRef = doc(db, 'users', currentUser.uid);
       const usersSnap = await getDoc(usersRef);
       if (usersSnap.exists()) {
         const usersData = usersSnap.data();
         const currentArtifacts = usersData.artifacts || [];
         
-        // Find and mark the artifact as used in the users collection
+        // Find the FIRST unused artifact with this name and mark only that one as used
+        let foundOne = false;
         const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+          // If we already found and marked one, don't mark any more
+          if (foundOne) return artifact;
+          
           if (typeof artifact === 'string') {
             // Legacy artifact stored as string - match by name
-            return artifact === artifactName ? { 
-              id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-              name: artifactName,
-              used: true,
-              usedAt: new Date(),
-              isLegacy: true
-            } : artifact;
+            if (artifact === artifactName) {
+              foundOne = true;
+              return { 
+                id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                name: artifactName,
+                used: true,
+                usedAt: new Date(),
+                isLegacy: true
+              };
+            }
+            return artifact;
           } else {
-            // New artifact stored as object - match by name
-            return artifact.name === artifactName 
-              ? { ...artifact, used: true, usedAt: new Date() } 
-              : artifact;
+            // New artifact stored as object - match by name and check if not already used
+            // Only mark as used if it's not already used (check for used property explicitly)
+            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+            if (artifact.name === artifactName && isNotUsed) {
+              foundOne = true;
+              return { ...artifact, used: true, usedAt: new Date() };
+            }
+            return artifact;
           }
         });
         
@@ -1056,7 +1168,7 @@ const Marketplace = () => {
           opacity: 0.3
         }} />
         <div style={{ maxWidth: '1200px', margin: '0 auto', padding: isMobile ? '0 1rem' : '0 1.5rem', position: 'relative', zIndex: 1 }}>
-          🔮 MYSTICAL SYSTEM TECHNOLOGY - Epic and Legendary artifacts now available! Limited time only.
+          🔮 MASTERS OF SPACE AND TIME - Epic and Legendary artifacts now available! Limited time only.
         </div>
       </div>
 

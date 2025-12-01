@@ -8,6 +8,7 @@ import BattleEngine from './BattleEngine';
 import { getLevelFromXP } from '../utils/leveling';
 import PvPRewardSpin from './PvPRewardSpin';
 import WaitingRoomModal from './WaitingRoomModal';
+import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 export type RiskLevel = 'easy' | 'medium' | 'high';
 
@@ -32,6 +33,8 @@ interface OpponentData {
   name: string;
   currentPP: number;
   maxPP: number;
+  vaultHealth?: number;
+  maxVaultHealth?: number;
   shieldStrength: number;
   maxShieldStrength: number;
   level: number;
@@ -629,11 +632,18 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const vaultData = opponentVault.data();
         const opponentLevel = getLevelFromXP(studentData.xp || 0);
 
+        const maxVaultHealth = vaultData.maxVaultHealth || Math.floor((vaultData.capacity || 1000) * 0.1);
+        const vaultHealth = vaultData.vaultHealth !== undefined 
+          ? vaultData.vaultHealth 
+          : Math.min(vaultData.currentPP || 0, maxVaultHealth);
+        
         setOpponent({
           id: opponentId,
           name: studentData.displayName || studentData.name || 'Unknown Player',
-          currentPP: vaultData.currentPP || 0,
+          currentPP: vaultData.currentPP || 0, // PP (currency) - not used for damage
           maxPP: vaultData.capacity || 1000,
+          vaultHealth: vaultHealth, // Vault health - what gets damaged
+          maxVaultHealth: maxVaultHealth,
           shieldStrength: vaultData.shieldStrength || 0,
           maxShieldStrength: vaultData.maxShieldStrength || 100,
           level: opponentLevel,
@@ -843,9 +853,22 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const newLoserPP = Math.max(0, (loserVault.currentPP || 0) - baseReward);
         const winnerCurrentPP = winnerVault.currentPP || 0;
         const winnerCapacity = winnerVault.capacity || 1000;
-        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + baseReward);
         
-        // Update both vaults with base transfer (loser loses base, winner gets base)
+        // Apply PP boost to winner's reward if active
+        let finalReward = baseReward;
+        try {
+          const activeBoost = await getActivePPBoost(winnerId);
+          if (activeBoost) {
+            finalReward = applyPPBoost(baseReward, winnerId, activeBoost);
+            console.log(`⚡ PP Boost applied to PvP reward: ${baseReward} → ${finalReward}`);
+          }
+        } catch (error) {
+          console.error('Error applying PP boost to PvP reward:', error);
+        }
+        
+        const newWinnerPP = Math.min(winnerCapacity, winnerCurrentPP + finalReward);
+        
+        // Update both vaults (loser loses base, winner gets boosted amount)
         await Promise.all([
           updateDoc(loserRef, { currentPP: newLoserPP }),
           updateDoc(winnerRef, { currentPP: newWinnerPP })
@@ -976,7 +999,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
                   </div>
                 )}
                 <div>
-                  <div style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>PP: {opponent.currentPP}/{opponent.maxPP}</div>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>VAULT HEALTH: {(opponent.vaultHealth !== undefined ? opponent.vaultHealth : (opponent.maxVaultHealth || Math.floor((opponent.maxPP || 1000) * 0.1)))}/{(opponent.maxVaultHealth || Math.floor((opponent.maxPP || 1000) * 0.1))}</div>
                   <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>🛡️ {opponent.shieldStrength}/{opponent.maxShieldStrength}</div>
                 </div>
               </div>

@@ -4,6 +4,7 @@ import { doc, getDoc, onSnapshot, addDoc, collection, updateDoc } from 'firebase
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 interface VaultStatsProps {
   vault: Vault | null;
@@ -28,28 +29,102 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 }) => {
   console.log('VaultStats: Received remainingOfflineMoves:', remainingOfflineMoves, 'maxOfflineMoves:', maxOfflineMoves);
   const { currentUser } = useAuth();
-  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData, offlineMoves } = useBattle();
+  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData, offlineMoves, collectGeneratorPP, getGeneratorRates } = useBattle();
   const [userXP, setUserXP] = useState<number>(0);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreCost, setRestoreCost] = useState<number>(100);
+  const [restoreHealthLoading, setRestoreHealthLoading] = useState(false);
 
-  // Helper to get "day" start time (8am EST) for a given date
+  // Helper to get "day" start time (8am Eastern Time) for a given date
+  // Properly handles EST (UTC-5) and EDT (UTC-4) automatically using America/New_York timezone
   const getDayStartForDate = (date: Date): Date => {
-    // Convert to EST
-    const estOffset = -5; // EST is UTC-5
-    const estDate = new Date(date.getTime() + (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    // Get current date/time in Eastern Time
+    const easternNow = date.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
     
-    // Create 8am EST for that date
-    const dayStart = new Date(estDate);
-    dayStart.setHours(8, 0, 0, 0);
+    // Parse the Eastern Time string
+    const parts = easternNow.split(', ');
+    const datePart = parts[0];
+    const timePart = parts[1];
+    const [month, day, year] = datePart.split('/');
+    const [hour] = timePart.split(':');
     
-    // If time is before 8am EST, use previous day's 8am EST
-    if (estDate < dayStart) {
-      dayStart.setDate(dayStart.getDate() - 1);
+    const yearNum = parseInt(year);
+    const monthNum = parseInt(month) - 1; // JS months are 0-indexed
+    const dayNum = parseInt(day);
+    const currentHour = parseInt(hour);
+    
+    // Determine which day's 8am to use
+    let targetYear = yearNum;
+    let targetMonth = monthNum;
+    let targetDay = dayNum;
+    
+    // If current Eastern time is before 8am, use previous day's 8am
+    if (currentHour < 8) {
+      const prevDate = new Date(yearNum, monthNum, dayNum - 1);
+      targetYear = prevDate.getFullYear();
+      targetMonth = prevDate.getMonth();
+      targetDay = prevDate.getDate();
     }
     
-    // Convert back to local time
-    return new Date(dayStart.getTime() - (estOffset * 60 - date.getTimezoneOffset()) * 60000);
+    // Find what UTC time corresponds to 8am Eastern on the target date
+    // Test both EST (13:00 UTC) and EDT (12:00 UTC) possibilities
+    // EST: 8am Eastern = 13:00 UTC (UTC-5)
+    // EDT: 8am Eastern = 12:00 UTC (UTC-4)
+    
+    // Try 13:00 UTC first (EST)
+    let testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 13, 0, 0));
+    let easternTimeStr = testUTC.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      hour12: false
+    });
+    let easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+    
+    if (easternHour === 8) {
+      // EST: 8am Eastern = 13:00 UTC
+      return testUTC;
+    }
+    
+    // Try 12:00 UTC (EDT)
+    testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 12, 0, 0));
+    easternTimeStr = testUTC.toLocaleString('en-US', { 
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      hour12: false
+    });
+    easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+    
+    if (easternHour === 8) {
+      // EDT: 8am Eastern = 12:00 UTC
+      return testUTC;
+    }
+    
+    // Fallback: if neither works, calculate dynamically
+    // Find the UTC hour that gives us 8am Eastern
+    for (let utcHour = 11; utcHour <= 14; utcHour++) {
+      testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, utcHour, 0, 0));
+      easternTimeStr = testUTC.toLocaleString('en-US', { 
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        hour12: false
+      });
+      easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
+      if (easternHour === 8) {
+        return testUTC;
+      }
+    }
+    
+    // Ultimate fallback: use 13:00 UTC (EST)
+    return new Date(Date.UTC(targetYear, targetMonth, targetDay, 13, 0, 0));
   };
 
   // Helper to get current "day" start time (8am EST)
@@ -153,6 +228,60 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       setRestoreLoading(false);
     }
   };
+
+  // Function to restore vault health to full using PP
+  const handleRestoreVaultHealth = async () => {
+    if (!currentUser || !vault) return;
+    
+    const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+    const currentVaultHealth = vault.vaultHealth || 0;
+    const healthNeeded = maxVaultHealth - currentVaultHealth;
+    
+    // Check if health is already at max
+    if (healthNeeded <= 0) {
+      alert('Your vault health is already at maximum!');
+      return;
+    }
+    
+    // Check if player has enough PP
+    if (vault.currentPP < healthNeeded) {
+      alert(`Not enough PP! You need ${healthNeeded} PP to restore vault health to full.`);
+      return;
+    }
+    
+    try {
+      setRestoreHealthLoading(true);
+      
+      // Calculate new PP (deduct health cost)
+      const newPP = vault.currentPP - healthNeeded;
+      
+      // Update vault in Firestore: restore health to max and deduct PP
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      await updateDoc(vaultRef, {
+        vaultHealth: maxVaultHealth,
+        currentPP: newPP
+      });
+      
+      // Also update student PP to match
+      const studentRef = doc(db, 'students', currentUser.uid);
+      await updateDoc(studentRef, {
+        powerPoints: newPP
+      });
+      
+      // Sync vault PP to ensure consistency
+      await syncVaultPP();
+      
+      // Force refresh of vault data
+      await refreshVaultData();
+      
+      alert(`Vault health restored to full! Spent ${healthNeeded} PP.`);
+    } catch (error) {
+      console.error('Error restoring vault health:', error);
+      alert('Failed to restore vault health. Please try again.');
+    } finally {
+      setRestoreHealthLoading(false);
+    }
+  };
   const [userLevel, setUserLevel] = useState<number>(1);
   const [previousXP, setPreviousXP] = useState<number>(0);
   const [previousPP, setPreviousPP] = useState<number>(0);
@@ -161,35 +290,26 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   const [showOfflineMovesNotification, setShowOfflineMovesNotification] = useState(false);
   const [previousOfflineMoves, setPreviousOfflineMoves] = useState<number>(remainingOfflineMoves);
   const [resetTimer, setResetTimer] = useState<string>('');
+  const [generatorTimer, setGeneratorTimer] = useState<string>('');
+  const [generatorTimeProgress, setGeneratorTimeProgress] = useState<number>(0);
+  const [ppBoostStatus, setPpBoostStatus] = useState<{ isActive: boolean; timeRemaining: string }>({ isActive: false, timeRemaining: '' });
 
-  // Calculate next reset time (8am EST each day)
-  // Note: 8am EST = 13:00 UTC (EST is UTC-5)
+  // Calculate next reset time (8am Eastern Time each day)
+  // Properly handles EST (UTC-5) and EDT (UTC-4) automatically
   const getNextResetTime = (): Date => {
     const now = new Date();
     
-    // Get current UTC time
-    const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const utcDate = new Date(utcNow);
+    // Get today's 8am Eastern Time
+    const today8amEastern = getDayStartForDate(now);
     
-    // Get today's date components in UTC
-    const utcYear = utcDate.getUTCFullYear();
-    const utcMonth = utcDate.getUTCMonth();
-    const utcDay = utcDate.getUTCDate();
-    
-    // Create today's 8am EST (13:00 UTC) in UTC milliseconds
-    const today8amEST_UTC = Date.UTC(utcYear, utcMonth, utcDay, 13, 0, 0, 0);
-    
-    // If current time is already past today's 8am EST, use tomorrow's 8am EST
-    let target8amEST_UTC = today8amEST_UTC;
-    if (utcNow >= today8amEST_UTC) {
-      // Add 24 hours to get tomorrow's 8am EST
-      target8amEST_UTC = today8amEST_UTC + (24 * 60 * 60 * 1000);
+    // If current time is already past today's 8am Eastern, get tomorrow's 8am Eastern
+    if (now >= today8amEastern) {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return getDayStartForDate(tomorrow);
     }
     
-    // Convert UTC time to local time for the Date object
-    const localResetTime = new Date(target8amEST_UTC - (now.getTimezoneOffset() * 60000));
-    
-    return localResetTime;
+    return today8amEastern;
   };
 
   // Update reset timer every second
@@ -216,6 +336,65 @@ const VaultStats: React.FC<VaultStatsProps> = ({
     
     return () => clearInterval(interval);
   }, []);
+
+  // Check for active PP boost
+  useEffect(() => {
+    const checkPPBoost = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const activeBoost = await getActivePPBoost(currentUser.uid);
+        const status = getPPBoostStatus(activeBoost);
+        setPpBoostStatus(status);
+      } catch (error) {
+        console.error('Error checking PP boost:', error);
+      }
+    };
+    
+    checkPPBoost();
+    
+    // Update every minute for countdown
+    const interval = setInterval(checkPPBoost, 60000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
+  // Update generator timer and progress every second
+  useEffect(() => {
+    if (!vault) return;
+
+    const updateGeneratorTimer = () => {
+      const now = new Date();
+      const nextReset = getNextResetTime();
+      
+      // Calculate time remaining until next reset (when generator will be full)
+      const timeUntilFull = nextReset.getTime() - now.getTime();
+      
+      // Total time in a day (24 hours)
+      const totalDayTime = 24 * 60 * 60 * 1000;
+      
+      // Calculate progress percentage based on time remaining
+      // If 13 hours remain, then 11 hours have elapsed = 11/24 = 45.8%
+      const progress = Math.min(100, Math.max(0, 100 - (timeUntilFull / totalDayTime * 100)));
+      setGeneratorTimeProgress(progress);
+      
+      if (timeUntilFull <= 0) {
+        setGeneratorTimer('Generator full!');
+        setGeneratorTimeProgress(100);
+        return;
+      }
+      
+      const hours = Math.floor(timeUntilFull / (1000 * 60 * 60));
+      const minutes = Math.floor((timeUntilFull % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((timeUntilFull % (1000 * 60)) / 1000);
+      
+      setGeneratorTimer(`${hours}h ${minutes}m ${seconds}s`);
+    };
+    
+    updateGeneratorTimer();
+    const interval = setInterval(updateGeneratorTimer, 1000);
+    
+    return () => clearInterval(interval);
+  }, [vault]);
 
   // Check for offline moves changes and show notification
   useEffect(() => {
@@ -538,8 +717,25 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>POWER POINTS</div>
             <span style={{ fontSize: '1.5rem' }}>⚡</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#059669', marginBottom: '0.5rem', position: 'relative' }}>
-            {vault.currentPP.toLocaleString()} / {vault.capacity.toLocaleString()}
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#059669', marginBottom: '0.5rem', position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>{vault.currentPP.toLocaleString()} / {vault.capacity.toLocaleString()}</span>
+            {ppBoostStatus.isActive && (
+              <span 
+                style={{ 
+                  fontSize: '1.25rem',
+                  color: '#f59e0b',
+                  fontWeight: 'bold',
+                  background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                  animation: 'pulse 2s infinite'
+                }}
+                title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+              >
+                ×2
+              </span>
+            )}
             {showPPNotification && (
               <div style={{
                 position: 'absolute',
@@ -583,6 +779,114 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <span>{getStatusIcon(ppPercentage)} {ppPercentage.toFixed(1)}% Full</span>
             <span>Capacity: {vault.capacity.toLocaleString()}</span>
           </div>
+        </div>
+
+        {/* Vault Health */}
+        <div style={{ 
+          background: 'white', 
+          padding: '1.5rem', 
+          borderRadius: '0.75rem', 
+          border: '2px solid #e5e7eb',
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>VAULT HEALTH</div>
+            <span style={{ fontSize: '1.5rem' }}>❤️</span>
+          </div>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: vault.vaultHealth === 0 ? '#6b7280' : '#10b981', marginBottom: '0.5rem', position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>{(vault.vaultHealth || vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()} / {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
+            {vault.vaultHealthCooldown && (() => {
+              const cooldownEnd = new Date(vault.vaultHealthCooldown);
+              cooldownEnd.setHours(cooldownEnd.getHours() + 3);
+              const now = new Date();
+              const remainingMs = cooldownEnd.getTime() - now.getTime();
+              if (remainingMs > 0) {
+                const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
+                const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+                return (
+                  <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'normal' }}>
+                    (Cooldown: {remainingHours}h {remainingMinutes}m)
+                  </span>
+                );
+              }
+              return null;
+            })()}
+          </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ 
+              background: '#f3f4f6', 
+              height: '8px', 
+              borderRadius: '4px',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                background: vault.vaultHealth === 0 
+                  ? 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)'
+                  : 'linear-gradient(90deg, #10b981 0%, #059669 100%)',
+                height: '100%',
+                width: `${vault.maxVaultHealth ? Math.min((vault.vaultHealth / vault.maxVaultHealth) * 100, 100) : 0}%`,
+                transition: 'width 0.3s ease'
+              }} />
+            </div>
+          </div>
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            fontSize: '0.875rem',
+            color: '#6b7280',
+            marginBottom: '1rem'
+          }}>
+            <span>{vault.vaultHealth === 0 ? '⏰ On Cooldown' : '🛡️ Protection Active'}</span>
+            <span>Max: {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
+          </div>
+          
+          {/* Restore Health Button */}
+          {(() => {
+            const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+            const currentVaultHealth = vault.vaultHealth || 0;
+            const healthNeeded = maxVaultHealth - currentVaultHealth;
+            const canRestore = healthNeeded > 0 && !vault.vaultHealthCooldown && vault.currentPP >= healthNeeded;
+            
+            return (
+              <button
+                onClick={handleRestoreVaultHealth}
+                disabled={restoreHealthLoading || !canRestore}
+                style={{
+                  width: '100%',
+                  background: canRestore ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : '#9ca3af',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '0.5rem',
+                  cursor: canRestore ? 'pointer' : 'not-allowed',
+                  fontSize: '0.875rem',
+                  fontWeight: 'bold',
+                  transition: 'all 0.2s ease',
+                  boxShadow: canRestore ? '0 2px 4px rgba(16, 185, 129, 0.2)' : 'none'
+                }}
+                onMouseEnter={(e) => {
+                  if (canRestore) {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(16, 185, 129, 0.3)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (canRestore) {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
+                  }
+                }}
+              >
+                {restoreHealthLoading 
+                  ? 'Restoring...' 
+                  : healthNeeded > 0 
+                    ? `❤️ Restore Health (${healthNeeded} PP)`
+                    : 'Health Full'
+                }
+              </button>
+            );
+          })()}
         </div>
 
         {/* Shield Strength */}
@@ -650,7 +954,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           )}
         </div>
 
-        {/* Firewall */}
+        {/* Generator */}
         <div style={{ 
           background: 'white', 
           padding: '1.5rem', 
@@ -659,37 +963,129 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>FIREWALL</div>
-            <span style={{ fontSize: '1.5rem' }}>🔥</span>
+            <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>GENERATOR</div>
+            <span style={{ fontSize: '1.5rem' }}>⚡</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#7c3aed', marginBottom: '0.5rem' }}>
-            {vault.firewall}%
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '0.5rem' }}>
+            Level {vault.generatorLevel || 1}
           </div>
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ 
-              background: '#f3f4f6', 
-              height: '8px', 
-              borderRadius: '4px',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                background: `linear-gradient(90deg, ${getStatusColor(vault.firewall)} 0%, ${getStatusColor(vault.firewall)}80 100%)`,
-                height: '100%',
-                width: `${vault.firewall}%`,
-                transition: 'width 0.3s ease'
-              }} />
-            </div>
-          </div>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            fontSize: '0.875rem',
-            color: '#6b7280'
-          }}>
-            <span>{getStatusIcon(vault.firewall)} Attack Resistance</span>
-            <span>Max: 100%</span>
-          </div>
+          {(() => {
+            const rates = getGeneratorRates(vault.generatorLevel || 1);
+            const pendingPP = vault.generatorPendingPP || 0;
+            const isFull = pendingPP >= rates.ppPerDay;
+            
+            return (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                    Pending PP: {pendingPP} / {rates.ppPerDay}
+                  </div>
+                  <div style={{ 
+                    background: '#f3f4f6', 
+                    height: '8px', 
+                    borderRadius: '4px',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{
+                      background: isFull 
+                        ? 'linear-gradient(90deg, #10b981 0%, #059669 100%)'
+                        : 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)',
+                      height: '100%',
+                      width: `${Math.min(100, (pendingPP / rates.ppPerDay) * 100)}%`,
+                      transition: 'width 0.3s ease'
+                    }} />
+                  </div>
+                </div>
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  fontSize: '0.875rem',
+                  color: '#6b7280',
+                  marginBottom: '0.75rem'
+                }}>
+                  <span>⚡ {rates.ppPerDay} PP/day</span>
+                  <span>🛡️ {rates.shieldsPerDay} Shields/day</span>
+                </div>
+                
+                {/* Generator Timer */}
+                <div style={{
+                  background: '#fef3c7',
+                  border: '1px solid #f59e0b',
+                  borderRadius: '0.5rem',
+                  padding: '0.5rem',
+                  marginBottom: '0.75rem',
+                  textAlign: 'center',
+                  fontSize: '0.875rem',
+                  color: '#92400e',
+                  fontWeight: '500'
+                }}>
+                  ⏰ Until Generator Full: {generatorTimer || 'Calculating...'}
+                </div>
+                
+                {/* Time-based Progress Bar */}
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                    fontSize: '0.75rem',
+                    color: '#6b7280',
+                    marginBottom: '0.25rem'
+                  }}>
+                    <span>Generation Progress</span>
+                    <span>{Math.round(generatorTimeProgress)}%</span>
+                  </div>
+                  <div style={{ 
+                    background: '#f3f4f6', 
+                    height: '6px', 
+                    borderRadius: '3px',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{
+                      background: 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)',
+                      height: '100%',
+                      width: `${generatorTimeProgress}%`,
+                      transition: 'width 0.3s ease'
+                    }} />
+                  </div>
+                </div>
+                
+                {pendingPP > 0 && (
+                  <button
+                    onClick={collectGeneratorPP}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      background: isFull 
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                        : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      transform: 'scale(1)',
+                      boxShadow: 'none',
+                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      willChange: 'transform, box-shadow'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'scale(1.02)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    {isFull ? '✓ Collect PP' : `Collect ${pendingPP} PP`}
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         {/* Battle Moves */}

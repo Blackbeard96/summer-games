@@ -1597,9 +1597,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 )}
               </div>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Firewall</span>
-                <div style={{ fontWeight: 'bold', color: '#7c3aed' }}>
-                  {targetVault.firewall}%
+                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Generator</span>
+                <div style={{ fontWeight: 'bold', color: '#f59e0b' }}>
+                  Level {targetVault.generatorLevel || 1}
                 </div>
               </div>
               <div>

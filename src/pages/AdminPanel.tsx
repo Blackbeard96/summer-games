@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { db, storage } from '../firebase';
+import { db, storage, auth } from '../firebase';
 import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref, deleteObject, getDownloadURL } from 'firebase/storage';
+import { sendPasswordResetEmail } from 'firebase/auth';
 import BadgeManager from '../components/BadgeManager';
 import BadgeSetup from '../components/BadgeSetup';
 import PlayerCard from '../components/PlayerCard';
@@ -10,6 +11,7 @@ import GoogleClassroomIntegration from '../components/GoogleClassroomIntegration
 import { getLevelFromXP } from '../utils/leveling';
 import { MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
+import { MOVE_TEMPLATES, ACTION_CARD_TEMPLATES } from '../types/battle';
 import { useLevelUp } from '../context/LevelUpContext';
 import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
@@ -23,6 +25,10 @@ import PPChangeApproval from '../components/PPChangeApproval';
 import RoleSystemSetup from '../components/RoleSystemSetup';
 import ManifestAdmin from '../components/ManifestAdmin';
 import BannerManager from '../components/BannerManager';
+import MindforgeQuestionManager from '../components/MindforgeQuestionManager';
+import CPUOpponentMovesAdmin from '../components/CPUOpponentMovesAdmin';
+import ActionCardsAdmin from '../components/ActionCardsAdmin';
+import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -80,7 +86,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -91,6 +97,8 @@ const AdminPanel: React.FC = () => {
   const [rowError, setRowError] = useState<{ [id: string]: string }>({});
   const [pendingSubmissionCount, setPendingSubmissionCount] = useState(0);
   const [viewingFile, setViewingFile] = useState<{ url: string; name: string; type: string } | null>(null);
+  const [passwordResetEmail, setPasswordResetEmail] = useState('');
+  const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   
   // Story Progress Management
   const [storyProgressData, setStoryProgressData] = useState<{ [studentId: string]: any }>({});
@@ -376,6 +384,282 @@ const AdminPanel: React.FC = () => {
       console.log('Chapter progress reset for all students completed');
     } catch (error) {
       console.error('Error resetting all chapter progress:', error);
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
+  const resetAllPlayerXP = async () => {
+    if (!window.confirm('⚠️ WARNING: This will reset ALL player XP and Levels for ALL students:\n\n- XP will be reset to 0\n- All players will be set to Level 1\n- Power Points (PP) will remain unchanged\n\nThis action CANNOT be undone. Are you absolutely sure?')) {
+      return;
+    }
+    
+    if (!window.confirm('This is your final warning. This will affect ALL players. Continue?')) {
+      return;
+    }
+    
+    setStoryProgressLoading(true);
+    try {
+      console.log('Starting XP reset for all students...');
+      
+      // Get all students
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const allStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      console.log(`Resetting XP for ${allStudents.length} students...`);
+      
+      // Reset XP for each student (keeping PP unchanged)
+      const updatePromises = allStudents.map(async (student) => {
+        try {
+          console.log(`Resetting XP for ${student.displayName || student.email || student.id} (${student.id})`);
+          
+          // Only reset XP, keep everything else (including PP) unchanged
+          await updateDoc(doc(db, 'students', student.id), {
+            xp: 0,
+            xpResetAt: serverTimestamp(),
+            xpResetBy: 'admin'
+          });
+          
+          console.log(`✅ Successfully reset XP for ${student.displayName || student.email || student.id} (${student.id})`);
+          return { success: true, studentId: student.id };
+        } catch (error) {
+          console.error(`❌ Failed to reset XP for ${student.displayName || student.email || student.id} (${student.id}):`, error);
+          return { success: false, studentId: student.id, error };
+        }
+      });
+      
+      const results = await Promise.all(updatePromises);
+      const successful = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      
+      console.log(`\n📊 XP Reset Summary:`);
+      console.log(`✅ Successful: ${successful.length}`);
+      console.log(`❌ Failed: ${failed.length}`);
+      
+      if (failed.length > 0) {
+        console.error('Failed resets:', failed);
+        alert(`XP reset completed with errors. ${successful.length} successful, ${failed.length} failed. Check console for details.`);
+      } else {
+        alert(`✅ Successfully reset XP and Levels for ${successful.length} players! All players are now Level 1 with 0 XP. Power Points remain unchanged.`);
+      }
+      
+      // Refresh students data
+      const updatedSnapshot = await getDocs(collection(db, 'students'));
+      const updatedStudents = updatedSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      setStudents(updatedStudents);
+      console.log('🎉 XP reset for all students completed');
+    } catch (error) {
+      console.error('❌ Error resetting player XP:', error);
+      alert('Error resetting player XP. Check console for details.');
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
+  const resetAllPlayerProgress = async () => {
+    if (!window.confirm('⚠️ WARNING: This will reset ALL player progress for ALL students:\n\n- Chapter progress (back to Chapter 1 - Challenge 1)\n- XP (reset to 0)\n- Move upgrades (reset to level 1)\n- Action card upgrades (reset to level 1)\n\nThis action CANNOT be undone. Are you absolutely sure?')) {
+      return;
+    }
+    
+    if (!window.confirm('This is your final warning. This will affect ALL players. Continue?')) {
+      return;
+    }
+    
+    setStoryProgressLoading(true);
+    try {
+      console.log('Starting comprehensive reset for all students...');
+      
+      // Get all students
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const allStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      console.log(`Resetting ${allStudents.length} students...`);
+      
+      // Reset each student
+      const updatePromises = allStudents.map(async (student) => {
+        try {
+          console.log(`Resetting all progress for ${student.displayName || student.email || student.id} (${student.id})`);
+          
+          // 1. Reset chapter progress in students collection
+          await updateDoc(doc(db, 'students', student.id), {
+            storyChapter: 1,
+            chapters: {},
+            xp: 0, // Reset XP
+            resetAt: serverTimestamp(),
+            resetBy: 'admin',
+            resetType: 'full'
+          });
+          
+          // 2. Reset chapter progress in users collection
+          try {
+            const userRef = doc(db, 'users', student.id);
+            const userDoc = await getDoc(userRef);
+            
+            if (userDoc.exists()) {
+              // Initialize chapter structure for Chapter 1
+              const chapterProgress: any = {};
+              
+              CHAPTERS.forEach(chapter => {
+                chapterProgress[chapter.id] = {
+                  isActive: chapter.id === 1,
+                  isCompleted: false,
+                  unlockDate: chapter.id === 1 ? serverTimestamp() : null,
+                  challenges: {}
+                };
+                
+                chapter.challenges.forEach(challenge => {
+                  chapterProgress[chapter.id].challenges[challenge.id] = {
+                    isCompleted: false,
+                    completionDate: null
+                  };
+                });
+              });
+              
+              await updateDoc(userRef, {
+                chapters: chapterProgress,
+                storyChapter: 1,
+                resetAt: serverTimestamp(),
+                resetBy: 'admin',
+                resetType: 'full'
+              });
+            }
+          } catch (userError) {
+            console.log(`User document not found for ${student.id}, skipping user reset`);
+          }
+          
+          // 3. Reset move upgrades (reset masteryLevel to 1 and restore base stats)
+          try {
+            const movesRef = doc(db, 'battleMoves', student.id);
+            const movesDoc = await getDoc(movesRef);
+            
+            if (movesDoc.exists()) {
+              const movesData = movesDoc.data();
+              const currentMoves = movesData.moves || [];
+              
+              // Reset all moves to level 1 with base stats
+              const resetMoves = currentMoves.map((move: any) => {
+                // Find the template for this move
+                const template = MOVE_TEMPLATES.find(t => t.name === move.name);
+                if (template) {
+                  return {
+                    ...template,
+                    id: move.id,
+                    unlocked: move.unlocked || false,
+                    masteryLevel: 1,
+                    currentCooldown: 0
+                  };
+                }
+                // If no template found, just reset mastery level
+                return {
+                  ...move,
+                  masteryLevel: 1,
+                  currentCooldown: 0
+                };
+              });
+              
+              await updateDoc(movesRef, { moves: resetMoves });
+            }
+          } catch (movesError) {
+            console.log(`Moves document not found for ${student.id}, skipping moves reset`);
+          }
+          
+          // 4. Reset action card upgrades (reset masteryLevel to 1)
+          try {
+            const cardsRef = doc(db, 'battleActionCards', student.id);
+            const cardsDoc = await getDoc(cardsRef);
+            
+            if (cardsDoc.exists()) {
+              const cardsData = cardsDoc.data();
+              const currentCards = cardsData.cards || [];
+              
+              // Reset all cards to level 1 with base stats
+              const resetCards = currentCards.map((card: any) => {
+                // Find the template for this card
+                const template = ACTION_CARD_TEMPLATES.find(t => t.name === card.name);
+                if (template) {
+                  return {
+                    ...template,
+                    id: card.id,
+                    masteryLevel: 1,
+                    uses: template.maxUses || 0
+                  };
+                }
+                // If no template found, just reset mastery level
+                return {
+                  ...card,
+                  masteryLevel: 1
+                };
+              });
+              
+              await updateDoc(cardsRef, { cards: resetCards });
+            }
+          } catch (cardsError) {
+            console.log(`Action cards document not found for ${student.id}, skipping cards reset`);
+          }
+          
+          console.log(`✅ Successfully reset all progress for ${student.displayName || student.email || student.id} (${student.id})`);
+          return { success: true, studentId: student.id };
+        } catch (error) {
+          console.error(`❌ Failed to reset progress for ${student.displayName || student.email || student.id} (${student.id}):`, error);
+          return { success: false, studentId: student.id, error };
+        }
+      });
+      
+      const results = await Promise.all(updatePromises);
+      const successful = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      
+      console.log(`\n📊 Reset Summary:`);
+      console.log(`✅ Successful: ${successful.length}`);
+      console.log(`❌ Failed: ${failed.length}`);
+      
+      if (failed.length > 0) {
+        console.error('Failed resets:', failed);
+        alert(`Reset completed with errors. ${successful.length} successful, ${failed.length} failed. Check console for details.`);
+      } else {
+        alert(`✅ Successfully reset all progress for ${successful.length} players!`);
+      }
+      
+      // Refresh students data
+      const updatedSnapshot = await getDocs(collection(db, 'students'));
+      const updatedStudents = updatedSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      setStudents(updatedStudents);
+      
+      // Update local state
+      const resetData = {
+        currentEpisode: 'Chapter 1',
+        currentChapterTitle: 'Leaving the Ordinary World',
+        completedEpisodes: 0,
+        totalProgress: 0,
+        seasonRewards: [],
+        chapters: {},
+        storyChapter: 1
+      };
+      
+      const newProgressData: { [studentId: string]: any } = {};
+      updatedStudents.forEach(student => {
+        newProgressData[student.id] = resetData;
+      });
+      
+      setStoryProgressData(newProgressData);
+      console.log('🎉 Full progress reset for all students completed');
+    } catch (error) {
+      console.error('❌ Error resetting all player progress:', error);
+      alert('Error resetting player progress. Check console for details.');
     } finally {
       setStoryProgressLoading(false);
     }
@@ -1405,6 +1689,71 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  // Password reset handler
+  const resetUserPassword = async (email: string, studentId?: string) => {
+    if (!email || !email.includes('@')) {
+      alert('Please enter a valid email address');
+      return;
+    }
+
+    if (!window.confirm(`Send password reset email to ${email}?`)) {
+      return;
+    }
+
+    if (studentId) {
+      setRowLoading(prev => ({ ...prev, [studentId]: true }));
+      setRowError(prev => ({ ...prev, [studentId]: '' }));
+    } else {
+      setPasswordResetLoading(true);
+    }
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      alert(`✅ Password reset email sent successfully to ${email}`);
+      
+      // Clear the email input if it was from the general form
+      if (!studentId) {
+        setPasswordResetEmail('');
+      }
+      
+      // Log the password reset action
+      if (currentUser) {
+        try {
+          await addDoc(collection(db, 'adminLogs'), {
+            adminId: currentUser.uid,
+            adminEmail: currentUser.email,
+            action: 'password_reset',
+            targetEmail: email,
+            timestamp: serverTimestamp()
+          });
+        } catch (logError) {
+          console.error('Error logging password reset:', logError);
+        }
+      }
+    } catch (error: any) {
+      const errorMessage = error.message || 'Failed to send password reset email';
+      console.error('Password reset error:', error);
+      
+      if (error.code === 'auth/user-not-found') {
+        alert(`❌ No account found with email: ${email}`);
+      } else if (error.code === 'auth/invalid-email') {
+        alert(`❌ Invalid email address: ${email}`);
+      } else {
+        alert(`❌ Error: ${errorMessage}`);
+      }
+      
+      if (studentId) {
+        setRowError(prev => ({ ...prev, [studentId]: errorMessage }));
+      }
+    } finally {
+      if (studentId) {
+        setRowLoading(prev => ({ ...prev, [studentId]: false }));
+      } else {
+        setPasswordResetLoading(false);
+      }
+    }
+  };
+
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -1813,6 +2162,70 @@ const AdminPanel: React.FC = () => {
         >
           📢 Banner Manager
         </button>
+        <button
+          onClick={() => setActiveTab('mindforge')}
+          style={{
+            backgroundColor: activeTab === 'mindforge' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'mindforge' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          Mindforge
+        </button>
+        <button
+          onClick={() => setActiveTab('cpu-opponent-moves')}
+          style={{
+            backgroundColor: activeTab === 'cpu-opponent-moves' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'cpu-opponent-moves' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          CPU Opponent Moves
+        </button>
+        <button
+          onClick={() => setActiveTab('elemental-moves')}
+          style={{
+            backgroundColor: activeTab === 'elemental-moves' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'elemental-moves' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          Elemental Moves
+        </button>
+        <button
+          onClick={() => setActiveTab('action-cards')}
+          style={{
+            backgroundColor: activeTab === 'action-cards' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'action-cards' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          🃏 Action Cards
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -1838,6 +2251,23 @@ const AdminPanel: React.FC = () => {
         <RoleSystemSetup />
       ) : activeTab === 'banner' ? (
         <BannerManager />
+      ) : activeTab === 'mindforge' ? (
+        <MindforgeQuestionManager />
+      ) : activeTab === 'cpu-opponent-moves' ? (
+        <CPUOpponentMovesAdmin
+          isOpen={true}
+          onClose={() => setActiveTab('students')}
+        />
+      ) : activeTab === 'elemental-moves' ? (
+        <ElementalMovesAdmin
+          isOpen={true}
+          onClose={() => setActiveTab('students')}
+        />
+      ) : activeTab === 'action-cards' ? (
+        <ActionCardsAdmin
+          isOpen={true}
+          onClose={() => setActiveTab('students')}
+        />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',
@@ -2057,7 +2487,36 @@ const AdminPanel: React.FC = () => {
               <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem', color: '#374151' }}>
                 ⚠️ Global Actions
               </h3>
-              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                <button
+                  onClick={resetAllPlayerXP}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#f59e0b',
+                    color: 'white',
+                    border: '2px solid #d97706',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    boxShadow: storyProgressLoading ? 'none' : '0 4px 12px rgba(245, 158, 11, 0.4)'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.5)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.4)';
+                    }
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Processing...' : '📉 Reset All XP & Levels (Keep PP)'}
+                </button>
                 <button
                   onClick={resetAllStoryProgress}
                   disabled={storyProgressLoading}
@@ -2073,6 +2532,35 @@ const AdminPanel: React.FC = () => {
                   }}
                 >
                   {storyProgressLoading ? '🔄 Processing...' : '🗑️ Reset All Chapter Progress'}
+                </button>
+                <button
+                  onClick={resetAllPlayerProgress}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#991b1b',
+                    color: 'white',
+                    border: '2px solid #7f1d1d',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    boxShadow: storyProgressLoading ? 'none' : '0 4px 12px rgba(153, 27, 27, 0.4)'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 6px 16px rgba(153, 27, 27, 0.5)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(153, 27, 27, 0.4)';
+                    }
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Processing...' : '⚠️ RESET ALL PLAYER PROGRESS'}
                 </button>
                 <button
                   onClick={fetchStoryProgress}
@@ -2368,6 +2856,62 @@ const AdminPanel: React.FC = () => {
             <p style={{ fontSize: '1.125rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem' }}>
               Manage student accounts, view progress, and adjust settings.
             </p>
+
+            {/* Password Reset Section */}
+            <div style={{
+              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+              border: '2px solid #f59e0b',
+              borderRadius: '0.75rem',
+              padding: '1.5rem',
+              marginBottom: '2rem'
+            }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#92400e' }}>
+                🔐 Password Reset
+              </h3>
+              <p style={{ fontSize: '0.875rem', color: '#78350f', marginBottom: '1rem' }}>
+                Send a password reset email to any user by entering their email address below.
+              </p>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  value={passwordResetEmail}
+                  onChange={(e) => setPasswordResetEmail(e.target.value)}
+                  placeholder="Enter user email address"
+                  style={{
+                    flex: '1',
+                    minWidth: '250px',
+                    padding: '0.75rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.375rem',
+                    fontSize: '0.875rem'
+                  }}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && passwordResetEmail && !passwordResetLoading) {
+                      resetUserPassword(passwordResetEmail);
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => resetUserPassword(passwordResetEmail)}
+                  disabled={!passwordResetEmail || passwordResetLoading}
+                  style={{
+                    backgroundColor: passwordResetLoading || !passwordResetEmail ? '#9ca3af' : '#8b5cf6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    cursor: passwordResetLoading || !passwordResetEmail ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  {passwordResetLoading ? '🔄' : '🔐'} Send Reset Email
+                </button>
+              </div>
+            </div>
 
             {/* Batch Operations */}
             <div style={{ marginBottom: '2rem' }}>
@@ -2767,7 +3311,7 @@ const AdminPanel: React.FC = () => {
                         </div>
                       </td>
                       <td style={{ padding: '1rem' }}>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                           <button
                             onClick={() => viewStudentProfile(student.id)}
                             style={{
@@ -2783,6 +3327,28 @@ const AdminPanel: React.FC = () => {
                           >
                             View Profile
                           </button>
+                          {student.email && (
+                            <button
+                              onClick={() => resetUserPassword(student.email!, student.id)}
+                              disabled={rowLoading[student.id]}
+                              style={{
+                                backgroundColor: rowLoading[student.id] ? '#9ca3af' : '#8b5cf6',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.375rem',
+                                padding: '0.5rem 0.75rem',
+                                cursor: rowLoading[student.id] ? 'not-allowed' : 'pointer',
+                                fontSize: '0.875rem',
+                                fontWeight: '500',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                              title={`Send password reset email to ${student.email}`}
+                            >
+                              {rowLoading[student.id] ? '🔄' : '🔐'} Reset Password
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

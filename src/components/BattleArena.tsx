@@ -12,17 +12,25 @@ import { getLevelFromXP } from '../utils/leveling';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { loadMoveOverrides } from '../utils/moveOverrides';
+import BagModal from './BagModal';
+import VaultModal from './VaultModal';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 interface BattleArenaProps {
-  onMoveSelect: (move: Move) => void;
+  onMoveSelect: (move: Move | null) => void;
   onTargetSelect: (targetId: string) => void;
   onEscape?: () => void;
   selectedMove: Move | null;
   selectedTarget: string | null;
   availableMoves: Move[];
-  availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number; maxPP?: number; maxShieldStrength?: number }>;
+  availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number; maxPP?: number; maxShieldStrength?: number; level?: number }>;
   isPlayerTurn: boolean;
   battleLog: string[];
+  customBackground?: string; // Custom background image for special modes like Mindforge
+  hideCenterPrompt?: boolean; // Hide the center battle log prompt (for Mindforge mode)
+  playerEffects?: Array<{ type: string; duration: number }>; // Active status effects on player
+  opponentEffects?: Array<{ type: string; duration: number }>; // Active status effects on opponent
+  isTerraAwakened?: boolean; // Whether Terra is in awakened state
 }
 
 const BattleArena: React.FC<BattleArenaProps> = ({
@@ -31,10 +39,15 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   onEscape,
   selectedMove,
   selectedTarget,
+  isTerraAwakened = false,
   availableMoves,
   availableTargets,
   isPlayerTurn,
-  battleLog
+  battleLog,
+  customBackground,
+  hideCenterPrompt = false,
+  playerEffects = [],
+  opponentEffects = []
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -42,8 +55,11 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const [showTargetMenu, setShowTargetMenu] = useState(false);
   const [currentLogIndex, setCurrentLogIndex] = useState(0);
   const [userLevel, setUserLevel] = useState(1);
+  const [ppBoostStatus, setPpBoostStatus] = useState<{ isActive: boolean; timeRemaining: string }>({ isActive: false, timeRemaining: '' });
   const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
+  const [showBagModal, setShowBagModal] = useState(false);
+  const [showVaultModal, setShowVaultModal] = useState(false);
 
   // Load move overrides when component mounts
   useEffect(() => {
@@ -110,6 +126,27 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     fetchUserData();
   }, [currentUser]);
 
+  // Check for active PP boost
+  useEffect(() => {
+    const checkPPBoost = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const activeBoost = await getActivePPBoost(currentUser.uid);
+        const status = getPPBoostStatus(activeBoost);
+        setPpBoostStatus(status);
+      } catch (error) {
+        console.error('Error checking PP boost:', error);
+      }
+    };
+    
+    checkPPBoost();
+    
+    // Update every minute for countdown
+    const interval = setInterval(checkPPBoost, 60000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
   // Helper function to get move data with overrides applied
   const getMoveDataWithOverrides = (moveName: string) => {
     const override = moveOverrides[moveName];
@@ -135,12 +172,18 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const handleMoveClick = (move: Move) => {
     onMoveSelect(move);
     setShowMoveMenu(false);
-    if (move.targetType === 'single' || move.targetType === 'enemy') {
-      setShowTargetMenu(true);
-    } else if (move.targetType === 'self') {
+    // Don't show target menu - player will click on opponent image to select target
+    if (move.targetType === 'self') {
       // For self-targeting moves, automatically select self as target
       onTargetSelect('self');
     }
+  };
+
+  const handleChangeMove = () => {
+    // Clear selected move and target, return to move selection
+    onMoveSelect(null); // Clear move selection
+    setShowTargetMenu(false);
+    setShowMoveMenu(true);
   };
 
   const handleTargetClick = (targetId: string) => {
@@ -193,10 +236,43 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     return icons[element as keyof typeof icons] || '⭐';
   };
 
-  const getOpponentImage = (opponentName: string) => {
+  const getOpponentImage = (opponentName: string, terraAwakened: boolean = false) => {
     // Return opponent-specific images based on name
     if (opponentName.toLowerCase().includes('hela')) {
       return '/images/Hela.png';
+    }
+    // Training Dummy opponent
+    if (opponentName.toLowerCase().includes('training dummy')) {
+      return '/images/Training Dummy.png';
+    }
+    // Novice Guard opponent
+    if (opponentName.toLowerCase().includes('novice guard')) {
+      return '/images/Novice Guard.png';
+    }
+    // Elite Soldier opponent
+    if (opponentName.toLowerCase().includes('elite soldier')) {
+      return '/images/Elite Soldier.png';
+    }
+    // Vault Keeper opponent
+    if (opponentName.toLowerCase().includes('vault keeper')) {
+      return '/images/Vault Keeper.png';
+    }
+    // Flame Keeper / Master Guardian opponent
+    if (opponentName.toLowerCase().includes('flame keeper') || opponentName.toLowerCase().includes('flame thrower') || opponentName.toLowerCase().includes('master guardian')) {
+      return '/images/Master Guardian - Flame Thrower.png';
+    }
+    // Terra / Legendary Protector opponent
+    if (opponentName.toLowerCase().includes('terra') || opponentName.toLowerCase().includes('legendary protector')) {
+      // Use awakened image if Terra is awakened
+      return terraAwakened ? '/images/Terra-Awakened.png' : '/images/Terra.png';
+    }
+    // Mindforge Standard opponent
+    if (opponentName.toLowerCase().includes('mindforge') && opponentName.toLowerCase().includes('standard')) {
+      return '/images/Standard Mind Forge Bot.png';
+    }
+    // Mindforge Advanced opponent
+    if (opponentName.toLowerCase().includes('mindforge') && opponentName.toLowerCase().includes('advanced')) {
+      return '/images/Advanced Mind Forge Bot.png';
     }
     // Add more opponent images as needed
     return null; // Default fallback
@@ -206,13 +282,33 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     <div style={{
       width: '100%',
       height: '600px',
-      background: 'linear-gradient(135deg, #87CEEB 0%, #98FB98 50%, #F0E68C 100%)',
-      borderRadius: '1rem',
+      background: customBackground 
+        ? `url("${customBackground}")` 
+        : 'linear-gradient(135deg, #87CEEB 0%, #98FB98 50%, #F0E68C 100%)',
+      backgroundSize: customBackground ? 'cover' : 'auto',
+      backgroundPosition: customBackground ? 'center' : 'center',
+      backgroundRepeat: customBackground ? 'no-repeat' : 'repeat',
+      backgroundAttachment: customBackground ? 'fixed' : 'scroll',
+      borderRadius: customBackground ? '0' : '1rem', // No border radius for Mindforge to show full background
       position: 'relative',
       overflow: 'hidden',
-      border: '3px solid #8B4513',
-      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+      border: customBackground ? 'none' : '3px solid #8B4513', // No border for Mindforge
+      boxShadow: customBackground ? 'none' : '0 8px 32px rgba(0, 0, 0, 0.3)'
     }}>
+      {/* Semi-transparent overlay for custom backgrounds (like Mindforge) */}
+      {customBackground && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.2)', // Lighter overlay so background is more visible
+          zIndex: 0,
+          pointerEvents: 'none' // Allow clicks to pass through
+        }} />
+      )}
+      
       {/* Battle Arena Background Elements */}
       <div style={{
         position: 'absolute',
@@ -220,7 +316,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         left: '50%',
         transform: 'translateX(-50%)',
         fontSize: '2rem',
-        opacity: 0.3
+        opacity: customBackground ? 0.1 : 0.3, // Less visible on Mindforge background
+        zIndex: 1
       }}>
         ⚔️ MST BATTLE ARENA ⚔️
       </div>
@@ -242,7 +339,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         alignItems: 'center',
         justifyContent: 'center',
         fontSize: '4rem',
-        animation: isPlayerTurn ? 'pulse 1s infinite' : 'none'
+        animation: isPlayerTurn ? 'pulse 1s infinite' : 'none',
+        zIndex: 2
       }}>
         {(() => {
           console.log('BattleArena: Rendering player profile - userPhotoURL:', userPhotoURL);
@@ -301,7 +399,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         border: '3px solid #8B4513',
         borderRadius: '0.5rem',
         padding: '0.75rem',
-        fontFamily: 'monospace'
+        fontFamily: 'monospace',
+        zIndex: 2
       }}>
         <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>
           {currentUser?.displayName || 'PLAYER'} VAULT
@@ -310,7 +409,26 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           Lv.{userLevel}
         </div>
         <div style={{ marginBottom: '0.25rem' }}>
-          <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>PP</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.125rem' }}>
+            <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>PP</span>
+            {ppBoostStatus.isActive && (
+              <span 
+                style={{ 
+                  fontSize: '0.75rem',
+                  color: '#f59e0b',
+                  fontWeight: 'bold',
+                  background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                  animation: 'pulse 2s infinite'
+                }}
+                title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+              >
+                ×2
+              </span>
+            )}
+          </div>
           <div style={{
             width: '100%',
             height: '12px',
@@ -327,6 +445,52 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           </div>
           <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
             {vault?.currentPP || 0}/{vault?.capacity || 100}
+          </div>
+        </div>
+        <div style={{ marginBottom: '0.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.125rem' }}>
+            <span style={{ fontSize: '0.75rem', color: '#10b981' }}>VAULT HEALTH</span>
+            {vault?.vaultHealthCooldown && (() => {
+              const cooldownEnd = new Date(vault.vaultHealthCooldown);
+              cooldownEnd.setHours(cooldownEnd.getHours() + 3);
+              const now = new Date();
+              const remainingMs = cooldownEnd.getTime() - now.getTime();
+              if (remainingMs > 0) {
+                const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
+                const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+                return (
+                  <span style={{ fontSize: '0.65rem', color: '#f59e0b', marginLeft: '0.25rem' }}>
+                    (Cooldown: {remainingHours}h {remainingMinutes}m)
+                  </span>
+                );
+              }
+              return null;
+            })()}
+          </div>
+          <div style={{
+            width: '100%',
+            height: '12px',
+            background: '#e5e7eb',
+            borderRadius: '6px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              width: `${(() => {
+                const maxVaultHealth = vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0);
+                const currentVaultHealth = vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, maxVaultHealth) : 0);
+                return maxVaultHealth > 0 ? (currentVaultHealth / maxVaultHealth) * 100 : 0;
+              })()}%`,
+              height: '100%',
+              background: (() => {
+                const maxVaultHealth = vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0);
+                const currentVaultHealth = vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, maxVaultHealth) : 0);
+                return currentVaultHealth === 0 ? 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
+              })(),
+              transition: 'width 0.3s ease'
+            }} />
+          </div>
+          <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
+            {(vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, Math.floor(vault.capacity * 0.1)) : 0))}/{vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0)}
           </div>
         </div>
         <div>
@@ -349,32 +513,118 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             {vault?.shieldStrength || 0}/{vault?.maxShieldStrength || 100}
           </div>
         </div>
+        
+        {/* Player Status Effects */}
+        {playerEffects && playerEffects.length > 0 && (
+          <div style={{ marginTop: '0.5rem', fontSize: '0.7rem' }}>
+            <div style={{ fontWeight: 'bold', marginBottom: '0.25rem', color: '#92400e' }}>EFFECTS:</div>
+            {playerEffects.map((effect, idx) => {
+              const icons: { [key: string]: string } = {
+                burn: '🔥',
+                stun: '⚡',
+                bleed: '🩸',
+                poison: '☠️',
+                confuse: '🌀',
+                drain: '💉',
+                freeze: '❄️'
+              };
+              return (
+                <div key={idx} style={{ marginBottom: '0.125rem' }}>
+                  {icons[effect.type] || '✨'} {effect.type.toUpperCase()} ({effect.duration})
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Opponent Profile Picture - Always visible */}
       {availableTargets.length > 0 && (
         <>
 
-          {/* Opponent Profile Picture */}
-          <div style={{
-            position: 'absolute',
-            top: '20px',
-            right: '20px',
-            width: '140px',
-            height: '140px',
-            borderRadius: '50%',
-            border: '4px solid #ef4444',
-            overflow: 'hidden',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
-            background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '4rem',
-            animation: !isPlayerTurn ? 'pulse 1s infinite' : 'none'
-          }}>
+          {/* Opponent Profile Picture - Clickable when move is selected */}
+          <div 
+            onClick={() => {
+              if (selectedMove && isPlayerTurn && availableTargets.length > 0) {
+                onTargetSelect(availableTargets[0].id);
+              }
+            }}
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              width: '140px',
+              height: '140px',
+              borderRadius: '50%',
+              border: selectedMove && isPlayerTurn 
+                ? (selectedTarget === availableTargets[0]?.id ? '6px solid #fbbf24' : '4px solid #ef4444')
+                : '4px solid #ef4444',
+              zIndex: 2,
+              overflow: 'hidden',
+              boxShadow: selectedMove && isPlayerTurn
+                ? (selectedTarget === availableTargets[0]?.id 
+                    ? '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 16px rgba(0, 0, 0, 0.3)'
+                    : '0 0 15px rgba(239, 68, 68, 0.6), 0 4px 16px rgba(0, 0, 0, 0.3)')
+                : '0 4px 16px rgba(0, 0, 0, 0.3)',
+              background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '4rem',
+              animation: !isPlayerTurn ? 'pulse 1s infinite' : 'none',
+              cursor: selectedMove && isPlayerTurn ? 'pointer' : 'default',
+              transition: 'all 0.2s ease',
+              transform: selectedMove && isPlayerTurn ? 'scale(1.1)' : 'scale(1)'
+            }}
+            onMouseEnter={(e) => {
+              if (selectedMove && isPlayerTurn) {
+                e.currentTarget.style.transform = 'scale(1.15)';
+                e.currentTarget.style.boxShadow = '0 0 25px rgba(251, 191, 36, 0.9), 0 6px 20px rgba(0, 0, 0, 0.4)';
+                e.currentTarget.style.borderColor = '#fbbf24';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (selectedMove && isPlayerTurn) {
+                e.currentTarget.style.transform = selectedTarget === availableTargets[0]?.id ? 'scale(1.1)' : 'scale(1.05)';
+                e.currentTarget.style.boxShadow = selectedTarget === availableTargets[0]?.id
+                  ? '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 16px rgba(0, 0, 0, 0.3)'
+                  : '0 0 15px rgba(239, 68, 68, 0.6), 0 4px 16px rgba(0, 0, 0, 0.3)';
+                e.currentTarget.style.borderColor = selectedTarget === availableTargets[0]?.id ? '#fbbf24' : '#ef4444';
+              } else {
+                e.currentTarget.style.transform = 'scale(1)';
+              }
+            }}
+          >
             {(() => {
-              const opponentImage = getOpponentImage(availableTargets[0]?.name || '');
+              const opponentImage = getOpponentImage(availableTargets[0]?.name || '', isTerraAwakened);
+              // Adjust objectPosition based on opponent type
+              const opponentName = availableTargets[0]?.name?.toLowerCase() || '';
+              const isStandardMindforge = opponentName.includes('mindforge') && opponentName.includes('standard');
+              const isAdvancedMindforge = opponentName.includes('mindforge') && opponentName.includes('advanced');
+              const isTrainingDummy = opponentName.includes('training dummy');
+              
+              // Focus on face area - use negative value to shift image up and show the head/face
+              const isNoviceGuard = opponentName.toLowerCase().includes('novice guard');
+              const isEliteSoldier = opponentName.toLowerCase().includes('elite soldier');
+              let objectPos = '55% -20%'; // Default
+              if (isStandardMindforge) {
+                objectPos = '50% -25%'; // Show face-focused view for Standard Mindforge Bot
+              } else if (isAdvancedMindforge) {
+                objectPos = '50% -20%'; // Show face-focused view for Advanced Mindforge Bot
+              } else if (isTrainingDummy) {
+                objectPos = '50% -40%'; // Show upper half of Training Dummy (scarecrow head and torso)
+              } else if (isNoviceGuard) {
+                objectPos = '50% -30%'; // Show upper half of Novice Guard (head and torso)
+              } else if (isEliteSoldier) {
+                objectPos = '50% -30%'; // Show upper half of Elite Soldier (head and torso)
+              } else if (opponentName.toLowerCase().includes('vault keeper')) {
+                objectPos = '50% 0%'; // Show top half of Vault Keeper (focus on face/head)
+              } else if (opponentName.toLowerCase().includes('flame keeper') || opponentName.toLowerCase().includes('flame thrower') || opponentName.toLowerCase().includes('master guardian')) {
+                objectPos = '50% -30%'; // Show upper half of Flame Keeper (focus on face/head and upper body)
+              } else if (opponentName.toLowerCase().includes('terra') || opponentName.toLowerCase().includes('legendary protector')) {
+                objectPos = '50% -30%'; // Show upper half of Terra (focus on face/head and upper body)
+              }
+              
               return opponentImage ? (
                 <img 
                   src={opponentImage} 
@@ -383,7 +633,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
-                    objectPosition: '55% -20%',
+                    objectPosition: objectPos,
                     borderRadius: '50%',
                     transform: 'scale(2.5)'
                   }}
@@ -399,7 +649,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             })()}
             <div 
               style={{
-                display: getOpponentImage(availableTargets[0]?.name || '') ? 'none' : 'flex',
+                display: getOpponentImage(availableTargets[0]?.name || '', isTerraAwakened) ? 'none' : 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 width: '100%',
@@ -423,33 +673,50 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             border: '3px solid #8B4513',
             borderRadius: '0.5rem',
             padding: '0.75rem',
-            fontFamily: 'monospace'
+            fontFamily: 'monospace',
+            zIndex: 2
           }}>
             <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>
-              {availableTargets[0]?.name || 'OPPONENT'} VAULT
+              {availableTargets[0]?.name || 'OPPONENT'}
             </div>
             <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>
-              Lv.{Math.floor((availableTargets[0]?.currentPP || 0) / 100) + 1}
+              Lv.{availableTargets[0]?.level || Math.floor((availableTargets[0]?.currentPP || 0) / 100) + 1}
             </div>
             <div style={{ marginBottom: '0.25rem' }}>
-              <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>PP</span>
-              <div style={{
-                width: '100%',
-                height: '12px',
-                background: '#e5e7eb',
-                borderRadius: '6px',
-                overflow: 'hidden'
-              }}>
-                <div style={{
-                  width: `${availableTargets[0] ? (availableTargets[0].currentPP / (availableTargets[0].maxPP || 1000)) * 100 : 0}%`,
-                  height: '100%',
-                  background: 'linear-gradient(90deg, #dc2626 0%, #ef4444 100%)',
-                  transition: 'width 0.3s ease'
-                }} />
-              </div>
-              <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
-                {availableTargets[0]?.currentPP || 0}/{availableTargets[0]?.maxPP || 1000}
-              </div>
+              {(() => {
+                // Check if this is a CPU opponent (Training Dummy, Novice Guard, Elite Soldier, etc.)
+                const opponentName = availableTargets[0]?.name?.toLowerCase() || '';
+                const isCPUOpponent = opponentName.includes('training dummy') || 
+                                     opponentName.includes('novice guard') || 
+                                     opponentName.includes('elite soldier') || 
+                                     opponentName.includes('vault keeper') || 
+                                     (opponentName.toLowerCase().includes('flame keeper') || opponentName.toLowerCase().includes('flame thrower') || opponentName.toLowerCase().includes('master guardian')) || 
+                                     opponentName.includes('legendary protector') ||
+                                     opponentName.includes('mindforge');
+                const statLabel = isCPUOpponent ? 'HEALTH' : 'PP';
+                return (
+                  <>
+                    <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>{statLabel}</span>
+                    <div style={{
+                      width: '100%',
+                      height: '12px',
+                      background: '#e5e7eb',
+                      borderRadius: '6px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        width: `${availableTargets[0] ? (availableTargets[0].currentPP / (availableTargets[0].maxPP || 1000)) * 100 : 0}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #dc2626 0%, #ef4444 100%)',
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
+                    <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
+                      {availableTargets[0]?.currentPP || 0}/{availableTargets[0]?.maxPP || 1000}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <div>
               <span style={{ fontSize: '0.75rem', color: '#3b82f6' }}>SHIELD</span>
@@ -471,11 +738,36 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 {availableTargets[0]?.shieldStrength || 0}/{availableTargets[0]?.maxShieldStrength || 100}
               </div>
             </div>
+            
+            {/* Opponent Status Effects */}
+            {opponentEffects && opponentEffects.length > 0 && (
+              <div style={{ marginTop: '0.5rem', fontSize: '0.7rem' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem', color: '#92400e' }}>EFFECTS:</div>
+                {opponentEffects.map((effect, idx) => {
+                  const icons: { [key: string]: string } = {
+                    burn: '🔥',
+                    stun: '⚡',
+                    bleed: '🩸',
+                    poison: '☠️',
+                    confuse: '🌀',
+                    drain: '💉',
+                    cleanse: '✨',
+                    freeze: '❄️'
+                  };
+                  return (
+                    <div key={idx} style={{ marginBottom: '0.125rem' }}>
+                      {icons[effect.type] || '✨'} {effect.type.toUpperCase()} ({effect.duration})
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </>
       )}
 
-      {/* Battle Log Display */}
+      {/* Battle Log Display - Hide in Mindforge mode to avoid blocking targeting */}
+      {!hideCenterPrompt && (
       <div style={{
         position: 'absolute',
         top: '50%',
@@ -489,10 +781,14 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         textAlign: 'center',
         fontSize: '0.875rem',
         fontFamily: 'monospace',
-        border: '2px solid #fbbf24'
+        border: '2px solid #fbbf24',
+        zIndex: 2
       }}>
-        {battleLog[currentLogIndex] || 'Select a move to begin battle!'}
+        {selectedMove && isPlayerTurn && !selectedTarget
+          ? `Selected: ${selectedMove.name} - Click opponent to attack!`
+          : (battleLog[currentLogIndex] || 'Select a move to begin battle!')}
       </div>
+      )}
 
       {/* Move Selection Menu */}
       {showMoveMenu && (
@@ -505,12 +801,60 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           border: '3px solid #8B4513',
           borderRadius: '0.5rem',
           padding: '1rem',
+          zIndex: 1000,
           maxHeight: '300px',
           overflowY: 'auto'
         }}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', textAlign: 'center' }}>
-            SELECT MOVE
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 'bold', textAlign: 'center', flex: 1 }}>
+              SELECT MOVE
+            </div>
+            {selectedMove && (
+              <button
+                onClick={() => {
+                  onMoveSelect(null);
+                  setShowMoveMenu(false);
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
+                  color: 'white',
+                  border: '2px solid #8B4513',
+                  borderRadius: '0.25rem',
+                  padding: '0.25rem 0.5rem',
+                  cursor: 'pointer',
+                  fontSize: '0.625rem',
+                  fontWeight: 'bold',
+                  transition: 'all 0.2s',
+                  marginLeft: '0.5rem'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #4b5563 0%, #374151 100%)';
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+                title="Clear selection"
+              >
+                ✕
+              </button>
+            )}
           </div>
+          {selectedMove && (
+            <div style={{ 
+              fontSize: '0.75rem', 
+              color: '#6b7280', 
+              marginBottom: '0.5rem', 
+              textAlign: 'center',
+              fontStyle: 'italic',
+              padding: '0.25rem',
+              background: 'rgba(16, 185, 129, 0.1)',
+              borderRadius: '0.25rem'
+            }}>
+              Selected: {selectedMove?.name || 'Unknown'}
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {availableMoves.map((move, index) => (
               <button
@@ -640,8 +984,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
-      {/* Target Selection Menu */}
-      {showTargetMenu && (
+      {/* Target Selection Menu - Hidden, targets are now selected by clicking their image */}
+      {false && showTargetMenu && (
         <div style={{
           position: 'absolute',
           top: '50%',
@@ -655,9 +999,49 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           maxHeight: '400px',
           overflowY: 'auto'
         }}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', textAlign: 'center' }}>
-            SELECT TARGET
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 'bold', textAlign: 'center', flex: 1 }}>
+              SELECT TARGET
+            </div>
+            <button
+              onClick={handleChangeMove}
+              style={{
+                background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
+                color: 'white',
+                border: '2px solid #8B4513',
+                borderRadius: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #4b5563 0%, #374151 100%)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              ← Back
+            </button>
           </div>
+          {selectedMove && (
+            <div style={{ 
+              fontSize: '0.75rem', 
+              color: '#6b7280', 
+              marginBottom: '0.5rem', 
+              textAlign: 'center',
+              fontStyle: 'italic'
+            }}>
+              Selected: {selectedMove?.name || 'Unknown'}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {availableTargets.map((target) => (
               <button
@@ -749,7 +1133,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              {/* TODO: Implement bag/items */}
+              setShowBagModal(true);
             }}
             style={{
               background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
@@ -781,7 +1165,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              {/* TODO: Implement vault management */}
+              setShowVaultModal(true);
             }}
             style={{
               background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
@@ -855,6 +1239,10 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           }
         `}
       </style>
+
+      {/* Modals */}
+      <BagModal isOpen={showBagModal} onClose={() => setShowBagModal(false)} />
+      <VaultModal isOpen={showVaultModal} onClose={() => setShowVaultModal(false)} />
     </div>
   );
 };

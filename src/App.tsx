@@ -16,12 +16,14 @@ import Banner from './components/Banner';
 import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
 import BadgeRewardNotifier from './components/BadgeRewardNotifier';
+import MilestoneModal from './components/MilestoneModal';
 
 // Context providers
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LevelUpProvider } from './context/LevelUpContext';
 import { BattleProvider } from './context/BattleContext';
 import { StoryProvider } from './context/StoryContext';
+import { MilestoneProvider, useMilestone } from './context/MilestoneContext';
 
 // Development components
 import FirebaseStatus from './components/FirebaseStatus';
@@ -34,6 +36,7 @@ import './utils/consoleCommands';
 
 // Lazy load pages for better performance with route splitting
 const Dashboard = withRouteSplitting(() => import('./pages/Dashboard'));
+const Home = withRouteSplitting(() => import('./pages/Home'));
 const Profile = withRouteSplitting(() => import('./pages/Profile'));
 const Login = withRouteSplitting(() => import('./pages/Login'));
 const PasswordReset = withRouteSplitting(() => import('./pages/PasswordReset'));
@@ -177,9 +180,29 @@ const ProtectedAdminRoute = () => {
 
 // App content component with routing utilities
 const AppContent = () => {
+  const { currentUser, loading } = useAuth();
+  const { showMilestone, currentMilestone, isOpen, closeMilestone } = useMilestone();
   const { updateMetadata } = useRouteMetadata();
   useRouteAnalytics();
   useScrollRestoration();
+
+  // Listen for milestone events
+  React.useEffect(() => {
+    const handleMilestoneReached = (event: CustomEvent) => {
+      const { milestone, moveName, rewards } = event.detail;
+      showMilestone({
+        milestone,
+        moveName,
+        rewards
+      });
+    };
+
+    window.addEventListener('milestoneReached', handleMilestoneReached as EventListener);
+    
+    return () => {
+      window.removeEventListener('milestoneReached', handleMilestoneReached as EventListener);
+    };
+  }, [showMilestone]);
 
   // Update metadata for different routes
   React.useEffect(() => {
@@ -202,6 +225,19 @@ const AppContent = () => {
     }
   }, [updateMetadata]);
 
+  // Show loading while checking auth
+  if (loading) {
+    return (
+      <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <NavBar />
+        <Banner />
+        <main style={{ flex: 1 }}>
+          <PageLoader />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <NavBar />
@@ -209,7 +245,14 @@ const AppContent = () => {
       <main style={{ flex: 1 }}>
         <RouteTransition>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={
+              currentUser ? <Navigate to="/home" replace /> : <Navigate to="/login" replace />
+            } />
+            <Route path="/home" element={
+              <ProtectedRoute user={true}>
+                <Home />
+              </ProtectedRoute>
+            } />
             <Route path="/profile" element={
               <ProtectedRoute user={true}>
                 <Profile />
@@ -293,6 +336,17 @@ const AppContent = () => {
       <InvitationManager />
       <BadgeRewardNotifier />
       
+      {/* Milestone Modal */}
+      {currentMilestone && (
+        <MilestoneModal
+          isOpen={isOpen}
+          onClose={closeMilestone}
+          milestone={currentMilestone.milestone}
+          moveName={currentMilestone.moveName}
+          rewards={currentMilestone.rewards}
+        />
+      )}
+      
       {/* Development Components */}
       {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
       <NavigationDebugger />
@@ -305,13 +359,15 @@ function App() {
     <ErrorBoundary>
       <AuthProvider>
         <LevelUpProvider>
-          <BattleProvider>
-            <StoryProvider>
-              <Router>
-                <AppContent />
-              </Router>
-            </StoryProvider>
-          </BattleProvider>
+          <MilestoneProvider>
+            <BattleProvider>
+              <StoryProvider>
+                <Router>
+                  <AppContent />
+                </Router>
+              </StoryProvider>
+            </BattleProvider>
+          </MilestoneProvider>
         </LevelUpProvider>
       </AuthProvider>
     </ErrorBoundary>

@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { Move, ActionCard } from '../types/battle';
+import { trackMoveUsage } from '../utils/manifestTracking';
+import { getMoveNameSync } from '../utils/moveOverrides';
 
 interface CPUChallengerProps {
   isOpen: boolean;
@@ -110,6 +112,18 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
 
   const executePlayerMove = async () => {
     if (!selectedMove) return;
+    
+    // Track move usage for manifest progress
+    const originalMoveName = selectedMove.name;
+    const moveName = getMoveNameSync(selectedMove.name) || selectedMove.name;
+    console.log(`[CPUChallenger] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
+    if (currentUser?.uid) {
+      trackMoveUsage(currentUser.uid, moveName).catch(err => {
+        console.error('[CPUChallenger] Error tracking move usage:', err);
+      });
+    } else {
+      console.warn('[CPUChallenger] No currentUser.uid available for tracking');
+    }
     
     addToBattleLog(`You used ${selectedMove.name}!`);
     

@@ -5,10 +5,15 @@ export interface Vault {
   ownerId: string;
   capacity: number;
   currentPP: number;
+  vaultHealth: number; // Vault health (10% of capacity) - separate from PP
+  maxVaultHealth: number; // Maximum vault health (10% of capacity)
+  vaultHealthCooldown?: Date; // Timestamp when vault health was depleted (3-hour cooldown)
   shieldStrength: number;
   maxShieldStrength: number;
   overshield: number; // Additional shield from Shield artifact that absorbs next attack
-  firewall: number; // 0-100, chance to nullify vault attacks
+  generatorLevel: number; // Generator level (starts at 1)
+  generatorPendingPP: number; // PP generated but not yet collected
+  generatorLastReset: Date; // When generator last reset (8am EST daily)
   lastUpgrade: Date;
   debtStatus: boolean;
   debtAmount: number;
@@ -18,7 +23,7 @@ export interface Vault {
   lastMoveReset: Date; // When moves were last reset
   capacityUpgrades?: number; // Number of capacity upgrades purchased
   shieldUpgrades?: number; // Number of shield upgrades purchased
-  firewallUpgrades?: number; // Number of firewall upgrades purchased
+  generatorUpgrades?: number; // Number of generator upgrades purchased
 }
 
 export interface Move {
@@ -35,7 +40,7 @@ export interface Move {
   ppSteal?: number; // PP stolen from target
   healing?: number;
   shieldBoost?: number;
-  debuffType?: 'burn' | 'soak' | 'shock' | 'root' | 'stun' | 'silence' | 'dread' | 'vault_hack' | 'shield_break' | 'pp_drain' | 'move_lock' | 'dodge' | 'accuracy' | 'confusion';
+  debuffType?: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'soak' | 'shock' | 'root' | 'silence' | 'dread' | 'vault_hack' | 'shield_break' | 'pp_drain' | 'move_lock' | 'dodge' | 'accuracy' | 'confusion';
   debuffStrength?: number;
   buffType?: 'crit' | 'dodge' | 'fortify' | 'stealth' | 'accuracy' | 'speed' | 'immunity';
   buffStrength?: number;
@@ -45,6 +50,7 @@ export interface Move {
   unlocked: boolean;
   masteryLevel: number; // 1-5, affects power
   targetType?: 'self' | 'single' | 'team' | 'enemy' | 'enemy_team' | 'all';
+  priority?: number; // Turn priority modifier (-2 to +2, default 0). Higher priority acts first.
 }
 
 export interface ActionCard {
@@ -57,9 +63,10 @@ export interface ActionCard {
   uses: number;
   maxUses: number;
   effect: {
-    type: 'shield_breach' | 'pp_restore' | 'teleport_pp' | 'reverse_dues' | 'double_xp' | 'move_disrupt' | 'shield_restore';
+    type: 'shield_breach' | 'pp_restore' | 'teleport_pp' | 'reverse_dues' | 'double_xp' | 'move_disrupt' | 'shield_restore' | 'freeze';
     strength: number;
     duration?: number;
+    chance?: number; // For effects with a chance to apply (like freeze)
   };
   imageUrl?: string;
   unlocked: boolean;
@@ -68,6 +75,7 @@ export interface ActionCard {
   nextLevelEffect?: {
     strength: number;
     duration?: number;
+    chance?: number; // For effects with a chance to apply (like freeze)
   };
 }
 
@@ -211,7 +219,7 @@ export interface Buff {
 
 export interface Debuff {
   id: string;
-  type: 'shield_break' | 'pp_drain' | 'move_lock' | 'vulnerability' | 'burn' | 'soak' | 'shock' | 'root' | 'stun' | 'silence' | 'dread' | 'vault_hack' | 'dodge' | 'accuracy' | 'confusion';
+  type: 'shield_break' | 'pp_drain' | 'move_lock' | 'vulnerability' | 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'soak' | 'shock' | 'root' | 'silence' | 'dread' | 'vault_hack' | 'dodge' | 'accuracy' | 'confusion' | 'freeze';
   strength: number;
   duration: number;
   remainingTurns: number;
@@ -1157,7 +1165,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
 // Move damage values (combined shield damage + PP steal)
 export const MOVE_DAMAGE_VALUES: Record<string, { damage: number }> = {
   // Manifest Moves (Reading)
-  'Emotional Read': { damage: 13 }, // 8 + 5
+  'Read the Room': { damage: 13 }, // Level 1 move (formerly Emotional Read)
+  'Emotional Read': { damage: 13 }, // 8 + 5 (legacy/alias)
   'Pattern Shield': { damage: 0 },
   
   // Manifest Moves (Writing)
@@ -1337,6 +1346,29 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
     upgradeCost: 200,
     nextLevelEffect: {
       strength: 3, // triple XP
+    },
+  },
+  {
+    name: 'Freeze',
+    description: 'Damages target and has a high chance to freeze them for ONE (1) TURN',
+    type: 'attack',
+    rarity: 'legendary',
+    truthMetalCost: 0, // Unlocked via Battle Pass
+    uses: 1,
+    maxUses: 1,
+    effect: {
+      type: 'freeze',
+      strength: 20, // Damage amount
+      duration: 1, // Freeze duration in turns
+      chance: 85, // High chance (85%) to freeze
+    },
+    imageUrl: '/images/Action Card - Freeze.png',
+    masteryLevel: 1,
+    upgradeCost: 200,
+    nextLevelEffect: {
+      strength: 25,
+      duration: 1,
+      chance: 90,
     },
   },
 ]; 

@@ -68,15 +68,7 @@ export class BattleEngine {
   static calculateVaultAttack(attacker: BattleParticipant, defender: BattleParticipant, move: Move): { success: boolean; ppStolen: number; message: string } {
     const defenderVault = defender.vault;
     
-    // Check firewall
-    const firewallRoll = Math.random() * 100;
-    if (firewallRoll < defenderVault.firewall) {
-      return {
-        success: false,
-        ppStolen: 0,
-        message: `${defender.displayName}'s firewall blocked the vault attack!`
-      };
-    }
+    // Generator doesn't block attacks (removed firewall functionality)
 
     // Calculate PP that can be stolen
     const maxPPToSteal = Math.min(defenderVault.currentPP, move.debuffStrength || 10);
@@ -384,6 +376,24 @@ export class BattleEngine {
             remainingTurns: card.effect.duration || 1,
             source: card.name
           });
+        }
+        break;
+
+      case 'freeze':
+        if (target) {
+          damage = card.effect.strength; // 20 damage
+          // Apply freeze status effect with chance
+          const freezeChance = card.effect.chance || 85;
+          if (Math.random() * 100 < freezeChance) {
+            debuffsApplied.push({
+              id: `freeze_${Date.now()}`,
+              type: 'freeze',
+              strength: 0,
+              duration: card.effect.duration || 1,
+              remainingTurns: card.effect.duration || 1,
+              source: card.name
+            });
+          }
         }
         break;
     }

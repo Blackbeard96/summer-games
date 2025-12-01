@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
 import { db, storage } from '../firebase';
-import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
@@ -13,6 +13,7 @@ import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -65,11 +66,13 @@ const enhanceLegacyItem = (item: any) => {
 
 const Profile = () => {
   const { currentUser } = useAuth();
+  const { syncVaultPP } = useBattle();
   const navigate = useNavigate();
   const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [ppBoostStatus, setPpBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({ isActive: false, timeRemaining: '', multiplier: 1 });
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   // Add state for manifest, style, and rarity
@@ -77,6 +80,9 @@ const Profile = () => {
   const [style, setStyle] = useState(userData?.manifestationType || 'Fire');
   const [rarity, setRarity] = useState(userData?.rarity || 1);
   const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#e0e7ff');
+  const [cardFrameShape, setCardFrameShape] = useState<'circular' | 'rectangular'>('circular');
+  const [cardBorderColor, setCardBorderColor] = useState(userData?.cardBorderColor || '#a78bfa');
+  const [cardImageBorderColor, setCardImageBorderColor] = useState(userData?.cardImageBorderColor || '#a78bfa');
   const [moves, setMoves] = useState(userData?.moves || []);
   const [newMove, setNewMove] = useState({ name: '', description: '', icon: '' });
   const [badges, setBadges] = useState(userData?.badges || []);
@@ -268,6 +274,15 @@ const Profile = () => {
         setStyle(userDataFromDB.manifestationType || 'Fire');
         setRarity(rarityValue);
         setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
+        // Validate cardFrameShape to ensure it's either 'circular' or 'rectangular'
+        const frameShape = userDataFromDB.cardFrameShape;
+        setCardFrameShape(
+          frameShape === 'circular' || frameShape === 'rectangular' 
+            ? frameShape 
+            : 'circular'
+        );
+        setCardBorderColor(userDataFromDB.cardBorderColor || '#a78bfa');
+        setCardImageBorderColor(userDataFromDB.cardImageBorderColor || '#a78bfa');
         setMoves(userDataFromDB.moves || []);
         setBadges(userDataFromDB.badges || []);
         
@@ -292,7 +307,7 @@ const Profile = () => {
         }
       } else {
         // Create user document if it doesn't exist
-        setUserData({ xp: 0, powerPoints: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
+        setUserData({ xp: 0, powerPoints: 0, truthMetal: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
       }
     } catch (error) {
       console.error('Error fetching user data:', error);
@@ -301,6 +316,30 @@ const Profile = () => {
     }
   };
 
+  // Load and update PP boost status
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    const loadPPBoostStatus = async () => {
+      try {
+        const activeBoost = await getActivePPBoost(currentUser.uid);
+        const status = getPPBoostStatus(activeBoost);
+        setPpBoostStatus(status);
+      } catch (error) {
+        console.error('Error loading PP boost status:', error);
+      }
+    };
+    
+    loadPPBoostStatus();
+    
+    // Update countdown every second for real-time display
+    const interval = setInterval(() => {
+      loadPPBoostStatus();
+    }, 1000); // Update every second
+    
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
   useEffect(() => {
     if (!currentUser) {
       navigate('/login');
@@ -308,6 +347,32 @@ const Profile = () => {
     }
 
     fetchUserData();
+    
+    // Set up real-time listener for manifest updates
+    const studentsRef = doc(db, 'students', currentUser.uid);
+    const unsubscribe = onSnapshot(studentsRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const userData = docSnapshot.data();
+        const manifestData = userData.manifest;
+        if (manifestData) {
+          // Convert Firestore timestamp to Date if needed
+          const processedManifest = {
+            ...manifestData,
+            lastAscension: manifestData.lastAscension?.toDate ? 
+              manifestData.lastAscension.toDate() : 
+              (manifestData.lastAscension ? new Date(manifestData.lastAscension) : new Date())
+          };
+          console.log('Profile: Manifest updated via real-time listener:', processedManifest);
+          setPlayerManifest(processedManifest);
+        }
+      }
+    }, (error) => {
+      console.error('Profile: Error listening to manifest updates:', error);
+    });
+    
+    return () => {
+      unsubscribe();
+    };
   }, [currentUser, navigate]);
 
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -413,12 +478,15 @@ const Profile = () => {
         manifestationType: style, // Save style as manifestationType to keep it consistent
         rarity,
         cardBgColor,
+        cardFrameShape,
+        cardBorderColor,
+        cardImageBorderColor,
         moves,
         updatedAt: new Date()
       });
       
       setEditing(false);
-      setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, manifestationType: style, rarity, cardBgColor, moves }));
+      setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, manifestationType: style, rarity, cardBgColor, cardFrameShape, cardBorderColor, cardImageBorderColor, moves }));
       
       // Check if profile is now complete for auto-completion
       const hasDisplayName = displayName && displayName.trim() !== '';
@@ -608,12 +676,16 @@ const Profile = () => {
               name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
               photoURL={userData?.photoURL || currentUser.photoURL || avatarUrl}
               powerPoints={userData?.powerPoints || 0}
+              truthMetal={userData?.truthMetal || 0}
               manifest={currentManifest}
               level={level}
               rarity={rarity}
               style={style}
               description={bio}
               cardBgColor={cardBgColor}
+              cardFrameShape={cardFrameShape}
+              cardBorderColor={cardBorderColor}
+              cardImageBorderColor={cardImageBorderColor}
               moves={moves}
               badges={badges}
               xp={userData?.xp || 0}
@@ -631,26 +703,41 @@ const Profile = () => {
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
               👤 Profile Settings
             </h2>
-            <div className="profile-card" style={{ display: 'flex', alignItems: 'center', gap: '2rem', marginBottom: '2rem' }}>
-              {/* Avatar Section */}
-              <div style={{ position: 'relative' }}>
-                <img
-                  key={avatarUrl} // Force re-render when avatar changes
-                  src={avatarUrl}
-                  alt="Profile"
-                  style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', border: '4px solid #4f46e5' }}
-                />
-                <label style={{ position: 'absolute', bottom: '0', right: '0', backgroundColor: uploading ? '#9ca3af' : '#4f46e5', color: 'white', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'not-allowed' : 'pointer', fontSize: '14px', opacity: uploading ? 0.7 : 1 }}>
-                  {uploading ? '⏳' : '📷'}
-                  <input type="file" accept="image/*" onChange={handleAvatarUpload} style={{ display: 'none' }} disabled={uploading} />
-                </label>
+            <div className="profile-card" style={{ marginBottom: '2rem' }}>
+              {/* User Info Section - Avatar, Name, and Bio */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.5rem', marginBottom: '2rem' }}>
+                {/* Avatar Section */}
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  <img
+                    key={avatarUrl} // Force re-render when avatar changes
+                    src={avatarUrl}
+                    alt="Profile"
+                    style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', border: '4px solid #4f46e5' }}
+                  />
+                  <label style={{ position: 'absolute', bottom: '0', right: '0', backgroundColor: uploading ? '#9ca3af' : '#4f46e5', color: 'white', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'not-allowed' : 'pointer', fontSize: '14px', opacity: uploading ? 0.7 : 1 }}>
+                    {uploading ? '⏳' : '📷'}
+                    <input type="file" accept="image/*" onChange={handleAvatarUpload} style={{ display: 'none' }} disabled={uploading} />
+                  </label>
+                </div>
+                {/* User Info Edit Controls */}
+                <div style={{ flex: 1 }}>
+                  {editing ? (
+                    <div>
+                      <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={{ fontSize: '1.5rem', fontWeight: 'bold', border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', marginBottom: '0.5rem', width: '100%' }} placeholder="Display Name" />
+                      <textarea value={bio} onChange={e => setBio(e.target.value)} style={{ border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', width: '100%', minHeight: '80px', resize: 'vertical' }} placeholder="Tell us about yourself..." />
+                    </div>
+                  ) : (
+                    <div>
+                      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
+                      <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{bio || 'No bio yet. Click edit to add one!'}</p>
+                    </div>
+                  )}
+                </div>
               </div>
-              {/* User Info Edit Controls */}
-              <div style={{ flex: 1 }}>
-                {editing ? (
-                  <div>
-                    <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={{ fontSize: '1.5rem', fontWeight: 'bold', border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', marginBottom: '0.5rem', width: '100%' }} placeholder="Display Name" />
-                    <textarea value={bio} onChange={e => setBio(e.target.value)} style={{ border: '1px solid #d1d5db', borderRadius: '0.375rem', padding: '0.5rem', width: '100%', minHeight: '80px', resize: 'vertical' }} placeholder="Tell us about yourself..." />
+              
+              {/* Rest of Profile Settings */}
+              {editing ? (
+                <div>
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
                       <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
@@ -659,9 +746,78 @@ const Profile = () => {
                       </span>
                     </div>
                     <div style={{ margin: '1rem 0' }}>
-                      <label><b>Card Background Color:</b></label>
-                      <div style={{ marginTop: 8 }}>
-                        <SketchPicker color={cardBgColor} onChange={(color: any) => setCardBgColor(color.hex)} />
+                      <label style={{ display: 'block', marginBottom: '1rem' }}><b>Card Customization:</b></label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Background Color:</b></label>
+                          <div style={{ marginTop: 8 }}>
+                            <SketchPicker color={cardBgColor} onChange={(color: any) => setCardBgColor(color.hex)} width="100%" />
+                          </div>
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Border Color:</b></label>
+                          <div style={{ marginTop: 8 }}>
+                            <SketchPicker color={cardBorderColor} onChange={(color: any) => setCardBorderColor(color.hex)} width="100%" />
+                          </div>
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.5rem' }}><b>Card Image Border Color:</b></label>
+                          <div style={{ marginTop: 8 }}>
+                            <SketchPicker color={cardImageBorderColor} onChange={(color: any) => setCardImageBorderColor(color.hex)} width="100%" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ margin: '1rem 0' }}>
+                      <label><b>Card Image Frame Shape:</b></label>
+                      <div style={{ marginTop: 8, display: 'flex', gap: '1rem' }}>
+                        <button
+                          onClick={() => setCardFrameShape('circular')}
+                          style={{
+                            backgroundColor: cardFrameShape === 'circular' ? '#4f46e5' : '#e5e7eb',
+                            color: cardFrameShape === 'circular' ? 'white' : '#374151',
+                            border: '2px solid',
+                            borderColor: cardFrameShape === 'circular' ? '#4f46e5' : '#d1d5db',
+                            borderRadius: '50%',
+                            width: '60px',
+                            height: '60px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '1.5rem',
+                            fontWeight: 'bold',
+                            transition: 'all 0.2s'
+                          }}
+                          title="Circular Frame"
+                        >
+                          ⭕
+                        </button>
+                        <button
+                          onClick={() => setCardFrameShape('rectangular')}
+                          style={{
+                            backgroundColor: cardFrameShape === 'rectangular' ? '#4f46e5' : '#e5e7eb',
+                            color: cardFrameShape === 'rectangular' ? 'white' : '#374151',
+                            border: '2px solid',
+                            borderColor: cardFrameShape === 'rectangular' ? '#4f46e5' : '#d1d5db',
+                            borderRadius: '0.5rem',
+                            width: '60px',
+                            height: '60px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '1.5rem',
+                            fontWeight: 'bold',
+                            transition: 'all 0.2s'
+                          }}
+                          title="Rectangular Frame"
+                        >
+                          ▭
+                        </button>
+                      </div>
+                      <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                        Current: {cardFrameShape === 'circular' ? 'Circular' : 'Rectangular'}
                       </div>
                     </div>
                     {level >= 3 && (
@@ -763,10 +919,8 @@ const Profile = () => {
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
                   </div>
                 )}
-              </div>
-            </div>
             {/* Stats Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.xp || 0}</div>
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Total XP</div>
@@ -776,8 +930,35 @@ const Profile = () => {
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Level</div>
               </div>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.powerPoints || 0}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.powerPoints || 0}</div>
+                  {ppBoostStatus.isActive && (
+                    <span 
+                      style={{ 
+                        fontSize: '1rem',
+                        color: '#7c3aed',
+                        fontWeight: 'bold',
+                        textShadow: '0 0 2px rgba(124, 58, 237, 0.3)',
+                        animation: 'pulse 2s infinite'
+                      }}
+                      title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                    >
+                      ×2
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Power Points</div>
+              </div>
+              <div style={{ 
+                background: 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)', 
+                padding: '1rem', 
+                borderRadius: '0.5rem', 
+                textAlign: 'center',
+                border: '1px solid #4b5563',
+                boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+              }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#ffffff' }}>{Math.floor(userData?.truthMetal || 0)}</div>
+                <div style={{ fontSize: '0.875rem', color: '#e5e7eb', fontWeight: '500' }}>Truth Metal Shards</div>
               </div>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>
@@ -786,12 +967,31 @@ const Profile = () => {
             </div>
           </div>
         </div>
+        </div>
       </div>
 
-      {/* Purchased Artifacts Section - Full Width */}
-      <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5', margin: 0 }}>🛒 Purchased Artifacts</h2>
+      {/* Artifacts and Manifest Progress Side by Side */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '2rem', 
+        marginBottom: '2rem',
+        alignItems: 'stretch' // Changed from flex-start to stretch for equal height
+      }}>
+        {/* Artifacts Section - Left Side with Vertical Scrolling */}
+        <div style={{ 
+          flex: '1', 
+          backgroundColor: 'white', 
+          borderRadius: '0.75rem', 
+          padding: '2rem', 
+          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
+          border: '1px solid #e5e7eb',
+          maxHeight: '800px',
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexShrink: 0 }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5', margin: 0, lineHeight: '1.5rem' }}>🛒 Purchased Artifacts</h2>
               {userData?.artifacts && userData.artifacts.length > 0 && (
                 <div style={{ 
                   background: '#f3f4f6', 
@@ -807,13 +1007,13 @@ const Profile = () => {
             
             {userData?.artifacts && userData.artifacts.length > 0 ? (
               <div>
-                {/* Available Artifacts */}
+              {/* Available Artifacts - 2 columns with vertical scroll */}
                 {userData.artifacts.filter((artifact: any) => !artifact.used).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
                       Available Artifacts ({userData.artifacts.filter((a: any) => !a.used).length})
                     </h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                       {userData.artifacts.filter((artifact: any) => !artifact.used).map((artifact: any) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
@@ -901,6 +1101,24 @@ const Profile = () => {
                               {enhancedArtifact.purchasedAt ? new Date(enhancedArtifact.purchasedAt.seconds * 1000).toLocaleDateString() : (enhancedArtifact.isLegacy ? 'Legacy Item' : 'Unknown')}
                             </div>
                             
+                            {/* PP Boost Countdown Display - Only show on the artifact that was actually used */}
+                            {enhancedArtifact.name === 'Double PP Boost' && ppBoostStatus.isActive && artifact.used && (
+                              <div style={{
+                                background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                                color: 'white',
+                                padding: '0.5rem',
+                                borderRadius: '0.375rem',
+                                marginBottom: '0.75rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                textAlign: 'center',
+                                boxShadow: '0 2px 4px rgba(251, 191, 36, 0.3)'
+                              }}>
+                                ⚡ Active: {ppBoostStatus.timeRemaining} remaining
+                              </div>
+                            )}
+                            
+                            <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
                             <button 
                               style={{ 
                                 backgroundColor: artifact.pending ? '#f59e0b' : '#4f46e5', 
@@ -911,7 +1129,7 @@ const Profile = () => {
                                 cursor: artifact.pending ? 'not-allowed' : 'pointer', 
                                 fontWeight: 'bold',
                                 fontSize: '0.8rem',
-                                width: '100%',
+                                flex: 1,
                                 transition: 'background-color 0.2s ease',
                                 opacity: artifact.pending ? 0.7 : 1
                               }} 
@@ -1031,27 +1249,39 @@ const Profile = () => {
                                       const userSnap = await getDoc(userRef);
                                       if (userSnap.exists()) {
                                         const userData = userSnap.data();
+                                        // Only mark ONE instance as used, not all of them
+                                        let foundOne = false;
                                         const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                          if (foundOne) return artifact;
+                                          
                                           // Handle both legacy artifacts (strings) and new artifacts (objects)
                                           if (typeof artifact === 'string') {
                                             // Legacy artifact stored as string - match by name
-                                            return artifact === enhancedArtifact.name ? { 
-                                              id: enhancedArtifact.id,
-                                              name: enhancedArtifact.name,
-                                              description: enhancedArtifact.description,
-                                              icon: enhancedArtifact.icon,
-                                              image: enhancedArtifact.image,
-                                              category: enhancedArtifact.category,
-                                              rarity: enhancedArtifact.rarity,
-                                              purchasedAt: null,
-                                              used: true,
-                                              isLegacy: true
-                                            } : artifact;
+                                            if (artifact === enhancedArtifact.name) {
+                                              foundOne = true;
+                                              return { 
+                                                id: enhancedArtifact.id,
+                                                name: enhancedArtifact.name,
+                                                description: enhancedArtifact.description,
+                                                icon: enhancedArtifact.icon,
+                                                image: enhancedArtifact.image,
+                                                category: enhancedArtifact.category,
+                                                rarity: enhancedArtifact.rarity,
+                                                purchasedAt: null,
+                                                used: true,
+                                                isLegacy: true
+                                              };
+                                            }
+                                            return artifact;
                                           } else {
-                                            // New artifact stored as object - match by ID or name
-                                            return (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) 
-                                              ? { ...artifact, used: true } 
-                                              : artifact;
+                                            // New artifact stored as object - match by ID or name and check if not already used
+                                            // Only mark as used if it's not already used (check for used property explicitly)
+                                            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+                                            if ((artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) && isNotUsed) {
+                                              foundOne = true;
+                                              return { ...artifact, used: true };
+                                            }
+                                            return artifact;
                                           }
                                         }) || [];
                                         
@@ -1063,10 +1293,13 @@ const Profile = () => {
                                         const studentsRef = doc(db, 'students', currentUser.uid);
                                         const studentsSnap = await getDoc(studentsRef);
                                         if (studentsSnap.exists()) {
-                                          const studentsData = studentsSnap.data();
-                                          const currentInventory = studentsData.inventory || [];
-                                          // Remove the used artifact from inventory
-                                          const updatedInventory = currentInventory.filter((item: string) => item !== enhancedArtifact.name);
+                                        const studentsData = studentsSnap.data();
+                                        const currentInventory = studentsData.inventory || [];
+                                        // Remove only ONE instance of the artifact from inventory
+                                        const artifactIndex = currentInventory.indexOf(enhancedArtifact.name);
+                                        const updatedInventory = artifactIndex > -1 
+                                          ? currentInventory.filter((item: string, index: number) => index !== artifactIndex)
+                                          : currentInventory;
                                           
                                           await updateDoc(studentsRef, {
                                             inventory: updatedInventory
@@ -1093,6 +1326,92 @@ const Profile = () => {
                                   } catch (error) {
                                     console.error('Error using Shield artifact:', error);
                                     alert('Error using Shield artifact. Please try again.');
+                                  }
+                                } else if (enhancedArtifact.name === 'Double PP Boost') {
+                                  // Handle Double PP Boost - no admin approval needed
+                                  try {
+                                    const { activatePPBoost, getActivePPBoost, getPPBoostStatus } = await import('../utils/ppBoost');
+                                    const success = await activatePPBoost(currentUser.uid, enhancedArtifact.name);
+                                    if (success) {
+                                      // Get the active boost to show countdown
+                                      const activeBoost = await getActivePPBoost(currentUser.uid);
+                                      const boostStatus = getPPBoostStatus(activeBoost);
+                                      const timeRemaining = boostStatus.isActive ? boostStatus.timeRemaining : '4:00';
+                                      alert(`⚡ Double PP Boost activated! You'll receive double PP for the next 4 hours!\n\nTime remaining: ${timeRemaining}`);
+                                      
+                                      // Mark only ONE artifact as used
+                                      const userRef = doc(db, 'users', currentUser.uid);
+                                      const userSnap = await getDoc(userRef);
+                                      if (userSnap.exists()) {
+                                        const userData = userSnap.data();
+                                        const currentArtifacts = userData.artifacts || [];
+                                        
+                                        // Find the FIRST unused artifact with this name and mark only that one
+                                        let foundOne = false;
+                                        const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+                                          if (foundOne) return artifact;
+                                          
+                                          if (typeof artifact === 'string') {
+                                            if (artifact === enhancedArtifact.name) {
+                                              foundOne = true;
+                                              return { 
+                                                id: enhancedArtifact.id,
+                                                name: enhancedArtifact.name,
+                                                description: enhancedArtifact.description,
+                                                icon: enhancedArtifact.icon,
+                                                image: enhancedArtifact.image,
+                                                category: enhancedArtifact.category,
+                                                rarity: enhancedArtifact.rarity,
+                                                purchasedAt: null,
+                                                used: true,
+                                                usedAt: new Date(),
+                                                isLegacy: true
+                                              };
+                                            }
+                                            return artifact;
+                                          } else {
+                                            // Only mark as used if it's not already used (check for used property explicitly)
+                                            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+                                            if ((artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) && isNotUsed) {
+                                              foundOne = true;
+                                              return { ...artifact, used: true, usedAt: new Date() };
+                                            }
+                                            return artifact;
+                                          }
+                                        });
+                                        
+                                        await updateDoc(userRef, {
+                                          artifacts: updatedArtifacts
+                                        });
+                                        
+                                        // Remove ONE instance from students inventory
+                                        const studentsRef = doc(db, 'students', currentUser.uid);
+                                        const studentsSnap = await getDoc(studentsRef);
+                                        if (studentsSnap.exists()) {
+                                          const studentsData = studentsSnap.data();
+                                          const currentInventory = studentsData.inventory || [];
+                                          const artifactIndex = currentInventory.indexOf(enhancedArtifact.name);
+                                          if (artifactIndex > -1) {
+                                            const updatedInventory = [...currentInventory];
+                                            updatedInventory.splice(artifactIndex, 1);
+                                            await updateDoc(studentsRef, {
+                                              inventory: updatedInventory
+                                            });
+                                          }
+                                        }
+                                        
+                                        // Refresh user data
+                                        const updatedUserSnap = await getDoc(userRef);
+                                        if (updatedUserSnap.exists()) {
+                                          setUserData(updatedUserSnap.data());
+                                        }
+                                      }
+                                    } else {
+                                      alert('Failed to activate PP boost. Please try again.');
+                                    }
+                                  } catch (error) {
+                                    console.error('Error using Double PP Boost:', error);
+                                    alert('Error using Double PP Boost. Please try again.');
                                   }
                                 } else {
                                   // Handle other artifacts (send to admin)
@@ -1126,24 +1445,36 @@ const Profile = () => {
                                   const userSnap = await getDoc(userRef);
                                   if (userSnap.exists()) {
                                     const userData = userSnap.data();
+                                    // Only mark ONE instance as used, not all of them
+                                    let foundOne = false;
                                     const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                      if (foundOne) return artifact;
+                                      
                                       if (typeof artifact === 'string') {
-                                        return artifact === enhancedArtifact.name ? { 
-                                          id: enhancedArtifact.id,
-                                          name: enhancedArtifact.name,
-                                          description: enhancedArtifact.description,
-                                          icon: enhancedArtifact.icon,
-                                          image: enhancedArtifact.image,
-                                          category: enhancedArtifact.category,
-                                          rarity: enhancedArtifact.rarity,
-                                          purchasedAt: null,
-                                          used: true,
-                                          isLegacy: true
-                                        } : artifact;
+                                        if (artifact === enhancedArtifact.name) {
+                                          foundOne = true;
+                                          return { 
+                                            id: enhancedArtifact.id,
+                                            name: enhancedArtifact.name,
+                                            description: enhancedArtifact.description,
+                                            icon: enhancedArtifact.icon,
+                                            image: enhancedArtifact.image,
+                                            category: enhancedArtifact.category,
+                                            rarity: enhancedArtifact.rarity,
+                                            purchasedAt: null,
+                                            used: true,
+                                            isLegacy: true
+                                          };
+                                        }
+                                        return artifact;
                                       } else {
-                                        return (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) 
-                                          ? { ...artifact, used: true, usedAt: new Date() } 
-                                          : artifact;
+                                        // Only mark as used if it's not already used (check for used property explicitly)
+                                        const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+                                        if ((artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) && isNotUsed) {
+                                          foundOne = true;
+                                          return { ...artifact, used: true, usedAt: new Date() };
+                                        }
+                                        return artifact;
                                       }
                                     }) || [];
                                     
@@ -1217,6 +1548,189 @@ const Profile = () => {
                             >
                               {artifact.pending ? 'In Use' : 'Use Artifact'}
                             </button>
+                            
+                            {/* Return Artifact Button */}
+                            {(() => {
+                              // Get the original price - check multiple sources
+                              let artifactPrice = 0;
+                              
+                              // First, check if artifact object has price property
+                              if (typeof artifact === 'object' && artifact.price) {
+                                artifactPrice = artifact.price;
+                              } 
+                              // Second, check if enhanced artifact has price
+                              else if (enhancedArtifact.price) {
+                                artifactPrice = enhancedArtifact.price;
+                              }
+                              // Third, try to find price from marketplace items
+                              else {
+                                const marketplaceItem = marketplaceItems.find(mi => 
+                                  mi.name === enhancedArtifact.name || mi.id === enhancedArtifact.id
+                                );
+                                if (marketplaceItem) {
+                                  artifactPrice = marketplaceItem.price;
+                                }
+                              }
+                              
+                              // Only show return button if artifact has a price (was purchased from MST MKT)
+                              if (artifactPrice > 0 && !artifact.used && !artifact.pending) {
+                                const returnPrice = Math.floor(artifactPrice * 0.5);
+                                
+                                return (
+                                  <button
+                                    style={{
+                                      backgroundColor: '#10b981',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '0.375rem',
+                                      padding: '0.5rem 0.75rem',
+                                      cursor: 'pointer',
+                                      fontWeight: 'bold',
+                                      fontSize: '0.8rem',
+                                      flex: 1,
+                                      transition: 'background-color 0.2s ease'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.backgroundColor = '#059669';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.backgroundColor = '#10b981';
+                                    }}
+                                    onClick={async () => {
+                                      if (!currentUser) return;
+                                      
+                                      if (!window.confirm(`Return ${enhancedArtifact.name} for ${returnPrice} PP (50% of original ${artifactPrice} PP)?`)) {
+                                        return;
+                                      }
+                                      
+                                      try {
+                                        // Get current user data
+                                        const userRef = doc(db, 'users', currentUser.uid);
+                                        const userSnap = await getDoc(userRef);
+                                        const studentsRef = doc(db, 'students', currentUser.uid);
+                                        const studentsSnap = await getDoc(studentsRef);
+                                        
+                                        if (!userSnap.exists() || !studentsSnap.exists()) {
+                                          alert('Error: User data not found.');
+                                          return;
+                                        }
+                                        
+                                        const userData = userSnap.data();
+                                        const studentsData = studentsSnap.data();
+                                        
+                                        // Remove ONE instance of the artifact from users collection
+                                        let foundOne = false;
+                                        const updatedArtifacts = userData.artifacts?.filter((art: any) => {
+                                          if (foundOne) return true;
+                                          
+                                          if (typeof art === 'string') {
+                                            if (art === enhancedArtifact.name) {
+                                              foundOne = true;
+                                              return false; // Remove this artifact
+                                            }
+                                            return true;
+                                          } else {
+                                            // Match by ID or name, and ensure it's not used
+                                            const isNotUsed = art.used === false || art.used === undefined || art.used === null;
+                                            if ((art.id === enhancedArtifact.id || art.name === enhancedArtifact.name) && isNotUsed) {
+                                              foundOne = true;
+                                              return false; // Remove this artifact
+                                            }
+                                            return true;
+                                          }
+                                        }) || [];
+                                        
+                                        // Remove ONE instance from students inventory
+                                        const currentInventory = studentsData.inventory || [];
+                                        const artifactIndex = currentInventory.indexOf(enhancedArtifact.name);
+                                        const updatedInventory = artifactIndex > -1 
+                                          ? currentInventory.filter((item: string, index: number) => index !== artifactIndex)
+                                          : currentInventory;
+                                        
+                                        // Calculate new PP (add 50% of original price)
+                                        const currentPP = studentsData.powerPoints || 0;
+                                        const newPP = currentPP + returnPrice;
+                                        
+                                        console.log('[Profile] Returning artifact:', {
+                                          artifactName: enhancedArtifact.name,
+                                          currentPP,
+                                          returnPrice,
+                                          newPP
+                                        });
+                                        
+                                        // Update both collections
+                                        await updateDoc(userRef, {
+                                          artifacts: updatedArtifacts
+                                        });
+                                        
+                                        // Update students collection with new PP
+                                        await updateDoc(studentsRef, {
+                                          inventory: updatedInventory,
+                                          powerPoints: newPP
+                                        });
+                                        
+                                        // Also update vault directly to ensure consistency
+                                        const vaultRef = doc(db, 'vaults', currentUser.uid);
+                                        const vaultSnap = await getDoc(vaultRef);
+                                        if (vaultSnap.exists()) {
+                                          const vaultData = vaultSnap.data();
+                                          const maxVaultHealth = vaultData.maxVaultHealth || Math.floor((vaultData.capacity || 1000) * 0.1);
+                                          const correctVaultHealth = newPP >= maxVaultHealth
+                                            ? maxVaultHealth
+                                            : Math.min(newPP, maxVaultHealth);
+                                          
+                                          await updateDoc(vaultRef, {
+                                            currentPP: newPP,
+                                            vaultHealth: correctVaultHealth
+                                          });
+                                          
+                                          console.log('[Profile] Updated vault:', {
+                                            currentPP: newPP,
+                                            vaultHealth: correctVaultHealth,
+                                            maxVaultHealth
+                                          });
+                                        } else {
+                                          console.error('[Profile] Vault not found for user:', currentUser.uid);
+                                        }
+                                        
+                                        // Don't call syncVaultPP here - we've already updated both collections directly
+                                        // Calling syncVaultPP might read stale data and overwrite our update
+                                        
+                                        // Refresh user data from both collections to ensure UI updates
+                                        const updatedUserSnap = await getDoc(userRef);
+                                        const updatedStudentsSnap = await getDoc(studentsRef);
+                                        
+                                        if (updatedUserSnap.exists() && updatedStudentsSnap.exists()) {
+                                          const userData = updatedUserSnap.data();
+                                          const studentsData = updatedStudentsSnap.data();
+                                          
+                                          // Merge the data to ensure we have the latest PP
+                                          setUserData({
+                                            ...userData,
+                                            powerPoints: studentsData.powerPoints || 0,
+                                            inventory: studentsData.inventory || []
+                                          });
+                                          
+                                          console.log('[Profile] Refreshed user data after return:', {
+                                            powerPoints: studentsData.powerPoints,
+                                            inventory: studentsData.inventory
+                                          });
+                                        }
+                                        
+                                        alert(`✅ ${enhancedArtifact.name} returned! You received ${returnPrice} PP (50% of original ${artifactPrice} PP).`);
+                                      } catch (error) {
+                                        console.error('Error returning artifact:', error);
+                                        alert('Error returning artifact. Please try again.');
+                                      }
+                                    }}
+                                  >
+                                    💰 Return ({returnPrice} PP)
+                                  </button>
+                                );
+                              }
+                              return null;
+                            })()}
+                            </div>
                           </div>
                         );
                       })}
@@ -1230,8 +1744,9 @@ const Profile = () => {
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
                       Used Artifacts ({userData.artifacts.filter((a: any) => a.used).length})
                     </h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
                       {userData.artifacts.filter((artifact: any) => artifact.used).map((artifact: any) => {
+                        const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
                           switch (rarity) {
                             case 'common': return '#6b7280';
@@ -1255,7 +1770,7 @@ const Profile = () => {
                               {typeof artifact === 'object' && artifact.image ? (
                                 <img 
                                   src={artifact.image} 
-                                  alt={artifact.name || 'Artifact'} 
+                                  alt={enhancedArtifact.name || 'Artifact'} 
                                   style={{ 
                                     width: '100%', 
                                     height: '60px', 
@@ -1281,8 +1796,25 @@ const Profile = () => {
                               )}
                             </div>
                             <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                              {typeof artifact === 'string' ? artifact : artifact.name || 'Unknown Item'}
+                              {enhancedArtifact.name || 'Unknown Item'}
                             </div>
+                            
+                            {/* PP Boost Countdown Display - Only show on the artifact that was actually used */}
+                            {enhancedArtifact.name === 'Double PP Boost' && ppBoostStatus.isActive && artifact.used && (
+                              <div style={{
+                                background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                                color: 'white',
+                                padding: '0.5rem',
+                                borderRadius: '0.375rem',
+                                marginBottom: '0.5rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                textAlign: 'center',
+                                boxShadow: '0 2px 4px rgba(251, 191, 36, 0.3)'
+                              }}>
+                                ⚡ Active: {ppBoostStatus.timeRemaining} remaining
+                              </div>
+                            )}
                             {typeof artifact === 'object' && artifact.rarity && (
                               <div style={{ 
                                 fontSize: '0.7rem', 
@@ -1317,12 +1849,24 @@ const Profile = () => {
             )}
           </div>
       
-      {/* Manifest Progress Section */}
-      <div style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', marginBottom: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb' }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+        {/* Manifest Progress Section - Right Side with Horizontal Scrolling */}
+        <div style={{ 
+          flex: '1', 
+          backgroundColor: 'white', 
+          borderRadius: '0.75rem', 
+          padding: '2rem', 
+          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', 
+          border: '1px solid #e5e7eb',
+          overflowX: 'auto',
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5', margin: 0, lineHeight: '1.5rem', flexShrink: 0 }}>
           ⚡ Manifest Progress
         </h2>
         {playerManifest ? (
+            <div style={{ minWidth: '600px' }}>
           <ManifestProgress 
             playerManifest={playerManifest} 
             onVeilBreak={handleVeilBreak}
@@ -1335,37 +1879,40 @@ const Profile = () => {
               }
             }}
           />
+            </div>
         ) : (
           <div style={{ 
             padding: '2rem', 
             textAlign: 'center',
             backgroundColor: '#f8fafc',
             borderRadius: '0.5rem',
-            border: '1px solid #e2e8f0'
-          }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
-              Choose Your Manifest
-            </h3>
-            <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
-              In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
-            </p>
-            <button
-              onClick={() => setShowManifestSelection(true)}
-              style={{
-                backgroundColor: '#4f46e5',
-                color: 'white',
-                padding: '0.75rem 1.5rem',
-                borderRadius: '0.5rem',
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: '1rem',
-                fontWeight: 'bold'
-              }}
-            >
-              Select Your Manifest
-            </button>
-          </div>
-        )}
+              border: '1px solid #e2e8f0',
+              minWidth: '400px'
+            }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
+                Choose Your Manifest
+              </h3>
+              <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+                In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will.
+              </p>
+              <button
+                onClick={() => setShowManifestSelection(true)}
+                style={{
+                  backgroundColor: '#4f46e5',
+                  color: 'white',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: 'bold'
+                }}
+              >
+                Select Your Manifest
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Admin Debug Section for UXP Artifact Management */}

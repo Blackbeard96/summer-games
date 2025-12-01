@@ -5,6 +5,7 @@ import { useBattle } from '../context/BattleContext';
 import { useAuth } from '../context/AuthContext';
 import { doc, updateDoc, increment, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 interface EpisodeRewardsModalProps {
   episode: StoryEpisode;
@@ -137,17 +138,29 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
       // Claim the episode rewards
       await claimRewards(episode.id);
 
+      // Apply PP boost if active
+      let finalPP = episode.rewards.pp;
+      try {
+        const activeBoost = await getActivePPBoost(currentUser.uid);
+        if (activeBoost) {
+          finalPP = applyPPBoost(episode.rewards.pp, currentUser.uid, activeBoost);
+          console.log(`⚡ PP Boost applied to story episode reward: ${episode.rewards.pp} → ${finalPP}`);
+        }
+      } catch (error) {
+        console.error('Error applying PP boost to story episode reward:', error);
+      }
+
       // Update player stats with PP and XP
       const userRef = doc(db, 'users', currentUser.uid);
       const studentRef = doc(db, 'students', currentUser.uid);
 
       await updateDoc(userRef, {
-        powerPoints: increment(episode.rewards.pp),
+        powerPoints: increment(finalPP),
         xp: increment(episode.rewards.xp)
       });
 
       await updateDoc(studentRef, {
-        powerPoints: increment(episode.rewards.pp),
+        powerPoints: increment(finalPP),
         xp: increment(episode.rewards.xp)
       });
 

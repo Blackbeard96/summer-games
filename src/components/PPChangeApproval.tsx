@@ -40,6 +40,7 @@ const PPChangeApproval: React.FC = () => {
   const [changeRequests, setChangeRequests] = useState<PPChangeRequest[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [processing, setProcessing] = useState<string | null>(null);
+  const [ppBoostStatuses, setPpBoostStatuses] = useState<{ [studentId: string]: boolean }>({});
 
   // Check if current user is admin
   const isAdmin = currentUser?.email === 'eddymosley@compscihigh.org' || 
@@ -77,6 +78,27 @@ const PPChangeApproval: React.FC = () => {
 
         setChangeRequests(requests);
         logger.roster.info('PPChangeApproval: Loaded change requests:', requests.length);
+        
+        // Check PP boost status for all students in all requests
+        const studentIds = new Set<string>();
+        requests.forEach(request => {
+          request.changes.forEach(change => {
+            studentIds.add(change.studentId);
+          });
+        });
+        
+        // Load PP boost status for each student
+        const boostStatuses: { [studentId: string]: boolean } = {};
+        for (const studentId of Array.from(studentIds)) {
+          try {
+            const activeBoost = await getActivePPBoost(studentId);
+            boostStatuses[studentId] = activeBoost !== null;
+          } catch (error) {
+            console.error(`Error checking PP boost for student ${studentId}:`, error);
+            boostStatuses[studentId] = false;
+          }
+        }
+        setPpBoostStatuses(boostStatuses);
       } catch (error) {
         logger.roster.error('PPChangeApproval: Error loading change requests:', error);
       } finally {
@@ -449,14 +471,36 @@ const PPChangeApproval: React.FC = () => {
                       alignItems: 'center',
                       marginBottom: '0.5rem'
                     }}>
-                      <h4 style={{ 
-                        fontSize: '0.875rem', 
-                        fontWeight: '600', 
-                        color: '#1f2937',
-                        margin: 0
-                      }}>
-                        {change.studentName}
-                      </h4>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <h4 style={{ 
+                          fontSize: '0.875rem', 
+                          fontWeight: '600', 
+                          color: '#1f2937',
+                          margin: 0
+                        }}>
+                          {change.studentName}
+                        </h4>
+                        {/* PP Boost Indicator */}
+                        {ppBoostStatuses[change.studentId] && change.changeAmount > 0 && (
+                          <span
+                            style={{
+                              background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                              color: 'white',
+                              padding: '0.125rem 0.375rem',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.7rem',
+                              fontWeight: 'bold',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              boxShadow: '0 1px 2px rgba(251, 191, 36, 0.3)'
+                            }}
+                            title="Double PP Boost Active - This student will receive double PP"
+                          >
+                            ⚡ x2
+                          </span>
+                        )}
+                      </div>
                       <span style={{
                         backgroundColor: change.changeAmount > 0 ? '#dcfce7' : '#fef2f2',
                         color: change.changeAmount > 0 ? '#166534' : '#dc2626',

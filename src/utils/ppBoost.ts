@@ -30,11 +30,61 @@ export const getActivePPBoost = async (userId: string): Promise<PPBoost | null> 
     // Find the most recent active boost
     const now = new Date();
     const activeBoost = activeBoosts.find((boost: any) => {
-      const endTime = boost.endTime?.toDate?.() || new Date(boost.endTime);
+      // Handle Firestore Timestamp or Date object
+      let endTime: Date;
+      if (boost.endTime?.toDate) {
+        // Firestore Timestamp
+        endTime = boost.endTime.toDate();
+      } else if (boost.endTime instanceof Date) {
+        // Already a Date
+        endTime = boost.endTime;
+      } else if (typeof boost.endTime === 'string') {
+        // ISO string
+        endTime = new Date(boost.endTime);
+      } else if (boost.endTime?.seconds) {
+        // Firestore Timestamp with seconds property
+        endTime = new Date(boost.endTime.seconds * 1000);
+      } else {
+        // Fallback
+        endTime = new Date(boost.endTime);
+      }
       return boost.isActive && endTime > now;
     });
     
-    return activeBoost || null;
+    if (!activeBoost) return null;
+    
+    // Convert timestamps to Date objects before returning
+    let startTime: Date;
+    if (activeBoost.startTime?.toDate) {
+      startTime = activeBoost.startTime.toDate();
+    } else if (activeBoost.startTime instanceof Date) {
+      startTime = activeBoost.startTime;
+    } else if (typeof activeBoost.startTime === 'string') {
+      startTime = new Date(activeBoost.startTime);
+    } else if (activeBoost.startTime?.seconds) {
+      startTime = new Date(activeBoost.startTime.seconds * 1000);
+    } else {
+      startTime = new Date(activeBoost.startTime);
+    }
+    
+    let endTime: Date;
+    if (activeBoost.endTime?.toDate) {
+      endTime = activeBoost.endTime.toDate();
+    } else if (activeBoost.endTime instanceof Date) {
+      endTime = activeBoost.endTime;
+    } else if (typeof activeBoost.endTime === 'string') {
+      endTime = new Date(activeBoost.endTime);
+    } else if (activeBoost.endTime?.seconds) {
+      endTime = new Date(activeBoost.endTime.seconds * 1000);
+    } else {
+      endTime = new Date(activeBoost.endTime);
+    }
+    
+    return {
+      ...activeBoost,
+      startTime,
+      endTime
+    } as PPBoost;
   } catch (error) {
     console.error('Error getting active PP boost:', error);
     return null;
@@ -141,25 +191,64 @@ export const cleanupExpiredPPBoosts = async (userId: string): Promise<void> => {
 /**
  * Get PP boost status for display
  */
-export const getPPBoostStatus = (activeBoost: PPBoost | null): { isActive: boolean; timeRemaining: string; multiplier: number } => {
+export const getPPBoostStatus = (activeBoost: PPBoost | null | any): { isActive: boolean; timeRemaining: string; multiplier: number } => {
   if (!activeBoost) {
     return { isActive: false, timeRemaining: '', multiplier: 1 };
   }
   
   const now = new Date();
-  const endTime = activeBoost.endTime instanceof Date ? activeBoost.endTime : new Date(activeBoost.endTime);
   
-  if (endTime <= now) {
+  // Ensure endTime is a proper Date object
+  // Handle Firestore Timestamp or Date object
+  let endTime: Date;
+  const endTimeValue = activeBoost.endTime;
+  
+  if (endTimeValue instanceof Date) {
+    endTime = endTimeValue;
+  } else if (endTimeValue && typeof endTimeValue.toDate === 'function') {
+    // Firestore Timestamp
+    endTime = endTimeValue.toDate();
+  } else if (typeof endTimeValue === 'string') {
+    endTime = new Date(endTimeValue);
+  } else if (endTimeValue && typeof endTimeValue === 'object' && 'seconds' in endTimeValue) {
+    // Firestore Timestamp with seconds property
+    endTime = new Date(endTimeValue.seconds * 1000);
+  } else {
+    // Fallback
+    endTime = new Date(endTimeValue);
+  }
+  
+  // Check if boost is expired
+  if (isNaN(endTime.getTime()) || endTime <= now) {
     return { isActive: false, timeRemaining: '', multiplier: 1 };
   }
   
   const timeRemaining = endTime.getTime() - now.getTime();
-  const hours = Math.floor(timeRemaining / (1000 * 60 * 60));
-  const minutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+  
+  // Ensure we have valid time
+  if (isNaN(timeRemaining) || timeRemaining <= 0) {
+    return { isActive: false, timeRemaining: '', multiplier: 1 };
+  }
+  
+  const totalHours = Math.floor(timeRemaining / (1000 * 60 * 60));
+  const totalMinutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+  
+  // Format as HH:MM
+  if (totalHours === 0 && totalMinutes === 0) {
+    return {
+      isActive: false,
+      timeRemaining: '00:00',
+      multiplier: activeBoost.multiplier
+    };
+  }
+  
+  // Format with leading zeros: HH:MM
+  const formattedHours = totalHours.toString().padStart(2, '0');
+  const formattedMinutes = totalMinutes.toString().padStart(2, '0');
   
   return {
     isActive: true,
-    timeRemaining: `${hours}h ${minutes}m`,
+    timeRemaining: `${formattedHours}:${formattedMinutes}`,
     multiplier: activeBoost.multiplier
   };
 };

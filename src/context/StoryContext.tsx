@@ -65,20 +65,27 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
       doc(db, 'storyProgress', currentUser.uid),
       async (docSnapshot) => {
         if (docSnapshot.exists()) {
-          const data = docSnapshot.data() as StoryProgress;
-          setStoryProgress(data);
+          const data = docSnapshot.data() as any;
+          const storyProgressData: StoryProgress = {
+            currentEpisode: data.currentEpisode || 'ep_01_xiotein_letter',
+            completedEpisodes: data.completedEpisodes || [],
+            totalProgress: data.totalProgress || 0,
+            seasonRewards: data.seasonRewards || []
+          };
+          setStoryProgress(storyProgressData);
           
-          // Calculate episode progress
+          // Calculate episode progress from stored data
           const episodeProgressData: Record<string, EpisodeProgress> = {};
           STORY_EPISODES.forEach(episode => {
+            const storedProgress = data.episodeProgress?.[episode.id] || {};
             episodeProgressData[episode.id] = {
-              isStarted: data.completedEpisodes.includes(episode.id) || episode.id === data.currentEpisode,
-              isCompleted: data.completedEpisodes.includes(episode.id),
-              objectivesCompleted: [], // TODO: Track individual objectives
-              encountersCompleted: [], // TODO: Track individual encounters
-              bossDefeated: data.completedEpisodes.includes(episode.id),
-              rewardsClaimed: data.completedEpisodes.includes(episode.id),
-              completionDate: data.completedEpisodes.includes(episode.id) ? new Date() : undefined
+              isStarted: storyProgressData.completedEpisodes.includes(episode.id) || episode.id === storyProgressData.currentEpisode,
+              isCompleted: storyProgressData.completedEpisodes.includes(episode.id),
+              objectivesCompleted: storedProgress.objectivesCompleted || [],
+              encountersCompleted: storedProgress.encountersCompleted || [],
+              bossDefeated: storedProgress.bossDefeated || storyProgressData.completedEpisodes.includes(episode.id),
+              rewardsClaimed: storedProgress.rewardsClaimed || storyProgressData.completedEpisodes.includes(episode.id),
+              completionDate: storedProgress.completionDate ? new Date(storedProgress.completionDate.seconds * 1000) : (storyProgressData.completedEpisodes.includes(episode.id) ? new Date() : undefined)
             };
           });
           setEpisodeProgress(episodeProgressData);
@@ -106,9 +113,16 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
           });
           setEpisodeProgress(defaultEpisodeProgress);
           
-          // Save default progress to Firestore
+          // Save default progress to Firestore with episodeProgress structure
           try {
-            await setDoc(doc(db, 'storyProgress', currentUser.uid), defaultProgress);
+            const progressToSave: any = {
+              ...defaultProgress,
+              episodeProgress: {}
+            };
+            STORY_EPISODES.forEach(episode => {
+              progressToSave.episodeProgress[episode.id] = defaultEpisodeProgress[episode.id];
+            });
+            await setDoc(doc(db, 'storyProgress', currentUser.uid), progressToSave);
           } catch (error) {
             console.error('Error saving default story progress:', error);
             setError('Failed to initialize story progress');
@@ -157,11 +171,28 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
       const currentProgress = episodeProgress[episodeId];
       if (!currentProgress) throw new Error('Episode progress not found');
       
+      // Check if already completed
+      if (currentProgress.objectivesCompleted.includes(objectiveId)) {
+        console.log(`Objective ${objectiveId} already completed`);
+        return;
+      }
+      
       const updatedObjectives = [...currentProgress.objectivesCompleted, objectiveId];
       
-      await updateDoc(doc(db, 'storyProgress', currentUser.uid), {
+      // Update Firestore
+      const storyProgressRef = doc(db, 'storyProgress', currentUser.uid);
+      await updateDoc(storyProgressRef, {
         [`episodeProgress.${episodeId}.objectivesCompleted`]: updatedObjectives
       });
+      
+      // Update local state
+      setEpisodeProgress(prev => ({
+        ...prev,
+        [episodeId]: {
+          ...prev[episodeId],
+          objectivesCompleted: updatedObjectives
+        }
+      }));
       
       console.log(`Completed objective: ${objectiveId} in episode: ${episodeId}`);
     } catch (error) {
@@ -178,11 +209,28 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
       const currentProgress = episodeProgress[episodeId];
       if (!currentProgress) throw new Error('Episode progress not found');
       
+      // Check if already completed
+      if (currentProgress.encountersCompleted.includes(encounterId)) {
+        console.log(`Encounter ${encounterId} already completed`);
+        return;
+      }
+      
       const updatedEncounters = [...currentProgress.encountersCompleted, encounterId];
       
-      await updateDoc(doc(db, 'storyProgress', currentUser.uid), {
+      // Update Firestore
+      const storyProgressRef = doc(db, 'storyProgress', currentUser.uid);
+      await updateDoc(storyProgressRef, {
         [`episodeProgress.${episodeId}.encountersCompleted`]: updatedEncounters
       });
+      
+      // Update local state
+      setEpisodeProgress(prev => ({
+        ...prev,
+        [episodeId]: {
+          ...prev[episodeId],
+          encountersCompleted: updatedEncounters
+        }
+      }));
       
       console.log(`Completed encounter: ${encounterId} in episode: ${episodeId}`);
     } catch (error) {

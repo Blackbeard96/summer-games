@@ -37,6 +37,24 @@ service cloud.firestore {
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
     
+    // Profiles collection - allow users to read/write their own profile
+    match /profiles/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Profiles collection - allow scorekeepers to read all profiles
+    match /profiles/{userId} {
+      allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
+         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
+    }
+    
     // Test account access - allow admin access to test accounts
     match /users/test-account-001 {
       allow read, write: if request.auth != null && 
@@ -46,6 +64,13 @@ service cloud.firestore {
     }
     
     match /students/test-account-001 {
+      allow read, write: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    match /profiles/test-account-001 {
       allow read, write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
@@ -368,6 +393,31 @@ service cloud.firestore {
     // Squads collection - allow authenticated users to read/write
     match /squads/{squadId} {
       allow read, write: if request.auth != null;
+    }
+    
+    // Mindforge battles collection - allow users to create and read their own battles
+    match /mindforgeBattles/{battleId} {
+      allow create: if request.auth != null && 
+        request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null && 
+        (resource.data.userId == request.auth.uid ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      allow update, delete: if request.auth != null && 
+        (resource.data.userId == request.auth.uid ||
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Mindforge questions collection - allow admins to manage, all users to read
+    match /mindforgeQuestions/{questionId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && 
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
     // Default rule - deny all other access

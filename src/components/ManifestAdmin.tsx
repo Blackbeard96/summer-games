@@ -10,16 +10,29 @@ interface ManifestAdminProps {
   onClose: () => void;
 }
 
+interface StatusEffect {
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'none';
+  duration: number;
+  intensity?: number;
+  damagePerTurn?: number;
+  ppLossPerTurn?: number;
+  ppStealPerTurn?: number;
+  healPerTurn?: number;
+  chance?: number;
+  successChance?: number;
+}
+
 interface MoveEditData {
   id: string;
   name: string;
-  damage: number | { min: number; max: number };
+  type?: 'attack' | 'defense' | 'heal';
+  damage?: number | { min: number; max: number };
+  damageRange?: { min: number; max: number };
+  baseDamage?: number;
+  healingRange?: { min: number; max: number };
   description?: string;
-  statusEffect?: {
-    type: 'burn' | 'freeze' | 'confuse' | 'none';
-    duration: number;
-    intensity?: number; // For burn damage per turn, or confuse chance percentage
-  };
+  statusEffect?: StatusEffect; // Legacy support - single effect
+  statusEffects?: StatusEffect[]; // New - multiple effects
 }
 
 const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
@@ -40,8 +53,27 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (editingMoves && selectedManifest) {
       console.log('Rendering move editing interface for manifest:', selectedManifest, 'editingMoves:', editingMoves);
+      
+      // Initialize moveEdits with existing overrides when editing starts
+      const manifestMoves = getManifestMoves(selectedManifest);
+      const initialEdits: { [key: string]: MoveEditData } = {};
+      
+      manifestMoves.forEach(move => {
+        const existingOverride = existingOverrides[move.id] as MoveEditData | undefined;
+        if (existingOverride) {
+          initialEdits[move.id] = {
+            ...existingOverride,
+            id: move.id,
+            name: existingOverride.name || move.id
+          };
+        }
+      });
+      
+      if (Object.keys(initialEdits).length > 0) {
+        setMoveEdits(prev => ({ ...prev, ...initialEdits }));
+      }
     }
-  }, [editingMoves, selectedManifest]);
+  }, [editingMoves, selectedManifest, existingOverrides]);
 
   const loadExistingOverrides = async () => {
     setLoading(true);
@@ -80,7 +112,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
   const getManifestMoves = (manifestId: string) => {
     // Map manifest IDs to their associated moves based on the comments in MOVE_DAMAGE_VALUES
     const manifestMoveMapping: { [key: string]: string[] } = {
-      'reading': ['Emotional Read', 'Pattern Shield'],
+      'reading': ['Read the Room', 'Pattern Shield'],
       'writing': ['Reality Rewrite', 'Narrative Barrier'],
       'drawing': ['Illusion Strike', 'Mirage Shield'],
       'athletics': ['Flow Strike', 'Rhythm Guard'],
@@ -101,12 +133,16 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
         // Check if there's an existing override for this move
         const override = existingOverrides[moveName];
         
+                // Support both legacy single effect and new multiple effects
+                const effects = override?.statusEffects || (override?.statusEffect ? [override.statusEffect] : []);
+        
                 manifestMoves.push({
                   id: moveName,
                   name: override?.name || moveName,
                   damage: override?.damage || moveData.damage,
                   description: override?.description || '',
-                  statusEffect: override?.statusEffect
+                  statusEffect: override?.statusEffect, // Legacy support
+                  statusEffects: effects.length > 0 ? effects : undefined
                 });
       }
     });
@@ -114,17 +150,121 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
     return manifestMoves;
   };
 
-  const handleMoveEdit = (moveId: string, field: string, value: string | number) => {
-    setMoveEdits(prev => ({
+  const handleMoveEdit = (moveId: string, field: string, value: any) => {
+    setMoveEdits(prev => {
+      const currentMove = prev[moveId] || {};
+      
+      // Handle status effect updates (can be an object) - legacy support
+      if (field === 'statusEffect') {
+        // Convert to array
+        return {
       ...prev,
       [moveId]: {
-        ...prev[moveId],
+            ...currentMove,
         id: moveId,
-        name: prev[moveId]?.name || moveId,
-        damage: prev[moveId]?.damage || 0,
+            name: currentMove.name || moveId,
+            damage: currentMove.damage || 0,
+            statusEffect: value,
+            statusEffects: value && value.type !== 'none' ? [value] : []
+          }
+        };
+      }
+      
+      if (field === 'statusEffects') {
+        return {
+          ...prev,
+          [moveId]: {
+            ...currentMove,
+            id: moveId,
+            name: currentMove.name || moveId,
+            damage: currentMove.damage || 0,
+            statusEffects: value
+          }
+        };
+      }
+      
+      // Handle healing range updates
+      if (field === 'healingRange') {
+        return {
+          ...prev,
+          [moveId]: {
+            ...currentMove,
+            id: moveId,
+            name: currentMove.name || moveId,
+            damage: currentMove.damage || 0,
+            healingRange: value
+          }
+        };
+      }
+      
+      // Default: update the field directly
+      return {
+        ...prev,
+        [moveId]: {
+          ...currentMove,
+          id: moveId,
+          name: currentMove.name || moveId,
+          damage: currentMove.damage || 0,
         [field]: value
       }
-    }));
+      };
+    });
+  };
+
+  const getMoveEffects = (moveId: string): StatusEffect[] => {
+    // First check moveEdits (current edits)
+    const move = moveEdits[moveId];
+    if (move?.statusEffects) {
+      return move.statusEffects;
+    }
+    if (move?.statusEffect && move.statusEffect.type !== 'none') {
+      return [move.statusEffect];
+    }
+    
+    // Then check existingOverrides (saved in database)
+    const existingOverride = existingOverrides[moveId] as MoveEditData | undefined;
+    if (existingOverride?.statusEffects) {
+      return existingOverride.statusEffects;
+    }
+    if (existingOverride?.statusEffect && existingOverride.statusEffect.type !== 'none') {
+      return [existingOverride.statusEffect];
+    }
+    
+    // Finally check original move template
+    const originalMove = getManifestMoves(selectedManifest || '').find(m => m.id === moveId);
+    if (originalMove?.statusEffects) {
+      return originalMove.statusEffects;
+    }
+    if (originalMove?.statusEffect && originalMove.statusEffect.type !== 'none') {
+      return [originalMove.statusEffect];
+    }
+    return [];
+  };
+
+  const addStatusEffect = (moveId: string) => {
+    const currentEffects = getMoveEffects(moveId);
+    const newEffect: StatusEffect = {
+      type: 'burn',
+      duration: 1,
+      successChance: 100
+    };
+    handleMoveEdit(moveId, 'statusEffects', [...currentEffects, newEffect]);
+  };
+
+  const removeStatusEffect = (moveId: string, effectIndex: number) => {
+    const currentEffects = getMoveEffects(moveId);
+    const newEffects = currentEffects.filter((_, index) => index !== effectIndex);
+    handleMoveEdit(moveId, 'statusEffects', newEffects);
+  };
+
+  const updateStatusEffect = (moveId: string, effectIndex: number, field: keyof StatusEffect, value: any) => {
+    const currentEffects = getMoveEffects(moveId);
+    const newEffects = [...currentEffects];
+    newEffects[effectIndex] = {
+      ...newEffects[effectIndex],
+      [field]: value
+    };
+    handleMoveEdit(moveId, 'statusEffects', newEffects);
   };
 
   const handleDamageRangeEdit = (moveId: string, rangeField: 'min' | 'max', value: number) => {
@@ -170,7 +310,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
     });
   };
 
-  const handleStatusEffectEdit = (moveId: string, field: 'type' | 'duration' | 'intensity', value: string | number) => {
+  const handleStatusEffectEdit = (moveId: string, field: 'type' | 'duration' | 'intensity' | 'successChance', value: string | number) => {
     setMoveEdits(prev => {
       const currentMove = prev[moveId];
       
@@ -226,6 +366,25 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
     });
   };
 
+  const removeUndefined = (obj: any): any => {
+    if (obj === null || obj === undefined) {
+      return null;
+    }
+    if (Array.isArray(obj)) {
+      return obj.map(item => removeUndefined(item));
+    }
+    if (typeof obj === 'object' && obj.constructor === Object) {
+      const cleaned: any = {};
+      for (const key in obj) {
+        if (obj.hasOwnProperty(key) && obj[key] !== undefined) {
+          cleaned[key] = removeUndefined(obj[key]);
+        }
+      }
+      return cleaned;
+    }
+    return obj;
+  };
+
   const saveMoveChanges = async () => {
     try {
       // For now, we'll save to a Firestore collection for admin move overrides
@@ -236,16 +395,21 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
       // Create a document with the move overrides
       const moveOverridesRef = doc(collection(db, 'adminSettings'), 'moveOverrides');
       
+      // Merge existing overrides with new edits, prioritizing new edits
       const overridesData = {
+        ...existingOverrides,
         ...moveEdits,
         lastUpdated: serverTimestamp(),
         updatedBy: 'admin' // You could get this from auth context
       };
       
-      await setDoc(moveOverridesRef, overridesData);
+      // Remove undefined values before saving (Firestore doesn't allow undefined)
+      const cleanedData = removeUndefined(overridesData);
+      
+      await setDoc(moveOverridesRef, cleanedData);
       
       console.log('Move changes saved to database:', moveEdits);
-      console.log('Overrides data saved:', overridesData);
+      console.log('Overrides data saved:', cleanedData);
       alert('✅ Move changes saved successfully! These will override the default values in battle.');
       
       // Reset editing state
@@ -499,8 +663,25 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                         e.stopPropagation();
                         console.log('Edit Moves button clicked for manifest:', manifest.id);
                         console.log('Current selectedManifest:', selectedManifest);
+                        
+                        // Initialize moveEdits with existing overrides for this manifest's moves
+                        const manifestMoves = getManifestMoves(manifest.id);
+                        const initialEdits: { [key: string]: MoveEditData } = {};
+                        
+                        manifestMoves.forEach(move => {
+                          const existingOverride = existingOverrides[move.id] as MoveEditData | undefined;
+                          if (existingOverride) {
+                            initialEdits[move.id] = {
+                              ...existingOverride,
+                              id: move.id,
+                              name: existingOverride.name || move.id
+                            };
+                          }
+                        });
+                        
+                        setMoveEdits(initialEdits);
                         setEditingMoves(true);
-                        console.log('editingMoves set to true');
+                        console.log('editingMoves set to true, initialized with:', initialEdits);
                       }}
                       style={{
                         marginTop: '0.5rem',
@@ -561,7 +742,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                   onClick={() => {
                     // Reset all moves for this manifest to default values
                     const manifestMoveMapping: { [key: string]: string[] } = {
-                      'reading': ['Emotional Read', 'Pattern Shield'],
+                      'reading': ['Read the Room', 'Pattern Shield'],
                       'writing': ['Reality Rewrite', 'Narrative Barrier'],
                       'drawing': ['Illusion Strike', 'Mirage Shield'],
                       'athletics': ['Flow Strike', 'Rhythm Guard'],
@@ -637,14 +818,14 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                       )}
                     </div>
                   
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
                     <div>
-                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem' }}>
-                        Move Name:
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                        Move Name
                       </label>
                       <input
                         type="text"
-                        value={moveEdits[move.id]?.name || move.name}
+                        value={moveEdits[move.id]?.name || (existingOverrides[move.id] as MoveEditData | undefined)?.name || move.name}
                         onChange={(e) => handleMoveEdit(move.id, 'name', e.target.value)}
                         style={{
                           width: '100%',
@@ -653,77 +834,173 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                           border: '1px solid rgba(255,255,255,0.3)',
                           borderRadius: '0.25rem',
                           color: 'white',
-                          fontSize: '0.9rem'
+                          fontSize: '0.875rem'
                         }}
                       />
-                      {hasOverride && (
-                        <div style={{ fontSize: '0.7rem', color: '#10B981', marginTop: '0.25rem' }}>
-                          Original: {originalMove ? Object.keys(MOVE_DAMAGE_VALUES).find(k => k === move.id) : move.id}
                         </div>
-                      )}
+
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                        Type
+                      </label>
+                      <select
+                        value={moveEdits[move.id]?.type || 'attack'}
+                        onChange={(e) => handleMoveEdit(move.id, 'type', e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          background: 'rgba(255,255,255,0.1)',
+                          border: '1px solid rgba(255,255,255,0.3)',
+                          borderRadius: '0.25rem',
+                          color: 'white',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        <option value="attack" style={{ background: '#1f2937', color: 'white' }}>Attack</option>
+                        <option value="defense" style={{ background: '#1f2937', color: 'white' }}>Defense</option>
+                        <option value="heal" style={{ background: '#1f2937', color: 'white' }}>Heal</option>
+                      </select>
+                    </div>
                     </div>
                     
+                  {(moveEdits[move.id]?.type || 'attack') === 'attack' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
                     <div>
-                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem' }}>
-                        Damage Range:
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Damage Range (Min)
                       </label>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '0.5rem', alignItems: 'center' }}>
                         <input
                           type="number"
-                          placeholder="Min"
                           value={(() => {
                             const damage = moveEdits[move.id]?.damage || move.damage;
                             if (typeof damage === 'object') {
                               return damage.min || 0;
                             }
-                            return damage || 0;
+                            return typeof damage === 'number' ? damage : 0;
                           })()}
                           onChange={(e) => handleDamageRangeEdit(move.id, 'min', parseInt(e.target.value) || 0)}
                           style={{
+                            width: '100%',
                             padding: '0.5rem',
                             background: 'rgba(255,255,255,0.1)',
                             border: '1px solid rgba(255,255,255,0.3)',
                             borderRadius: '0.25rem',
                             color: 'white',
-                            fontSize: '0.9rem'
+                            fontSize: '0.875rem'
                           }}
                         />
-                        <span style={{ color: '#6b7280', fontSize: '0.8rem' }}>to</span>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Damage Range (Max)
+                        </label>
                         <input
                           type="number"
-                          placeholder="Max"
                           value={(() => {
                             const damage = moveEdits[move.id]?.damage || move.damage;
                             if (typeof damage === 'object') {
                               return damage.max || 0;
                             }
-                            return damage || 0;
+                            return typeof damage === 'number' ? damage : 0;
                           })()}
                           onChange={(e) => handleDamageRangeEdit(move.id, 'max', parseInt(e.target.value) || 0)}
                           style={{
+                            width: '100%',
                             padding: '0.5rem',
                             background: 'rgba(255,255,255,0.1)',
                             border: '1px solid rgba(255,255,255,0.3)',
                             borderRadius: '0.25rem',
                             color: 'white',
-                            fontSize: '0.9rem'
+                            fontSize: '0.875rem'
                           }}
                         />
                       </div>
-                      {hasOverride && originalMove && (
-                        <div style={{ fontSize: '0.7rem', color: '#10B981', marginTop: '0.25rem' }}>
-                          Original: {originalMove.damage}
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Base Damage (if no range)
+                        </label>
+                        <input
+                          type="number"
+                          value={(() => {
+                            const damage = moveEdits[move.id]?.damage || move.damage;
+                            if (typeof damage === 'number') {
+                              return damage;
+                            }
+                            return 0;
+                          })()}
+                          onChange={(e) => handleMoveEdit(move.id, 'damage', parseInt(e.target.value) || 0)}
+                          disabled={typeof (moveEdits[move.id]?.damage || move.damage) === 'object'}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: typeof (moveEdits[move.id]?.damage || move.damage) === 'object' ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.1)',
+                            border: '1px solid rgba(255,255,255,0.3)',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            fontSize: '0.875rem'
+                          }}
+                        />
+                      </div>
                         </div>
                       )}
+
+                  {(moveEdits[move.id]?.type || 'attack') === 'heal' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Healing Range (Min)
+                        </label>
+                        <input
+                          type="number"
+                          value={moveEdits[move.id]?.healingRange?.min || 0}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value) || 0;
+                            const currentRange = moveEdits[move.id]?.healingRange || { min: 0, max: 0 };
+                            handleMoveEdit(move.id, 'healingRange', { ...currentRange, min: value });
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(255,255,255,0.1)',
+                            border: '1px solid rgba(255,255,255,0.3)',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            fontSize: '0.875rem'
+                          }}
+                        />
                     </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Healing Range (Max)
+                        </label>
+                        <input
+                          type="number"
+                          value={moveEdits[move.id]?.healingRange?.max || 0}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value) || 0;
+                            const currentRange = moveEdits[move.id]?.healingRange || { min: 0, max: 0 };
+                            handleMoveEdit(move.id, 'healingRange', { ...currentRange, max: value });
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(255,255,255,0.1)',
+                            border: '1px solid rgba(255,255,255,0.3)',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            fontSize: '0.875rem'
+                          }}
+                        />
                   </div>
+                    </div>
+                  )}
                   
                   <div style={{ marginTop: '0.5rem' }}>
                     <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem' }}>
                       Description:
                     </label>
                     <textarea
-                      value={moveEdits[move.id]?.description || move.description || ''}
+                      value={moveEdits[move.id]?.description || (existingOverrides[move.id] as MoveEditData | undefined)?.description || move.description || ''}
                       onChange={(e) => handleMoveEdit(move.id, 'description', e.target.value)}
                       rows={2}
                       style={{
@@ -739,17 +1016,45 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                     />
                   </div>
                   
-                  {/* Status Effect Controls */}
-                  <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '0.5rem', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  {/* Status Effects Editor - Multiple Effects */}
+                  <div style={{ marginTop: '1rem', padding: '1rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                      <label style={{ fontSize: '1rem', fontWeight: 'bold', color: '#fbbf24' }}>
-                        Status Effect:
-                      </label>
+                      <h5 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>
+                        Status Effects
+                      </h5>
                       <button
-                        onClick={() => handleRemoveStatusEffect(move.id)}
+                        onClick={() => addStatusEffect(move.id)}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          background: '#10b981',
+                          border: 'none',
+                          borderRadius: '0.25rem',
+                          color: 'white',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        + Add Effect
+                      </button>
+                    </div>
+                    
+                    {getMoveEffects(move.id).length === 0 ? (
+                      <div style={{ color: '#92400e', fontSize: '0.875rem', fontStyle: 'italic', textAlign: 'center', padding: '1rem' }}>
+                        No effects. Click "Add Effect" to add one.
+                      </div>
+                    ) : (
+                      getMoveEffects(move.id).map((effect, effectIndex) => (
+                        <div key={effectIndex} style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.3)', borderRadius: '0.5rem', border: '1px solid rgba(0,0,0,0.1)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>
+                              Effect {effectIndex + 1}
+                            </span>
+                            <button
+                              onClick={() => removeStatusEffect(move.id, effectIndex)}
                         style={{
                           padding: '0.25rem 0.5rem',
-                          background: '#dc2626',
+                                background: '#ef4444',
                           border: 'none',
                           borderRadius: '0.25rem',
                           color: 'white',
@@ -757,102 +1062,220 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                           cursor: 'pointer'
                         }}
                       >
-                        Remove Effect
+                              Remove
                       </button>
                     </div>
-                    
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                      {/* Status Effect Type */}
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
                       <div>
-                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>
-                          Effect Type:
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Effect Type
                         </label>
                         <select
-                          value={moveEdits[move.id]?.statusEffect?.type || 'none'}
-                          onChange={(e) => handleStatusEffectEdit(move.id, 'type', e.target.value as 'burn' | 'freeze' | 'confuse' | 'none')}
+                                        value={effect.type || 'none'}
+                                        onChange={(e) => {
+                                          const effectType = e.target.value;
+                                          updateStatusEffect(move.id, effectIndex, 'type', effectType);
+                                          if (effectType === 'none') {
+                                            updateStatusEffect(move.id, effectIndex, 'intensity', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'damagePerTurn', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'ppLossPerTurn', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'ppStealPerTurn', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'healPerTurn', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'chance', undefined);
+                                          }
+                                          if (effectType !== 'none' && effect.successChance === undefined) {
+                                            updateStatusEffect(move.id, effectIndex, 'successChance', 100);
+                                          }
+                                        }}
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                                          border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
-                            fontSize: '0.9rem'
-                          }}
-                        >
-                          <option value="none" style={{ background: '#1f2937', color: 'white' }}>⚪ None</option>
-                          <option value="burn" style={{ background: '#1f2937', color: 'white' }}>🔥 Burn</option>
-                          <option value="freeze" style={{ background: '#1f2937', color: 'white' }}>❄️ Freeze</option>
-                          <option value="confuse" style={{ background: '#1f2937', color: 'white' }}>🌀 Confuse</option>
+                                          fontSize: '0.875rem'
+                                        }}
+                                      >
+                                        <option value="none">None</option>
+                                        <option value="burn">Burn (Damage over time)</option>
+                                        <option value="stun">Stun (Skip turn)</option>
+                                        <option value="bleed">Bleed (Lose PP each turn)</option>
+                                        <option value="poison">Poison (Minor damage over time, stacks)</option>
+                                        <option value="confuse">Confuse (50% wrong move/attack self)</option>
+                                        <option value="drain">Drain (Steal PP and heal each turn)</option>
+                                        <option value="cleanse">Cleanse (Removes all negative effects)</option>
+                                        <option value="freeze">Freeze (Legacy)</option>
                         </select>
                       </div>
-                      
-                      {/* Duration */}
                       <div>
-                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>
-                          Duration (turns):
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Duration (Turns)
                         </label>
                         <input
                           type="number"
-                          min="1"
-                          max="10"
-                          value={moveEdits[move.id]?.statusEffect?.duration || 1}
-                          onChange={(e) => handleStatusEffectEdit(move.id, 'duration', parseInt(e.target.value) || 1)}
+                                        min="0"
+                                        value={effect.duration || 0}
+                                        onChange={(e) => updateStatusEffect(move.id, effectIndex, 'duration', parseInt(e.target.value) || 0)}
+                                        disabled={effect.type === 'none'}
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                                          border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
-                            fontSize: '0.9rem'
+                                          fontSize: '0.875rem',
+                                          background: effect.type === 'none' ? '#f3f4f6' : 'white'
                           }}
                         />
                       </div>
-                      
-                      {/* Intensity */}
                       <div>
-                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>
-                          {moveEdits[move.id]?.statusEffect?.type === 'burn' ? 'Damage/Turn:' : 
-                           moveEdits[move.id]?.statusEffect?.type === 'confuse' ? 'Chance %:' : 'Strength:'}
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Success Chance (%)
                         </label>
                         <input
                           type="number"
-                          min="1"
-                          max={moveEdits[move.id]?.statusEffect?.type === 'confuse' ? '100' : '50'}
-                          value={moveEdits[move.id]?.statusEffect?.intensity || (moveEdits[move.id]?.statusEffect?.type === 'confuse' ? 50 : 5)}
-                          onChange={(e) => handleStatusEffectEdit(move.id, 'intensity', parseInt(e.target.value) || (moveEdits[move.id]?.statusEffect?.type === 'confuse' ? 50 : 5))}
+                                        min="0"
+                                        max="100"
+                                        value={effect.successChance !== undefined ? effect.successChance : 100}
+                                        onChange={(e) => updateStatusEffect(move.id, effectIndex, 'successChance', parseInt(e.target.value) || 100)}
+                                        disabled={effect.type === 'none'}
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                                          border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
-                            fontSize: '0.9rem'
+                                          fontSize: '0.875rem',
+                                          background: effect.type === 'none' ? '#f3f4f6' : 'white'
                           }}
                         />
                       </div>
                     </div>
                     
-                    {/* Status Effect Description */}
-                    <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#d1d5db', fontStyle: 'italic' }}>
-                      {moveEdits[move.id]?.statusEffect?.type === 'burn' && 
-                        `Deals ${moveEdits[move.id]?.statusEffect?.intensity || 5} damage per turn for ${moveEdits[move.id]?.statusEffect?.duration || 1} turns.`
-                      }
-                      {moveEdits[move.id]?.statusEffect?.type === 'freeze' && 
-                        `Skips opponent's turn for ${moveEdits[move.id]?.statusEffect?.duration || 1} turns.`
-                      }
-                      {moveEdits[move.id]?.statusEffect?.type === 'confuse' && 
-                        `${moveEdits[move.id]?.statusEffect?.intensity || 50}% chance to use wrong move or attack self for ${moveEdits[move.id]?.statusEffect?.duration || 1} turns.`
-                      }
-                      {moveEdits[move.id]?.statusEffect?.type === 'none' && 
-                        `This move has no status effect.`
-                      }
-                      {!moveEdits[move.id]?.statusEffect && 
-                        `This move has no status effect.`
-                      }
+                                  {/* Effect-specific fields */}
+                                  {(effect.type === 'burn' || effect.type === 'poison') && (
+                                    <div style={{ marginBottom: '0.5rem' }}>
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Damage Per Turn
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={effect.damagePerTurn || effect.intensity || ''}
+                                        onChange={(e) => {
+                                          const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
+                                          updateStatusEffect(move.id, effectIndex, 'damagePerTurn', value);
+                                          updateStatusEffect(move.id, effectIndex, 'intensity', value);
+                                        }}
+                                        style={{
+                                          width: '100%',
+                                          padding: '0.5rem',
+                                          border: '1px solid #d1d5db',
+                                          borderRadius: '0.25rem',
+                                          fontSize: '0.875rem'
+                                        }}
+                                      />
                     </div>
+                                  )}
+
+                                  {effect.type === 'bleed' && (
+                                    <div style={{ marginBottom: '0.5rem' }}>
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Health/PP Loss per turn
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={effect.ppLossPerTurn || effect.intensity || ''}
+                                        onChange={(e) => {
+                                          const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
+                                          updateStatusEffect(move.id, effectIndex, 'ppLossPerTurn', value);
+                                          updateStatusEffect(move.id, effectIndex, 'intensity', value);
+                                        }}
+                                        style={{
+                                          width: '100%',
+                                          padding: '0.5rem',
+                                          border: '1px solid #d1d5db',
+                                          borderRadius: '0.25rem',
+                                          fontSize: '0.875rem'
+                                        }}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {effect.type === 'confuse' && (
+                                    <div style={{ marginBottom: '0.5rem' }}>
+                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                        Confusion Chance (%)
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        value={effect.chance || effect.intensity || 50}
+                                        onChange={(e) => {
+                                          const value = e.target.value === '' ? 50 : parseInt(e.target.value) || 50;
+                                          updateStatusEffect(move.id, effectIndex, 'chance', value);
+                                          updateStatusEffect(move.id, effectIndex, 'intensity', value);
+                                        }}
+                                        style={{
+                                          width: '100%',
+                                          padding: '0.5rem',
+                                          border: '1px solid #d1d5db',
+                                          borderRadius: '0.25rem',
+                                          fontSize: '0.875rem'
+                                        }}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {effect.type === 'drain' && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                                      <div>
+                                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                          PP Steal Per Turn
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={effect.ppStealPerTurn || effect.intensity || ''}
+                                          onChange={(e) => {
+                                            const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
+                                            updateStatusEffect(move.id, effectIndex, 'ppStealPerTurn', value);
+                                            updateStatusEffect(move.id, effectIndex, 'intensity', value);
+                                          }}
+                                          style={{
+                                            width: '100%',
+                                            padding: '0.5rem',
+                                            border: '1px solid #d1d5db',
+                                            borderRadius: '0.25rem',
+                                            fontSize: '0.875rem'
+                                          }}
+                                        />
+                                      </div>
+                                      <div>
+                                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                          Heal Per Turn (Health/Shield)
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={effect.healPerTurn || ''}
+                                          onChange={(e) => {
+                                            const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
+                                            updateStatusEffect(move.id, effectIndex, 'healPerTurn', value);
+                                          }}
+                                          style={{
+                                            width: '100%',
+                                            padding: '0.5rem',
+                                            border: '1px solid #d1d5db',
+                                            borderRadius: '0.25rem',
+                                            fontSize: '0.875rem'
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            )}
                   </div>
                 </div>
                 );

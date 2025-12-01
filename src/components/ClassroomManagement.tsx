@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import StudentListItem from './StudentListItem';
@@ -265,13 +265,59 @@ const ClassroomManagement: React.FC = () => {
     if (!newClassroom.name.trim()) return;
 
     try {
-      await addDoc(collection(db, 'classrooms'), {
+      // Create the classroom
+      const classroomRef = await addDoc(collection(db, 'classrooms'), {
         name: newClassroom.name.trim(),
         description: newClassroom.description.trim(),
         maxStudents: newClassroom.maxStudents,
         students: [],
         createdAt: new Date()
       });
+
+      const newClassroomId = classroomRef.id;
+
+      // Automatically add all admins as scorekeepers for this new class
+      try {
+        // Find all users with admin role
+        const userRolesQuery = query(
+          collection(db, 'userRoles'),
+          where('role', '==', 'admin')
+        );
+        const adminRolesSnapshot = await getDocs(userRolesQuery);
+        
+        // Update each admin's role to include scorekeeper permissions for this class
+        const updatePromises = adminRolesSnapshot.docs.map(async (adminRoleDoc) => {
+          const adminRoleData = adminRoleDoc.data();
+          const adminId = adminRoleDoc.id;
+          
+          // Get existing classIds or create new array
+          const existingClassIds = adminRoleData.classIds || [];
+          
+          // Add new classId if not already present
+          if (!existingClassIds.includes(newClassroomId)) {
+            const updatedClassIds = [...existingClassIds, newClassroomId];
+            
+            // Update the admin's role document to include scorekeeper classIds
+            await updateDoc(doc(db, 'userRoles', adminId), {
+              classIds: updatedClassIds,
+              // Keep existing role as admin, but add scorekeeper permissions
+              permissions: {
+                ...adminRoleData.permissions,
+                canViewAllStudents: true,
+                canSubmitPPChanges: true
+              }
+            });
+            
+            console.log(`✅ Added admin ${adminId} as scorekeeper for class ${newClassroomId}`);
+          }
+        });
+        
+        await Promise.all(updatePromises);
+        console.log(`✅ All admins automatically added as scorekeepers for new class: ${newClassroom.name.trim()}`);
+      } catch (adminUpdateError) {
+        console.error('Error adding admins as scorekeepers:', adminUpdateError);
+        // Don't fail the classroom creation if admin update fails
+      }
 
       setNewClassroom({ name: '', description: '', maxStudents: 30 });
       setShowCreateModal(false);

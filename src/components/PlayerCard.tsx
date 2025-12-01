@@ -5,12 +5,16 @@ interface PlayerCardProps {
   name: string;
   photoURL: string;
   powerPoints: number;
+  truthMetal?: number;
   manifest: string;
   level: number;
   rarity: number; // 1-5
   style: string; // e.g. 'Fire', 'Water', etc.
   description: string;
   cardBgColor?: string;
+  cardFrameShape?: 'circular' | 'rectangular';
+  cardBorderColor?: string;
+  cardImageBorderColor?: string;
   moves?: Array<{ name: string; description: string; icon: string }>;
   badges?: Array<{ id: string; name: string; imageUrl: string; description: string; earnedAt: Date | any }>;
   xp?: number;
@@ -58,12 +62,16 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   name,
   photoURL,
   powerPoints,
+  truthMetal = 0,
   manifest,
   level,
   rarity,
   style,
   description,
   cardBgColor = 'linear-gradient(135deg, #e0e7ff 0%, #fbbf24 100%)',
+  cardFrameShape = 'circular',
+  cardBorderColor = '#a78bfa',
+  cardImageBorderColor = '#a78bfa',
   moves = [],
   badges = [],
   xp = 0,
@@ -277,7 +285,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               height: '100%',
               backfaceVisibility: 'hidden',
               background: background,
-              border: '4px solid #4f46e5',
+              border: `4px solid ${cardBorderColor}`,
               borderRadius: 24,
               boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
               display: 'flex',
@@ -287,33 +295,63 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               transform: 'rotateY(0deg)',
             }}
           >
-            {/* Top Row: Name (left), Level/PP/Stars (right) */}
-            <div style={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: 8 }}>
-              {/* Name top left */}
-              <div style={{ flex: 1, fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.1, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {name}
-                {ppBoostStatus.isActive && (
-                  <span 
-                    style={{ 
-                      fontSize: '16px',
-                      color: '#f59e0b',
-                      fontWeight: 'bold',
-                      textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
-                      animation: 'pulse 2s infinite'
-                    }}
-                    title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
-                  >
-                    ⚡
-                  </span>
-                )}
+            {/* Top Row: Name, PP, TM, Level all aligned */}
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: 4 }}>
+              {/* First row: Name, PP, TM, Level all on same line */}
+              <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+                {/* Player Name */}
+                <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {name}
+                  {ppBoostStatus.isActive && (
+                    <span 
+                      style={{ 
+                        fontSize: '16px',
+                        color: '#f59e0b',
+                        fontWeight: 'bold',
+                        textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                        animation: 'pulse 2s infinite'
+                      }}
+                      title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                    >
+                      ⚡
+                    </span>
+                  )}
+                </div>
+                {/* PP and TM badges */}
+                <span 
+                  style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, display: 'flex', alignItems: 'center', gap: '4px' }} 
+                  title="Power Points"
+                >
+                  PP: {powerPoints}
+                  {ppBoostStatus.isActive && (
+                    <span 
+                      style={{ 
+                        fontSize: '12px',
+                        color: '#f59e0b',
+                        fontWeight: 'bold',
+                        textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                        animation: 'pulse 2s infinite'
+                      }}
+                      title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                    >
+                      ×2
+                    </span>
+                  )}
+                </span>
+                <span 
+                  style={{ background: '#9ca3af', color: '#ffffff', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, border: '1px solid #6b7280', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }}
+                  title="Truth Metal Shards"
+                >
+                  TM: {truthMetal}
+                </span>
+                {/* Level badge */}
+                <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, marginLeft: 'auto' }}>Lv. {level}</span>
               </div>
-              {/* Level, PP, Stars top right */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14 }}>Lv. {level}</span>
-                <span style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14 }}>PP: {powerPoints}</span>
-                <span>{Array.from({ length: rarity }).map((_, i) => (
-                  <span key={i} style={{ color: '#fbbf24', fontSize: 18, marginLeft: 1 }}>★</span>
-                ))}</span>
+              {/* Second row: Rarity stars under name */}
+              <div style={{ display: 'flex', alignItems: 'center', marginTop: -4 }}>
+                {Array.from({ length: rarity }).map((_, i) => (
+                  <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
+                ))}
               </div>
             </div>
 
@@ -339,9 +377,9 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   style={{
                     width: 120,
                     height: 120,
-                    borderRadius: '50%',
+                    borderRadius: cardFrameShape === 'circular' ? '50%' : '0.75rem',
                     objectFit: 'cover',
-                    border: '4px solid #a78bfa',
+                    border: `4px solid ${cardImageBorderColor}`,
                     marginBottom: 16,
                     background: '#fff',
                   }}
@@ -367,8 +405,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 style={{
                   width: 120,
                   height: 120,
-                  borderRadius: '50%',
-                  border: '4px solid #a78bfa',
+                  borderRadius: cardFrameShape === 'circular' ? '50%' : '0.75rem',
+                  border: `4px solid ${cardImageBorderColor}`,
                   marginBottom: 16,
                   background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
                   display: (photoURL && photoURL.trim() !== '') ? 'none' : 'flex',
@@ -464,7 +502,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               height: '100%',
               backfaceVisibility: 'hidden',
               background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 100%)',
-              border: '4px solid #4f46e5',
+              border: `4px solid ${cardBorderColor}`,
               borderRadius: 24,
               boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
               display: 'flex',

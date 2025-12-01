@@ -36,7 +36,7 @@ const Login = () => {
       } else {
         await signup(email, password, displayName);
       }
-      navigate('/');
+      navigate('/profile');
     } catch (error: any) {
       setError(error.message || 'An error occurred');
     } finally {
@@ -50,7 +50,7 @@ const Login = () => {
 
     try {
       await loginWithGoogle();
-      navigate('/');
+      navigate('/profile');
     } catch (error: any) {
       setError(error.message || 'An error occurred');
     } finally {

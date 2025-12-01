@@ -6,6 +6,8 @@ import { useBattle } from '../context/BattleContext';
 import { STORY_EPISODES, BossData } from '../types/story';
 import { Move, ActionCard } from '../types/battle';
 import EpisodeRewardsModal from '../components/EpisodeRewardsModal';
+import { trackMoveUsage } from '../utils/manifestTracking';
+import { getMoveNameSync } from '../utils/moveOverrides';
 
 const StoryEpisodeBattle: React.FC = () => {
   const { episodeId } = useParams<{ episodeId: string }>();
@@ -95,6 +97,14 @@ const StoryEpisodeBattle: React.FC = () => {
     if (playerEnergy < move.cost) {
       addToBattleLog(`⚠️ Not enough energy! Need ${move.cost}, have ${playerEnergy}`);
       return;
+    }
+
+    // Track move usage for manifest progress
+    const moveName = getMoveNameSync(move.name) || move.name;
+    if (currentUser?.uid) {
+      trackMoveUsage(currentUser.uid, moveName).catch(err => {
+        console.error('Error tracking move usage:', err);
+      });
     }
 
     // Consume energy

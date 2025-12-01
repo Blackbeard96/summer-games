@@ -1958,7 +1958,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     
     const unlockedMoves = moves.filter(move => move.unlocked).length;
     const unlockedCards = actionCards.filter(card => card.unlocked).length;
-    const vaultStrength = vault.shieldStrength + vault.firewall;
+    const vaultStrength = vault.shieldStrength + (vault.generatorLevel || 1) * 5; // Use generator level instead of firewall
     const level = Math.floor((vault.currentPP / vault.capacity) * 10);
     
     return unlockedMoves * 10 + unlockedCards * 15 + vaultStrength + level;

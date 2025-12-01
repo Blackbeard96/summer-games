@@ -43,8 +43,14 @@ const BattleAnimations: React.FC<BattleAnimationsProps> = ({
       }, duration);
       
       return () => clearTimeout(timer);
+    } else {
+      // Reset animation state when move is null
+      setShowAnimation(false);
+      setAnimationType('');
+      setOverriddenMoveName('');
     }
-  }, [move, onAnimationComplete]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [move]); // Removed onAnimationComplete from deps to prevent infinite loop
 
   const getAnimationType = (move: Move): string => {
     // Determine animation type based on move properties
