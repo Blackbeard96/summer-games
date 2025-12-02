@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db, storage, auth } from '../firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, query, where, writeBatch, addDoc, serverTimestamp, onSnapshot, deleteField } from 'firebase/firestore';
 import { ref, deleteObject, getDownloadURL } from 'firebase/storage';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import BadgeManager from '../components/BadgeManager';
@@ -389,6 +389,112 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const resetAllMovesToLevel1 = async () => {
+    if (!window.confirm('⚠️ WARNING: This will reset ALL Manifest and Elemental Moves to Level 1 for ALL students:\n\n- All moves\' masteryLevel will be reset to 1\n- Move stats will be restored to base values\n- This affects both Manifest and Elemental moves\n\nThis action CANNOT be undone. Are you absolutely sure?')) {
+      return;
+    }
+    
+    if (!window.confirm('This is your final warning. This will affect ALL players. Continue?')) {
+      return;
+    }
+    
+    setStoryProgressLoading(true);
+    try {
+      console.log('Starting moves reset for all students...');
+      
+      // Get all students
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const allStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      console.log(`Resetting moves for ${allStudents.length} students...`);
+      
+      // Reset moves for each student
+      const updatePromises = allStudents.map(async (student) => {
+        try {
+          console.log(`Resetting moves for ${student.displayName || student.email || student.id} (${student.id})`);
+          
+          // Reset move upgrades (reset masteryLevel to 1 and restore base stats)
+          try {
+            const movesRef = doc(db, 'battleMoves', student.id);
+            const movesDoc = await getDoc(movesRef);
+            
+            if (movesDoc.exists()) {
+              const movesData = movesDoc.data();
+              const currentMoves = movesData.moves || [];
+              
+              // Reset all manifest and elemental moves to level 1 with base stats
+              const resetMoves = currentMoves.map((move: any) => {
+                // Only reset manifest and elemental moves, skip system moves
+                if (move.category !== 'manifest' && move.category !== 'elemental') {
+                  return move; // Keep system moves unchanged
+                }
+                
+                // Find the template for this move
+                const template = MOVE_TEMPLATES.find(t => t.name === move.name);
+                if (template) {
+                  return {
+                    ...template,
+                    id: move.id,
+                    unlocked: move.unlocked || false,
+                    masteryLevel: 1,
+                    currentCooldown: 0
+                  };
+                }
+                // If no template found, just reset mastery level
+                return {
+                  ...move,
+                  masteryLevel: 1,
+                  currentCooldown: 0
+                };
+              });
+              
+              await updateDoc(movesRef, { 
+                moves: resetMoves,
+                movesResetAt: serverTimestamp(),
+                movesResetBy: 'admin'
+              });
+            } else {
+              console.log(`No moves document found for ${student.id}, skipping`);
+            }
+          } catch (movesError) {
+            console.log(`Moves document not found for ${student.id}, skipping moves reset`);
+          }
+          
+          console.log(`✅ Successfully reset moves for ${student.displayName || student.email || student.id} (${student.id})`);
+          return { success: true, studentId: student.id };
+        } catch (error) {
+          console.error(`❌ Failed to reset moves for ${student.displayName || student.email || student.id} (${student.id}):`, error);
+          return { success: false, studentId: student.id, error };
+        }
+      });
+      
+      const results = await Promise.all(updatePromises);
+      const successful = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      
+      console.log(`\n📊 Moves Reset Summary:`);
+      console.log(`✅ Successful: ${successful.length}`);
+      console.log(`❌ Failed: ${failed.length}`);
+      
+      if (failed.length > 0) {
+        console.error('Failed resets:', failed);
+        alert(`Moves reset completed with errors. ${successful.length} successful, ${failed.length} failed. Check console for details.`);
+      } else {
+        alert(`✅ Successfully reset all Manifest and Elemental moves to Level 1 for ${successful.length} players!`);
+      }
+      
+      console.log('🎉 Moves reset for all students completed');
+    } catch (error) {
+      console.error('❌ Error resetting moves:', error);
+      alert('Error resetting moves. Check console for details.');
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
   const resetAllPlayerXP = async () => {
     if (!window.confirm('⚠️ WARNING: This will reset ALL player XP and Levels for ALL students:\n\n- XP will be reset to 0\n- All players will be set to Level 1\n- Power Points (PP) will remain unchanged\n\nThis action CANNOT be undone. Are you absolutely sure?')) {
       return;
@@ -660,6 +766,202 @@ const AdminPanel: React.FC = () => {
     } catch (error) {
       console.error('❌ Error resetting all player progress:', error);
       alert('Error resetting player progress. Check console for details.');
+    } finally {
+      setStoryProgressLoading(false);
+    }
+  };
+
+  // Reset Challenge 7 (Hela Awakened) for current user (testing)
+  const resetChallenge7ForCurrentUser = async () => {
+    if (!currentUser) {
+      alert('No current user found');
+      return;
+    }
+    
+    if (!window.confirm('⚠️ This will reset Challenge 7 "Hela Awakened" for YOUR account, marking it as incomplete.\n\nThis will allow you to test the 4-on-1 Ice Golem battle again.\n\nContinue?')) {
+      return;
+    }
+    
+    try {
+      console.log('Resetting Challenge 7 (Hela Awakened) for current user...');
+      
+      // Reset in users collection - use direct field paths to ensure deletion works
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Reconstruct the challenge object without the fields we want to delete
+        const existingChallenge = userData.chapters?.[1]?.challenges?.['ep1-update-profile'] || {};
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        // Only keep other fields that aren't the ones we're deleting
+        if (existingChallenge.completedBy) cleanChallenge.completedBy = existingChallenge.completedBy;
+        if (existingChallenge.autoCompleted !== undefined) cleanChallenge.autoCompleted = false;
+        if (existingChallenge.manuallyCompleted !== undefined) cleanChallenge.manuallyCompleted = false;
+        
+        // Update the challenge with clean data
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              'ep1-update-profile': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+        console.log('✅ Users collection reset - challenge data:', cleanChallenge);
+      }
+      
+      // Reset in students collection if it exists
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        // Reconstruct the challenge object without the fields we want to delete
+        const existingChallenge = studentData.chapters?.[1]?.challenges?.['ep1-update-profile'] || {};
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        // Update the challenge with clean data
+        const updatedChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              'ep1-update-profile': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(studentRef, {
+          chapters: updatedChapters
+        });
+        console.log('✅ Students collection reset - challenge data:', cleanChallenge);
+      }
+      
+      console.log('🎉 Challenge 7 reset for current user completed');
+      
+      // Force a page reload to refresh all cached data
+      alert('✅ Successfully reset Challenge 7 "Hela Awakened" for your account! The page will now refresh.');
+      window.location.reload();
+    } catch (error) {
+      console.error('❌ Error resetting Challenge 7:', error);
+      alert('Error resetting Challenge 7. Check console for details.');
+    }
+  };
+
+  // Reset Challenge 7 (Hela Awakened) for all players
+  const resetChallenge7ForAllPlayers = async () => {
+    if (!window.confirm('⚠️ This will reset Challenge 7 "Hela Awakened" for ALL players, marking it as incomplete.\n\nThis will allow players to test the 4-on-1 Ice Golem battle again.\n\nContinue?')) {
+      return;
+    }
+    
+    setStoryProgressLoading(true);
+    try {
+      console.log('Resetting Challenge 7 (Hela Awakened) for all players...');
+      
+      // Get all students
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      const allStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Student[];
+      
+      const successful: string[] = [];
+      const failed: string[] = [];
+      
+      for (const student of allStudents) {
+        try {
+          // Reset in users collection
+          const userRef = doc(db, 'users', student.id);
+          const userDoc = await getDoc(userRef);
+          
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            // Always reset, even if challenge doesn't exist yet
+            const updatedChapters = {
+              ...(userData.chapters || {}),
+              [1]: {
+                ...(userData.chapters?.[1] || {}),
+                challenges: {
+                  ...(userData.chapters?.[1]?.challenges || {}),
+                  'ep1-update-profile': {
+                    isCompleted: false,
+                    completedAt: null,
+                    status: deleteField(),
+                    helaDefeated: deleteField(),
+                    iceGolemsDefeated: deleteField()
+                  }
+                }
+              }
+            };
+            
+            await updateDoc(userRef, {
+              chapters: updatedChapters
+            });
+          }
+          
+          // Reset in students collection if it exists
+          const studentRef = doc(db, 'students', student.id);
+          const studentDoc = await getDoc(studentRef);
+          
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            // Always reset, even if challenge doesn't exist yet
+            const updatedStudentChapters = {
+              ...(studentData.chapters || {}),
+              [1]: {
+                ...(studentData.chapters?.[1] || {}),
+                challenges: {
+                  ...(studentData.chapters?.[1]?.challenges || {}),
+                  'ep1-update-profile': {
+                    isCompleted: false,
+                    completedAt: null,
+                    status: deleteField(),
+                    helaDefeated: deleteField(),
+                    iceGolemsDefeated: deleteField()
+                  }
+                }
+              }
+            };
+            
+            await updateDoc(studentRef, {
+              chapters: updatedStudentChapters
+            });
+          }
+          
+          successful.push(student.displayName || student.email || student.id);
+        } catch (error) {
+          console.error(`Error resetting Challenge 7 for ${student.id}:`, error);
+          failed.push(student.displayName || student.email || student.id);
+        }
+      }
+      
+      if (failed.length > 0) {
+        alert(`Challenge 7 reset completed with errors. ${successful.length} successful, ${failed.length} failed. Check console for details.`);
+      } else {
+        alert(`✅ Successfully reset Challenge 7 "Hela Awakened" for ${successful.length} players! The challenge is now incomplete and ready for testing.`);
+      }
+      
+      // Refresh story progress data
+      await fetchStoryProgress();
+      
+      console.log('🎉 Challenge 7 reset for all players completed');
+    } catch (error) {
+      console.error('❌ Error resetting Challenge 7:', error);
+      alert('Error resetting Challenge 7. Check console for details.');
     } finally {
       setStoryProgressLoading(false);
     }
@@ -1643,7 +1945,52 @@ const AdminPanel: React.FC = () => {
         }
       }
       
-      // 3. Add notification to notifications subcollection
+      // 3. If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
+      if (sub.challengeId === 'ep1-combat-drill') {
+        try {
+          // Get user's element from student data
+          const studentDoc = await getDoc(doc(db, 'students', sub.userId));
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            const userElement = studentData.elementalAffinity?.toLowerCase() || 
+                               studentData.manifestationType?.toLowerCase() || 
+                               'fire';
+            
+            // Unlock elemental moves for this user
+            const movesRef = doc(db, 'battleMoves', sub.userId);
+            const movesDoc = await getDoc(movesRef);
+            
+            if (movesDoc.exists()) {
+              const movesData = movesDoc.data();
+              const currentMoves = movesData.moves || [];
+              
+              // Unlock level 1 moves for the user's element
+              const updatedMoves = currentMoves.map((move: any) => {
+                if (move.category === 'elemental' && 
+                    move.elementalAffinity === userElement && 
+                    move.level === 1) {
+                  return { ...move, unlocked: true };
+                }
+                return move;
+              });
+              
+              await updateDoc(movesRef, { moves: updatedMoves });
+              
+              // Add notification about elemental moves unlock
+              await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+                type: 'elemental_moves_unlocked',
+                message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
+                timestamp: serverTimestamp(),
+                read: false
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error unlocking elemental moves:', error);
+        }
+      }
+
+      // 4. Add notification to notifications subcollection
       await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
         type: 'challenge_approved',
         message: `Your submission for "${sub.challengeName}" was approved! You earned ${sub.xpReward || 10} XP and ${sub.ppReward || 5} PP.`,
@@ -1655,7 +2002,7 @@ const AdminPanel: React.FC = () => {
         read: false
       });
       
-      // 4. Remove from UI
+      // 5. Remove from UI
       setSubmissions(prev => prev.filter(s => s.id !== sub.id));
     } catch (err: any) {
       setRowError(prev => ({ ...prev, [sub.id]: 'Failed to approve. Try again.' }));
@@ -2489,6 +2836,35 @@ const AdminPanel: React.FC = () => {
               </h3>
               <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                 <button
+                  onClick={resetAllMovesToLevel1}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#8b5cf6',
+                    color: 'white',
+                    border: '2px solid #7c3aed',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                    boxShadow: storyProgressLoading ? 'none' : '0 4px 12px rgba(139, 92, 246, 0.4)'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 6px 16px rgba(139, 92, 246, 0.5)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!storyProgressLoading) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(139, 92, 246, 0.4)';
+                    }
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Processing...' : '⚔️ Reset All Moves to Level 1'}
+                </button>
+                <button
                   onClick={resetAllPlayerXP}
                   disabled={storyProgressLoading}
                   style={{
@@ -2561,6 +2937,37 @@ const AdminPanel: React.FC = () => {
                   }}
                 >
                   {storyProgressLoading ? '🔄 Processing...' : '⚠️ RESET ALL PLAYER PROGRESS'}
+                </button>
+                <button
+                  onClick={resetChallenge7ForCurrentUser}
+                  style={{
+                    background: '#dc2626',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  ❄️ Reset Challenge 7 (Your Account - Testing)
+                </button>
+                <button
+                  onClick={resetChallenge7ForAllPlayers}
+                  disabled={storyProgressLoading}
+                  style={{
+                    background: storyProgressLoading ? '#9ca3af' : '#991b1b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: storyProgressLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  {storyProgressLoading ? '🔄 Processing...' : '❄️ Reset Challenge 7 (All Players)'}
                 </button>
                 <button
                   onClick={fetchStoryProgress}

@@ -177,7 +177,7 @@ export const CHAPTERS: Chapter[] = [
         requirements: [],
         rewards: [
           { type: 'xp', value: 10, description: 'Letter received XP' },
-          { type: 'pp', value: 5, description: 'Letter received PP' }
+          { type: 'pp', value: 100, description: 'Letter received PP' }
         ],
         isCompleted: false
       },
@@ -188,8 +188,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'letter_received', description: 'Must have received the letter' }],
         rewards: [
-          { type: 'xp', value: 15, description: 'Choice made XP' },
-          { type: 'pp', value: 8, description: 'Choice made PP' }
+          { type: 'xp', value: 20, description: 'Choice made XP' },
+          { type: 'pp', value: 100, description: 'Choice made PP' }
         ],
         isCompleted: false
       },
@@ -200,8 +200,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'chose_truth_metal', description: 'Must have chosen to touch Truth Metal' }],
         rewards: [
-          { type: 'xp', value: 25, description: 'Truth Metal touched XP' },
-          { type: 'pp', value: 15, description: 'Truth Metal touched PP' },
+          { type: 'xp', value: 30, description: 'Truth Metal touched XP' },
+          { type: 'pp', value: 100, description: 'Truth Metal touched PP' },
           { type: 'artifact', value: 'truth_metal_currency', description: 'Truth Metal currency unlocked' }
         ],
         isCompleted: false
@@ -213,8 +213,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'truth_metal_currency', description: 'Must have touched Truth Metal' }],
         rewards: [
-          { type: 'xp', value: 25, description: 'MST Tutorial completion XP' },
-          { type: 'pp', value: 10, description: 'MST Tutorial completion PP' }
+          { type: 'xp', value: 40, description: 'MST Tutorial completion XP' },
+          { type: 'pp', value: 100, description: 'MST Tutorial completion PP' }
         ],
         isCompleted: false
       },
@@ -225,8 +225,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'ui_explored', description: 'Must have explored MST UI' }],
         rewards: [
-          { type: 'xp', value: 25, description: 'Power Card discovery XP' },
-          { type: 'pp', value: 15, description: 'Power Card understanding PP' },
+          { type: 'xp', value: 50, description: 'Power Card discovery XP' },
+          { type: 'pp', value: 100, description: 'Power Card understanding PP' },
           { type: 'artifact', value: 'power_card_discovered', description: 'Power Card discovered' }
         ],
         isCompleted: false
@@ -238,21 +238,21 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'power_card_discovered', description: 'Must have discovered your Power Card' }],
         rewards: [
-          { type: 'xp', value: 50, description: 'Portal sequence completion XP' },
-          { type: 'pp', value: 25, description: 'First villain encounter PP' },
+          { type: 'xp', value: 60, description: 'Portal sequence completion XP' },
+          { type: 'pp', value: 100, description: 'First villain encounter PP' },
           { type: 'artifact', value: 'hela_encountered', description: 'Encountered Hela' }
         ],
         isCompleted: false
       },
       {
         id: 'ep1-update-profile',
-        title: 'Update Player Profile',
-        description: 'Complete your player profile with your display name, avatar, and basic information',
+        title: 'Hela Awakened',
+        description: 'Face Hela\'s awakened power as she summons four Ice Golems to test your strength',
         type: 'personal',
         requirements: [{ type: 'manifest', value: 'chosen', description: 'Must have chosen a manifest' }],
         rewards: [
-          { type: 'xp', value: 15, description: 'Profile completion XP' },
-          { type: 'pp', value: 8, description: 'Profile completion PP' }
+          { type: 'xp', value: 70, description: 'Hela Awakened completion XP' },
+          { type: 'pp', value: 100, description: 'Hela Awakened completion PP' }
         ],
         isCompleted: false
       },
@@ -263,8 +263,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'profile', value: 'completed', description: 'Must have completed profile' }],
         rewards: [
-          { type: 'xp', value: 12, description: 'Power card viewed XP' },
-          { type: 'pp', value: 6, description: 'Power card viewed PP' }
+          { type: 'xp', value: 80, description: 'Power card viewed XP' },
+          { type: 'pp', value: 100, description: 'Power card viewed PP' }
         ],
         isCompleted: false
       },
@@ -275,8 +275,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'profile', value: 'power_card_viewed', description: 'Must have viewed power card' }],
         rewards: [
-          { type: 'xp', value: 30, description: 'Combat drill XP' },
-          { type: 'pp', value: 20, description: 'Combat drill PP' },
+          { type: 'xp', value: 90, description: 'Combat drill XP' },
+          { type: 'pp', value: 100, description: 'Combat drill PP' },
           { type: 'ability', value: 'first_combat', description: 'First combat ability unlocked' }
         ],
         isCompleted: false
@@ -288,8 +288,8 @@ export const CHAPTERS: Chapter[] = [
         type: 'personal',
         requirements: [{ type: 'ability', value: 'first_combat', description: 'Must have completed first combat drill' }],
         rewards: [
-          { type: 'xp', value: 50, description: 'School entry XP' },
-          { type: 'pp', value: 25, description: 'School entry PP' },
+          { type: 'xp', value: 100, description: 'School entry XP' },
+          { type: 'pp', value: 100, description: 'School entry PP' },
           { type: 'level', value: 1, description: 'Unlock Level 1' },
           { type: 'artifact', value: 'school_access', description: 'Xiotein School access granted' }
         ],

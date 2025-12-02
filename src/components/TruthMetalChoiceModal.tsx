@@ -1,19 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface TruthMetalChoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onChoiceSubmit: (choice: 'touch' | 'ignore', ordinaryWorld: string) => void;
+  existingOrdinaryWorld?: string;
 }
 
 const TruthMetalChoiceModal: React.FC<TruthMetalChoiceModalProps> = ({ 
   isOpen, 
   onClose, 
-  onChoiceSubmit 
+  onChoiceSubmit,
+  existingOrdinaryWorld
 }) => {
   const [view, setView] = useState<'flashback' | 'choice' | 'ordinary-world'>('flashback');
   const [playerChoice, setPlayerChoice] = useState<'touch' | 'ignore' | null>(null);
-  const [ordinaryWorld, setOrdinaryWorld] = useState('');
+  const [ordinaryWorld, setOrdinaryWorld] = useState(existingOrdinaryWorld || '');
+
+  // Update ordinaryWorld when existingOrdinaryWorld changes
+  useEffect(() => {
+    if (existingOrdinaryWorld && !ordinaryWorld) {
+      setOrdinaryWorld(existingOrdinaryWorld);
+    }
+  }, [existingOrdinaryWorld]);
 
   if (!isOpen) return null;
 
@@ -21,6 +30,13 @@ const TruthMetalChoiceModal: React.FC<TruthMetalChoiceModalProps> = ({
     if (playerChoice && ordinaryWorld.trim()) {
       onChoiceSubmit(playerChoice, ordinaryWorld.trim());
       onClose();
+    }
+  };
+
+  const handleSkip = () => {
+    if (existingOrdinaryWorld && existingOrdinaryWorld.trim()) {
+      setOrdinaryWorld(existingOrdinaryWorld);
+      setView('choice');
     }
   };
 
@@ -273,6 +289,33 @@ const TruthMetalChoiceModal: React.FC<TruthMetalChoiceModalProps> = ({
                 </p>
               </div>
 
+              {/* Show existing data message if available */}
+              {existingOrdinaryWorld && existingOrdinaryWorld.trim() && (
+                <div style={{
+                  background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+                  borderRadius: '0.75rem',
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  border: '2px solid #3b82f6'
+                }}>
+                  <p style={{ 
+                    fontSize: '0.875rem', 
+                    color: '#1e40af',
+                    marginBottom: '0.5rem',
+                    fontWeight: '600'
+                  }}>
+                    ℹ️ You already have an Ordinary World description saved.
+                  </p>
+                  <p style={{ 
+                    fontSize: '0.875rem', 
+                    color: '#1e3a8a',
+                    marginBottom: '0'
+                  }}>
+                    You can edit it below or skip to continue with your existing description.
+                  </p>
+                </div>
+              )}
+
               <div style={{ marginBottom: '2rem' }}>
                 <textarea
                   value={ordinaryWorld}
@@ -301,7 +344,7 @@ const TruthMetalChoiceModal: React.FC<TruthMetalChoiceModalProps> = ({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+              <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                 <button
                   onClick={() => setView('flashback')}
                   style={{
@@ -317,6 +360,23 @@ const TruthMetalChoiceModal: React.FC<TruthMetalChoiceModalProps> = ({
                 >
                   ← Back to Memory
                 </button>
+                {existingOrdinaryWorld && existingOrdinaryWorld.trim() && (
+                  <button
+                    onClick={handleSkip}
+                    style={{
+                      backgroundColor: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      padding: '0.75rem 1.5rem',
+                      fontSize: '1rem',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ⏭️ Skip (Use Existing)
+                  </button>
+                )}
                 <button
                   onClick={() => setView('choice')}
                   disabled={!ordinaryWorld.trim()}

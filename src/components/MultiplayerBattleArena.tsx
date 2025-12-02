@@ -113,12 +113,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         }}
         style={{
           width: '100%',
-          minHeight: '120px',
-          background: isSelected 
-            ? 'rgba(59, 130, 246, 0.2)' 
-            : isCurrentPlayer 
-              ? 'rgba(251, 191, 36, 0.1)' 
-              : 'rgba(255, 255, 255, 0.9)',
+          minHeight: '140px',
+          maxWidth: '100%',
+          background: 'rgba(255, 255, 255, 1)', // White background for all cards for better visibility
           border: isSelected 
             ? '3px solid #3b82f6' 
             : (canClick && !isAlly)
@@ -127,7 +124,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 ? '3px solid #fbbf24' 
                 : '2px solid #8B4513',
           borderRadius: '0.5rem',
-          padding: '0.75rem',
+          padding: '0.6rem',
           marginBottom: '0.5rem',
           cursor: canClick ? 'pointer' : 'default',
           transition: 'all 0.2s ease',
@@ -137,7 +134,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
             : (canClick && !isAlly)
               ? '0 0 15px rgba(251, 191, 36, 0.6)'
               : '0 2px 8px rgba(0, 0, 0, 0.1)',
-          transform: canClick && !isAlly ? 'scale(1.05)' : 'scale(1)'
+          transform: canClick && !isAlly ? 'scale(1.05)' : 'scale(1)',
+          boxSizing: 'border-box',
+          overflow: 'hidden'
         }}
         onMouseEnter={(e) => {
           if (canClick) {
@@ -162,11 +161,11 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           }
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
           {/* Avatar */}
           <div style={{
-            width: '50px',
-            height: '50px',
+            width: '45px',
+            height: '45px',
             borderRadius: '50%',
             border: isCurrentPlayer ? '3px solid #fbbf24' : '2px solid #8B4513',
             overflow: 'hidden',
@@ -174,15 +173,32 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: '1.5rem',
+            fontSize: '1.3rem',
             flexShrink: 0
           }}>
-            {participant.avatar ? (
+            {participant.avatar && (participant.avatar.startsWith('http') || participant.avatar.startsWith('/')) ? (
               <img 
                 src={participant.avatar} 
                 alt={participant.name}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onError={(e) => {
+                  // Fallback to initial if image fails to load
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  const parent = target.parentElement;
+                  if (parent) {
+                    const fallback = document.createElement('div');
+                    fallback.style.color = 'white';
+                    fallback.style.fontWeight = 'bold';
+                    fallback.textContent = participant.name[0]?.toUpperCase() || '?';
+                    parent.appendChild(fallback);
+                  }
+                }}
               />
+            ) : participant.avatar ? (
+              <div style={{ color: 'white', fontWeight: 'bold', fontSize: '1.5rem' }}>
+                {participant.avatar}
+              </div>
             ) : (
               <div style={{ color: 'white', fontWeight: 'bold' }}>
                 {participant.name[0]?.toUpperCase() || '?'}
@@ -191,19 +207,20 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           </div>
           
           {/* Name and Level */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
             <div style={{ 
-              fontSize: '0.875rem', 
+              fontSize: '0.8rem', 
               fontWeight: 'bold',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
-              textOverflow: 'ellipsis'
+              textOverflow: 'ellipsis',
+              lineHeight: '1.2'
             }}>
               {participant.name}
               {isCurrentPlayer && ' (You)'}
             </div>
             {participant.level && (
-              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+              <div style={{ fontSize: '0.7rem', color: '#6b7280', lineHeight: '1.2' }}>
                 Lv.{participant.level}
               </div>
             )}
@@ -211,21 +228,21 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         </div>
 
         {/* Health/PP Bar */}
-        <div style={{ marginBottom: '0.25rem' }}>
-          <div style={{ fontSize: '0.7rem', marginBottom: '0.125rem', color: '#dc2626' }}>
+        <div style={{ marginBottom: '0.2rem' }}>
+          <div style={{ fontSize: '0.65rem', marginBottom: '0.1rem', color: '#dc2626', lineHeight: '1.1' }}>
             {participant.vaultHealth !== undefined ? 'HEALTH' : 'PP'}
           </div>
           <div style={{
             width: '100%',
-            height: '8px',
+            height: '7px',
             background: '#e5e7eb',
-            borderRadius: '4px',
+            borderRadius: '3.5px',
             overflow: 'hidden'
           }}>
             <div style={{
               width: `${(() => {
                 const max = participant.vaultHealth !== undefined 
-                  ? (participant.maxVaultHealth || participant.maxPP || 100)
+                  ? (participant.maxVaultHealth || Math.floor((participant.maxPP || 1000) * 0.1))
                   : (participant.maxPP || 100);
                 const current = participant.vaultHealth !== undefined 
                   ? participant.vaultHealth 
@@ -239,23 +256,23 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               transition: 'width 0.3s ease'
             }} />
           </div>
-          <div style={{ fontSize: '0.65rem', textAlign: 'right', marginTop: '0.125rem', color: '#6b7280' }}>
+          <div style={{ fontSize: '0.6rem', textAlign: 'right', marginTop: '0.1rem', color: '#6b7280', lineHeight: '1.1' }}>
             {participant.vaultHealth !== undefined 
-              ? `${participant.vaultHealth}/${participant.maxVaultHealth || participant.maxPP || 100}`
+              ? `${participant.vaultHealth}/${participant.maxVaultHealth || Math.floor((participant.maxPP || 1000) * 0.1)}`
               : `${participant.currentPP}/${participant.maxPP || 100}`}
           </div>
         </div>
 
         {/* Shield Bar */}
         <div>
-          <div style={{ fontSize: '0.7rem', marginBottom: '0.125rem', color: '#3b82f6' }}>
+          <div style={{ fontSize: '0.65rem', marginBottom: '0.1rem', color: '#3b82f6', lineHeight: '1.1' }}>
             SHIELD
           </div>
           <div style={{
             width: '100%',
-            height: '8px',
+            height: '7px',
             background: '#e5e7eb',
-            borderRadius: '4px',
+            borderRadius: '3.5px',
             overflow: 'hidden'
           }}>
             <div style={{
@@ -268,7 +285,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               transition: 'width 0.3s ease'
             }} />
           </div>
-          <div style={{ fontSize: '0.65rem', textAlign: 'right', marginTop: '0.125rem', color: '#6b7280' }}>
+          <div style={{ fontSize: '0.6rem', textAlign: 'right', marginTop: '0.1rem', color: '#6b7280', lineHeight: '1.1' }}>
             {participant.shieldStrength}/{participant.maxShieldStrength || 100}
           </div>
         </div>
@@ -354,18 +371,23 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         height: '100%',
         padding: '1rem',
         paddingTop: '80px',
-        gap: '1rem',
+        gap: '1.5rem',
         zIndex: 2,
-        position: 'relative'
+        position: 'relative',
+        overflow: 'visible',
+        boxSizing: 'border-box'
       }}>
         {/* Left Side - Allies (up to 4) */}
         <div style={{
-          flex: '0 0 200px',
+          flex: '0 0 300px',
           display: 'flex',
           flexDirection: 'column',
           gap: '0.5rem',
           overflowY: 'auto',
-          paddingRight: '0.5rem'
+          overflowX: 'visible',
+          paddingRight: '1.5rem',
+          paddingLeft: '1.5rem',
+          boxSizing: 'border-box'
         }}>
           <div style={{
             fontSize: '0.875rem',
@@ -422,6 +444,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               {selectedMove && isPlayerTurn && !selectedTarget ? (
                 <div style={{ color: '#fbbf24', fontWeight: 'bold' }}>
                   Selected: {selectedMove.name} - Click an enemy to attack!
+                  <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.8 }}>
+                    (Click FIGHT button again to change move)
+                  </div>
                 </div>
               ) : battleLog.length > 0 ? (
                 <div>
@@ -442,7 +467,16 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               justifyContent: 'center'
             }}>
               <button
-                onClick={() => setShowMoveMenu(!showMoveMenu)}
+                onClick={() => {
+                  if (selectedMove) {
+                    // If a move is selected, deselect it
+                    onMoveSelect(null);
+                    onTargetSelect('');
+                  } else {
+                    // Otherwise, toggle the move menu
+                    setShowMoveMenu(!showMoveMenu);
+                  }
+                }}
                 disabled={!isPlayerTurn}
                 style={{
                   padding: '0.75rem 1.5rem',
@@ -470,7 +504,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
                 }}
               >
-                {selectedMove ? `✓ ${selectedMove.name}` : '⚔️ FIGHT'}
+                {selectedMove ? `✕ Cancel: ${selectedMove.name}` : '⚔️ FIGHT'}
               </button>
 
               <button
@@ -574,13 +608,65 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
             }}>
               <div style={{ 
-                fontSize: '1rem', 
-                fontWeight: 'bold', 
-                marginBottom: '0.75rem',
-                textAlign: 'center'
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '0.75rem'
               }}>
-                Select Move
+                <div style={{ 
+                  fontSize: '1rem', 
+                  fontWeight: 'bold',
+                  textAlign: 'center',
+                  flex: 1
+                }}>
+                  Select Move
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMoveMenu(false);
+                    if (selectedMove) {
+                      onMoveSelect(null);
+                      onTargetSelect('');
+                    }
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
+                    color: 'white',
+                    border: '2px solid #8B4513',
+                    borderRadius: '0.25rem',
+                    padding: '0.5rem 1rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    transition: 'all 0.2s ease',
+                    marginLeft: '0.5rem'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, #4b5563 0%, #374151 100%)';
+                    e.currentTarget.style.transform = 'scale(1.05)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)';
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }}
+                >
+                  ← Back
+                </button>
               </div>
+              {selectedMove && (
+                <div style={{ 
+                  fontSize: '0.75rem', 
+                  color: '#6b7280', 
+                  marginBottom: '0.5rem', 
+                  textAlign: 'center',
+                  fontStyle: 'italic',
+                  padding: '0.25rem',
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  borderRadius: '0.25rem'
+                }}>
+                  Currently selected: {selectedMove.name}
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {availableMoves.map((move) => (
                   <button
@@ -686,12 +772,15 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
 
         {/* Right Side - Enemies (up to 4) */}
         <div style={{
-          flex: '0 0 200px',
+          flex: '0 0 300px',
           display: 'flex',
           flexDirection: 'column',
           gap: '0.5rem',
           overflowY: 'auto',
-          paddingLeft: '0.5rem'
+          overflowX: 'visible',
+          paddingLeft: '1.5rem',
+          paddingRight: '1.5rem',
+          boxSizing: 'border-box'
         }}>
           <div style={{
             fontSize: '0.875rem',

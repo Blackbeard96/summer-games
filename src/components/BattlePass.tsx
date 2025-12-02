@@ -57,38 +57,53 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
     { tier: 15, freeReward: { type: 'actionCard', amount: 1, actionCardName: 'Freeze', imageUrl: '/images/Action Card - Freeze.png' }, premiumReward: { type: 'pp', amount: 1000 }, requiredXP: 15000 },
   ];
 
-  // Fetch battle pass progress
+  // Fetch battle pass progress - use player's actual XP
   useEffect(() => {
     const fetchBattlePassProgress = async () => {
       if (!currentUser || !isOpen) return;
 
       setLoading(true);
       try {
+        // Get player's actual XP from students collection
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        const playerXP = studentDoc.exists() ? (studentDoc.data().xp || 0) : 0;
+        
+        // Get or create battle pass document for claim tracking
         const battlePassRef = doc(db, 'battlePass', `${currentUser.uid}_season${season}`);
         const battlePassDoc = await getDoc(battlePassRef);
 
         if (battlePassDoc.exists()) {
           const data = battlePassDoc.data();
           setBattlePassProgress(data);
-          setTotalXP(data.totalXP || 0);
-          // Calculate current tier based on total XP
-          const tier = calculateTier(data.totalXP || 0);
+          // Use player's actual XP, not the stored totalXP
+          setTotalXP(playerXP);
+          // Calculate current tier based on player's actual XP
+          const tier = calculateTier(playerXP);
           setCurrentTier(tier);
+          
+          // Sync totalXP in battle pass document with player XP
+          if (data.totalXP !== playerXP) {
+            await updateDoc(battlePassRef, {
+              totalXP: playerXP,
+              currentTier: tier
+            });
+          }
         } else {
           // Initialize battle pass for this season
           const initialData = {
             userId: currentUser.uid,
             season,
-            totalXP: 0,
-            currentTier: 0,
+            totalXP: playerXP, // Use player's actual XP
+            currentTier: calculateTier(playerXP),
             claimedTiers: [],
             isPremium: false,
             createdAt: serverTimestamp()
           };
           await setDoc(battlePassRef, initialData);
           setBattlePassProgress(initialData);
-          setTotalXP(0);
-          setCurrentTier(0);
+          setTotalXP(playerXP);
+          setCurrentTier(calculateTier(playerXP));
         }
       } catch (error) {
         console.error('Error fetching battle pass progress:', error);
@@ -307,9 +322,11 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       backgroundColor: 'rgba(0, 0, 0, 0.9)',
       display: 'flex',
       justifyContent: 'center',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       zIndex: 10000,
-      padding: '2rem'
+      padding: '2rem',
+      paddingTop: '6rem', // Add extra padding at top to account for nav bar
+      overflowY: 'auto'
     }}>
       <div style={{
         background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
@@ -318,11 +335,12 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
         padding: '2rem',
         maxWidth: '1200px',
         width: '100%',
-        maxHeight: '90vh',
-        overflow: 'auto',
+        maxHeight: 'calc(100vh - 8rem)', // Account for padding
+        overflowY: 'auto',
         boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7)',
         border: '2px solid rgba(139, 92, 246, 0.5)',
-        position: 'relative'
+        position: 'relative',
+        marginBottom: '2rem' // Add margin at bottom for scrolling
       }}>
         {/* Header */}
         <div style={{
@@ -344,9 +362,52 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
             }}>
               Battle Pass - Season {season}
             </h2>
-            <p style={{ color: '#94a3b8', marginTop: '0.5rem' }}>
-              {totalXP} / {season0Tiers[season0Tiers.length - 1].requiredXP} XP • Tier {currentTier} / {season0Tiers.length}
-            </p>
+            <div style={{ marginTop: '0.5rem' }}>
+              <p style={{ color: '#94a3b8', margin: '0 0 0.5rem 0' }}>
+                {totalXP} / {season0Tiers[season0Tiers.length - 1].requiredXP} XP • Tier {currentTier} / {season0Tiers.length}
+              </p>
+              {(() => {
+                const nextTier = currentTier < season0Tiers.length ? currentTier + 1 : season0Tiers.length;
+                const currentTierXP = currentTier > 0 ? season0Tiers[currentTier - 1].requiredXP : 0;
+                const nextTierXP = nextTier <= season0Tiers.length ? season0Tiers[nextTier - 1].requiredXP : season0Tiers[season0Tiers.length - 1].requiredXP;
+                const xpInCurrentTier = totalXP - currentTierXP;
+                const xpNeededForNextTier = nextTierXP - currentTierXP;
+                const progressPercent = xpNeededForNextTier > 0 ? Math.min(100, (xpInCurrentTier / xpNeededForNextTier) * 100) : 100;
+                
+                return (
+                  <div style={{ width: '100%', maxWidth: '400px' }}>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem',
+                      fontSize: '0.875rem',
+                      color: '#cbd5e1'
+                    }}>
+                      <span>Progress to Tier {nextTier}:</span>
+                      <span>{xpInCurrentTier} / {xpNeededForNextTier} XP</span>
+                    </div>
+                    <div style={{
+                      width: '100%',
+                      height: '12px',
+                      background: 'rgba(0, 0, 0, 0.3)',
+                      borderRadius: '6px',
+                      overflow: 'hidden',
+                      border: '1px solid rgba(139, 92, 246, 0.5)'
+                    }}>
+                      <div style={{
+                        width: `${progressPercent}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%)',
+                        borderRadius: '6px',
+                        transition: 'width 0.3s ease',
+                        boxShadow: '0 0 10px rgba(139, 92, 246, 0.5)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -459,21 +520,63 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
           </div>
         )}
 
-        {/* Progress Bar */}
+        {/* Overall Progress Bar */}
         <div style={{
           background: 'rgba(0, 0, 0, 0.3)',
           borderRadius: '1rem',
-          padding: '1rem',
-          marginBottom: '2rem'
+          padding: '1.5rem',
+          marginBottom: '2rem',
+          border: '2px solid rgba(139, 92, 246, 0.3)'
         }}>
           <div style={{
-            background: 'linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%)',
-            height: '20px',
-            borderRadius: '10px',
-            width: `${(totalXP / season0Tiers[season0Tiers.length - 1].requiredXP) * 100}%`,
-            maxWidth: '100%',
-            transition: 'width 0.3s ease'
-          }} />
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '0.75rem'
+          }}>
+            <span style={{ color: '#cbd5e1', fontWeight: 'bold' }}>Overall Progress</span>
+            <span style={{ color: '#a78bfa', fontWeight: 'bold' }}>
+              {totalXP.toLocaleString()} / {season0Tiers[season0Tiers.length - 1].requiredXP.toLocaleString()} XP
+            </span>
+          </div>
+          <div style={{
+            background: 'rgba(0, 0, 0, 0.5)',
+            height: '24px',
+            borderRadius: '12px',
+            overflow: 'hidden',
+            border: '2px solid rgba(139, 92, 246, 0.5)',
+            position: 'relative'
+          }}>
+            <div style={{
+              background: 'linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%)',
+              height: '100%',
+              borderRadius: '12px',
+              width: `${Math.min(100, (totalXP / season0Tiers[season0Tiers.length - 1].requiredXP) * 100)}%`,
+              maxWidth: '100%',
+              transition: 'width 0.3s ease',
+              boxShadow: '0 0 15px rgba(139, 92, 246, 0.6)'
+            }} />
+          </div>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            marginTop: '0.5rem',
+            fontSize: '0.875rem',
+            color: '#94a3b8'
+          }}>
+            <span>Tier {currentTier} of {season0Tiers.length}</span>
+            {(() => {
+              const nextTier = currentTier < season0Tiers.length ? currentTier + 1 : season0Tiers.length;
+              const currentTierXP = currentTier > 0 ? season0Tiers[currentTier - 1].requiredXP : 0;
+              const nextTierXP = nextTier <= season0Tiers.length ? season0Tiers[nextTier - 1].requiredXP : season0Tiers[season0Tiers.length - 1].requiredXP;
+              const xpNeeded = nextTierXP - totalXP;
+              return xpNeeded > 0 ? (
+                <span>{xpNeeded.toLocaleString()} XP to Tier {nextTier}</span>
+              ) : (
+                <span>Max Tier Reached!</span>
+              );
+            })()}
+          </div>
         </div>
 
         {/* Tiers Grid */}

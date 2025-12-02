@@ -687,6 +687,82 @@ const Marketplace = () => {
         return;
       }
       
+      // Handle Shield artifact - check for active overshield before using
+      if (artifactName === 'Shield') {
+        if (!vault) {
+          alert('❌ Vault not found. Please try again.');
+          return;
+        }
+        
+        // Check if player already has an active overshield
+        if ((vault.overshield || 0) > 0) {
+          alert('❌ You already have an active overshield! You can only have 1 overshield at a time.');
+          return;
+        }
+        
+        // Add overshield to vault
+        await updateVault({ overshield: 1 });
+        
+        // Remove one instance of the artifact from inventory
+        const updatedInventory = [...inventory];
+        const artifactIndex = updatedInventory.indexOf(artifactName);
+        if (artifactIndex > -1) {
+          updatedInventory.splice(artifactIndex, 1);
+        }
+        
+        // Update user's inventory in students collection
+        await updateDoc(userRef, {
+          inventory: updatedInventory
+        });
+
+        // Also update the users collection artifacts array
+        const usersRef = doc(db, 'users', currentUser.uid);
+        const usersSnap = await getDoc(usersRef);
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          const currentArtifacts = usersData.artifacts || [];
+          
+          let foundOne = false;
+          const updatedArtifacts = currentArtifacts.map((artifact: any) => {
+            if (foundOne) return artifact;
+            
+            if (typeof artifact === 'string') {
+              if (artifact === artifactName) {
+                foundOne = true;
+                return { 
+                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                  name: artifactName,
+                  used: true,
+                  usedAt: new Date(),
+                  isLegacy: true
+                };
+              }
+              return artifact;
+            } else {
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
+            }
+          });
+          
+          await updateDoc(usersRef, {
+            artifacts: updatedArtifacts
+          });
+        }
+
+        // Update local state
+        setInventory(updatedInventory);
+        
+        // Refresh artifact counts
+        await updateAllArtifactCounts();
+        
+        alert('🛡️ Shield activated! Your next attack will be blocked.');
+        return;
+      }
+      
       // Remove one instance of the artifact from inventory
       const updatedInventory = [...inventory];
       const artifactIndex = updatedInventory.indexOf(artifactName);
@@ -854,10 +930,18 @@ const Marketplace = () => {
       return;
     }
     
-    // Shield purchase limit - only 1 shield total (including used ones)
-    if (item.name === 'Shield' && artifactCount >= 1) {
-      alert('You can only own 1 Shield at a time (including used shields)!');
-      return;
+    // Shield purchase limit - check for active overshield
+    if (item.name === 'Shield') {
+      // Check if player already has an active overshield
+      if (vault && (vault.overshield || 0) > 0) {
+        alert('You already have an active overshield! You can only have 1 overshield at a time.');
+        return;
+      }
+      // Also check artifact count as backup
+      if (artifactCount >= 1) {
+        alert('You can only own 1 Shield artifact at a time!');
+        return;
+      }
     }
 
     try {
@@ -1334,7 +1418,9 @@ const Marketplace = () => {
                 const artifactCount = artifactCounts[artifact.name] || 0;
                 const purchased = artifactCount > 0;
                 const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
-                const isShieldAtLimit = artifact.name === 'Shield' && artifactCount >= 1;
+                // Shield limit: check both artifact count and active overshield
+                const hasActiveOvershield = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0;
+                const isShieldAtLimit = artifact.name === 'Shield' && (artifactCount >= 1 || hasActiveOvershield);
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
                     background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
@@ -1508,21 +1594,23 @@ const Marketplace = () => {
                             {purchased && (
                               <button
                                 onClick={() => handleUseArtifact(artifact.name)}
+                                disabled={artifact.name === 'Shield' && vault ? (vault.overshield || 0) > 0 : false}
                                 style={{
-                                  backgroundColor: '#f59e0b',
+                                  backgroundColor: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? '#6b7280' : '#f59e0b',
                                   color: 'white',
                                   border: 'none',
                                   padding: isMobile ? '0.375rem 0.5rem' : '0.375rem 0.75rem',
                                   borderRadius: '0.375rem',
                                   fontSize: isMobile ? '0.625rem' : '0.75rem',
                                   fontWeight: '500',
-                                  cursor: 'pointer',
+                                  cursor: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'not-allowed' : 'pointer',
                                   transition: 'all 0.2s',
                                   minWidth: isMobile ? '60px' : 'auto',
-                                  minHeight: isMobile ? '28px' : 'auto'
+                                  minHeight: isMobile ? '28px' : 'auto',
+                                  opacity: artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 0.6 : 1
                                 }}
                                 onMouseEnter={e => {
-                                  if (!isMobile) {
+                                  if (!isMobile && !(artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0)) {
                                     e.currentTarget.style.transform = 'translateY(-1px)';
                                     e.currentTarget.style.backgroundColor = '#d97706';
                                   }
@@ -1530,11 +1618,12 @@ const Marketplace = () => {
                                 onMouseLeave={e => {
                                   if (!isMobile) {
                                     e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.backgroundColor = '#f59e0b';
+                                    e.currentTarget.style.backgroundColor = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? '#6b7280' : '#f59e0b';
                                   }
                                 }}
+                                title={artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'You already have an active overshield!' : ''}
                               >
-                                Used
+                                {artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0 ? 'Active' : 'Used'}
                               </button>
                             )}
                             <button
@@ -1565,7 +1654,7 @@ const Marketplace = () => {
                                 }
                               }}
                             >
-                              {isAtLimit ? 'At Limit' : isShieldAtLimit ? 'Owned' : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
+                              {isAtLimit ? 'At Limit' : isShieldAtLimit ? (hasActiveOvershield ? 'Active' : 'Owned') : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
                             </button>
                           </div>
                         </div>

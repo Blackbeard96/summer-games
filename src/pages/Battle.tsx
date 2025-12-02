@@ -311,7 +311,7 @@ const Battle: React.FC = () => {
           "Master Space & Time" — Fight with your Manifest in the Now
         </p>
         <button
-          onClick={forceMigration}
+          onClick={() => forceMigration(false)}
           style={{
             background: '#059669',
             color: 'white',
@@ -361,7 +361,7 @@ const Battle: React.FC = () => {
             🔄 Retry
           </button>
           <button
-            onClick={forceMigration}
+            onClick={() => forceMigration(false)}
             style={{
               background: '#059669',
               color: 'white',
@@ -734,7 +734,7 @@ const Battle: React.FC = () => {
                     title="Attack other players' vaults when they're offline. Use your daily offline moves strategically!"
                   >
                     <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🎯</div>
-                    <div>Offline Battle</div>
+                    <div>Vault Siege</div>
                     <div style={{
                       fontSize: '0.875rem',
                       opacity: 0.9,
@@ -1210,7 +1210,7 @@ const Battle: React.FC = () => {
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                 <button 
-                  onClick={() => handleRestoreShields(5, 5)}
+                  onClick={() => handleRestoreShields(5, 15)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1223,11 +1223,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+5 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 5 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 15 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(10, 8)}
+                  onClick={() => handleRestoreShields(10, 24)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1240,11 +1240,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+10 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 8 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 24 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(25, 15)}
+                  onClick={() => handleRestoreShields(25, 45)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1257,11 +1257,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+25 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 15 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 45 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(50, 20)}
+                  onClick={() => handleRestoreShields(50, 60)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1274,14 +1274,14 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 20 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 60 PP</div>
                 </button>
                 
                 <button 
                   onClick={() => {
                     if (vault) {
                       const neededShields = vault.maxShieldStrength - vault.shieldStrength;
-                      handleRestoreShields(neededShields, 30);
+                      handleRestoreShields(neededShields, 90);
                     }
                   }}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
@@ -1296,7 +1296,7 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 30 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 90 PP</div>
                 </button>
               </div>
             </div>

@@ -66,7 +66,7 @@ const enhanceLegacyItem = (item: any) => {
 
 const Profile = () => {
   const { currentUser } = useAuth();
-  const { syncVaultPP } = useBattle();
+  const { syncVaultPP, vault } = useBattle();
   const navigate = useNavigate();
   const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -1239,9 +1239,15 @@ const Profile = () => {
                                     if (vaultSnap.exists()) {
                                       const vaultData = vaultSnap.data();
                                       
-                                      // Add overshield (absorbs next attack)
+                                      // Check if player already has an active overshield
+                                      if ((vaultData.overshield || 0) > 0) {
+                                        alert('You already have an active overshield! You can only have 1 overshield at a time.');
+                                        return;
+                                      }
+                                      
+                                      // Add overshield (absorbs next attack) - capped at 1
                                       await updateDoc(vaultRef, {
-                                        overshield: (vaultData.overshield || 0) + 1
+                                        overshield: 1
                                       });
                                       
                                       // Mark artifact as used

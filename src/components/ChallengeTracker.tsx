@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { useBattle } from '../context/BattleContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
 import ManifestSelection from './ManifestSelection';
@@ -104,6 +105,7 @@ interface GoogleClassroomAssignment {
 
 const ChallengeTracker = () => {
   const { currentUser } = useAuth();
+  const { unlockElementalMoves } = useBattle();
   
   // Helper function to update the new chapter system after legacy challenge submission
   const updateChapterSystem = async (challengeName: string, submitted: boolean, completed: boolean = false) => {
@@ -229,9 +231,10 @@ const ChallengeTracker = () => {
           console.log('ChallengeTracker: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!rival });
           break;
         case 'ep1-update-profile':
-          // Auto-complete if profile is complete
-          shouldAutoComplete = !!(userProgress.displayName && userProgress.photoURL);
-          console.log('ChallengeTracker: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!userProgress.displayName, hasPhotoURL: !!userProgress.photoURL });
+          // Challenge 7 "Hela Awakened" is now a battle challenge - cannot be auto-completed
+          // Must be completed by winning the 4-on-1 battle against Ice Golems
+          shouldAutoComplete = false;
+          console.log('ChallengeTracker: Hela Awakened challenge - battle required, cannot auto-complete');
           break;
         case 'ep1-power-card-intro':
           // Auto-complete if Power Card has been customized (description, background, or image)
@@ -314,6 +317,33 @@ const ChallengeTracker = () => {
           timestamp: serverTimestamp(),
           read: false
         });
+
+        // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
+        if (challenge.id === 'ep1-combat-drill') {
+          try {
+            // Get user's element from student data
+            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+            if (studentDoc.exists()) {
+              const studentData = studentDoc.data();
+              const userElement = studentData.elementalAffinity?.toLowerCase() || 
+                                 studentData.manifestationType?.toLowerCase() || 
+                                 'fire';
+              
+              console.log(`ChallengeTracker: Unlocking elemental moves for element: ${userElement}`);
+              await unlockElementalMoves(userElement);
+              
+              // Add notification about elemental moves unlock
+              await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+                type: 'elemental_moves_unlocked',
+                message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
+                timestamp: serverTimestamp(),
+                read: false
+              });
+            }
+          } catch (error) {
+            console.error('Error unlocking elemental moves:', error);
+          }
+        }
       }
     }
   };

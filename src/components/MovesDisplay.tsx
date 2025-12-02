@@ -6,7 +6,7 @@ import {
   calculateHealingRange,
   formatDamageRange 
 } from '../utils/damageCalculator';
-import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription } from '../utils/moveOverrides';
+import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -19,7 +19,7 @@ interface MovesDisplayProps {
   onForceUnlockAllMoves?: () => void;
   onResetMovesWithElementFilter?: () => void;
   onApplyElementFilterToExistingMoves?: () => void;
-  onForceMigration?: () => void;
+  onForceMigration?: (resetLevels?: boolean) => void;
   userElement?: string;
   canPurchaseMove?: (category: 'manifest' | 'elemental' | 'system') => boolean;
   getNextMilestone?: (manifestType: string) => any;
@@ -53,7 +53,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [overridesLoaded, setOverridesLoaded] = useState(false);
   const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
 
-  // Load move overrides when component mounts
+  // Load move overrides when component mounts and periodically refresh
   useEffect(() => {
     const loadOverrides = async () => {
       try {
@@ -69,6 +69,13 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     };
 
     loadOverrides();
+    
+    // Refresh overrides every 30 seconds to pick up admin changes
+    const refreshInterval = setInterval(() => {
+      loadOverrides();
+    }, 30000);
+    
+    return () => clearInterval(refreshInterval);
   }, []);
 
   console.log('MovesDisplay: movesRemaining:', movesRemaining, 'offlineMovesRemaining:', offlineMovesRemaining);
@@ -76,14 +83,37 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   console.log('MovesDisplay: Move overrides loaded:', overridesLoaded, 'overrides:', moveOverrides);
 
   // Helper function to get move data with overrides applied
+  // Uses synchronous functions that access the global cache, which is updated when admin saves changes
   const getMoveDataWithOverrides = (moveName: string) => {
-    const override = moveOverrides[moveName];
-    const defaultMove = MOVE_DAMAGE_VALUES[moveName];
+    // Use synchronous functions that access the global cache
+    // This ensures we get the latest overrides even if local state hasn't updated
+    // The cache is invalidated when admin saves, and will be refreshed on next loadMoveOverrides call
+    const overrideName = getMoveNameSync(moveName);
+    const overrideDescription = getMoveDescriptionSync(moveName);
     
+    // Find the original template name if moveName is an overridden name
+    // This is needed because overrides are keyed by original template names
+    let originalTemplateName = moveName;
+    if (moveOverrides) {
+      // Check if moveName is already an overridden name by searching for it
+      for (const [templateName, override] of Object.entries(moveOverrides)) {
+        if (override.name === moveName) {
+          originalTemplateName = templateName;
+          break;
+        }
+      }
+    }
+    
+    // For damage, check local state using original template name, then fall back to cache, then default
+    const override = moveOverrides[originalTemplateName] || moveOverrides[moveName];
+    const defaultMove = MOVE_DAMAGE_VALUES[originalTemplateName] || MOVE_DAMAGE_VALUES[moveName];
+    
+    // Prioritize cache-based name (from getMoveNameSync) over local state
+    // This ensures we always get the latest admin updates
     return {
-      name: override?.name || moveName,
+      name: overrideName, // Always use the cache-based name
       damage: override?.damage || defaultMove?.damage || 0,
-      description: override?.description || ''
+      description: overrideDescription || override?.description || ''
     };
   };
 
@@ -1195,11 +1225,31 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               </div>
             )}
             
-            {/* Debug: Force Migration Button */}
+            {/* Debug: Force Migration Buttons */}
             {onForceMigration && (
-              <div style={{ marginTop: '1rem' }}>
+              <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                 <button
-                  onClick={onForceMigration}
+                  onClick={() => onForceMigration(false)}
+                  style={{
+                    background: '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem 2rem',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  🔄 Force Migration (Keep Levels)
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm('⚠️ This will reset all move mastery levels to 1 while keeping updated move names. Continue?')) {
+                      onForceMigration(true);
+                    }
+                  }}
                   style={{
                     background: '#dc2626',
                     color: 'white',
@@ -1212,7 +1262,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                     transition: 'all 0.2s'
                   }}
                 >
-                    🔄 Force Migration (Debug)
+                  🔄 Force Migration (Reset Levels)
                 </button>
               </div>
             )}

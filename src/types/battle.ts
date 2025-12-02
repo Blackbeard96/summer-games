@@ -7,7 +7,7 @@ export interface Vault {
   currentPP: number;
   vaultHealth: number; // Vault health (10% of capacity) - separate from PP
   maxVaultHealth: number; // Maximum vault health (10% of capacity)
-  vaultHealthCooldown?: Date; // Timestamp when vault health was depleted (3-hour cooldown)
+  vaultHealthCooldown?: Date; // Timestamp when vault health was depleted (4-hour cooldown, or until player attacks someone)
   shieldStrength: number;
   maxShieldStrength: number;
   overshield: number; // Additional shield from Shield artifact that absorbs next attack
@@ -316,18 +316,18 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
   // Manifest Moves (Specific to each manifest)
   // Reading Manifest
   {
-    name: 'Emotional Read',
+    name: 'Read the Room',
     description: 'Read target\'s emotions to predict their next move',
     category: 'manifest',
     type: 'attack',
     manifestType: 'reading',
     level: 1,
     cost: 1,
-    damage: 8,
+    damage: 13,
     ppSteal: 0,
-    debuffType: 'accuracy',
-    debuffStrength: 20,
-    duration: 2,
+    debuffType: undefined,
+    debuffStrength: undefined,
+    duration: undefined,
     cooldown: 2,
     targetType: 'single',
   },
@@ -1905,11 +1905,11 @@ export const MOVE_UPGRADE_TEMPLATES: Record<string, {
   level4: { damage?: number; ppSteal?: number; debuffStrength?: number; buffStrength?: number; shieldBoost?: number; healing?: number };
 }> = {
   // Manifest Moves (Reading)
-  'Emotional Read': {
-    level1: { damage: 8, ppSteal: 0, debuffStrength: 20 },
-    level2: { damage: 12, ppSteal: 3, debuffStrength: 30 },
-    level3: { damage: 16, ppSteal: 6, debuffStrength: 40 },
-    level4: { damage: 20, ppSteal: 10, debuffStrength: 50 }
+  'Read the Room': {
+    level1: { damage: 13, ppSteal: 0 },
+    level2: { damage: 18, ppSteal: 3 },
+    level3: { damage: 23, ppSteal: 6 },
+    level4: { damage: 28, ppSteal: 10 }
   },
   'Pattern Shield': {
     level1: { shieldBoost: 15, buffStrength: 25 },

@@ -24,6 +24,11 @@ interface Player {
   shieldStrength?: number;
   maxShieldStrength?: number;
   overshield?: number;
+  vaultHealth?: number;
+  maxVaultHealth?: number;
+  capacity?: number;
+  onCooldown?: boolean;
+  cooldownEndTime?: Date;
 }
 
 const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultSiegeModalProps) => {
@@ -45,6 +50,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     console.log('🔄 Loading state changed:', loading);
   }, [loading]);
   const [targetVault, setTargetVault] = useState<any>(null);
+  const [targetVaultBefore, setTargetVaultBefore] = useState<any>(null); // Store initial stats
   const [attackResults, setAttackResults] = useState<any>(null);
   const [remainingMoves, setRemainingMoves] = useState<number>(0);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -302,7 +308,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
         console.log('VaultSiegeModal: Available players before vault loading:', availablePlayers.length);
 
-        // Load vault data for each player to get shield information
+        // Load vault data for each player to get shield and vault health information
         for (const player of availablePlayers) {
           try {
             const vaultDoc = await getDoc(doc(db, 'vaults', player.uid));
@@ -311,6 +317,28 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               player.shieldStrength = vaultData.shieldStrength || 0;
               player.maxShieldStrength = vaultData.maxShieldStrength || 50;
               player.overshield = vaultData.overshield || 0;
+              player.capacity = vaultData.capacity || 1000;
+              // Max vault health is always 10% of vault capacity
+              player.maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
+              // Current vault health is capped at current PP if PP < max health
+              const maxVaultHealth = player.maxVaultHealth;
+              const currentVaultHealth = vaultData.vaultHealth !== undefined 
+                ? Math.min(vaultData.vaultHealth, maxVaultHealth, vaultData.currentPP || 0)
+                : Math.min(vaultData.currentPP || 0, maxVaultHealth);
+              player.vaultHealth = currentVaultHealth;
+              
+              // Check if player is on cooldown (vault health is 0 and cooldown is active)
+              if (vaultData.vaultHealthCooldown) {
+                const cooldownEndTime = new Date(vaultData.vaultHealthCooldown);
+                cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
+                const now = new Date();
+                if (now < cooldownEndTime) {
+                  // Player is on cooldown - mark them but don't exclude (we'll show them as unavailable)
+                  (player as any).onCooldown = true;
+                  (player as any).cooldownEndTime = cooldownEndTime;
+                }
+              }
+              
               console.log('VaultSiegeModal: Loaded vault for', player.displayName, vaultData);
             } else {
               console.log('VaultSiegeModal: No vault found for', player.displayName);
@@ -337,14 +365,30 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   useEffect(() => {
     if (!selectedTarget) {
       setTargetVault(null);
+      setTargetVaultBefore(null);
       return;
     }
 
-    const loadTargetVault = async () => {
+        const loadTargetVault = async () => {
       try {
         const vaultDoc = await getDoc(doc(db, 'vaults', selectedTarget));
         if (vaultDoc.exists()) {
-          setTargetVault(vaultDoc.data());
+          const vaultData = vaultDoc.data();
+          setTargetVault(vaultData);
+          // Always store initial stats when target is selected (reset for new target)
+          const maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
+          const currentVaultHealth = vaultData.vaultHealth !== undefined 
+            ? Math.min(vaultData.vaultHealth, maxVaultHealth, vaultData.currentPP || 0)
+            : Math.min(vaultData.currentPP || 0, maxVaultHealth);
+          setTargetVaultBefore({
+            shieldStrength: vaultData.shieldStrength || 0,
+            maxShieldStrength: vaultData.maxShieldStrength || 50,
+            currentPP: vaultData.currentPP || 0,
+            capacity: vaultData.capacity || 1000,
+            overshield: vaultData.overshield || 0,
+            vaultHealth: currentVaultHealth,
+            maxVaultHealth: maxVaultHealth
+          });
         }
       } catch (error) {
         console.error('Error loading target vault:', error);
@@ -559,9 +603,101 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       console.log('✅ Setting attack results:', results);
       console.log('✅ About to call setAttackResults with:', JSON.stringify(results, null, 2));
       
+      // Refresh target vault data after attack
+      const refreshTargetData = async () => {
+        try {
+          // Refresh target vault
+          const vaultDoc = await getDoc(doc(db, 'vaults', selectedTarget));
+          if (vaultDoc.exists()) {
+            const newVaultData = vaultDoc.data();
+            setTargetVault(newVaultData);
+          }
+          
+          // Refresh target player data in the list
+          const studentDoc = await getDoc(doc(db, 'students', selectedTarget));
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            setPlayers(prevPlayers => prevPlayers.map(player => {
+              if (player.uid === selectedTarget) {
+                // Reload vault for updated stats
+                return {
+                  ...player,
+                  powerPoints: studentData.powerPoints || studentData.currentPP || 0,
+                };
+              }
+              return player;
+            }));
+            
+            // Also update filtered players
+            setFilteredPlayers(prevFiltered => prevFiltered.map(player => {
+              if (player.uid === selectedTarget) {
+                return {
+                  ...player,
+                  powerPoints: studentData.powerPoints || studentData.currentPP || 0,
+                };
+              }
+              return player;
+            }));
+          }
+          
+          // Reload vault data for the target player in the list
+          const vaultDocForList = await getDoc(doc(db, 'vaults', selectedTarget));
+          if (vaultDocForList.exists()) {
+            const vaultDataForList = vaultDocForList.data();
+            const capacity = vaultDataForList.capacity || 1000;
+            const maxVaultHealth = Math.floor(capacity * 0.1);
+            const currentVaultHealth = vaultDataForList.vaultHealth !== undefined 
+              ? Math.min(vaultDataForList.vaultHealth, maxVaultHealth, vaultDataForList.currentPP || 0)
+              : Math.min(vaultDataForList.currentPP || 0, maxVaultHealth);
+            
+            setPlayers(prevPlayers => prevPlayers.map(player => {
+              if (player.uid === selectedTarget) {
+                return {
+                  ...player,
+                  shieldStrength: vaultDataForList.shieldStrength || 0,
+                  maxShieldStrength: vaultDataForList.maxShieldStrength || 50,
+                  overshield: vaultDataForList.overshield || 0,
+                  capacity: capacity,
+                  vaultHealth: currentVaultHealth,
+                  maxVaultHealth: maxVaultHealth,
+                };
+              }
+              return player;
+            }));
+            
+            setFilteredPlayers(prevFiltered => prevFiltered.map(player => {
+              if (player.uid === selectedTarget) {
+                return {
+                  ...player,
+                  shieldStrength: vaultDataForList.shieldStrength || 0,
+                  maxShieldStrength: vaultDataForList.maxShieldStrength || 50,
+                  overshield: vaultDataForList.overshield || 0,
+                  capacity: capacity,
+                  vaultHealth: currentVaultHealth,
+                  maxVaultHealth: maxVaultHealth,
+                };
+              }
+              return player;
+            }));
+          }
+        } catch (error) {
+          console.error('Error refreshing target data:', error);
+        }
+      };
+      
+      // Refresh target data after a short delay to allow database to update
+      setTimeout(() => {
+        refreshTargetData();
+      }, 500);
+      
       // Set attackResults immediately - this will trigger the popup
       console.log('✅ Setting attackResults NOW:', results);
       setAttackResults(results);
+      
+      // Clear selected moves after attack (user can select new ones for next attack)
+      // Keep target selected for easy re-attack
+      setSelectedMoves([]);
+      setSelectedActionCards([]);
       
       // Log after setting to verify
       console.log('✅ setAttackResults called. Current attackResults state should be:', results);
@@ -1093,6 +1229,16 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 onClick={() => {
                   console.log('Closing attack results popup');
                   setAttackResults(null);
+                  // Update before stats to current stats for next attack comparison
+                  if (targetVault) {
+                    setTargetVaultBefore({
+                      shieldStrength: targetVault.shieldStrength || 0,
+                      maxShieldStrength: targetVault.maxShieldStrength || 50,
+                      currentPP: targetVault.currentPP || 0,
+                      capacity: targetVault.capacity || 1000,
+                      overshield: targetVault.overshield || 0
+                    });
+                  }
                 }}
                 style={{
                   position: 'absolute',
@@ -1399,10 +1545,26 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   return '💥';
                 };
 
+                const isOnCooldown = player.onCooldown === true;
+                const cooldownRemaining = isOnCooldown && player.cooldownEndTime ? (() => {
+                      const now = new Date();
+                      const remainingMs = player.cooldownEndTime!.getTime() - now.getTime();
+                      if (remainingMs > 0) {
+                        const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+                        const minutes = Math.ceil((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+                        return { hours, minutes };
+                      }
+                      return null;
+                    })() : null;
+
                 return (
                   <div
                     key={player.uid}
                     onClick={() => {
+                      if (isOnCooldown) {
+                        alert(`This player is on cooldown and cannot be attacked. Cooldown expires in ${cooldownRemaining?.hours || 0}h ${cooldownRemaining?.minutes || 0}m.`);
+                        return;
+                      }
                       console.log('VaultSiegeModal: Player clicked:', {
                         playerUid: player.uid,
                         playerName: player.displayName,
@@ -1418,11 +1580,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       console.log('VaultSiegeModal: Player mouseup:', player.displayName);
                     }}
                     style={{
-                      background: getCardBackground(),
-                      border: `2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.2)'}`,
+                      background: isOnCooldown ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' : getCardBackground(),
+                      border: `2px solid ${isSelected ? '#ffffff' : isOnCooldown ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}`,
                       borderRadius: '12px',
                       padding: '1.25rem',
-                      cursor: 'pointer',
+                      cursor: isOnCooldown ? 'not-allowed' : 'pointer',
                       transition: 'all 0.3s ease',
                       boxShadow: isSelected ? '0 8px 25px rgba(79, 70, 229, 0.4)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
                       minHeight: '160px',
@@ -1433,7 +1595,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       justifyContent: 'space-between',
                       position: 'relative',
                       overflow: 'hidden',
-                      flexShrink: 0
+                      flexShrink: 0,
+                      opacity: isOnCooldown ? 0.6 : 1
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) {
@@ -1464,6 +1627,25 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         zIndex: 2
                       }}>
                         ✓ SELECTED
+                      </div>
+                    )}
+                    
+                    {/* Cooldown Badge */}
+                    {isOnCooldown && (
+                      <div style={{
+                        position: 'absolute',
+                        top: '0.75rem',
+                        left: '0.75rem',
+                        background: 'rgba(107, 114, 128, 0.95)',
+                        color: 'white',
+                        padding: '0.25rem 0.5rem',
+                        borderRadius: '0.5rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 'bold',
+                        backdropFilter: 'blur(10px)',
+                        zIndex: 2
+                      }}>
+                        ⏰ On Cooldown
                       </div>
                     )}
 
@@ -1508,9 +1690,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         marginBottom: '0.75rem'
                       }}>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>POWER POINTS</div>
-                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#f59e0b' }}>
-                            {player.powerPoints.toLocaleString()}
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280', marginBottom: '0.125rem' }}>VAULT HEALTH</div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>
+                            {player.vaultHealth !== undefined ? player.vaultHealth : Math.floor((player.capacity || 1000) * 0.1)}/{player.maxVaultHealth !== undefined ? player.maxVaultHealth : Math.floor((player.capacity || 1000) * 0.1)}
                           </div>
                         </div>
                         <div style={{ textAlign: 'center' }}>
@@ -1529,7 +1711,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                               fontWeight: 'bold',
                               display: 'inline-block'
                             }}>
-                              ✨ +{player.overshield} Overshield{(player.overshield || 0) > 1 ? 's' : ''}
+                              ✨ +1 Overshield
                             </div>
                           )}
                         </div>
@@ -1552,14 +1734,18 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         }} />
                       </div>
 
-                      {/* Shield Status Text */}
+                      {/* Shield Status Text / Cooldown */}
                       <div style={{ 
                         textAlign: 'center',
                         fontSize: '0.75rem',
                         color: '#6b7280',
                         fontWeight: '500'
                       }}>
-                        {shieldPercentage >= 80 ? '🛡️ Well Protected' : 
+                        {isOnCooldown && cooldownRemaining ? (
+                          <span style={{ color: '#6b7280', fontWeight: 'bold' }}>
+                            ⏰ Cooldown: {cooldownRemaining.hours}h {cooldownRemaining.minutes}m
+                          </span>
+                        ) : shieldPercentage >= 80 ? '🛡️ Well Protected' : 
                          shieldPercentage >= 50 ? '⚠️ Moderate Defense' : 
                          '💥 Vulnerable Target'}
                       </div>
@@ -1573,17 +1759,62 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
         {/* Target Vault Info */}
         {targetVault && (
-          <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f9fafb', borderRadius: '8px' }}>
-            <h4 style={{ marginBottom: '0.5rem', color: '#374151' }}>Target Vault Status</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
+          <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f9fafb', borderRadius: '8px', border: '2px solid #e5e7eb' }}>
+            <h4 style={{ marginBottom: '0.75rem', color: '#374151', fontSize: '1.1rem', fontWeight: 'bold' }}>Target Vault Status</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.5rem' }}>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Shield Strength</span>
-                <div style={{ fontWeight: 'bold', color: '#2563eb' }}>
-                  {targetVault.shieldStrength} / {targetVault.maxShieldStrength}
+                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Shield Strength</span>
+                <div style={{ position: 'relative' }}>
+                  {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && (
+                    <div style={{ 
+                      position: 'absolute',
+                      top: '-1.5rem',
+                      left: 0,
+                      fontSize: '0.75rem',
+                      color: '#9ca3af',
+                      fontStyle: 'italic'
+                    }}>
+                      Before: {targetVaultBefore.shieldStrength}
+                    </div>
+                  )}
+                  <div style={{ 
+                    fontWeight: 'bold', 
+                    color: '#2563eb',
+                    fontSize: '1.1rem',
+                    position: 'relative',
+                    padding: '0.5rem',
+                    background: 'white',
+                    borderRadius: '0.5rem',
+                    border: '2px solid #dbeafe'
+                  }}>
+                    {targetVault.shieldStrength || 0} / {targetVault.maxShieldStrength || 50}
+                    {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && targetVaultBefore.shieldStrength !== (targetVault.shieldStrength || 0) && (
+                      <div style={{
+                        position: 'absolute',
+                        right: '-2px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: '3px',
+                        height: '100%',
+                        background: 'linear-gradient(to bottom, transparent, #ef4444, transparent)',
+                        borderRadius: '2px'
+                      }} />
+                    )}
+                  </div>
+                  {targetVaultBefore && targetVaultBefore.shieldStrength !== undefined && targetVaultBefore.shieldStrength !== (targetVault.shieldStrength || 0) && (
+                    <div style={{ 
+                      marginTop: '0.25rem',
+                      fontSize: '0.75rem',
+                      color: '#ef4444',
+                      fontWeight: 'bold'
+                    }}>
+                      {targetVaultBefore.shieldStrength > (targetVault.shieldStrength || 0) ? '↓' : '↑'} {Math.abs((targetVault.shieldStrength || 0) - targetVaultBefore.shieldStrength)}
+                    </div>
+                  )}
                 </div>
                 {(targetVault.overshield || 0) > 0 && (
                   <div style={{ 
-                    marginTop: '0.25rem',
+                    marginTop: '0.5rem',
                     padding: '0.125rem 0.375rem',
                     backgroundColor: '#fbbf24',
                     color: '#92400e',
@@ -1592,20 +1823,90 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     fontWeight: 'bold',
                     display: 'inline-block'
                   }}>
-                    ✨ +{targetVault.overshield} Overshield{(targetVault.overshield || 0) > 1 ? 's' : ''}
+                    ✨ +1 Overshield
                   </div>
                 )}
               </div>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Generator</span>
-                <div style={{ fontWeight: 'bold', color: '#f59e0b' }}>
+                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Generator</span>
+                <div style={{ fontWeight: 'bold', color: '#f59e0b', fontSize: '1.1rem', padding: '0.5rem', background: 'white', borderRadius: '0.5rem', border: '2px solid #fde68a' }}>
                   Level {targetVault.generatorLevel || 1}
                 </div>
               </div>
               <div>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Current PP</span>
-                <div style={{ fontWeight: 'bold', color: '#059669' }}>
-                  {targetVault.currentPP} / {targetVault.capacity}
+                <span style={{ fontSize: '0.875rem', color: '#6b7280', display: 'block', marginBottom: '0.5rem' }}>Vault Health</span>
+                <div style={{ position: 'relative' }}>
+                  {targetVaultBefore && targetVaultBefore.vaultHealth !== undefined && (
+                    <div style={{ 
+                      position: 'absolute',
+                      top: '-1.5rem',
+                      left: 0,
+                      fontSize: '0.75rem',
+                      color: '#9ca3af',
+                      fontStyle: 'italic'
+                    }}>
+                      Before: {targetVaultBefore.vaultHealth}
+                    </div>
+                  )}
+                  <div style={{ 
+                    fontWeight: 'bold', 
+                    color: '#059669',
+                    fontSize: '1.1rem',
+                    position: 'relative',
+                    padding: '0.5rem',
+                    background: 'white',
+                    borderRadius: '0.5rem',
+                    border: '2px solid #d1fae5'
+                  }}>
+                    {(() => {
+                      const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
+                      const currentVaultHealth = targetVault.vaultHealth !== undefined 
+                        ? Math.min(targetVault.vaultHealth, maxVaultHealth, targetVault.currentPP || 0)
+                        : Math.min(targetVault.currentPP || 0, maxVaultHealth);
+                      return `${currentVaultHealth} / ${maxVaultHealth}`;
+                    })()}
+                    {targetVaultBefore && targetVaultBefore.vaultHealth !== undefined && (() => {
+                      const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
+                      const currentVaultHealth = targetVault.vaultHealth !== undefined 
+                        ? Math.min(targetVault.vaultHealth, maxVaultHealth, targetVault.currentPP || 0)
+                        : Math.min(targetVault.currentPP || 0, maxVaultHealth);
+                      return currentVaultHealth !== targetVaultBefore.vaultHealth;
+                    })() && (
+                      <div style={{
+                        position: 'absolute',
+                        right: '-2px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: '3px',
+                        height: '100%',
+                        background: 'linear-gradient(to bottom, transparent, #ef4444, transparent)',
+                        borderRadius: '2px'
+                      }} />
+                    )}
+                  </div>
+                  {targetVaultBefore && targetVaultBefore.vaultHealth !== undefined && (() => {
+                    const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
+                    const currentVaultHealth = targetVault.vaultHealth !== undefined 
+                      ? Math.min(targetVault.vaultHealth, maxVaultHealth, targetVault.currentPP || 0)
+                      : Math.min(targetVault.currentPP || 0, maxVaultHealth);
+                    const change = currentVaultHealth - targetVaultBefore.vaultHealth;
+                    return change !== 0;
+                  })() && (
+                    <div style={{ 
+                      marginTop: '0.25rem',
+                      fontSize: '0.75rem',
+                      color: '#ef4444',
+                      fontWeight: 'bold'
+                    }}>
+                      ↓ {Math.abs((() => {
+                        const maxVaultHealth = Math.floor((targetVault.capacity || 1000) * 0.1);
+                        const currentVaultHealth = targetVault.vaultHealth !== undefined 
+                          ? Math.min(targetVault.vaultHealth, maxVaultHealth, targetVault.currentPP || 0)
+                          : Math.min(targetVault.currentPP || 0, maxVaultHealth);
+                        return currentVaultHealth - (targetVaultBefore.vaultHealth || 0);
+                      })())}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

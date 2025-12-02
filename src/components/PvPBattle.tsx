@@ -632,7 +632,8 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const vaultData = opponentVault.data();
         const opponentLevel = getLevelFromXP(studentData.xp || 0);
 
-        const maxVaultHealth = vaultData.maxVaultHealth || Math.floor((vaultData.capacity || 1000) * 0.1);
+        // Max vault health is always 10% of vault capacity (maxPP)
+        const maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
         const vaultHealth = vaultData.vaultHealth !== undefined 
           ? vaultData.vaultHealth 
           : Math.min(vaultData.currentPP || 0, maxVaultHealth);
@@ -999,7 +1000,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
                   </div>
                 )}
                 <div>
-                  <div style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>VAULT HEALTH: {(opponent.vaultHealth !== undefined ? opponent.vaultHealth : (opponent.maxVaultHealth || Math.floor((opponent.maxPP || 1000) * 0.1)))}/{(opponent.maxVaultHealth || Math.floor((opponent.maxPP || 1000) * 0.1))}</div>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>VAULT HEALTH: {(opponent.vaultHealth !== undefined ? opponent.vaultHealth : Math.floor((opponent.maxPP || 1000) * 0.1))}/{Math.floor((opponent.maxPP || 1000) * 0.1)}</div>
                   <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>🛡️ {opponent.shieldStrength}/{opponent.maxShieldStrength}</div>
                 </div>
               </div>

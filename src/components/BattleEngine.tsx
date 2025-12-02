@@ -32,6 +32,8 @@ interface Opponent {
   maxShieldStrength: number;
   level: number;
   speed?: number; // Speed stat for turn order (default 50)
+  photoURL?: string; // Profile picture URL for players
+  image?: string; // Image URL for CPU opponents
 }
 
 interface BattleEngineProps {
@@ -97,6 +99,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
+  const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
   
   // Use initialBattleLog if provided (for Mindforge), otherwise use default
   const defaultLog = mindforgeMode 
@@ -335,7 +338,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       if (totalHealing > 0) {
         const currentHealth = vault.vaultHealth || vault.maxVaultHealth || 0;
-        const maxHealth = vault.maxVaultHealth || Math.floor((vault.capacity || 1000) * 0.1);
+        // Max vault health is always 10% of vault capacity
+        const maxHealth = Math.floor((vault.capacity || 1000) * 0.1);
         const actualHealthHealed = Math.min(maxHealth - currentHealth, totalHealing);
         const actualShieldHealed = Math.min((vault.maxShieldStrength || 100) - vault.shieldStrength, Math.floor(totalHealing * 0.5));
         await updateVault({
@@ -501,9 +505,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     return true;
   }, [playerEffects, opponentEffects]);
 
-  // Fetch user level
+  // Fetch user level and photo
   useEffect(() => {
-    const fetchUserLevel = async () => {
+    const fetchUserData = async () => {
       if (!currentUser) return;
       
       try {
@@ -511,17 +515,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         if (userDoc.exists()) {
           const userData = userDoc.data();
           const calculatedLevel = getLevelFromXP(userData.xp || 0);
+          const finalPhotoURL = userData.photoURL || currentUser.photoURL || null;
           console.log('BattleEngine: User data from Firestore:', userData);
           console.log('BattleEngine: User XP from Firestore:', userData.xp);
           console.log('BattleEngine: Calculated level from XP:', calculatedLevel);
+          console.log('BattleEngine: Final photoURL:', finalPhotoURL);
           setUserLevel(calculatedLevel);
+          setUserPhotoURL(finalPhotoURL);
         }
       } catch (error) {
-        console.error('Error fetching user level:', error);
+        console.error('Error fetching user data:', error);
       }
     };
 
-    fetchUserLevel();
+    fetchUserData();
   }, [currentUser]);
 
   // Load CPU opponent moves from Firestore
@@ -669,7 +676,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         if (opponentVaultDoc.exists()) {
           const opponentVaultData = opponentVaultDoc.data();
-          const maxVaultHealth = opponentVaultData.maxVaultHealth || Math.floor((opponentVaultData.capacity || 1000) * 0.1);
+          // Max vault health is always 10% of vault capacity
+          const maxVaultHealth = Math.floor((opponentVaultData.capacity || 1000) * 0.1);
           const vaultHealth = opponentVaultData.vaultHealth !== undefined 
             ? opponentVaultData.vaultHealth 
             : Math.min(opponentVaultData.currentPP || 0, maxVaultHealth);
@@ -745,7 +753,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const updatedVaultDoc = await getDoc(updatedVaultRef);
         if (updatedVaultDoc.exists()) {
           const updatedVaultData = updatedVaultDoc.data();
-          const maxVaultHealth = updatedVaultData.maxVaultHealth || Math.floor((updatedVaultData.capacity || 1000) * 0.1);
+          // Max vault health is always 10% of vault capacity
+          const maxVaultHealth = Math.floor((updatedVaultData.capacity || 1000) * 0.1);
           const updatedVaultHealth = updatedVaultData.vaultHealth !== undefined 
             ? updatedVaultData.vaultHealth 
             : maxVaultHealth;
@@ -922,13 +931,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }));
     } else {
       return [
-        {
-          id: opponent.id,
-          name: opponent.name,
-          avatar: '🏰',
-          currentPP: opponent.currentPP,
-          shieldStrength: opponent.shieldStrength,
-          maxPP: opponent.maxPP,
+    {
+      id: opponent.id,
+      name: opponent.name,
+      avatar: '🏰',
+      currentPP: opponent.currentPP,
+      shieldStrength: opponent.shieldStrength,
+      maxPP: opponent.maxPP,
           maxShieldStrength: opponent.maxShieldStrength,
           level: opponent.level
         }
@@ -971,10 +980,29 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       let opponentMoves: any[] = [];
       if (cpuOpponentMoves && Array.isArray(cpuOpponentMoves)) {
         const opponentId = opponent.id || opponent.name?.toLowerCase().replace(/\s+/g, '-');
-        const opponentData = cpuOpponentMoves.find((opp: any) => 
-          opp.id === opponentId || 
-          opp.name?.toLowerCase() === opponent.name?.toLowerCase()
-        );
+        const opponentName = opponent.name?.toLowerCase() || '';
+        
+        // Try to find opponent by ID or name
+        // For Ice Golems, match by name since IDs are like "ice-golem-1", "ice-golem-2", etc.
+        const opponentData = cpuOpponentMoves.find((opp: any) => {
+          const oppId = opp.id?.toLowerCase() || '';
+          const oppName = opp.name?.toLowerCase() || '';
+          
+          // Exact ID match
+          if (oppId === opponentId) return true;
+          
+          // Exact name match
+          if (oppName === opponentName) return true;
+          
+          // For Ice Golems, check if ID starts with "ice-golem" or name contains "ice golem"
+          if ((opponentId.startsWith('ice-golem') || opponentName.includes('ice golem')) &&
+              (oppId === 'ice-golem' || oppName.includes('ice golem'))) {
+            return true;
+          }
+          
+          return false;
+        });
+        
         if (opponentData && opponentData.moves) {
           opponentMoves = opponentData.moves;
         }
@@ -982,12 +1010,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
       // Fallback to default moves if not found
       if (opponentMoves.length === 0) {
-        opponentMoves = [
-          { name: 'Vault Breach', baseDamage: 8, type: 'attack', level: 1, masteryLevel: 1 },
-          { name: 'PP Drain', baseDamage: 6, type: 'attack', level: 1, masteryLevel: 1 },
-          { name: 'Shield Bash', baseDamage: 7, type: 'attack', level: 1, masteryLevel: 1 },
-          { name: 'Energy Strike', baseDamage: 9, type: 'attack', level: 1, masteryLevel: 1 }
-        ];
+        // Check if this is an Ice Golem
+        if (opponent.name?.toLowerCase().includes('ice golem') || opponent.id?.toLowerCase().includes('ice-golem')) {
+          opponentMoves = [
+            { name: 'Ice Shard', damageRange: { min: 20, max: 50 }, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Ice Punch', damageRange: { min: 25, max: 40 }, type: 'attack', level: 1, masteryLevel: 1 }
+          ];
+        } else {
+          // Default training dummy moves
+          opponentMoves = [
+            { name: 'Vault Breach', baseDamage: 8, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'PP Drain', baseDamage: 6, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Shield Bash', baseDamage: 7, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Energy Strike', baseDamage: 9, type: 'attack', level: 1, masteryLevel: 1 }
+          ];
+        }
       }
 
       // Select best target (weakest enemy)
@@ -1038,6 +1075,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
         // Log CPU move selection (optional, for debugging)
         console.log(`🤖 ${opponent.name} selected: ${selectedMove.move.name} on ${target.name} - ${selectedMove.reason}`);
+        console.log(`🤖 ${opponent.name} move details:`, selectedMove.move);
+        console.log(`🤖 Available moves for ${opponent.name}:`, opponentMoves);
       }
     });
   }, [isMultiplayer, allies, opponents, participantMoves, currentUser, vault, cpuOpponentMoves, battleState.turnOrder]);
@@ -1120,31 +1159,156 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Player targeting an opponent
         target = opponents.find(opp => opp.id === targetId);
       } else {
-        // CPU/Other player - for now, target the current player
-        // TODO: Implement AI targeting logic for CPU opponents
-        target = allies.find(ally => ally.id === currentUser?.uid) || opponents[0];
+        // CPU opponent - find the target
+        if (targetId) {
+          // Target was selected by CPU AI
+          target = allies.find(ally => ally.id === targetId) || opponents.find(opp => opp.id === targetId);
+        } else {
+          // Fallback: target the current player
+          target = allies.find(ally => ally.id === currentUser?.uid) || opponents[0];
+        }
       }
 
       if (!target) continue;
 
-      // Log the move execution
-      newLog.push(`⚔️ ${participant.name} uses ${moveData.move.name} on ${target.name}!`);
-      
-      // Update battle log
+      // Execute the move
+      if (isCurrentPlayer) {
+        // Player move execution in multiplayer mode
+        const playerMove = moveData.move;
+        const playerName = currentUser?.displayName || 'Player';
+        
+        // Calculate damage - player moves use the Move interface which has 'damage' property
+        let totalDamage = playerMove.damage || 0;
+        
+        // Apply damage to target
+        if (totalDamage > 0 && target) {
+          const targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
+          const remainingDamage = totalDamage - targetShieldDamage;
+          const targetHealthDamage = Math.min(remainingDamage, target.currentPP || 0);
+          
+          // Update target stats
+          const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
+          const newTargetHealth = Math.max(0, (target.currentPP || 0) - targetHealthDamage);
+          
+          // Update opponents array if target is an opponent
+          const targetId = target.id;
+          if (targetId && opponents.some(opp => opp.id === targetId)) {
+            setOpponents(prev => prev.map(opp => 
+              opp.id === targetId 
+                ? { ...opp, shieldStrength: newTargetShield, currentPP: newTargetHealth }
+                : opp
+            ));
+          }
+          
+          // Log the attack
+          if (targetShieldDamage > 0 && targetHealthDamage > 0) {
+            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`);
+          } else if (targetShieldDamage > 0) {
+            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetShieldDamage} damage to shields!`);
+          } else if (targetHealthDamage > 0) {
+            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetHealthDamage} damage to health!`);
+          } else {
+            newLog.push(`⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`);
+          }
+        } else {
+          // Non-damage move (heal, shield boost, etc.)
+          if (target) {
+            newLog.push(`⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`);
+          }
+        }
+      } else {
+        // Execute CPU/opponent move - CPU moves have a different structure (from selectOptimalCPUMove)
+        const cpuMove = moveData.move as any; // CPU moves have damageRange/baseDamage which aren't in Move interface
+        const cpuOpponent = participant;
+        
+        console.log(`⚔️ Executing CPU move: ${cpuOpponent.name} using ${cpuMove.name}`, cpuMove);
+        
+        // Calculate damage - CPU moves can have damageRange or baseDamage
+        let totalDamage = 0;
+        if ((cpuMove as any).damageRange) {
+          const { min, max } = (cpuMove as any).damageRange;
+          totalDamage = Math.floor(Math.random() * (max - min + 1)) + min;
+          console.log(`⚔️ ${cpuOpponent.name} damage range: ${min}-${max}, rolled: ${totalDamage}`);
+        } else if ((cpuMove as any).baseDamage) {
+          totalDamage = (cpuMove as any).baseDamage;
+          console.log(`⚔️ ${cpuOpponent.name} base damage: ${totalDamage}`);
+        } else if (cpuMove.damage) {
+          // Fallback to standard Move damage property
+          totalDamage = cpuMove.damage;
+          console.log(`⚔️ ${cpuOpponent.name} move damage: ${totalDamage}`);
+        }
+        
+        // Apply damage to target
+        if (totalDamage > 0 && target) {
+          const targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
+          const remainingDamage = totalDamage - targetShieldDamage;
+          const targetHealthDamage = Math.min(remainingDamage, target.currentPP || 0);
+          
+          // Update target stats
+          const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
+          const newTargetHealth = Math.max(0, (target.currentPP || 0) - targetHealthDamage);
+          
+          // Store target ID for use in closures
+          const targetId = target.id;
+          
+          // Update opponents array if target is an opponent
+          if (targetId && opponents.some(opp => opp.id === targetId)) {
+            setOpponents(prev => prev.map(opp => 
+              opp.id === targetId 
+                ? { ...opp, shieldStrength: newTargetShield, currentPP: newTargetHealth }
+                : opp
+            ));
+          }
+          
+          // Update allies array if target is an ally (player)
+          if (targetId && allies.some(ally => ally.id === targetId)) {
+            setAllies(prev => prev.map(ally => 
+              ally.id === targetId 
+                ? { ...ally, shieldStrength: newTargetShield, currentPP: newTargetHealth }
+                : ally
+            ));
+            
+            // If targeting the player, also update vault
+            if (targetId === currentUser?.uid) {
+              const newShieldStrength = Math.max(0, vault.shieldStrength - targetShieldDamage);
+              const maxVaultHealth = Math.floor(vault.capacity * 0.1);
+              const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
+              const newVaultHealth = Math.max(0, currentVaultHealth - targetHealthDamage);
+              
+              try {
+                await updateVault({
+                  shieldStrength: newShieldStrength,
+                  vaultHealth: newVaultHealth
+                });
+              } catch (error) {
+                console.error('Failed to update vault after CPU attack:', error);
+              }
+            }
+          }
+          
+          // Log the attack
+          if (targetShieldDamage > 0 && targetHealthDamage > 0) {
+            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`);
+          } else if (targetShieldDamage > 0) {
+            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetShieldDamage} damage to shields!`);
+          } else if (targetHealthDamage > 0) {
+            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetHealthDamage} damage to health!`);
+          } else {
+            newLog.push(`⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`);
+          }
+        } else {
+          // Non-damage move (heal, shield boost, etc.)
+          if (target) {
+            newLog.push(`⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`);
+          }
+        }
+      }
+
+      // Update battle log immediately after each move so it's visible
       setBattleState(prev => ({
         ...prev,
-        battleLog: newLog
+        battleLog: [...newLog] // Create a new array to trigger React update
       }));
-
-      // Execute the move (simplified for now - full implementation would reuse handleAnimationComplete logic)
-      // For now, we'll trigger the existing move execution logic
-      if (isCurrentPlayer) {
-        // Use existing player move execution
-        // The move is already stored in battleState, so we can proceed
-      } else {
-        // Execute CPU/opponent move
-        // This would need to be adapted from executeOpponentTurn
-      }
 
       // Small delay between moves for visual clarity
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -1162,7 +1326,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       selectedTarget: null,
       battleLog: newLog
     }));
-  }, [vault, battleState.battleLog, participantMoves, currentUser, opponents, allies]);
+  }, [vault, battleState.battleLog, participantMoves, currentUser, opponents, allies, updateVault]);
 
   const executePlayerMove = useCallback(async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
@@ -1481,7 +1645,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const counterRemainingDamage = Math.max(0, counterDamage - vault.shieldStrength);
         
         if (counterRemainingDamage > 0) {
-          const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+          // Max vault health is always 10% of vault capacity
+          const maxVaultHealth = Math.floor(vault.capacity * 0.1);
           const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
           const counterVaultDamage = Math.min(counterRemainingDamage, currentVaultHealth);
           
@@ -1672,12 +1837,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newTargetOpponent.currentPP = Math.max(0, targetOpponent.currentPP - healthDamage);
     } else {
       // For PvP opponents, damage vault health, not PP
-      const maxVaultHealth = targetOpponent.maxVaultHealth || Math.floor((targetOpponent.maxPP || 1000) * 0.1);
+      // Max vault health is always 10% of maxPP (vault capacity)
+      const maxVaultHealth = Math.floor((targetOpponent.maxPP || 1000) * 0.1);
       const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : maxVaultHealth;
       const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
       const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
       newTargetOpponent.vaultHealth = newVaultHealth;
-      newTargetOpponent.maxVaultHealth = maxVaultHealth;
+      newTargetOpponent.maxVaultHealth = maxVaultHealth; // Always 10% of maxPP
       // Set cooldown if vault health reaches 0
       if (newVaultHealth === 0 && currentVaultHealth > 0) {
         // Note: We'll need to update this in Firestore separately
@@ -1724,7 +1890,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         if (opponentVaultDoc.exists()) {
           const vaultData = opponentVaultDoc.data();
-          const maxVaultHealth = targetOpponent.maxVaultHealth || Math.floor((targetOpponent.maxPP || 1000) * 0.1);
+          // Max vault health is always 10% of maxPP (vault capacity)
+          const maxVaultHealth = Math.floor((targetOpponent.maxPP || 1000) * 0.1);
           const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : (vaultData.vaultHealth || maxVaultHealth);
           const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
           const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
@@ -2050,6 +2217,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         { name: 'Ice Shard', baseDamage: 7, level: 1, masteryLevel: 1, type: 'attack' },
         { name: 'Ice Wall', baseDamage: 0, level: 1, masteryLevel: 1, type: 'defense' }
       ];
+      } else if (opponent.name?.toLowerCase().includes('ice golem') || opponent.id?.toLowerCase().includes('ice-golem')) {
+        // Ice Golem's moves
+        opponentMoves = [
+          { name: 'Ice Shard', damageRange: { min: 20, max: 50 }, level: 1, masteryLevel: 1, type: 'attack' },
+          { name: 'Ice Punch', damageRange: { min: 25, max: 40 }, level: 1, masteryLevel: 1, type: 'attack' }
+        ];
       } else if (opponent.name?.toLowerCase().includes('flame keeper') || opponent.name?.toLowerCase().includes('flame thrower') || opponent.name?.toLowerCase().includes('master guardian')) {
         // Flame Keeper's fire-based moves
         opponentMoves = [
@@ -2170,15 +2343,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         shieldDamage = 0;
         ppStolen = 0;
         
-        // Reduce overshield by 1
-        const newOvershield = Math.max(0, vault.overshield - 1);
+        // Overshield is consumed (set to 0) after absorbing an attack
+        newLog.push(`✨ Your overshield absorbed ${opponent.name}'s ${opponentMove.name} attack! (0 overshields remaining)`);
         
-        newLog.push(`✨ Your overshield absorbed ${opponent.name}'s ${opponentMove.name} attack! (${newOvershield} overshield${newOvershield !== 1 ? 's' : ''} remaining)`);
-        
-        // Update vault with reduced overshield
+        // Update vault with overshield consumed
         try {
           await updateVault({
-            overshield: newOvershield
+            overshield: 0
           });
         } catch (error) {
           console.error('❌ Failed to update overshield:', error);
@@ -2198,7 +2369,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         });
       
       if (remainingDamage > 0) {
-          const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+          // Max vault health is always 10% of vault capacity
+          const maxVaultHealth = Math.floor(vault.capacity * 0.1);
           const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
           ppStolen = Math.min(remainingDamage, currentVaultHealth);
       }
@@ -2222,7 +2394,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Update player vault (only if overshield didn't absorb the attack)
     const currentShieldStrength = vault.shieldStrength || 0;
     const newShieldStrength = overshieldAbsorbed ? currentShieldStrength : Math.max(0, currentShieldStrength - shieldDamage);
-    const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
+    // Max vault health is always 10% of vault capacity
+    const maxVaultHealth = Math.floor(vault.capacity * 0.1);
     const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
     const newVaultHealth = Math.max(0, currentVaultHealth - ppStolen);
     // Set cooldown if vault health reaches 0
@@ -2434,10 +2607,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const getCustomBackground = () => {
     if (mindforgeMode) return '/images/Mind Forge BKG.png';
     if (isMultiplayer) {
+      // Check for Ice Golem battle (Chapter 1 - Challenge 7)
+      const hasIceGolem = opponents.some(opp => 
+        opp.name?.toLowerCase().includes('ice golem') || 
+        opp.id?.toLowerCase().includes('ice-golem')
+      );
+      if (hasIceGolem) return '/images/Frozen train Station.png';
+      
       // For multiplayer, check if any opponent is Terra
       const hasTerra = opponents.some(opp => opp.name?.toLowerCase().includes('terra'));
       if (hasTerra && isTerraAwakened) return '/images/Forest Stage.png';
     } else {
+      // Check for Truth opponent (Chapter 1 - Challenge 1)
+      if (opponent.id === 'truth' || opponent.name?.toLowerCase() === 'truth') {
+        return '/images/Frozen train Station.png';
+      }
       if (isTerraAwakened && opponent.name?.toLowerCase().includes('terra')) {
         return '/images/Forest Stage.png';
       }
@@ -2463,27 +2647,29 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           allies={allies.map(ally => ({
             id: ally.id,
             name: ally.name,
-            avatar: '🏰',
+            avatar: ally.id === currentUser?.uid 
+              ? (userPhotoURL || ally.photoURL || '🏰')
+              : (ally.photoURL || '🏰'),
             currentPP: ally.currentPP,
             shieldStrength: ally.shieldStrength,
             maxPP: ally.maxPP,
             maxShieldStrength: ally.maxShieldStrength,
             level: ally.level,
             vaultHealth: ally.vaultHealth,
-            maxVaultHealth: ally.maxVaultHealth,
+            maxVaultHealth: Math.floor((ally.maxPP || 1000) * 0.1), // Always 10% of maxPP
             isPlayer: ally.id === currentUser?.uid
           }))}
           enemies={opponents.map(opp => ({
             id: opp.id,
             name: opp.name,
-            avatar: '🏰',
+            avatar: opp.image || '🏰',
             currentPP: opp.currentPP,
             shieldStrength: opp.shieldStrength,
             maxPP: opp.maxPP,
             maxShieldStrength: opp.maxShieldStrength,
             level: opp.level,
             vaultHealth: opp.vaultHealth,
-            maxVaultHealth: opp.maxVaultHealth
+            maxVaultHealth: Math.floor((opp.maxPP || 1000) * 0.1) // Always 10% of maxPP
           }))}
           isPlayerTurn={battleState.isPlayerTurn}
           battleLog={battleState.battleLog}
@@ -2493,22 +2679,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           opponentEffects={opponentEffects}
         />
       ) : (
-        <BattleArena
-          onMoveSelect={handleMoveSelect}
-          onTargetSelect={handleTargetSelect}
-          onEscape={handleEscape}
-          selectedMove={battleState.selectedMove}
-          selectedTarget={battleState.selectedTarget}
-          availableMoves={availableMoves}
-          availableTargets={availableTargets}
-          isPlayerTurn={battleState.isPlayerTurn}
-          battleLog={battleState.battleLog}
+      <BattleArena
+        onMoveSelect={handleMoveSelect}
+        onTargetSelect={handleTargetSelect}
+        onEscape={handleEscape}
+        selectedMove={battleState.selectedMove}
+        selectedTarget={battleState.selectedTarget}
+        availableMoves={availableMoves}
+        availableTargets={availableTargets}
+        isPlayerTurn={battleState.isPlayerTurn}
+        battleLog={battleState.battleLog}
           customBackground={getCustomBackground()}
-          hideCenterPrompt={mindforgeMode} // Hide center prompt in Mindforge mode
+        hideCenterPrompt={mindforgeMode} // Hide center prompt in Mindforge mode
           playerEffects={playerEffects}
           opponentEffects={opponentEffects}
           isTerraAwakened={isTerraAwakened}
-        />
+      />
       )}
       
       {/* Battle Status */}

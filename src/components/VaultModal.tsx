@@ -164,10 +164,10 @@ const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
               }}
             >
               <div style={{ color: '#f59e0b', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                🛡️ Overshield Active: {vault.overshield}
+                🛡️ Overshield Active: 1
               </div>
               <div style={{ color: '#9ca3af', fontSize: '0.9rem', marginTop: '0.5rem' }}>
-                Your next {vault.overshield} attack{vault.overshield > 1 ? 's' : ''} will be blocked
+                Your next attack will be blocked
               </div>
             </div>
           )}

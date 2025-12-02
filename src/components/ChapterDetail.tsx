@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -26,7 +26,7 @@ interface ChapterDetailProps {
 
 const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const { currentUser } = useAuth();
-  const { vault, moves, actionCards } = useBattle();
+  const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
   const navigate = useNavigate();
   const [userProgress, setUserProgress] = useState<any>(null);
@@ -423,6 +423,33 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           timestamp: serverTimestamp(),
           read: false
         });
+
+        // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
+        if (challenge.id === 'ep1-combat-drill') {
+          try {
+            // Get user's element from student data
+            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+            if (studentDoc.exists()) {
+              const studentData = studentDoc.data();
+              const userElement = studentData.elementalAffinity?.toLowerCase() || 
+                                 studentData.manifestationType?.toLowerCase() || 
+                                 'fire';
+              
+              console.log(`ChapterDetail: Unlocking elemental moves for element: ${userElement}`);
+              await unlockElementalMoves(userElement);
+              
+              // Add notification about elemental moves unlock
+              await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+                type: 'elemental_moves_unlocked',
+                message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
+                timestamp: serverTimestamp(),
+                read: false
+              });
+            }
+          } catch (error) {
+            console.error('Error unlocking elemental moves:', error);
+          }
+        }
       }
     }
   };
@@ -545,7 +572,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     if (!currentUser) return;
 
     try {
-      console.log('CPU Battle completed:', { victory, xpGained, ppGained });
+      console.log('CPU Battle completed:', { victory, xpGained, ppGained, completingChallenge });
+      
+      // Determine which challenge is being completed
+      const challengeId = completingChallenge || 'ep1-manifest-test'; // Default to manifest test if not set
+      const challengeName = challengeId === 'ep1-combat-drill' ? '1st Combat Drill' : 'Test Awakened Abilities';
       
       if (victory) {
         if (!isReplayMode) {
@@ -559,7 +590,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
               ...currentData.chapters?.[chapter.id],
               challenges: {
                 ...currentData.chapters?.[chapter.id]?.challenges,
-                'ep1-manifest-test': {
+                [challengeId]: {
                   isCompleted: true,
                   completedAt: serverTimestamp(),
                   autoCompleted: true,
@@ -581,8 +612,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
             email: currentUser.email || '',
             photoURL: currentUser.photoURL || '',
-            challengeId: 'ep1-manifest-test',
-            challengeName: 'Test Awakened Abilities',
+            challengeId: challengeId,
+            challengeName: challengeName,
             submissionType: 'auto_completed',
             status: 'approved',
             timestamp: serverTimestamp(),
@@ -597,24 +628,55 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           // Create notification for challenge completion
           await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
             type: 'challenge_completed',
-            message: `🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`,
-            challengeId: 'ep1-manifest-test',
-            challengeName: 'Test Awakened Abilities',
+            message: `🎉 Challenge "${challengeName}" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`,
+            challengeId: challengeId,
+            challengeName: challengeName,
             xpReward: xpGained,
             ppReward: ppGained,
             timestamp: serverTimestamp(),
             read: false
           });
+
+          // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
+          if (challengeId === 'ep1-combat-drill') {
+            try {
+              // Get user's element from student data
+              const studentRef = doc(db, 'students', currentUser.uid);
+              const studentDoc = await getDoc(studentRef);
+              if (studentDoc.exists()) {
+                const studentData = studentDoc.data();
+                const userElement = studentData.elementalAffinity?.toLowerCase() || 
+                                   studentData.manifestationType?.toLowerCase() || 
+                                   'fire';
+                
+                console.log(`ChapterDetail: Unlocking elemental moves for element: ${userElement}`);
+                await unlockElementalMoves(userElement);
+                
+                // Add notification about elemental moves unlock
+                await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+                  type: 'elemental_moves_unlocked',
+                  message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
+                  timestamp: serverTimestamp(),
+                  read: false
+                });
+              }
+            } catch (error) {
+              console.error('Error unlocking elemental moves:', error);
+            }
+          }
         }
         
         if (isReplayMode) {
           alert(`🎉 Battle completed! You defeated the CPU challenger again! This was a replay - no rewards earned.`);
         } else {
-          alert(`🎉 Challenge "Test Awakened Abilities" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
+          alert(`🎉 Challenge "${challengeName}" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
         }
       } else {
         alert('💪 The CPU challenger proved too strong this time. Try again to test your awakened abilities!');
       }
+      
+      // Reset completing challenge state
+      setCompletingChallenge(null);
       
       // Close the battle modal and reset replay mode
       setShowCPUBattleModal(false);
@@ -1026,17 +1088,23 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       const currentData = await getDoc(userRef);
       
       if (currentData.exists()) {
+        // Determine which challenge to complete based on completingChallenge state
+        const challengeId = completingChallenge === 'ep1-update-profile' 
+          ? 'ep1-update-profile' 
+          : 'ep1-portal-sequence';
+        
         const updatedChapters = {
           ...currentData.data().chapters,
           [chapter.id]: {
             ...currentData.data().chapters?.[chapter.id],
             challenges: {
               ...currentData.data().chapters?.[chapter.id]?.challenges,
-              ['ep1-portal-sequence']: {
+              [challengeId]: {
                 isCompleted: true,
                 status: 'approved',
                 completedAt: serverTimestamp(),
-                helaDefeated: true
+                helaDefeated: true,
+                iceGolemsDefeated: completingChallenge === 'ep1-update-profile'
               }
             }
           }
@@ -1052,12 +1120,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           chapters: updatedChapters
         }));
 
-        console.log('Portal sequence challenge completed - Hela defeated!');
-        alert('🎉 Victory! You\'ve defeated Hela and can now continue to Xiotein School!');
+        console.log(`${challengeId} challenge completed - ${completingChallenge === 'ep1-update-profile' ? 'Ice Golems' : 'Hela'} defeated!`);
+        // Modal will be closed by the Continue button in HelaBattle component
       }
     } catch (error) {
-      console.error('Error completing portal sequence challenge:', error);
-      alert('Failed to complete the portal sequence challenge. Please try again.');
+      console.error('Error completing challenge:', error);
+      alert('Failed to complete the challenge. Please try again.');
+      setShowHelaBattle(false);
     }
   };
 
@@ -1071,6 +1140,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   };
 
   const handleHelaBattleEscape = () => {
+    // Close the battle modal
+    setShowHelaBattle(false);
+    // Reset the completing challenge state (important: don't mark challenge as complete)
+    setCompletingChallenge(null);
+    
     if (isReplayMode) {
       alert('🏃 You chose to run away from Hela in this replay!');
       setIsReplayMode(false);
@@ -1123,7 +1197,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         email: currentUser.email || '',
         photoURL: currentUser.photoURL || '',
         challengeId: 'ep1-update-profile',
-        challengeName: 'Update Your Profile',
+        challengeName: 'Hela Awakened',
         submissionType: 'manual_override',
         status: 'approved',
         timestamp: serverTimestamp(),
@@ -1141,7 +1215,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         type: 'challenge_completed',
         message: `🎉 Challenge "Update Your Profile" was manually completed! You earned +15 XP and +5 PP.`,
         challengeId: 'ep1-update-profile',
-        challengeName: 'Update Your Profile',
+        challengeName: 'Hela Awakened',
         xpReward: 15,
         ppReward: 5,
         timestamp: serverTimestamp(),
@@ -1165,6 +1239,89 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  // Reset Challenge 7 for testing
+  const resetChallenge7 = async () => {
+    if (!currentUser) return;
+    
+    if (!window.confirm('Reset Challenge 7 "Hela Awakened" to incomplete for testing?')) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Reconstruct challenge without status field
+        const existingChallenge = userData.chapters?.[1]?.challenges?.['ep1-update-profile'] || {};
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              'ep1-update-profile': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          'chapters.1.challenges.ep1-update-profile.status': deleteField(),
+          'chapters.1.challenges.ep1-update-profile.helaDefeated': deleteField(),
+          'chapters.1.challenges.ep1-update-profile.iceGolemsDefeated': deleteField()
+        });
+      }
+      
+      // Reset in students collection
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedStudentChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              'ep1-update-profile': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(studentRef, {
+          chapters: updatedStudentChapters,
+          'chapters.1.challenges.ep1-update-profile.status': deleteField(),
+          'chapters.1.challenges.ep1-update-profile.helaDefeated': deleteField(),
+          'chapters.1.challenges.ep1-update-profile.iceGolemsDefeated': deleteField()
+        });
+      }
+      
+      // Refresh user progress
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        setUserProgress(refreshedUserDoc.data());
+      }
+      
+      alert('✅ Challenge 7 reset! Refresh the page to see it as incomplete.');
+    } catch (error) {
+      console.error('Error resetting Challenge 7:', error);
+      alert('Error resetting challenge. Check console for details.');
+    }
+  };
+
   const handleChallengeComplete = async (challenge: ChapterChallenge) => {
     if (!currentUser) return;
 
@@ -1176,24 +1333,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       return;
     }
 
-    // Special handling for profile update challenge
+    // Special handling for profile update challenge - now it's a Hela battle with Ice Golems
     if (challenge.id === 'ep1-update-profile') {
-      const hasDisplayName = studentData?.displayName;
-      const hasPhotoURL = studentData?.photoURL;
-      
-      if (!hasDisplayName || !hasPhotoURL) {
-        // Show options for profile challenge
-        const userChoice = window.confirm(
-          'Profile not detected as complete. Do you want to:\n\n' +
-          '• Click OK to manually mark as complete (if you know your profile is updated)\n' +
-          '• Click Cancel to go update your profile first'
-        );
-        
-        if (userChoice) {
-          await manualCompleteProfileChallenge();
-        }
-        return;
-      }
+      setCompletingChallenge('ep1-update-profile');
+      setShowHelaBattle(true);
+      return;
     }
 
     // Special handling for manifest declaration challenge
@@ -1441,6 +1585,69 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                 </span>
               </div>
 
+              {/* Rewards Preview */}
+              {challenge.rewards && challenge.rewards.length > 0 && (
+                <div style={{
+                  marginTop: '1rem',
+                  padding: '0.75rem',
+                  backgroundColor: '#f0f9ff',
+                  border: '1px solid #0ea5e9',
+                  borderRadius: '0.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '1rem',
+                  flexWrap: 'wrap'
+                }}>
+                  <div style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    color: '#0c4a6e',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem'
+                  }}>
+                    🎁 Rewards:
+                  </div>
+                  {challenge.rewards.map((reward, rewardIndex) => {
+                    if (reward.type === 'xp') {
+                      return (
+                        <div key={rewardIndex} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.25rem 0.5rem',
+                          backgroundColor: '#dbeafe',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: '#1e40af'
+                        }}>
+                          <span>⭐</span>
+                          <span>{reward.value} XP</span>
+                        </div>
+                      );
+                    } else if (reward.type === 'pp') {
+                      return (
+                        <div key={rewardIndex} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.25rem 0.5rem',
+                          backgroundColor: '#fef3c7',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: '#92400e'
+                        }}>
+                          <span>💰</span>
+                          <span>{reward.value} PP</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+              )}
 
                           {/* CPU Battle section for Test Awakened Abilities challenge */}
                           {status === 'available' && challenge.id === 'ep1-manifest-test' && (
@@ -1458,7 +1665,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                                   fontSize: '0.875rem',
                                   transition: 'all 0.2s ease'
                                 }}
-                                onClick={() => setShowCPUBattleModal(true)}
+                                onClick={() => {
+                                  setCompletingChallenge('ep1-manifest-test');
+                                  setIsReplayMode(false);
+                                  setShowCPUBattleModal(true);
+                                }}
                                 onMouseOver={(e) => {
                                   e.currentTarget.style.background = '#b91c1c';
                                   e.currentTarget.style.transform = 'translateY(-2px)';
@@ -1687,8 +1898,117 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                             </button>
                           )}
 
+                          {/* Combat Drill Challenge Button */}
+                          {status === 'available' && challenge.id === 'ep1-combat-drill' && (
+                            <button
+                              onClick={() => {
+                                setCompletingChallenge('ep1-combat-drill');
+                                setIsReplayMode(false);
+                                setShowCPUBattleModal(true);
+                              }}
+                              style={{
+                                background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                color: 'white',
+                                border: '3px solid #b91c1c',
+                                borderRadius: '0.75rem',
+                                padding: '1rem',
+                                fontSize: '1rem',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(239, 68, 68, 0.4)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(239, 68, 68, 0.3)';
+                              }}
+                            >
+                              <span style={{ marginRight: '0.5rem' }}>⚔️</span>
+                              Start Combat Drill
+                            </button>
+                          )}
+
+                          {/* Hela Awakened Challenge Button */}
+                          {challenge.id === 'ep1-update-profile' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {status === 'available' && (
+                                <button
+                                  onClick={() => {
+                                    setCompletingChallenge('ep1-update-profile');
+                                    setShowHelaBattle(true);
+                                  }}
+                                  style={{
+                                    background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                                    color: 'white',
+                                    border: '3px solid #7f1d1d',
+                                    borderRadius: '0.75rem',
+                                    padding: '1rem',
+                                    fontSize: '1rem',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '100%'
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
+                                  }}
+                                >
+                                  <span style={{ marginRight: '0.5rem' }}>❄️</span>
+                                  Face Hela Awakened
+                                </button>
+                              )}
+                              {/* Reset button for testing (only show if completed) */}
+                              {status === 'completed' && (
+                                <button
+                                  onClick={resetChallenge7}
+                                  style={{
+                                    background: '#f59e0b',
+                                    color: 'white',
+                                    border: '2px solid #d97706',
+                                    borderRadius: '0.5rem',
+                                    padding: '0.5rem 1rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '100%'
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(245, 158, 11, 0.4)';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(245, 158, 11, 0.3)';
+                                  }}
+                                >
+                                  <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                  Reset for Testing
+                                </button>
+                              )}
+                            </div>
+                          )}
+
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && challenge.id !== 'ep1-combat-drill' && challenge.id !== 'ep1-update-profile' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -1788,6 +2108,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                         } else if (challenge.id === 'ep1-portal-sequence') {
                           setShowHelaBattle(true);
                         } else if (challenge.id === 'ep1-combat-drill') {
+                          setCompletingChallenge('ep1-combat-drill');
                           setShowCPUBattleModal(true);
                         }
                       }}
@@ -2611,6 +2932,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             isOpen={showTruthMetalModal}
             onClose={() => setShowTruthMetalModal(false)}
             onChoiceSubmit={handleTruthMetalChoice}
+            existingOrdinaryWorld={studentData?.ordinaryWorld}
           />
 
           {/* Truth Metal Touch Modal */}
@@ -2656,6 +2978,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             onVictory={handleHelaBattleVictory}
             onDefeat={handleHelaBattleDefeat}
             onEscape={handleHelaBattleEscape}
+            isIceGolemBattle={completingChallenge === 'ep1-update-profile'}
           />
         </div>
       );

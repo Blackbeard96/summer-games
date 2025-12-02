@@ -128,6 +128,26 @@ const DEFAULT_OPPONENTS: CPUOpponent[] = [
       { id: 'shield-bash', name: 'Shield Bash', baseDamage: 7, type: 'attack' },
       { id: 'energy-strike', name: 'Energy Strike', baseDamage: 9, type: 'attack' }
     ]
+  },
+  {
+    id: 'ice-golem',
+    name: 'Ice Golem',
+    moves: [
+      { 
+        id: 'ice-shard', 
+        name: 'Ice Shard', 
+        damageRange: { min: 20, max: 50 }, 
+        type: 'attack',
+        description: 'Hurls sharp ice shards at the target'
+      },
+      { 
+        id: 'ice-punch', 
+        name: 'Ice Punch', 
+        damageRange: { min: 25, max: 40 }, 
+        type: 'attack',
+        description: 'A powerful frozen punch attack'
+      }
+    ]
   }
 ];
 

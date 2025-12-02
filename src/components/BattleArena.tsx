@@ -236,10 +236,30 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     return icons[element as keyof typeof icons] || '⭐';
   };
 
+  // Helper function to calculate max vault health (always 10% of capacity)
+  const calculateMaxVaultHealth = (capacity: number): number => {
+    return Math.floor(capacity * 0.1);
+  };
+  
+  // Helper function to calculate current vault health (capped at current PP if PP < max health)
+  const calculateCurrentVaultHealth = (capacity: number, currentPP: number, storedVaultHealth?: number): number => {
+    const maxVaultHealth = calculateMaxVaultHealth(capacity);
+    if (storedVaultHealth !== undefined) {
+      // If we have a stored value, cap it at both max health and current PP
+      return Math.min(storedVaultHealth, maxVaultHealth, currentPP);
+    }
+    // Default: min of current PP and max health
+    return Math.min(currentPP, maxVaultHealth);
+  };
+
   const getOpponentImage = (opponentName: string, terraAwakened: boolean = false) => {
     // Return opponent-specific images based on name
     if (opponentName.toLowerCase().includes('hela')) {
       return '/images/Hela.png';
+    }
+    // Truth opponent
+    if (opponentName.toLowerCase().includes('truth')) {
+      return '/images/Truth.jpg';
     }
     // Training Dummy opponent
     if (opponentName.toLowerCase().includes('training dummy')) {
@@ -273,6 +293,10 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     // Mindforge Advanced opponent
     if (opponentName.toLowerCase().includes('mindforge') && opponentName.toLowerCase().includes('advanced')) {
       return '/images/Advanced Mind Forge Bot.png';
+    }
+    // Ice Golem opponent
+    if (opponentName.toLowerCase().includes('ice golem')) {
+      return '/images/Ice Golem.png';
     }
     // Add more opponent images as needed
     return null; // Default fallback
@@ -452,7 +476,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             <span style={{ fontSize: '0.75rem', color: '#10b981' }}>VAULT HEALTH</span>
             {vault?.vaultHealthCooldown && (() => {
               const cooldownEnd = new Date(vault.vaultHealthCooldown);
-              cooldownEnd.setHours(cooldownEnd.getHours() + 3);
+              cooldownEnd.setHours(cooldownEnd.getHours() + 4);
               const now = new Date();
               const remainingMs = cooldownEnd.getTime() - now.getTime();
               if (remainingMs > 0) {
@@ -476,21 +500,28 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           }}>
             <div style={{
               width: `${(() => {
-                const maxVaultHealth = vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0);
-                const currentVaultHealth = vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, maxVaultHealth) : 0);
+                if (!vault) return 0;
+                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
+                const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
                 return maxVaultHealth > 0 ? (currentVaultHealth / maxVaultHealth) * 100 : 0;
               })()}%`,
               height: '100%',
               background: (() => {
-                const maxVaultHealth = vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0);
-                const currentVaultHealth = vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, maxVaultHealth) : 0);
+                if (!vault) return 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)';
+                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
+                const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
                 return currentVaultHealth === 0 ? 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
               })(),
               transition: 'width 0.3s ease'
             }} />
           </div>
           <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
-            {(vault?.vaultHealth !== undefined ? vault.vaultHealth : (vault ? Math.min(vault.currentPP, Math.floor(vault.capacity * 0.1)) : 0))}/{vault?.maxVaultHealth || (vault ? Math.floor(vault.capacity * 0.1) : 0)}
+            {(() => {
+              if (!vault) return '0/0';
+              const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
+              const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
+              return `${currentVaultHealth}/${maxVaultHealth}`;
+            })()}
           </div>
         </div>
         <div>
@@ -606,6 +637,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               // Focus on face area - use negative value to shift image up and show the head/face
               const isNoviceGuard = opponentName.toLowerCase().includes('novice guard');
               const isEliteSoldier = opponentName.toLowerCase().includes('elite soldier');
+              const isTruth = opponentName.toLowerCase().includes('truth');
               let objectPos = '55% -20%'; // Default
               if (isStandardMindforge) {
                 objectPos = '50% -25%'; // Show face-focused view for Standard Mindforge Bot
@@ -623,6 +655,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 objectPos = '50% -30%'; // Show upper half of Flame Keeper (focus on face/head and upper body)
               } else if (opponentName.toLowerCase().includes('terra') || opponentName.toLowerCase().includes('legendary protector')) {
                 objectPos = '50% -30%'; // Show upper half of Terra (focus on face/head and upper body)
+              } else if (isTruth) {
+                objectPos = '50% 0%'; // Show top half of Truth (focus on the head/face area with the grin)
               }
               
               return opponentImage ? (
@@ -1101,10 +1135,19 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setShowMoveMenu(true);
+              if (selectedMove) {
+                // If a move is selected, deselect it
+                onMoveSelect(null);
+                onTargetSelect('');
+              } else {
+                // Otherwise, open the move menu
+                setShowMoveMenu(true);
+              }
             }}
             style={{
-              background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+              background: selectedMove 
+                ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' 
+                : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
               color: 'white',
               border: '3px solid #8B4513',
               borderRadius: '0.5rem',
@@ -1123,7 +1166,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               e.currentTarget.style.boxShadow = 'none';
             }}
           >
-            ⚔️ FIGHT
+            {selectedMove ? `✕ Cancel: ${selectedMove.name}` : '⚔️ FIGHT'}
           </button>
         )}
         {/* BAG button - only show when not in menus */}

@@ -13,7 +13,8 @@ import {
   query, 
   where, 
   orderBy,
-  serverTimestamp 
+  serverTimestamp,
+  deleteField
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { 
@@ -56,7 +57,7 @@ interface BattleContextType {
   forceUnlockAllMoves: (userElement?: string) => Promise<void>;
   resetMovesWithElementFilter: (userElement?: string) => Promise<void>;
   applyElementFilterToExistingMoves: (userElement?: string) => Promise<void>;
-  forceMigration: () => Promise<void>;
+  forceMigration: (resetLevels?: boolean) => Promise<void>;
   upgradeMove: (moveId: string) => Promise<void>;
   resetMoveLevel: (moveId: string) => Promise<void>;
   
@@ -120,6 +121,22 @@ export const useBattle = () => {
     throw new Error('useBattle must be used within a BattleProvider');
   }
   return context;
+};
+
+// Helper function to calculate max vault health (always 10% of capacity)
+const calculateMaxVaultHealth = (capacity: number): number => {
+  return Math.floor(capacity * 0.1);
+};
+
+// Helper function to calculate current vault health (capped at current PP if PP < max health)
+const calculateCurrentVaultHealth = (capacity: number, currentPP: number, storedVaultHealth?: number): number => {
+  const maxVaultHealth = calculateMaxVaultHealth(capacity);
+  if (storedVaultHealth !== undefined) {
+    // If we have a stored value, cap it at both max health and current PP
+    return Math.min(storedVaultHealth, maxVaultHealth, currentPP);
+  }
+  // Default: min of current PP and max health
+  return Math.min(currentPP, maxVaultHealth);
 };
 
 export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -211,13 +228,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.log('BattleContext: Existing vault PP:', existingVaultData.currentPP, 'Player PP:', playerPP);
           
           // Migrate existing vault to include new move tracking fields and generator
-          // Calculate vault health (10% of capacity) if not already set
-          const maxVaultHealth = existingVaultData.maxVaultHealth || Math.floor((existingVaultData.capacity || 1000) * 0.1);
-          // Vault health is the minimum of current PP and max vault health
+          // Max vault health is always 10% of capacity
           const currentPP = existingVaultData.currentPP || playerPP;
-          const vaultHealth = existingVaultData.vaultHealth !== undefined 
-            ? existingVaultData.vaultHealth 
-            : Math.min(currentPP, maxVaultHealth); // Default to min of PP and max if not set
+          const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(existingVaultData.capacity || 1000);
+          // Current vault health is capped at current PP if PP < max health
+          const vaultHealth = calculateCurrentVaultHealth(existingVaultData.capacity || 1000, currentPP, existingVaultData.vaultHealth);
           
           const existingVault: Vault = {
             ...existingVaultData,
@@ -243,21 +258,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           updatedVault = checkAndGenerateGeneratorResources(updatedVault);
           
           // Always update vault PP to match player's current PP
-          // When entering a new battle: if PP >= max health, reset vault health to max
-          // Otherwise, vault health should be min of PP and max vault health
-          const correctVaultHealth = playerPP >= updatedVault.maxVaultHealth
-            ? updatedVault.maxVaultHealth
-            : Math.min(playerPP, updatedVault.maxVaultHealth);
+          // Max vault health is always 10% of capacity (already set in updatedVault)
+          // Current vault health is capped at current PP if PP < max health
+          const correctVaultHealth = calculateCurrentVaultHealth(updatedVault.capacity, playerPP, updatedVault.vaultHealth);
           if (existingVault.currentPP !== playerPP || updatedVault.vaultHealth !== correctVaultHealth ||
               updatedVault.movesRemaining !== existingVault.movesRemaining || 
               updatedVault.generatorPendingPP !== existingVault.generatorPendingPP || 
               updatedVault.shieldStrength !== existingVault.shieldStrength) {
             console.log('BattleContext: Syncing vault PP from', existingVault.currentPP, 'to', playerPP);
-            if (playerPP >= updatedVault.maxVaultHealth) {
-              console.log(`BattleContext: Resetting vault health to max (${updatedVault.maxVaultHealth}) because PP (${playerPP}) >= max health`);
-            } else {
-              console.log('BattleContext: Updating vault health to', correctVaultHealth);
-            }
+            console.log(`BattleContext: Updating vault health to ${correctVaultHealth}/${updatedVault.maxVaultHealth} (capped at current PP: ${playerPP})`);
             await updateDoc(vaultRef, { 
               currentPP: playerPP,
               vaultHealth: correctVaultHealth,
@@ -283,17 +292,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const movesDoc = await getDoc(movesRef);
         
         if (!movesDoc.exists()) {
-          // Create initial moves
+          // Create initial moves - NO elemental moves unlocked initially
+          // Elemental moves will be unlocked when player completes Chapter 1 - Challenge 7
           const initialMoves: Move[] = MOVE_TEMPLATES.map((template, index) => ({
             ...template,
             id: `move_${index + 1}`,
             unlocked: template.category === 'system' || 
-                      (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === 'fire') || // Only unlock user's element
+                      // Elemental moves are NOT unlocked initially - must complete Chapter 1 Challenge 7
                       (template.category === 'manifest' && template.manifestType === userManifest), // Only unlock user's manifest
             currentCooldown: 0,
             masteryLevel: 1,
           }));
-          console.log('BattleContext: Creating initial moves:', initialMoves);
+          console.log('BattleContext: Creating initial moves (elemental moves locked until Challenge 7):', initialMoves);
           await setDoc(movesRef, { moves: initialMoves });
           setMoves(initialMoves);
         } else {
@@ -308,22 +318,50 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.log('BattleContext: Migrating to new move system for existing user');
             console.log('BattleContext: User manifest for migration:', userManifest);
             
-            // Create new moves with the updated system
+            // Create new moves with the updated system - NO elemental moves unlocked initially
+            // Elemental moves will be unlocked when player completes Chapter 1 - Challenge 7
+            // Load move overrides to get updated names
+            const { getMoveNameSync, loadMoveOverrides } = await import('../utils/moveOverrides');
+            // Ensure cache is loaded before using sync functions
+            await loadMoveOverrides();
+            
+            // Preserve existing mastery levels when migrating
             const newMoves: Move[] = MOVE_TEMPLATES.map((template, index) => {
               const isUnlocked = template.category === 'system' || 
-                (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === 'fire') || // Only unlock user's element
+                // Elemental moves are NOT unlocked initially - must complete Chapter 1 Challenge 7
                 (template.category === 'manifest' && template.manifestType === userManifest); // Only unlock user's manifest
               
               if (template.category === 'manifest') {
                 console.log(`BattleContext: Creating manifest move ${template.name} (${template.manifestType}) - unlocked: ${isUnlocked}`);
               }
               
+              // Get the overridden name (from admin panel) for this move
+              // Always use the original template.name as the key to look up overrides
+              const overriddenName = getMoveNameSync(template.name);
+              
+              // Match existing move by ID first (most reliable), then by original template name
+              // Don't match by overridden name since it might have changed
+              const moveId = `move_${index + 1}`;
+              const existingMove = movesData.find((m: Move) => 
+                m.id === moveId || 
+                m.name === template.name
+              );
+              
               return {
                 ...template,
-                id: `move_${index + 1}`,
+                name: overriddenName, // Use the overridden name from admin panel
+                id: moveId,
                 unlocked: isUnlocked,
                 currentCooldown: 0,
-                masteryLevel: 1,
+                // Preserve mastery level if move exists, otherwise default to 1
+                masteryLevel: existingMove?.masteryLevel || 1,
+                // Preserve other properties that might have been upgraded
+                damage: existingMove?.damage || template.damage,
+                shieldBoost: existingMove?.shieldBoost || template.shieldBoost,
+                healing: existingMove?.healing || template.healing,
+                ppSteal: existingMove?.ppSteal || template.ppSteal,
+                debuffStrength: existingMove?.debuffStrength || template.debuffStrength,
+                buffStrength: existingMove?.buffStrength || template.buffStrength,
               };
             });
             
@@ -334,6 +372,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             // Apply element-specific filtering to existing moves
             console.log('BattleContext: Applying element-specific filtering to existing moves');
             
+            // Load move overrides to get updated names
+            const { getMoveNameSync, loadMoveOverrides } = await import('../utils/moveOverrides');
+            // Ensure cache is loaded before using sync functions
+            await loadMoveOverrides();
+            
             // Get user's element from student data
             const studentRef = doc(db, 'students', currentUser.uid);
             const studentDoc = await getDoc(studentRef);
@@ -343,23 +386,76 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.log('BattleContext: User element for move filtering:', userElement);
             
             // Update moves with correct element and manifest filtering
+            // Also apply overridden names from admin panel
+            // Elemental moves should remain locked unless player has completed Chapter 1 Challenge 7
             const updatedMoves = movesData.map((move: Move) => {
+              // Find the original template name for this move
+              // First, try to find it by matching the move's ID to the template index
+              let template = null;
+              const moveIndex = parseInt(move.id.replace('move_', '')) - 1;
+              if (moveIndex >= 0 && moveIndex < MOVE_TEMPLATES.length) {
+                template = MOVE_TEMPLATES[moveIndex];
+              }
+              
+              // If ID lookup failed, try to find template by matching other properties
+              if (!template) {
+                template = MOVE_TEMPLATES.find(t => 
+                  t.category === move.category &&
+                  t.manifestType === move.manifestType &&
+                  t.elementalAffinity === move.elementalAffinity &&
+                  t.level === move.level
+                );
+              }
+              
+              // Get the overridden name using the original template name
+              // If we can't find the template, try reverse lookup on the move's current name
+              let overriddenName = move.name;
+              if (template) {
+                overriddenName = getMoveNameSync(template.name);
+              } else {
+                // Fallback: try to find if current name is an override by checking all templates
+                for (const t of MOVE_TEMPLATES) {
+                  const overrideName = getMoveNameSync(t.name);
+                  if (overrideName === move.name) {
+                    // Current name matches an override, get the latest override
+                    overriddenName = getMoveNameSync(t.name);
+                    break;
+                  }
+                }
+              }
+              
+              // Apply overridden name if it's different from the stored name
+              const updatedMove = {
+                ...move,
+                name: overriddenName
+              };
+              
               if (move.category === 'elemental' && move.level === 1) {
-                // Only unlock if it matches user's element
-                const shouldUnlock = move.elementalAffinity === userElement;
-                console.log(`BattleContext: Move ${move.name} (${move.elementalAffinity}) - should unlock: ${shouldUnlock}`);
-                return { ...move, unlocked: shouldUnlock };
+                // Keep elemental moves locked - they will be unlocked when Challenge 7 is completed
+                // Don't unlock based on element match alone anymore
+                console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - keeping locked until Challenge 7`);
+                return { ...updatedMove, unlocked: false };
               } else if (move.category === 'manifest') {
                 // Only unlock if it matches user's manifest
                 const shouldUnlock = move.manifestType === userManifest;
-                console.log(`BattleContext: Move ${move.name} (${move.manifestType}) - should unlock: ${shouldUnlock}`);
-                return { ...move, unlocked: shouldUnlock };
+                console.log(`BattleContext: Move ${updatedMove.name} (${move.manifestType}) - should unlock: ${shouldUnlock}`);
+                return { ...updatedMove, unlocked: shouldUnlock };
               }
-              return move;
+              return updatedMove;
             });
             
-            // Update the database with filtered moves
-            await updateDoc(movesRef, { moves: updatedMoves });
+            // Check if any move names were updated
+            const hasNameUpdates = updatedMoves.some((move: Move, index: number) => {
+              const originalMove = movesData[index];
+              return originalMove && move.name !== originalMove.name;
+            });
+            
+            // Only update database if names changed
+            if (hasNameUpdates) {
+              console.log('BattleContext: Move names updated, saving to database');
+              await updateDoc(movesRef, { moves: updatedMoves });
+            }
+            
             setMoves(updatedMoves);
           }
         }
@@ -669,6 +765,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentUser || !vault) return;
     
     try {
+      // Cap overshield at 1 to prevent more than 1 overshield
+      if (updates.overshield !== undefined) {
+        updates.overshield = Math.min(1, Math.max(0, updates.overshield));
+      }
+      
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       await updateDoc(vaultRef, updates);
       
@@ -688,7 +789,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const checkAndResetVaultHealthCooldown = (vaultData: Vault): Vault => {
     if (!vaultData.vaultHealthCooldown) {
       // Even if no cooldown, ensure vault health doesn't exceed PP if PP is below threshold
-      const maxVaultHealth = vaultData.maxVaultHealth || Math.floor(vaultData.capacity * 0.1);
+      // Max vault health is always 10% of vault capacity
+      const maxVaultHealth = Math.floor(vaultData.capacity * 0.1);
       const correctVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
       if (vaultData.vaultHealth !== correctVaultHealth) {
         return {
@@ -700,12 +802,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     
     const cooldownEndTime = new Date(vaultData.vaultHealthCooldown);
-    cooldownEndTime.setHours(cooldownEndTime.getHours() + 3); // 3-hour cooldown
+    cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
     const now = new Date();
     
     // If cooldown has expired, reset vault health to min of PP and max
     if (now >= cooldownEndTime) {
-      const maxVaultHealth = vaultData.maxVaultHealth || Math.floor(vaultData.capacity * 0.1);
+      // Max vault health is always 10% of vault capacity
+      const maxVaultHealth = Math.floor(vaultData.capacity * 0.1);
       const resetVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
       return {
         ...vaultData,
@@ -985,12 +1088,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       console.log('🔄 Manual sync - Player PP:', playerPP, 'Vault PP:', vault.currentPP);
       
-      const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
-      // When entering a new battle: if PP >= max health, reset vault health to max
-      // Otherwise, vault health should be min of current PP and max vault health
-      const correctVaultHealth = playerPP >= maxVaultHealth 
-        ? maxVaultHealth 
-        : Math.min(playerPP, maxVaultHealth);
+      // Max vault health is always 10% of capacity
+      const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
+      
+      // Current vault health is capped at current PP if PP < max health
+      // Otherwise, it can be up to max health
+      const correctVaultHealth = calculateCurrentVaultHealth(vault.capacity, playerPP, vault.vaultHealth);
       
       if (playerPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth) {
         // Update vault PP to match player PP and adjust vault health
@@ -1008,11 +1111,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } : null);
         
         console.log('✅ Vault PP synced to player PP:', playerPP);
-        if (playerPP >= maxVaultHealth) {
-          console.log(`✅ Vault health reset to max (${maxVaultHealth}) because PP (${playerPP}) >= max health`);
-        } else {
-          console.log('✅ Vault health updated to:', correctVaultHealth);
-        }
+        console.log(`✅ Vault health updated to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${playerPP})`);
       } else {
         console.log('✅ Vault PP already in sync with player PP');
       }
@@ -1070,14 +1169,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const studentDoc = await getDoc(studentRef);
         const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : processedVault.currentPP;
         
-        // Reset vault health to max if PP >= max health (when entering a new battle)
-        const maxVaultHealth = processedVault.maxVaultHealth || Math.floor(processedVault.capacity * 0.1);
-        if (playerPP >= maxVaultHealth && processedVault.vaultHealth !== maxVaultHealth) {
-          processedVault.vaultHealth = maxVaultHealth;
+        // Max vault health is always 10% of capacity
+        const maxVaultHealth = processedVault.maxVaultHealth || calculateMaxVaultHealth(processedVault.capacity);
+        if (processedVault.maxVaultHealth !== maxVaultHealth) {
+          processedVault.maxVaultHealth = maxVaultHealth;
           await updateDoc(vaultRef, {
-            vaultHealth: maxVaultHealth
+            maxVaultHealth: maxVaultHealth
           });
-          console.log(`✅ Reset vault health to max (${maxVaultHealth}) because PP (${playerPP}) >= max health`);
+          console.log(`✅ Updated max vault health to ${maxVaultHealth} (10% of capacity)`);
+        }
+        
+        // Current vault health is capped at current PP if PP < max health
+        const correctVaultHealth = calculateCurrentVaultHealth(processedVault.capacity, playerPP, processedVault.vaultHealth);
+        if (processedVault.vaultHealth !== correctVaultHealth) {
+          processedVault.vaultHealth = correctVaultHealth;
+          await updateDoc(vaultRef, {
+            vaultHealth: correctVaultHealth
+          });
+          console.log(`✅ Updated vault health to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${playerPP})`);
         }
         
         setVault(processedVault);
@@ -1413,11 +1522,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const forceMigration = async () => {
+  const forceMigration = async (resetLevels: boolean = false) => {
     if (!currentUser) return;
     
     try {
-      console.log('BattleContext: Force migration triggered');
+      console.log('BattleContext: Force migration triggered', resetLevels ? '(resetting levels)' : '(preserving levels)');
       
       // Get user's manifest from student data
       const studentRef = doc(db, 'students', currentUser.uid);
@@ -1427,7 +1536,16 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       console.log('BattleContext: Force migration - User manifest:', userManifest);
       
+      // Load move overrides to get updated names
+      const { getMoveNameSync, loadMoveOverrides } = await import('../utils/moveOverrides');
+      // Ensure cache is loaded before using sync functions
+      await loadMoveOverrides();
+      
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
+      const movesDoc = await getDoc(movesRef);
+      
+      // Get existing moves to preserve mastery levels (if not resetting)
+      const existingMoves = movesDoc.exists() ? (movesDoc.data().moves || []) : [];
       
       // Create new moves with the updated system
       const newMoves: Move[] = MOVE_TEMPLATES.map((template, index) => {
@@ -1439,33 +1557,68 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.log(`BattleContext: Force migration - Creating manifest move ${template.name} (${template.manifestType}) - unlocked: ${isUnlocked}`);
         }
         
+        // Get the overridden name (from admin panel) for this move
+        // Always use the original template.name as the key to look up overrides
+        const overriddenName = getMoveNameSync(template.name);
+        
+        // Match existing move by ID first (most reliable), then by original template name
+        // Don't match by overridden name since it might have changed
+        const moveId = `move_${index + 1}`;
+        const existingMove = existingMoves.find((m: Move) => 
+          m.id === moveId || 
+          m.name === template.name
+        );
+        
+        console.log(`BattleContext: Force migration - Move ${moveId}: template="${template.name}", override="${overriddenName}", existing=${existingMove ? `found (level ${existingMove.masteryLevel})` : 'not found'}`);
+        
         return {
           ...template,
-          id: `move_${index + 1}`,
+          name: overriddenName, // Use the overridden name from admin panel
+          id: moveId,
           unlocked: isUnlocked,
           currentCooldown: 0,
-          masteryLevel: 1,
+          // Reset mastery level if requested, otherwise preserve it
+          masteryLevel: resetLevels ? 1 : (existingMove?.masteryLevel || 1),
+          // Reset upgraded properties if resetting levels, otherwise preserve them
+          damage: resetLevels ? template.damage : (existingMove?.damage || template.damage),
+          shieldBoost: resetLevels ? template.shieldBoost : (existingMove?.shieldBoost || template.shieldBoost),
+          healing: resetLevels ? template.healing : (existingMove?.healing || template.healing),
+          ppSteal: resetLevels ? template.ppSteal : (existingMove?.ppSteal || template.ppSteal),
+          debuffStrength: resetLevels ? template.debuffStrength : (existingMove?.debuffStrength || template.debuffStrength),
+          buffStrength: resetLevels ? template.buffStrength : (existingMove?.buffStrength || template.buffStrength),
         };
       });
       
-      // Overwrite the database with new moves
+      // Overwrite the database with new moves (preserving mastery levels)
       await setDoc(movesRef, { moves: newMoves });
       setMoves(newMoves);
       
-                  // Force refresh action cards from templates
-            const updatedActionCards = ACTION_CARD_TEMPLATES.map((template, index) => ({
-              ...template,
-              id: `card_${index + 1}`,
-              unlocked: index < 2, // First 2 cards unlocked by default
-              masteryLevel: 1, // Start at level 1
-              upgradeCost: template.upgradeCost || 100, // Default upgrade cost
-            }));
-      
+      // Force refresh action cards from templates, preserving mastery levels
       const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+      const cardsDoc = await getDoc(cardsRef);
+      const existingCards = cardsDoc.exists() ? (cardsDoc.data().cards || []) : [];
+      
+      const updatedActionCards = ACTION_CARD_TEMPLATES.map((template, index) => {
+        // Try to find existing card by name to preserve mastery level
+        const existingCard = existingCards.find((c: ActionCard) => 
+          c.name === template.name || 
+          (c.id === `card_${index + 1}`)
+        );
+        
+        return {
+          ...template,
+          id: `card_${index + 1}`,
+          unlocked: index < 2, // First 2 cards unlocked by default
+          // Preserve mastery level if card exists, otherwise default to 1
+          masteryLevel: existingCard?.masteryLevel || 1,
+          upgradeCost: template.upgradeCost || 100, // Default upgrade cost
+        };
+      });
+      
       await setDoc(cardsRef, { cards: updatedActionCards });
       setActionCards(updatedActionCards);
       
-      console.log('BattleContext: Force migration completed successfully - moves and action cards updated');
+      console.log(`BattleContext: Force migration completed successfully - moves and action cards updated${resetLevels ? ' (levels reset)' : ' (levels preserved)'}`);
     } catch (err) {
       console.error('BattleContext: Error in force migration:', err);
       setError('Failed to force migration');
@@ -1571,6 +1724,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Apply boost multiplier to all numeric properties (damage, shieldBoost, healing, ppSteal, etc.)
+      // IMPORTANT: Use the CURRENT values (which may already be upgraded) as the base for the new multiplier
+      // This allows upgrades to compound correctly
       const updatedMoves = moves.map(m => {
         if (m.id === moveId) {
           const updatedMove = { 
@@ -1578,9 +1733,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             masteryLevel: newLevel
           };
           
-          // Apply boost to damage
+          // Apply boost to damage - use current damage as base (may already be upgraded)
           let baseDamage = m.damage;
           if (!baseDamage || baseDamage === 0) {
+            // If no damage set, get base from MOVE_DAMAGE_VALUES
             const moveDamageValue = MOVE_DAMAGE_VALUES[m.name];
             baseDamage = moveDamageValue?.damage || 0;
           }
@@ -1588,49 +1744,87 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             updatedMove.damage = Math.floor(baseDamage * damageBoostMultiplier);
           }
           
-          // Apply boost to shieldBoost
+          // Apply boost to shieldBoost - use current value as base
           if (m.shieldBoost && m.shieldBoost > 0) {
             updatedMove.shieldBoost = Math.floor(m.shieldBoost * damageBoostMultiplier);
           }
           
-          // Apply boost to healing
+          // Apply boost to healing - use current value as base
           if (m.healing && m.healing > 0) {
             updatedMove.healing = Math.floor(m.healing * damageBoostMultiplier);
           }
           
-          // Apply boost to ppSteal
+          // Apply boost to ppSteal - use current value as base
           if (m.ppSteal && m.ppSteal > 0) {
             updatedMove.ppSteal = Math.floor(m.ppSteal * damageBoostMultiplier);
           }
           
-          // Apply boost to debuffStrength
+          // Apply boost to debuffStrength - use current value as base
           if (m.debuffStrength && m.debuffStrength > 0) {
             updatedMove.debuffStrength = Math.floor(m.debuffStrength * damageBoostMultiplier);
           }
           
-          // Apply boost to buffStrength
+          // Apply boost to buffStrength - use current value as base
           if (m.buffStrength && m.buffStrength > 0) {
             updatedMove.buffStrength = Math.floor(m.buffStrength * damageBoostMultiplier);
           }
+          
+          console.log(`Upgrading ${m.name} from level ${m.masteryLevel} to ${newLevel}:`, {
+            oldDamage: m.damage,
+            newDamage: updatedMove.damage,
+            multiplier: damageBoostMultiplier,
+            oldShieldBoost: m.shieldBoost,
+            newShieldBoost: updatedMove.shieldBoost
+          });
           
           return updatedMove;
         }
         return m;
       });
 
-      // Update moves in database
+      // Update moves in database FIRST, then update local state
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
-      await updateDoc(movesRef, { moves: updatedMoves });
-      setMoves(updatedMoves);
+      await updateDoc(movesRef, { 
+        moves: updatedMoves,
+        lastUpdated: serverTimestamp()
+      });
+      
+      // Update local state AFTER Firestore update completes
+      setMoves([...updatedMoves]); // Create new array to trigger React re-render
+      
+      console.log('Move upgrade saved to Firestore:', {
+        moveId,
+        moveName: move.name,
+        newLevel,
+        updatedMoves: updatedMoves.find(m => m.id === moveId)
+      });
 
       // Deduct PP from vault
       const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newPP = vault.currentPP - upgradeCost;
       await updateDoc(vaultRef, { 
-        currentPP: vault.currentPP - upgradeCost 
+        currentPP: newPP
       });
 
-      // Update vault state
-      setVault({ ...vault, currentPP: vault.currentPP - upgradeCost });
+      // Update vault state AFTER Firestore update
+      setVault({ ...vault, currentPP: newPP });
+      
+      // Force a refresh of moves data to ensure UI is in sync
+      // This helps catch any cases where the UI might not have updated
+      setTimeout(async () => {
+        try {
+          const movesDoc = await getDoc(movesRef);
+          if (movesDoc.exists()) {
+            const movesData = movesDoc.data();
+            if (movesData.moves) {
+              console.log('Refreshing moves after upgrade to ensure sync');
+              setMoves([...movesData.moves]);
+            }
+          }
+        } catch (refreshError) {
+          console.error('Error refreshing moves after upgrade:', refreshError);
+        }
+      }, 500);
 
       // Collect all boosted properties for the alert message
       const boostedProperties: string[] = [];
@@ -2491,16 +2685,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Check if target vault is on cooldown
       if (targetVaultData.vaultHealthCooldown) {
         const cooldownEndTime = new Date(targetVaultData.vaultHealthCooldown);
-        cooldownEndTime.setHours(cooldownEndTime.getHours() + 3); // 3-hour cooldown
+        cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
         const now = new Date();
         
         if (now < cooldownEndTime) {
-          const remainingMinutes = Math.ceil((cooldownEndTime.getTime() - now.getTime()) / (1000 * 60));
+          const remainingHours = Math.floor((cooldownEndTime.getTime() - now.getTime()) / (1000 * 60 * 60));
+          const remainingMinutes = Math.ceil(((cooldownEndTime.getTime() - now.getTime()) % (1000 * 60 * 60)) / (1000 * 60));
           return { 
             success: false, 
-            message: `Target vault is on cooldown. Cannot attack for another ${remainingMinutes} minutes.` 
+            message: `Target vault is on cooldown. Cannot attack for another ${remainingHours}h ${remainingMinutes}m.` 
           };
         }
+      }
+      
+      // Reset attacker's cooldown when they attack someone (they're no longer protected)
+      if (vault.vaultHealthCooldown) {
+        const attackerVaultRef = doc(db, 'vaults', currentUser.uid);
+        await updateDoc(attackerVaultRef, { vaultHealthCooldown: deleteField() });
+        console.log('✅ Reset attacker cooldown - player attacked someone');
       }
       
       // Get target student data to sync vault PP from student PP (student PP is the source of truth)
@@ -2782,23 +2984,22 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         shieldDamage = 0; // No shield damage
         ppStolen = 0; // No PP stolen
         
-        // Reduce overshield by 1
-        const newOvershield = Math.max(0, targetVaultData.overshield - 1);
-        updates.overshield = newOvershield;
+        // Overshield is consumed (set to 0) after absorbing an attack
+        updates.overshield = 0;
         
-        console.log(`✨ Overshield absorbed attack! Original overshield: ${targetVaultData.overshield}, New overshield: ${newOvershield}`);
+        console.log(`✨ Overshield absorbed attack! Original overshield: ${targetVaultData.overshield}, New overshield: 0`);
         console.log(`🔍 Updates object:`, updates);
-        message = `Attack absorbed by overshield! (${newOvershield} overshield${newOvershield !== 1 ? 's' : ''} remaining)`;
+        message = `Attack absorbed by overshield! (0 overshields remaining)`;
         
         // Create notification for the target player about overshield usage
         try {
           await addDoc(collection(db, 'students', targetUserId, 'notifications'), {
             type: 'overshield_used',
             title: '🛡️ Overshield Activated!',
-            message: `Your overshield blocked an attack from ${attackerName}! (${newOvershield} overshield${newOvershield !== 1 ? 's' : ''} remaining)`,
+            message: `Your overshield blocked an attack from ${attackerName}! (0 overshields remaining)`,
             attackerName: attackerName,
             attackerId: currentUser.uid,
-            overshieldRemaining: newOvershield,
+            overshieldRemaining: 0,
             timestamp: serverTimestamp()
           });
           console.log(`📢 Created overshield notification for ${targetName}`);
@@ -2831,7 +3032,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Check if vault health reached 0 - set cooldown
         if (newVaultHealth === 0 && targetVaultData.vaultHealth > 0) {
           updates.vaultHealthCooldown = new Date();
-          console.log('⏰ Vault health depleted! Setting 3-hour cooldown.');
+          console.log('⏰ Vault health depleted! Setting 4-hour cooldown.');
         }
         
         // Apply PP boost if active before adding to attacker's vault
@@ -2896,6 +3097,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Update target vault
       if (Object.keys(updates).length > 0) {
+        // Cap overshield at 1 to prevent more than 1 overshield
+        if (updates.overshield !== undefined) {
+          updates.overshield = Math.min(1, Math.max(0, updates.overshield));
+        }
         console.log('Updating target vault with:', updates);
         await updateDoc(targetVaultRef, updates);
         console.log('Target vault updated successfully');
@@ -3000,13 +3205,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         timestamp: serverTimestamp(),
         targetVaultBefore: {
           currentPP: targetVaultData.currentPP,
-          vaultHealth: targetVaultData.vaultHealth || targetVaultData.maxVaultHealth || Math.floor(targetVaultData.capacity * 0.1),
+          vaultHealth: targetVaultData.vaultHealth || Math.floor(targetVaultData.capacity * 0.1),
           shieldStrength: targetVaultData.shieldStrength,
           overshield: targetVaultData.overshield || 0,
         },
         targetVaultAfter: {
           currentPP: targetVaultData.currentPP, // PP doesn't change from attacks
-          vaultHealth: updates.vaultHealth !== undefined ? updates.vaultHealth : (targetVaultData.vaultHealth || targetVaultData.maxVaultHealth || Math.floor(targetVaultData.capacity * 0.1)),
+          vaultHealth: updates.vaultHealth !== undefined ? updates.vaultHealth : (targetVaultData.vaultHealth || Math.floor(targetVaultData.capacity * 0.1)),
           shieldStrength: updates.shieldStrength !== undefined ? updates.shieldStrength : targetVaultData.shieldStrength,
           overshield: updates.overshield !== undefined ? updates.overshield : (targetVaultData.overshield || 0),
         },
@@ -3511,12 +3716,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Handle other specific artifacts
       if (artifactName === 'Shield') {
-        // Add overshield to vault
+        // Check if player already has an active overshield
+        if ((vault.overshield || 0) > 0) {
+          setSuccess('❌ You already have an active overshield! You can only have 1 overshield at a time.');
+          return;
+        }
+        
+        // Add overshield to vault (capped at 1)
         const vaultRef = doc(db, 'vaults', currentUser.uid);
         await updateDoc(vaultRef, {
-          overshield: (vault.overshield || 0) + 1
+          overshield: 1
         });
-        setVault({ ...vault, overshield: (vault.overshield || 0) + 1 });
+        setVault({ ...vault, overshield: 1 });
         setSuccess('🛡️ Shield activated! Your next attack will be blocked.');
       } else if (artifactName === 'Double PP Boost') {
         // Activate PP boost immediately (no admin approval needed)

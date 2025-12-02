@@ -124,10 +124,11 @@ const StoryChallenges = () => {
     const isProfileChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
     const isManifestChallengeCompleted = userProgress.chapters?.[1]?.challenges?.['ep1-power-card-intro']?.isCompleted;
     
-    if (isProfileComplete && isChapter1Active && !isProfileChallengeCompleted) {
-      console.log('Profile is complete, auto-completing challenge...');
-      checkAndCompleteProfileChallenge(userProgress);
-    }
+    // Challenge 7 "Hela Awakened" is now a battle challenge - disabled auto-completion
+    // if (isProfileComplete && isChapter1Active && !isProfileChallengeCompleted) {
+    //   console.log('Profile is complete, auto-completing challenge...');
+    //   checkAndCompleteProfileChallenge(userProgress);
+    // }
     
     if (hasManifest && isChapter1Active && !isManifestChallengeCompleted) {
       console.log('Manifest is chosen, auto-completing Power Card challenge...');
@@ -155,114 +156,10 @@ const StoryChallenges = () => {
 
   // Function to check and auto-complete profile update challenge
   const checkAndCompleteProfileChallenge = async (userData: any) => {
-    console.log('🔍 checkAndCompleteProfileChallenge called', { 
-      currentUser: !!currentUser, 
-      userData: !!userData,
-      chapter1Active: userData?.chapters?.[1]?.isActive 
-    });
-    
-    if (!currentUser) return;
-
-    try {
-      // Check if we're in Chapter 1 (since getCurrentChapter might not be available yet)
-      if (!userData.chapters?.[1]?.isActive) {
-        console.log('❌ Chapter 1 not active, skipping profile auto-completion');
-        return;
-      }
-
-      // Check if challenge is already completed
-      const isAlreadyCompleted = userData.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
-      if (isAlreadyCompleted) {
-        console.log('Profile challenge already completed');
-        return;
-      }
-
-      // Check if profile is complete (has display name and avatar)
-      const hasDisplayName = userData.displayName && userData.displayName.trim() !== '';
-      // Check for avatar in multiple possible fields
-      const hasAvatar = (userData.photoURL && userData.photoURL.trim() !== '') || 
-                       (currentUser.photoURL && currentUser.photoURL.trim() !== '') ||
-                       (userData.avatar && userData.avatar.trim() !== '');
-      
-      console.log('🔍 Profile completion check:', { 
-        hasDisplayName, 
-        hasAvatar, 
-        displayName: userData.displayName, 
-        photoURL: userData.photoURL,
-        currentUserPhotoURL: currentUser.photoURL,
-        userDataAvatar: userData.avatar,
-        shouldAutoComplete: hasDisplayName && hasAvatar
-      });
-      
-      if (hasDisplayName && hasAvatar) {
-        console.log('Profile is complete, auto-completing challenge...');
-        
-        // Auto-complete the profile challenge
-        const userRef = doc(db, 'users', currentUser.uid);
-        const updatedChapters = {
-          ...userData.chapters,
-          [1]: {
-            ...userData.chapters?.[1],
-            challenges: {
-              ...userData.chapters?.[1]?.challenges,
-              'ep1-update-profile': {
-                isCompleted: true,
-                completedAt: serverTimestamp(),
-                autoCompleted: true
-              }
-            }
-          }
-        };
-
-        await updateDoc(userRef, {
-          chapters: updatedChapters
-        });
-
-        // Add to challenge submissions for tracking
-        await addDoc(collection(db, 'challengeSubmissions'), {
-          userId: currentUser.uid,
-          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
-          email: currentUser.email || '',
-          photoURL: currentUser.photoURL || '',
-          challengeId: 'ep1-update-profile',
-          challengeName: 'Update Your Profile',
-          submissionType: 'auto_completed',
-          status: 'approved',
-          timestamp: serverTimestamp(),
-          xpReward: 15,
-          ppReward: 5,
-          manifestationType: 'Chapter Challenge',
-          character: 'Chapter System',
-          autoCompleted: true
-        });
-
-        console.log('Profile challenge auto-completed!');
-        
-        // Create notification instead of alert
-        await createChallengeNotification('Update Your Profile', 15, 5, true);
-        
-        // Check if Chapter 1 is now complete and progress to Chapter 2
-        await checkAndProgressChapter(1);
-        
-        // Force refresh user progress to show unlocked challenges
-        const userRefRefresh = doc(db, 'users', currentUser.uid);
-        const userDocRefresh = await getDoc(userRefRefresh);
-        if (userDocRefresh.exists()) {
-          const userDataRefresh = userDocRefresh.data();
-          setUserProgress(userDataRefresh);
-        }
-        
-        // Show a brief success message only once per session
-        if (!sessionStorage.getItem('profileAutoCompleteAlertShown')) {
-          alert('✅ Profile challenge auto-completed! Check your notifications for details.');
-          sessionStorage.setItem('profileAutoCompleteAlertShown', 'true');
-        }
-      } else {
-        console.log('Profile not complete yet:', { hasDisplayName, hasAvatar });
-      }
-    } catch (error) {
-      console.error('Error auto-completing profile challenge:', error);
-    }
+    // Challenge 7 (ep1-update-profile) is now a battle challenge, not auto-completable
+    // Disabled auto-completion - challenge must be completed by winning the battle
+    // The challenge "Hela Awakened" requires defeating 4 Ice Golems in battle
+    return;
   };
 
   // Function to check and auto-complete Power Card discovery challenge

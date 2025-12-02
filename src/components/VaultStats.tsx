@@ -629,7 +629,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Quick Actions</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
           <button 
-            onClick={() => onRestoreShields(5, 5)}
+            onClick={() => onRestoreShields(5, 15)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -642,11 +642,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +5 Shields (5 PP)
+            +5 Shields (15 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(10, 8)}
+            onClick={() => onRestoreShields(10, 24)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -659,11 +659,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +10 Shields (8 PP)
+            +10 Shields (24 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(25, 15)}
+            onClick={() => onRestoreShields(25, 45)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -676,11 +676,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +25 Shields (15 PP)
+            +25 Shields (45 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(50, 30)}
+            onClick={() => onRestoreShields(50, 90)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -693,7 +693,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +50 Shields (30 PP)
+            +50 Shields (90 PP)
           </button>
         </div>
       </div>
@@ -797,7 +797,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <span>{(vault.vaultHealth || vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()} / {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
             {vault.vaultHealthCooldown && (() => {
               const cooldownEnd = new Date(vault.vaultHealthCooldown);
-              cooldownEnd.setHours(cooldownEnd.getHours() + 3);
+              cooldownEnd.setHours(cooldownEnd.getHours() + 4);
               const now = new Date();
               const remainingMs = cooldownEnd.getTime() - now.getTime();
               if (remainingMs > 0) {
@@ -945,7 +945,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
                 <span style={{ fontWeight: 'bold', color: '#92400e' }}>Overshield Active</span>
               </div>
               <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
-                {vault.overshield} Attack{vault.overshield > 1 ? 's' : ''} Absorbed
+                1 Attack Absorbed
               </div>
               <div style={{ fontSize: '0.8rem', color: '#92400e' }}>
                 Next incoming attack will be completely blocked

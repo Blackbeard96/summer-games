@@ -154,22 +154,57 @@ export const getMoveDamageSync = (moveName: string): number | { min: number; max
 };
 
 /**
+ * Finds the original template name for a given overridden name
+ * This is needed because moves in the database might have overridden names,
+ * but overrides are keyed by original template names
+ */
+const findOriginalTemplateName = (overriddenName: string): string | null => {
+  if (!moveOverridesCache) return null;
+  
+  // Search through all overrides to find one that matches the overridden name
+  for (const [templateName, override] of Object.entries(moveOverridesCache)) {
+    if (override.name === overriddenName) {
+      return templateName;
+    }
+  }
+  
+  return null;
+};
+
+/**
  * Synchronous version for move name with cache
+ * Handles both original template names and overridden names
  */
 export const getMoveNameSync = (moveName: string): string => {
+  // First, try direct lookup (if moveName is the original template name)
   if (moveOverridesCache && moveOverridesCache[moveName]) {
     return moveOverridesCache[moveName].name;
   }
   
+  // If not found, try reverse lookup (if moveName is already an overridden name)
+  const originalName = findOriginalTemplateName(moveName);
+  if (originalName && moveOverridesCache && moveOverridesCache[originalName]) {
+    return moveOverridesCache[originalName].name;
+  }
+  
+  // Fall back to the provided name
   return moveName;
 };
 
 /**
  * Synchronous version for move description with cache
+ * Handles both original template names and overridden names
  */
 export const getMoveDescriptionSync = (moveName: string): string => {
+  // First, try direct lookup (if moveName is the original template name)
   if (moveOverridesCache && moveOverridesCache[moveName]) {
     return moveOverridesCache[moveName].description || '';
+  }
+  
+  // If not found, try reverse lookup (if moveName is already an overridden name)
+  const originalName = findOriginalTemplateName(moveName);
+  if (originalName && moveOverridesCache && moveOverridesCache[originalName]) {
+    return moveOverridesCache[originalName].description || '';
   }
   
   return '';
