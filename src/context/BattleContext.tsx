@@ -34,6 +34,7 @@ import {
 } from '../types/battle';
 import { getMoveDamage } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import { getElementalRingLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 
 interface BattleContextType {
   // Vault Management
@@ -431,11 +432,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               };
               
               if (move.category === 'elemental' && move.level === 1) {
-                // Preserve the unlocked state from the database
+                // CRITICAL: Preserve the unlocked state from the database PERMANENTLY
                 // Elemental moves are unlocked when the player chooses their element in the Artifacts page
-                // Once unlocked, they should remain unlocked
-                console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - unlocked state: ${move.unlocked}`);
-                return { ...updatedMove, unlocked: move.unlocked || false };
+                // Once unlocked (unlocked === true), they should ALWAYS remain unlocked
+                // If already unlocked, keep it unlocked. Otherwise, unlock if it matches user's element.
+                const shouldRemainUnlocked = move.unlocked === true ? true : 
+                  (move.elementalAffinity === userElement);
+                console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - unlocked state: ${move.unlocked}, preserving: ${shouldRemainUnlocked}`);
+                return { ...updatedMove, unlocked: shouldRemainUnlocked };
               } else if (move.category === 'manifest') {
                 // Only unlock if it matches user's manifest
                 const shouldUnlock = move.manifestType === userManifest;
@@ -1532,6 +1536,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // Unlock elemental moves based on user's element
+  // IMPORTANT: Once unlocked, these moves should stay unlocked permanently
   const unlockElementalMoves = async (elementalAffinity: string) => {
     if (!currentUser) return;
     
@@ -1539,20 +1544,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.log(`Unlocking ${elementalAffinity} elemental moves for user`);
       
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
-      const updatedMoves = moves.map(move => {
+      
+      // Get current moves from database to ensure we have the latest state
+      const movesDoc = await getDoc(movesRef);
+      const currentMoves = movesDoc.exists() ? (movesDoc.data().moves || []) : moves;
+      
+      const updatedMoves = currentMoves.map((move: Move) => {
         // Unlock level 1 moves for the user's element
+        // IMPORTANT: Set unlocked to true explicitly - this will persist
         if (move.category === 'elemental' && 
             move.elementalAffinity === elementalAffinity && 
             move.level === 1) {
+          console.log(`BattleContext: Permanently unlocking ${move.name} (${move.elementalAffinity})`);
           return { ...move, unlocked: true };
         }
+        // Preserve unlocked state for all other moves
         return move;
       });
       
       await updateDoc(movesRef, { moves: updatedMoves });
       setMoves(updatedMoves);
       
-      console.log(`Successfully unlocked ${elementalAffinity} elemental moves`);
+      console.log(`Successfully unlocked ${elementalAffinity} elemental moves - these will remain unlocked`);
     } catch (err) {
       console.error('Error unlocking elemental moves:', err);
       setError('Failed to unlock elemental moves');
@@ -1638,13 +1651,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
       
       // Update existing moves with correct element and manifest filtering
-      // IMPORTANT: Preserve unlocked state - if a move is already unlocked, keep it unlocked
+      // IMPORTANT: Preserve unlocked state - if a move is already unlocked, keep it unlocked PERMANENTLY
       const updatedMoves = moves.map((move: Move) => {
         if (move.category === 'elemental' && move.level === 1) {
-          // If already unlocked, keep it unlocked (preserve state)
-          // Otherwise, unlock if it matches user's element
-          const shouldUnlock = move.unlocked || move.elementalAffinity === userElement;
-          console.log(`BattleContext: Move ${move.name} (${move.elementalAffinity}) - already unlocked: ${move.unlocked}, should unlock: ${shouldUnlock}`);
+          // CRITICAL: If already unlocked (unlocked === true), ALWAYS keep it unlocked (preserve state permanently)
+          // Only unlock if it matches user's element AND hasn't been unlocked yet
+          const shouldUnlock = move.unlocked === true ? true : 
+            (move.elementalAffinity === userElement);
+          console.log(`BattleContext: Move ${move.name} (${move.elementalAffinity}) - already unlocked: ${move.unlocked}, preserving unlock: ${shouldUnlock}`);
           return { ...move, unlocked: shouldUnlock };
         } else if (move.category === 'manifest') {
           // If already unlocked, keep it unlocked (preserve state)
@@ -2969,6 +2983,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               }
             } else {
               totalDamage = 0;
+            }
+          }
+          
+          // Apply artifact damage multiplier for elemental moves
+          if (selectedMove.category === 'elemental') {
+            try {
+              const studentRef = doc(db, 'students', currentUser.uid);
+              const studentDoc = await getDoc(studentRef);
+              if (studentDoc.exists()) {
+                const studentData = studentDoc.data();
+                const equippedArtifacts = studentData.equippedArtifacts || null;
+                if (equippedArtifacts) {
+                  const ringLevel = getElementalRingLevel(equippedArtifacts);
+                  const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+                  if (artifactMultiplier > 1.0) {
+                    totalDamage = Math.floor(totalDamage * artifactMultiplier);
+                    console.log(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%`);
+                  }
+                }
+              }
+            } catch (error) {
+              console.error('Error applying artifact multiplier:', error);
             }
           }
           

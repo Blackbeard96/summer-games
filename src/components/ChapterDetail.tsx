@@ -1417,7 +1417,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const resetChallenge8 = async () => {
     if (!currentUser) return;
     
-    if (!window.confirm('Reset Challenge 8 "Artifacts and Elements" to incomplete for testing?')) {
+    if (!window.confirm('Reset Challenge 8 "Artifacts and Elements"?\n\nThis will allow you to redo the updated challenge. Your progress will be reset to incomplete.')) {
       return;
     }
     
@@ -1477,16 +1477,22 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         });
       }
       
-      // Refresh user progress
+      // Refresh user progress - the onSnapshot listener will automatically update the UI
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         setUserProgress(refreshedUserDoc.data());
       }
       
-      alert('✅ Challenge 8 reset! Refresh the page to see it as incomplete.');
+      // Also refresh student data
+      const refreshedStudentDoc = await getDoc(studentRef);
+      if (refreshedStudentDoc.exists()) {
+        setStudentData(refreshedStudentDoc.data());
+      }
+      
+      alert('✅ Challenge 8 has been reset! You can now redo the updated challenge.');
     } catch (error) {
       console.error('Error resetting Challenge 8:', error);
-      alert('Error resetting challenge. Check console for details.');
+      alert('Error resetting challenge. Please try again.');
     }
   };
 
@@ -2531,41 +2537,73 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                                   Next
                                 </button>
                               )}
-                              {/* Replay button (only show if completed) */}
+                              {/* Replay and Reset buttons (only show if completed) */}
                               {status === 'completed' && (
-                                <button
-                                  onClick={() => {
-                                    setIsReplayMode(true);
-                                    setShowIcyDeathCutscene(true);
-                                  }}
-                                  style={{
-                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '0.5rem',
-                                    padding: '0.75rem 1.5rem',
-                                    fontSize: '0.875rem',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s ease',
-                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '100%'
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                                  }}
-                                >
-                                  <span style={{ marginRight: '0.5rem' }}>🔄</span>
-                                  Replay Challenge
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setIsReplayMode(true);
+                                      setShowIcyDeathCutscene(true);
+                                    }}
+                                    style={{
+                                      background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '0.5rem',
+                                      padding: '0.75rem 1.5rem',
+                                      fontSize: '0.875rem',
+                                      fontWeight: 'bold',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.2s ease',
+                                      boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      width: '100%'
+                                    }}
+                                    onMouseOver={(e) => {
+                                      e.currentTarget.style.transform = 'translateY(-2px)';
+                                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                                    }}
+                                    onMouseOut={(e) => {
+                                      e.currentTarget.style.transform = 'translateY(0)';
+                                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                                    }}
+                                  >
+                                    <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                    Replay Challenge
+                                  </button>
+                                  <button
+                                    onClick={resetChallenge8}
+                                    style={{
+                                      background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '0.5rem',
+                                      padding: '0.75rem 1.5rem',
+                                      fontSize: '0.875rem',
+                                      fontWeight: 'bold',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.2s ease',
+                                      boxShadow: '0 2px 4px rgba(245, 158, 11, 0.3)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      width: '100%'
+                                    }}
+                                    onMouseOver={(e) => {
+                                      e.currentTarget.style.transform = 'translateY(-2px)';
+                                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(245, 158, 11, 0.4)';
+                                    }}
+                                    onMouseOut={(e) => {
+                                      e.currentTarget.style.transform = 'translateY(0)';
+                                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(245, 158, 11, 0.3)';
+                                    }}
+                                  >
+                                    <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                    Reset Challenge (Redo Updated Version)
+                                  </button>
+                                </>
                               )}
                             </div>
                           )}

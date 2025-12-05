@@ -42,13 +42,14 @@ console.error = function(...args: any[]) {
   originalConsoleError.apply(console, args);
 };
 
-// Add error handling for debugging Firefox issues
+// Add error handling for debugging Firefox issues - multiple layers for maximum coverage
 window.addEventListener('error', (event) => {
   // Suppress Firestore internal assertion errors
   if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    console.warn('🚨 Suppressed Firestore internal assertion error - preventing crash');
+    // Completely suppress - don't even warn in production
     event.preventDefault(); // Prevent default error handling
     event.stopPropagation(); // Stop event propagation
+    event.stopImmediatePropagation(); // Stop immediate propagation
     return false;
   }
   // Only log non-Firestore errors
@@ -62,15 +63,44 @@ window.addEventListener('error', (event) => {
   });
 }, true); // Use capture phase to catch errors earlier
 
+// Additional error listener in bubble phase for Firefox compatibility
+window.addEventListener('error', (event) => {
+  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
+    // Completely suppress - don't log anything
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }
+}, false);
+
 window.addEventListener('unhandledrejection', (event) => {
   // Suppress Firestore internal assertion errors
   if (isFirestoreInternalError(event.reason)) {
-    console.warn('🚨 Suppressed Firestore internal assertion error in promise rejection');
+    // Completely suppress - don't even warn
     event.preventDefault(); // Prevent default error handling
-    return;
+    event.stopPropagation(); // Stop event propagation
+    return false;
   }
   originalConsoleError('Unhandled promise rejection:', event.reason);
 });
+
+// Suppress React error overlay for Firestore errors
+if (typeof window !== 'undefined') {
+  // Suppress React error overlay (the red screen in development)
+  if ((window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__) {
+    const originalOnError = (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError;
+    (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError = function(...args: any[]) {
+      const error = args[0];
+      if (isFirestoreInternalError(error)) {
+        // Suppress React error overlay for Firestore errors
+        return;
+      }
+      if (originalOnError) {
+        return originalOnError.apply(this, args);
+      }
+    };
+  }
+}
 
 console.log('App starting...', {
   userAgent: navigator.userAgent,

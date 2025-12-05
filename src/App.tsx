@@ -104,7 +104,7 @@ const isFirestoreInternalError = (error: any): boolean => {
 // Global error handler for Firestore assertion errors (capture phase)
 window.addEventListener('error', (event) => {
   if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    console.warn('🚨 Suppressed Firestore internal assertion error - preventing crash');
+    // Completely suppress - don't log anything
     event.preventDefault(); // Prevent the error from crashing the app
     event.stopPropagation(); // Stop event propagation
     event.stopImmediatePropagation(); // Stop immediate propagation
@@ -112,11 +112,21 @@ window.addEventListener('error', (event) => {
   }
 }, true); // Use capture phase to catch errors earlier
 
+// Additional error listener in bubble phase for Firefox compatibility
+window.addEventListener('error', (event) => {
+  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }
+}, false);
+
 // Global unhandled promise rejection handler
 window.addEventListener('unhandledrejection', (event) => {
   if (isFirestoreInternalError(event.reason)) {
-    console.warn('🚨 Suppressed Firestore internal assertion error in promise rejection - preventing crash');
+    // Completely suppress - don't log anything
     event.preventDefault(); // Prevent the error from crashing the app
+    event.stopPropagation(); // Stop event propagation
     return false;
   }
 });

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Vault, Move, ActionCard } from '../types/battle';
-import { doc, getDoc, onSnapshot, addDoc, collection, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, addDoc, collection, updateDoc, deleteField } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
@@ -34,6 +34,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreCost, setRestoreCost] = useState<number>(100);
   const [restoreHealthLoading, setRestoreHealthLoading] = useState(false);
+  const [cooldownRemaining, setCooldownRemaining] = useState<{ hours: number; minutes: number; seconds: number } | null>(null);
 
   // Helper to get "day" start time (8am Eastern Time) for a given date
   // Properly handles EST (UTC-5) and EDT (UTC-4) automatically using America/New_York timezone
@@ -230,6 +231,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   };
 
   // Function to restore vault health to full using PP
+  // If on cooldown, this will remove the cooldown and allow the player to be attacked again
   const handleRestoreVaultHealth = async () => {
     if (!currentUser || !vault) return;
     
@@ -248,6 +250,32 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       alert(`Not enough PP! You need ${healthNeeded} PP to restore vault health to full.`);
       return;
     }
+
+    // If on cooldown, warn the player that restoring health will remove the cooldown
+    if (vault.vaultHealthCooldown) {
+      const cooldownEnd = new Date(vault.vaultHealthCooldown);
+      cooldownEnd.setHours(cooldownEnd.getHours() + 4);
+      const now = new Date();
+      const remainingMs = cooldownEnd.getTime() - now.getTime();
+      
+      if (remainingMs > 0) {
+        const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
+        const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+        const remainingSeconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+        
+        const confirmMessage = `⚠️ WARNING: You are currently on cooldown (${remainingHours}h ${remainingMinutes}m ${remainingSeconds}s remaining).\n\n` +
+          `Restoring your health now will:\n` +
+          `✅ Restore your vault health to full\n` +
+          `❌ Remove the cooldown protection\n` +
+          `⚠️ Make you vulnerable to attacks again\n\n` +
+          `Cost: ${healthNeeded} PP\n\n` +
+          `Do you want to restore health early and remove the cooldown?`;
+        
+        if (!window.confirm(confirmMessage)) {
+          return;
+        }
+      }
+    }
     
     try {
       setRestoreHealthLoading(true);
@@ -255,12 +283,19 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       // Calculate new PP (deduct health cost)
       const newPP = vault.currentPP - healthNeeded;
       
-      // Update vault in Firestore: restore health to max and deduct PP
+      // Update vault in Firestore: restore health to max, deduct PP, and REMOVE cooldown
       const vaultRef = doc(db, 'vaults', currentUser.uid);
-      await updateDoc(vaultRef, {
+      const updateData: any = {
         vaultHealth: maxVaultHealth,
         currentPP: newPP
-      });
+      };
+      
+      // Remove cooldown if it exists (using deleteField() to remove it from Firestore)
+      if (vault.vaultHealthCooldown) {
+        updateData.vaultHealthCooldown = deleteField();
+      }
+      
+      await updateDoc(vaultRef, updateData);
       
       // Also update student PP to match
       const studentRef = doc(db, 'students', currentUser.uid);
@@ -274,7 +309,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       // Force refresh of vault data
       await refreshVaultData();
       
-      alert(`Vault health restored to full! Spent ${healthNeeded} PP.`);
+      const cooldownMessage = vault.vaultHealthCooldown 
+        ? `Vault health restored to full! Cooldown removed - you can now be attacked again. Spent ${healthNeeded} PP.`
+        : `Vault health restored to full! Spent ${healthNeeded} PP.`;
+      
+      alert(cooldownMessage);
     } catch (error) {
       console.error('Error restoring vault health:', error);
       alert('Failed to restore vault health. Please try again.');
@@ -336,6 +375,37 @@ const VaultStats: React.FC<VaultStatsProps> = ({
     
     return () => clearInterval(interval);
   }, []);
+
+  // Update cooldown timer every second
+  useEffect(() => {
+    if (!vault?.vaultHealthCooldown) {
+      setCooldownRemaining(null);
+      return;
+    }
+
+    const updateCooldownTimer = () => {
+      const cooldownEnd = new Date(vault.vaultHealthCooldown!);
+      cooldownEnd.setHours(cooldownEnd.getHours() + 4); // 4-hour cooldown
+      const now = new Date();
+      const remainingMs = cooldownEnd.getTime() - now.getTime();
+      
+      if (remainingMs <= 0) {
+        setCooldownRemaining(null);
+        return;
+      }
+      
+      const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+      const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+      
+      setCooldownRemaining({ hours, minutes, seconds });
+    };
+    
+    updateCooldownTimer();
+    const interval = setInterval(updateCooldownTimer, 1000);
+    
+    return () => clearInterval(interval);
+  }, [vault?.vaultHealthCooldown]);
 
   // Check for active PP boost
   useEffect(() => {
@@ -793,24 +863,30 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>VAULT HEALTH</div>
             <span style={{ fontSize: '1.5rem' }}>❤️</span>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: vault.vaultHealth === 0 ? '#6b7280' : '#10b981', marginBottom: '0.5rem', position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span>{(vault.vaultHealth || vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()} / {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
-            {vault.vaultHealthCooldown && (() => {
-              const cooldownEnd = new Date(vault.vaultHealthCooldown);
-              cooldownEnd.setHours(cooldownEnd.getHours() + 4);
-              const now = new Date();
-              const remainingMs = cooldownEnd.getTime() - now.getTime();
-              if (remainingMs > 0) {
-                const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
-                const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-                return (
-                  <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'normal' }}>
-                    (Cooldown: {remainingHours}h {remainingMinutes}m)
-                  </span>
-                );
-              }
-              return null;
-            })()}
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: vault.vaultHealth === 0 ? '#6b7280' : '#10b981', marginBottom: '0.5rem', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>{(vault.vaultHealth || vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()} / {(vault.maxVaultHealth || Math.floor(vault.capacity * 0.1)).toLocaleString()}</span>
+            </div>
+            {cooldownRemaining && (
+              <div style={{
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                border: '1px solid #f59e0b',
+                borderRadius: '0.5rem',
+                padding: '0.5rem 0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: 'bold',
+                color: '#92400e'
+              }}>
+                <span style={{ fontSize: '1rem' }}>⏰</span>
+                <span>Cooldown: {cooldownRemaining.hours}h {cooldownRemaining.minutes}m {cooldownRemaining.seconds}s</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.8, marginLeft: '0.5rem' }}>
+                  (Protected from attacks)
+                </span>
+              </div>
+            )}
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 
@@ -846,45 +922,71 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
             const currentVaultHealth = vault.vaultHealth || 0;
             const healthNeeded = maxVaultHealth - currentVaultHealth;
-            const canRestore = healthNeeded > 0 && !vault.vaultHealthCooldown && vault.currentPP >= healthNeeded;
+            const hasCooldown = !!vault.vaultHealthCooldown;
+            const canRestore = healthNeeded > 0 && vault.currentPP >= healthNeeded;
+            const isOnCooldown = hasCooldown && cooldownRemaining;
             
             return (
-              <button
-                onClick={handleRestoreVaultHealth}
-                disabled={restoreHealthLoading || !canRestore}
-                style={{
-                  width: '100%',
-                  background: canRestore ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : '#9ca3af',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1rem',
-                  borderRadius: '0.5rem',
-                  cursor: canRestore ? 'pointer' : 'not-allowed',
-                  fontSize: '0.875rem',
-                  fontWeight: 'bold',
-                  transition: 'all 0.2s ease',
-                  boxShadow: canRestore ? '0 2px 4px rgba(16, 185, 129, 0.2)' : 'none'
-                }}
-                onMouseEnter={(e) => {
-                  if (canRestore) {
-                    e.currentTarget.style.transform = 'translateY(-1px)';
-                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(16, 185, 129, 0.3)';
+              <div>
+                <button
+                  onClick={handleRestoreVaultHealth}
+                  disabled={restoreHealthLoading || !canRestore}
+                  style={{
+                    width: '100%',
+                    background: canRestore 
+                      ? (isOnCooldown 
+                          ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' 
+                          : 'linear-gradient(135deg, #10b981 0%, #059669 100%)')
+                      : '#9ca3af',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '0.5rem',
+                    cursor: canRestore ? 'pointer' : 'not-allowed',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    transition: 'all 0.2s ease',
+                    boxShadow: canRestore ? '0 2px 4px rgba(16, 185, 129, 0.2)' : 'none'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (canRestore) {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = isOnCooldown 
+                        ? '0 4px 8px rgba(245, 158, 11, 0.3)' 
+                        : '0 4px 8px rgba(16, 185, 129, 0.3)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (canRestore) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
+                    }
+                  }}
+                >
+                  {restoreHealthLoading 
+                    ? 'Restoring...' 
+                    : healthNeeded > 0 
+                      ? (isOnCooldown 
+                          ? `⚠️ Restore Health Early (${healthNeeded} PP) - Removes Cooldown`
+                          : `❤️ Restore Health (${healthNeeded} PP)`)
+                      : 'Health Full'
                   }
-                }}
-                onMouseLeave={(e) => {
-                  if (canRestore) {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
-                  }
-                }}
-              >
-                {restoreHealthLoading 
-                  ? 'Restoring...' 
-                  : healthNeeded > 0 
-                    ? `❤️ Restore Health (${healthNeeded} PP)`
-                    : 'Health Full'
-                }
-              </button>
+                </button>
+                {isOnCooldown && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    background: '#fef3c7',
+                    border: '1px solid #f59e0b',
+                    borderRadius: '0.375rem',
+                    fontSize: '0.75rem',
+                    color: '#92400e',
+                    textAlign: 'center'
+                  }}>
+                    ⚠️ Restoring health now will remove your cooldown protection
+                  </div>
+                )}
+              </div>
             );
           })()}
         </div>

@@ -4,6 +4,7 @@ import { useBattle } from '../context/BattleContext';
 import { Move } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
 import { trackMoveUsage } from '../utils/manifestTracking';
+import { getElementalRingLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -102,6 +103,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
   const [userLevel, setUserLevel] = useState(1);
   const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
+  const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   
   // Use initialBattleLog if provided (for Mindforge), otherwise use default
   const defaultLog = mindforgeMode 
@@ -525,6 +527,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           console.log('BattleEngine: Final photoURL:', finalPhotoURL);
           setUserLevel(calculatedLevel);
           setUserPhotoURL(finalPhotoURL);
+          // Load equipped artifacts for artifact damage multiplier
+          setEquippedArtifacts(userData.equippedArtifacts || null);
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -1651,8 +1655,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
       const damageResult = rollDamage(damageRange, playerLevel, move.level, move.masteryLevel);
       
+      // Apply artifact damage multiplier for elemental moves
+      let artifactMultiplier = 1.0;
+      if (move.category === 'elemental' && equippedArtifacts) {
+        const ringLevel = getElementalRingLevel(equippedArtifacts);
+        artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+        if (artifactMultiplier > 1.0) {
+          newLog.push(`💍 Elemental Ring (Level ${ringLevel}) boosts ${overriddenMoveName} damage by ${Math.round((artifactMultiplier - 1) * 100)}%!`);
+        }
+      }
+      
       // Apply Mindforge damage multiplier
-      damage = Math.floor(damageResult.damage * playerDamageMultiplier);
+      damage = Math.floor(damageResult.damage * playerDamageMultiplier * artifactMultiplier);
       
       // Log damage reduction/increase for Mindforge mode
       if (mindforgeMode && !questionCorrect) {

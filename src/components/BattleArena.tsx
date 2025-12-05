@@ -60,6 +60,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [showBagModal, setShowBagModal] = useState(false);
   const [showVaultModal, setShowVaultModal] = useState(false);
+  const [cooldownRemaining, setCooldownRemaining] = useState<{ hours: number; minutes: number; seconds: number } | null>(null);
 
   // Load move overrides when component mounts
   useEffect(() => {
@@ -168,6 +169,37 @@ const BattleArena: React.FC<BattleArenaProps> = ({
       return () => clearTimeout(timer);
     }
   }, [battleLog, currentLogIndex]);
+
+  // Update cooldown timer every second
+  useEffect(() => {
+    if (!vault?.vaultHealthCooldown) {
+      setCooldownRemaining(null);
+      return;
+    }
+
+    const updateCooldownTimer = () => {
+      const cooldownEnd = new Date(vault.vaultHealthCooldown!);
+      cooldownEnd.setHours(cooldownEnd.getHours() + 4); // 4-hour cooldown
+      const now = new Date();
+      const remainingMs = cooldownEnd.getTime() - now.getTime();
+      
+      if (remainingMs <= 0) {
+        setCooldownRemaining(null);
+        return;
+      }
+      
+      const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+      const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+      
+      setCooldownRemaining({ hours, minutes, seconds });
+    };
+    
+    updateCooldownTimer();
+    const interval = setInterval(updateCooldownTimer, 1000);
+    
+    return () => clearInterval(interval);
+  }, [vault?.vaultHealthCooldown]);
 
   const handleMoveClick = (move: Move) => {
     onMoveSelect(move);
@@ -474,22 +506,11 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         <div style={{ marginBottom: '0.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.125rem' }}>
             <span style={{ fontSize: '0.75rem', color: '#10b981' }}>VAULT HEALTH</span>
-            {vault?.vaultHealthCooldown && (() => {
-              const cooldownEnd = new Date(vault.vaultHealthCooldown);
-              cooldownEnd.setHours(cooldownEnd.getHours() + 4);
-              const now = new Date();
-              const remainingMs = cooldownEnd.getTime() - now.getTime();
-              if (remainingMs > 0) {
-                const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
-                const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-                return (
-                  <span style={{ fontSize: '0.65rem', color: '#f59e0b', marginLeft: '0.25rem' }}>
-                    (Cooldown: {remainingHours}h {remainingMinutes}m)
-                  </span>
-                );
-              }
-              return null;
-            })()}
+            {cooldownRemaining && (
+              <span style={{ fontSize: '0.65rem', color: '#f59e0b', marginLeft: '0.25rem', fontWeight: 'bold' }}>
+                (⏰ {cooldownRemaining.hours}h {cooldownRemaining.minutes}m {cooldownRemaining.seconds}s)
+              </span>
+            )}
           </div>
           <div style={{
             width: '100%',
