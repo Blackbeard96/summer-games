@@ -101,6 +101,11 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   const getChapterStatus = (chapter: Chapter) => {
     if (!userProgress) return 'locked';
     
+    // Force Chapter 2 to be locked and disabled for now
+    if (chapter.id === 2) {
+      return 'locked';
+    }
+    
     const chapterProgress = userProgress.chapters?.[chapter.id];
     if (chapterProgress?.isCompleted) return 'completed';
     if (chapterProgress?.isActive) return 'active';

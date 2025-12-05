@@ -7,6 +7,10 @@ const Chapters: React.FC = () => {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
 
   const handleChapterSelect = (chapter: Chapter) => {
+    // Block access to Chapter 2 - it's locked and disabled for now
+    if (chapter.id === 2) {
+      return;
+    }
     setSelectedChapter(chapter);
   };
 

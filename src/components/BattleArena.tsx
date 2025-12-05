@@ -227,7 +227,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
       fire: '🔥',
       water: '💧',
       air: '💨',
-      earth: '🌱',
+      earth: '🪨',
       lightning: '⚡',
       light: '✨',
       shadow: '🌑',

@@ -46,6 +46,7 @@ const Leaderboard = withRouteSplitting(() => import('./pages/Leaderboard'));
 const Chapters = withRouteSplitting(() => import('./pages/Chapters'));
 const Squads = withRouteSplitting(() => import('./pages/Squads'));
 const Battle = withRouteSplitting(() => import('./pages/Battle'));
+const Artifacts = withRouteSplitting(() => import('./pages/Artifacts'));
 const StoryEpisodeBattle = withRouteSplitting(() => import('./pages/StoryEpisodeBattle'));
 
 // Loading component for lazy-loaded routes
@@ -76,25 +77,45 @@ const PageLoader = () => (
   </div>
 );
 
-// Global error handler for Firestore assertion errors
+// Helper function to check if error is a Firestore internal assertion error
+const isFirestoreInternalError = (error: any): boolean => {
+  if (!error) return false;
+  const errorString = String(error);
+  const errorMessage = error?.message || '';
+  const errorStack = error?.stack || '';
+  const errorCode = error?.code || '';
+  
+  return (
+    errorString.includes('INTERNAL ASSERTION FAILED') || 
+    errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+    errorStack.includes('INTERNAL ASSERTION FAILED') ||
+    errorString.includes('ID: ca9') ||
+    errorString.includes('ID: b815') ||
+    errorMessage.includes('ID: ca9') ||
+    errorMessage.includes('ID: b815') ||
+    errorStack.includes('ID: ca9') ||
+    errorStack.includes('ID: b815') ||
+    (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
+    (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
+    (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
+  );
+};
+
+// Global error handler for Firestore assertion errors (capture phase)
 window.addEventListener('error', (event) => {
-  if (event.error && event.error.message && 
-      (event.error.message.includes('INTERNAL ASSERTION FAILED') || 
-       event.error.message.includes('FIRESTORE') ||
-       event.error.message.includes('Unexpected state'))) {
-    console.warn('🚨 Caught Firestore Error - preventing crash:', event.error.message);
+  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
+    console.warn('🚨 Suppressed Firestore internal assertion error - preventing crash');
     event.preventDefault(); // Prevent the error from crashing the app
+    event.stopPropagation(); // Stop event propagation
+    event.stopImmediatePropagation(); // Stop immediate propagation
     return false;
   }
-});
+}, true); // Use capture phase to catch errors earlier
 
 // Global unhandled promise rejection handler
 window.addEventListener('unhandledrejection', (event) => {
-  if (event.reason && event.reason.message && 
-      (event.reason.message.includes('INTERNAL ASSERTION FAILED') || 
-       event.reason.message.includes('FIRESTORE') ||
-       event.reason.message.includes('Unexpected state'))) {
-    console.warn('🚨 Caught Firestore Error in Promise - preventing crash:', event.reason.message);
+  if (isFirestoreInternalError(event.reason)) {
+    console.warn('🚨 Suppressed Firestore internal assertion error in promise rejection - preventing crash');
     event.preventDefault(); // Prevent the error from crashing the app
     return false;
   }
@@ -102,12 +123,10 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // Additional error handler for console errors
 const originalConsoleError = console.error;
-console.error = function(...args) {
+console.error = function(...args: any[]) {
   const message = args.join(' ');
-  if (message.includes('INTERNAL ASSERTION FAILED') || 
-      message.includes('FIRESTORE') ||
-      message.includes('Unexpected state')) {
-    console.warn('🚨 Caught Firestore Error in Console - preventing crash:', message);
+  if (isFirestoreInternalError(message) || args.some(arg => isFirestoreInternalError(arg))) {
+    // Completely suppress - don't even warn
     return;
   }
   originalConsoleError.apply(console, args);
@@ -280,6 +299,11 @@ const AppContent = () => {
             <Route path="/battle" element={
               <ProtectedRoute user={true}>
                 <Battle />
+              </ProtectedRoute>
+            } />
+            <Route path="/artifacts" element={
+              <ProtectedRoute user={true}>
+                <Artifacts />
               </ProtectedRoute>
             } />
             <Route path="/story/:episodeId/battle" element={

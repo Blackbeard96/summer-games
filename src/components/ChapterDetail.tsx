@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -17,6 +17,8 @@ import TruthBattle from './TruthBattle';
 import TruthRevelationModal from './TruthRevelationModal';
 import MSTInterfaceTutorial from './MSTInterfaceTutorial';
 import HelaBattle from './HelaBattle';
+import IcyDeathCutscene from './IcyDeathCutscene';
+import ZekeEndsBattleCutscene from './ZekeEndsBattleCutscene';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -25,7 +27,7 @@ interface ChapterDetailProps {
 }
 
 const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
   const navigate = useNavigate();
@@ -48,38 +50,47 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [isReplayMode, setIsReplayMode] = useState(false);
   const [chapterActivationInProgress, setChapterActivationInProgress] = useState(false);
   const [showMSTTutorial, setShowMSTTutorial] = useState(false);
+  const [showIcyDeathCutscene, setShowIcyDeathCutscene] = useState(false);
+  const [showZekeEndsBattleCutscene, setShowZekeEndsBattleCutscene] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
 
-    const fetchUserData = async () => {
-      try {
-        // Fetch user progress from 'users' collection
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          console.log('ChapterDetail: User data loaded:', userData);
-          setUserProgress(userData);
-        }
+    // Use real-time listener to automatically update when data changes
+    const userRef = doc(db, 'users', currentUser.uid);
+    const studentRef = doc(db, 'students', currentUser.uid);
 
-        // Fetch student data from 'students' collection (for manifest, etc.)
-        const studentRef = doc(db, 'students', currentUser.uid);
-        const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) {
-          const studentData = studentDoc.data();
-          console.log('ChapterDetail: Student data loaded:', studentData);
-          setStudentData(studentData);
-        }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
-      } finally {
+    const unsubscribeUser = onSnapshot(userRef, (userDoc) => {
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        console.log('ChapterDetail: User data updated (real-time):', {
+          chapterId: chapter.id,
+          chapterData: userData.chapters?.[chapter.id],
+          challengeData: userData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+        });
+        setUserProgress(userData);
         setLoading(false);
       }
-    };
+    }, (error) => {
+      console.error('ChapterDetail: Error in user listener:', error);
+      setLoading(false);
+    });
 
-    fetchUserData();
-  }, [currentUser]);
+    const unsubscribeStudent = onSnapshot(studentRef, (studentDoc) => {
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        console.log('ChapterDetail: Student data updated (real-time):', studentData);
+        setStudentData(studentData);
+      }
+    }, (error) => {
+      console.error('ChapterDetail: Error in student listener:', error);
+    });
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeStudent();
+    };
+  }, [currentUser, chapter.id]);
 
   const getRequirementStatus = (requirement: any) => {
     console.log('ChapterDetail: Checking requirement:', requirement.type, {
@@ -121,16 +132,43 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const getChallengeStatus = (challenge: ChapterChallenge) => {
     if (!userProgress) return 'locked';
     
-    const chapterProgress = userProgress.chapters?.[chapter.id];
-    if (!chapterProgress) return 'locked';
+    // Ensure chapter.id is used as a string key (Firestore uses string keys)
+    const chapterKey = String(chapter.id);
+    const chapterProgress = userProgress.chapters?.[chapterKey];
+    if (!chapterProgress) {
+      console.log('ChapterDetail: getChallengeStatus - No chapter progress found:', {
+        chapterId: chapter.id,
+        chapterKey: chapterKey,
+        availableKeys: userProgress.chapters ? Object.keys(userProgress.chapters) : 'no chapters'
+      });
+      return 'locked';
+    }
     
     const challengeProgress = chapterProgress.challenges?.[challenge.id];
+    console.log('ChapterDetail: getChallengeStatus - Challenge progress:', {
+      challengeId: challenge.id,
+      challengeProgress: challengeProgress,
+      allChallenges: chapterProgress.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges'
+    });
     
     // Check if challenge is pending approval first
     if (pendingSubmissions[challenge.id]) return 'pending';
     
-    // Check if challenge is completed (only after admin approval)
-    if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted) return 'completed';
+    // Check if challenge is completed
+    // For Challenge 7 (Hela Awakened), only mark as completed if it was actually completed through battle
+    // Don't mark as completed if it was auto-completed (which shouldn't happen anymore, but check anyway)
+    if (challenge.id === 'ep1-update-profile') {
+      // Challenge 7 requires actual battle completion - check for iceGolemsDefeated or helaDefeated flag
+      const wasBattleCompleted = challengeProgress?.iceGolemsDefeated === true || 
+                                 challengeProgress?.helaDefeated === true ||
+                                 (challengeProgress?.isCompleted === true && challengeProgress?.autoCompleted !== true);
+      if (wasBattleCompleted && (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted)) {
+        return 'completed';
+      }
+    } else {
+      // For other challenges, use standard completion check
+      if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted) return 'completed';
+    }
     
     // If no requirements, challenge is available
     if (!challenge.requirements || challenge.requirements.length === 0) {
@@ -160,6 +198,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           } else if (req.value === 'first_combat') {
             const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
             return combatChallenge?.isCompleted;
+          } else if (req.value === 'giant_ice_golem_cutscene_seen') {
+            // Check if the player has seen the Giant Ice Golem cutscene
+            // Also check if Challenge 7 is completed as a fallback
+            const challenge7Completed = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile']?.isCompleted;
+            const cutsceneSeen = studentData?.artifacts?.giant_ice_golem_cutscene_seen === true;
+            return cutsceneSeen || challenge7Completed === true;
           } else if (req.value === 'power_card_discovered') {
             const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             return powerCardChallenge?.isCompleted;
@@ -333,9 +377,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           console.log('ChapterDetail: Rival selection challenge auto-complete check:', { shouldAutoComplete, hasRival: !!userProgress.rival });
           break;
         case 'ep1-update-profile':
-          // Auto-complete if profile is complete
-          shouldAutoComplete = !!(studentData?.displayName && studentData?.photoURL);
-          console.log('ChapterDetail: Profile update challenge auto-complete check:', { shouldAutoComplete, hasDisplayName: !!studentData?.displayName, hasPhotoURL: !!studentData?.photoURL });
+          // Challenge 7 "Hela Awakened" is now a battle challenge - cannot be auto-completed
+          // Must be completed by winning the 4-on-1 battle against Ice Golems
+          shouldAutoComplete = false;
+          console.log('ChapterDetail: Hela Awakened challenge - battle required, cannot auto-complete');
           break;
         case 'ep1-power-card-intro':
           // Auto-complete if Power Card has been customized (description, background, or image)
@@ -391,6 +436,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         // Apply rewards
         const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
         const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
 
         // Update student data (legacy system)
         const studentDoc = await getDoc(studentRef);
@@ -405,11 +451,23 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             }
           };
           
+          // Grant artifact rewards
+          const currentArtifacts = studentData.artifacts || {};
+          const updatedArtifacts = { ...currentArtifacts };
+          
+          artifactRewards.forEach(artifactReward => {
+            updatedArtifacts[artifactReward.value] = true;
+          });
+          
           await updateDoc(studentRef, {
             challenges: updatedChallenges,
             xp: (studentData.xp || 0) + xpReward,
-            powerPoints: (studentData.powerPoints || 0) + ppReward
+            powerPoints: (studentData.powerPoints || 0) + ppReward,
+            artifacts: updatedArtifacts
           });
+          
+          // Elemental Ring is granted, but player will choose their element on the Artifacts page
+          // No need to unlock moves here - the modal on Artifacts page will handle element selection
         }
 
         // Add notification
@@ -1089,9 +1147,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       
       if (currentData.exists()) {
         // Determine which challenge to complete based on completingChallenge state
+        // If Ice Golems were defeated, complete Challenge 7 and unlock Challenge 8
         const challengeId = completingChallenge === 'ep1-update-profile' 
           ? 'ep1-update-profile' 
           : 'ep1-portal-sequence';
+        
+        // If this is the Ice Golem battle, also mark that we've seen the cutscene
+        const iceGolemsDefeated = completingChallenge === 'ep1-update-profile';
         
         const updatedChapters = {
           ...currentData.data().chapters,
@@ -1104,7 +1166,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                 status: 'approved',
                 completedAt: serverTimestamp(),
                 helaDefeated: true,
-                iceGolemsDefeated: completingChallenge === 'ep1-update-profile'
+                iceGolemsDefeated: iceGolemsDefeated,
+                giantGolemCutscene: iceGolemsDefeated // Mark that cutscene was shown
               }
             }
           }
@@ -1121,6 +1184,35 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         }));
 
         console.log(`${challengeId} challenge completed - ${completingChallenge === 'ep1-update-profile' ? 'Ice Golems' : 'Hela'} defeated!`);
+        
+        // If Ice Golems were defeated, mark the artifact requirement for Challenge 8
+        if (iceGolemsDefeated) {
+          // Also update the student's artifacts to mark the cutscene as seen
+          const studentRef = doc(db, 'students', currentUser.uid);
+          const studentDoc = await getDoc(studentRef);
+          
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            const currentArtifacts = studentData.artifacts || {};
+            
+            await updateDoc(studentRef, {
+              artifacts: {
+                ...currentArtifacts,
+                giant_ice_golem_cutscene_seen: true
+              }
+            });
+          }
+          
+          // Navigate to Challenge 8 after a short delay
+          setTimeout(() => {
+            // Scroll to Challenge 8 (Artifacts and Elements) or show it
+            const challenge8Element = document.getElementById(`challenge-ep1-view-power-card`);
+            if (challenge8Element) {
+              challenge8Element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 1000);
+        }
+        
         // Modal will be closed by the Continue button in HelaBattle component
       }
     } catch (error) {
@@ -1319,6 +1411,363 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     } catch (error) {
       console.error('Error resetting Challenge 7:', error);
       alert('Error resetting challenge. Check console for details.');
+    }
+  };
+
+  const resetChallenge8 = async () => {
+    if (!currentUser) return;
+    
+    if (!window.confirm('Reset Challenge 8 "Artifacts and Elements" to incomplete for testing?')) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              'ep1-view-power-card': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          'chapters.1.challenges.ep1-view-power-card.status': deleteField()
+        });
+      }
+      
+      // Reset in students collection
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedStudentChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              'ep1-view-power-card': cleanChallenge
+            }
+          }
+        };
+        
+        await updateDoc(studentRef, {
+          chapters: updatedStudentChapters,
+          'chapters.1.challenges.ep1-view-power-card.status': deleteField()
+        });
+      }
+      
+      // Refresh user progress
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        setUserProgress(refreshedUserDoc.data());
+      }
+      
+      alert('✅ Challenge 8 reset! Refresh the page to see it as incomplete.');
+    } catch (error) {
+      console.error('Error resetting Challenge 8:', error);
+      alert('Error resetting challenge. Check console for details.');
+    }
+  };
+
+  const handleIcyDeathCutsceneComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-view-power-card');
+      if (!challenge) return;
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const currentData = await getDoc(userRef);
+
+      if (currentData.exists()) {
+        // Mark Challenge 8 as complete
+        const updatedChapters = {
+          ...currentData.data().chapters,
+          [chapter.id]: {
+            ...currentData.data().chapters?.[chapter.id],
+            challenges: {
+              ...currentData.data().chapters?.[chapter.id]?.challenges,
+              ['ep1-view-power-card']: {
+                isCompleted: true,
+                status: 'approved',
+                completedAt: serverTimestamp()
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+
+        // Apply rewards
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+        // Update student data
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          const updatedChallenges = {
+            ...studentData.challenges,
+            ['ep1-view-power-card']: {
+              completed: true,
+              status: 'approved',
+              completedAt: serverTimestamp()
+            }
+          };
+
+          // Grant artifact rewards
+          const currentArtifacts = studentData.artifacts || {};
+          const updatedArtifacts = { ...currentArtifacts };
+
+          artifactRewards.forEach(artifactReward => {
+            updatedArtifacts[artifactReward.value] = true;
+          });
+
+          await updateDoc(studentRef, {
+            challenges: updatedChallenges,
+            xp: (studentData.xp || 0) + xpReward,
+            powerPoints: (studentData.powerPoints || 0) + ppReward,
+            artifacts: updatedArtifacts
+          });
+
+          // If Elemental Ring is granted, unlock elemental moves
+          if (updatedArtifacts.elemental_ring_level_1) {
+            try {
+              const userElement = studentData.elementalAffinity?.toLowerCase() || 
+                                 studentData.manifestationType?.toLowerCase() || 
+                                 'fire';
+              await unlockElementalMoves(userElement);
+              console.log(`Elemental moves unlocked for ${userElement} element via Elemental Ring`);
+            } catch (error) {
+              console.error('Failed to unlock elemental moves:', error);
+            }
+          }
+        }
+
+        // Update local state
+        setUserProgress((prev: any) => ({
+          ...prev,
+          chapters: updatedChapters
+        }));
+
+        // Add notification
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP, ${ppReward} PP, and new artifacts!`,
+          challengeId: challenge.id,
+          challengeName: challenge.title,
+          xpReward: xpReward,
+          ppReward: ppReward,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+
+        alert(`🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP, ${ppReward} PP, and new artifacts!`);
+        
+        // Navigate to Artifacts page
+        setTimeout(() => {
+          navigate('/artifacts');
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error completing Challenge 8:', error);
+      alert('Failed to complete the challenge. Please try again.');
+    } finally {
+      setShowIcyDeathCutscene(false);
+    }
+  };
+
+  const handleZekeEndsBattleCutsceneComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-where-it-started');
+      if (!challenge) return;
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const currentData = await getDoc(userRef);
+
+      if (currentData.exists()) {
+        const currentChapters = currentData.data().chapters || {};
+        // Ensure chapter.id is used as a string key (Firestore uses string keys)
+        const chapterKey = String(chapter.id);
+        const currentChapterData = currentChapters[chapterKey] || {};
+        const currentChallenges = currentChapterData.challenges || {};
+        
+        console.log('ChapterDetail: Completing Challenge 9 - Current data:', {
+          chapterId: chapter.id,
+          chapterKey: chapterKey,
+          currentChapters,
+          currentChapterData,
+          currentChallenges,
+          allChapterKeys: Object.keys(currentChapters)
+        });
+        
+        // Mark Challenge 9 as complete AND mark Chapter 1 as completed in one update
+        const updatedChapters = {
+          ...currentChapters,
+          [chapterKey]: {
+            ...currentChapterData,
+            isCompleted: true,
+            completionDate: serverTimestamp(),
+            isActive: false,
+            challenges: {
+              ...currentChallenges,
+              'ep1-where-it-started': {
+                isCompleted: true,
+                status: 'approved',
+                completedAt: serverTimestamp()
+              }
+            }
+          }
+          // Chapter 2 unlock disabled - will be enabled later
+          // 2: {
+          //   ...currentChapters[2],
+          //   isActive: true,
+          //   unlockDate: serverTimestamp()
+          // }
+        };
+
+        console.log('ChapterDetail: Updating with:', {
+          chapterId: chapter.id,
+          chapterKey: chapterKey,
+          updatedChapters: updatedChapters[chapterKey],
+          challengeData: updatedChapters[chapterKey].challenges['ep1-where-it-started']
+        });
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters
+        });
+        
+        console.log('ChapterDetail: Challenge 9 completion saved to users collection');
+
+        // Grant rewards and update students collection
+        const studentData = await getDoc(studentRef);
+        if (studentData.exists()) {
+          const studentDataObj = studentData.data();
+          const studentChapters = studentDataObj.chapters || {};
+          const chapterKey = String(chapter.id);
+          const studentChapterData = studentChapters[chapterKey] || {};
+          const studentChallenges = studentChapterData.challenges || {};
+          
+          console.log('ChapterDetail: Updating students collection - Current data:', {
+            chapterId: chapter.id,
+            chapterKey: chapterKey,
+            studentChapters,
+            studentChapterData,
+            studentChallenges,
+            allChapterKeys: Object.keys(studentChapters)
+          });
+          
+          let updatedPowerPoints = (studentDataObj.powerPoints || 0) + 150;
+          let updatedXP = (studentDataObj.xp || 0) + 100;
+          
+          // Grant Truth Metal reward
+          const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+          let updatedTruthMetal = (studentDataObj.truthMetal || 0) + truthMetalReward;
+
+          // Grant artifact rewards
+          const currentArtifacts = studentDataObj.artifacts || {};
+          const updatedArtifacts = { ...currentArtifacts };
+          updatedArtifacts.chapter_1_completed = true;
+
+          const updatedStudentChapters = {
+            ...studentChapters,
+            [chapterKey]: {
+              ...studentChapterData,
+              isCompleted: true,
+              completionDate: serverTimestamp(),
+              isActive: false,
+              challenges: {
+                ...studentChallenges,
+                'ep1-where-it-started': {
+                  completed: true,
+                  status: 'approved',
+                  completedAt: serverTimestamp()
+                }
+              }
+            }
+          };
+
+          console.log('ChapterDetail: Updating students with:', {
+            chapterId: chapter.id,
+            chapterKey: chapterKey,
+            updatedChapter: updatedStudentChapters[chapterKey],
+            challengeData: updatedStudentChapters[chapterKey].challenges['ep1-where-it-started']
+          });
+
+          await updateDoc(studentRef, {
+            powerPoints: updatedPowerPoints,
+            xp: updatedXP,
+            truthMetal: updatedTruthMetal,
+            artifacts: updatedArtifacts,
+            chapters: updatedStudentChapters
+            // storyChapter: 2 // Disabled for now
+          });
+          
+          console.log('ChapterDetail: Challenge 9 completion saved to students collection');
+        }
+
+        // Wait a moment for Firestore to propagate the changes
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Refresh user progress from both collections
+        const refreshedUserDoc = await getDoc(userRef);
+        if (refreshedUserDoc.exists()) {
+          const refreshedData = refreshedUserDoc.data();
+          console.log('ChapterDetail: Refreshed user data:', {
+            chapterId: chapter.id,
+            chapterData: refreshedData.chapters?.[chapter.id],
+            challengeData: refreshedData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+          });
+          setUserProgress(refreshedData);
+        }
+
+        // Also refresh student data
+        const refreshedStudentDoc = await getDoc(studentRef);
+        if (refreshedStudentDoc.exists()) {
+          const refreshedStudentData = refreshedStudentDoc.data();
+          console.log('ChapterDetail: Refreshed student data:', {
+            chapterId: chapter.id,
+            chapterData: refreshedStudentData.chapters?.[chapter.id],
+            challengeData: refreshedStudentData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+          });
+          setStudentData(refreshedStudentData);
+        }
+
+        alert('✅ Chapter 1 Complete!');
+      }
+    } catch (error) {
+      console.error('Error completing Challenge 9:', error);
+      alert('❌ Failed to complete challenge. Please try again.');
+    } finally {
+      setShowZekeEndsBattleCutscene(false);
     }
   };
 
@@ -1641,6 +2090,42 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                         }}>
                           <span>💰</span>
                           <span>{reward.value} PP</span>
+                        </div>
+                      );
+                    } else if (reward.type === 'truthMetal') {
+                      return (
+                        <div key={rewardIndex} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.25rem 0.5rem',
+                          backgroundColor: '#fef2f2',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: '#991b1b'
+                        }}>
+                          <span>💎</span>
+                          <span>{reward.value} Truth Metal</span>
+                        </div>
+                      );
+                    } else if (reward.type === 'artifact') {
+                      // Display artifact rewards with a nice format
+                      const artifactName = reward.description || reward.value;
+                      return (
+                        <div key={rewardIndex} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.25rem 0.5rem',
+                          backgroundColor: '#f3e8ff',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: '#7c3aed'
+                        }}>
+                          <span>💍</span>
+                          <span>{artifactName}</span>
                         </div>
                       );
                     }
@@ -1972,20 +2457,25 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                                   Face Hela Awakened
                                 </button>
                               )}
-                              {/* Reset button for testing (only show if completed) */}
+                              {/* Replay button (only show if completed) */}
                               {status === 'completed' && (
                                 <button
-                                  onClick={resetChallenge7}
+                                  onClick={() => {
+                                    setIsReplayMode(true);
+                                    setCompletingChallenge('ep1-update-profile');
+                                    setShowHelaBattle(true);
+                                  }}
                                   style={{
-                                    background: '#f59e0b',
+                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
                                     color: 'white',
-                                    border: '2px solid #d97706',
+                                    border: 'none',
                                     borderRadius: '0.5rem',
-                                    padding: '0.5rem 1rem',
+                                    padding: '0.75rem 1.5rem',
                                     fontSize: '0.875rem',
                                     fontWeight: 'bold',
                                     cursor: 'pointer',
-                                    transition: 'all 0.2s',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',
@@ -1993,22 +2483,132 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                                   }}
                                   onMouseOver={(e) => {
                                     e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(245, 158, 11, 0.4)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
                                   }}
                                   onMouseOut={(e) => {
                                     e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(245, 158, 11, 0.3)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
                                   }}
                                 >
                                   <span style={{ marginRight: '0.5rem' }}>🔄</span>
-                                  Reset for Testing
+                                  Replay Challenge
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Challenge 8: Artifacts and Elements */}
+                          {challenge.id === 'ep1-view-power-card' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {status === 'available' && (
+                                <button
+                                  onClick={() => setShowIcyDeathCutscene(true)}
+                                  style={{
+                                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                                    color: 'white',
+                                    padding: '0.75rem 1.5rem',
+                                    borderRadius: '0.5rem',
+                                    border: 'none',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '100%'
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.4)';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(59, 130, 246, 0.3)';
+                                  }}
+                                >
+                                  <span style={{ marginRight: '0.5rem' }}>➡️</span>
+                                  Next
+                                </button>
+                              )}
+                              {/* Replay button (only show if completed) */}
+                              {status === 'completed' && (
+                                <button
+                                  onClick={() => {
+                                    setIsReplayMode(true);
+                                    setShowIcyDeathCutscene(true);
+                                  }}
+                                  style={{
+                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.5rem',
+                                    padding: '0.75rem 1.5rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '100%'
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                                  }}
+                                >
+                                  <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                  Replay Challenge
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Challenge 9: Where it all started */}
+                          {challenge.id === 'ep1-where-it-started' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {status === 'available' && (
+                                <button
+                                  onClick={() => setShowZekeEndsBattleCutscene(true)}
+                                  style={{
+                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
+                                    color: 'white',
+                                    padding: '0.75rem 1.5rem',
+                                    borderRadius: '0.5rem',
+                                    border: 'none',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '100%'
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
+                                  }}
+                                >
+                                  <span style={{ marginRight: '0.5rem' }}>🎬</span>
+                                  Begin Final Challenge
                                 </button>
                               )}
                             </div>
                           )}
 
                           {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && challenge.id !== 'ep1-combat-drill' && challenge.id !== 'ep1-update-profile' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && challenge.id !== 'ep1-combat-drill' && challenge.id !== 'ep1-update-profile' && challenge.id !== 'ep1-view-power-card' && challenge.id !== 'ep1-where-it-started' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
               <button
                 onClick={() => handleChallengeComplete(challenge)}
                 disabled={completingChallenge === challenge.id}
@@ -2733,6 +3333,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     </div>
   );
 
+  // Block access to Chapter 2 - it's locked and disabled for now
+  if (chapter.id === 2) {
+    return (
+      <div style={{
+        padding: '2rem',
+        textAlign: 'center',
+        background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
+        borderRadius: '1rem',
+        border: '2px solid #e5e7eb'
+      }}>
+        <h2 style={{ color: '#6b7280', marginBottom: '1rem' }}>🔒 Chapter 2 is Locked</h2>
+        <p style={{ color: '#9ca3af', marginBottom: '1.5rem' }}>
+          This chapter is currently disabled and will be available in a future update.
+        </p>
+        {onBack && (
+          <button
+            onClick={onBack}
+            style={{
+              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem 1.5rem',
+              borderRadius: '0.5rem',
+              fontSize: '1rem',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+          >
+            ← Back to Chapters
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="bg-white rounded-xl shadow-xl p-8">
@@ -2979,6 +3614,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             onDefeat={handleHelaBattleDefeat}
             onEscape={handleHelaBattleEscape}
             isIceGolemBattle={completingChallenge === 'ep1-update-profile'}
+          />
+
+          {/* Icy Death Cutscene */}
+          <IcyDeathCutscene
+            isOpen={showIcyDeathCutscene}
+            onComplete={handleIcyDeathCutsceneComplete}
+          />
+
+          {/* Zeke Ends Battle Cutscene */}
+          <ZekeEndsBattleCutscene
+            isOpen={showZekeEndsBattleCutscene}
+            onComplete={handleZekeEndsBattleCutsceneComplete}
           />
         </div>
       );

@@ -432,6 +432,7 @@ const NavBar = memo(() => {
     { to: '/home', label: 'Home', tooltip: 'Home Hub' },
     { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges & Story Episodes' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
+    { to: '/artifacts', label: 'Artifacts', tooltip: 'Artifacts System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ], []);
 

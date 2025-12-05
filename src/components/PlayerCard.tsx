@@ -26,7 +26,7 @@ interface PlayerCardProps {
 const styleIcons: Record<string, string> = {
   Fire: '🔥',
   Water: '💧',
-  Earth: '🌱',
+  Earth: '🪨',
   Air: '💨',
 };
 

@@ -20,6 +20,7 @@ export function searchStudents<T extends SearchableStudent>(students: T[], query
   return students.filter(student => {
     // Get all searchable text fields
     const searchFields = [
+      student.id, // Search by student ID as well
       student.displayName,
       student.name,
       student.email,
@@ -28,7 +29,11 @@ export function searchStudents<T extends SearchableStudent>(students: T[], query
       // Combine first and last name
       student.firstName && student.lastName ? `${student.firstName} ${student.lastName}` : null,
       // Reverse order
-      student.lastName && student.firstName ? `${student.lastName} ${student.firstName}` : null
+      student.lastName && student.firstName ? `${student.lastName} ${student.firstName}` : null,
+      // Also search through any other string fields in the student object
+      ...(Object.values(student as any).filter((val): val is string => 
+        typeof val === 'string' && val.length > 0 && val.length < 100 // Only search reasonable string fields
+      ))
     ].filter(Boolean);
 
     // Check if any field contains the search term

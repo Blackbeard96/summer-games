@@ -57,6 +57,7 @@ interface BattleEngineProps {
   isTerraAwakened?: boolean; // Whether Terra is in awakened state
   isForestStageActive?: boolean; // Whether the forest stage is active (for field bonus)
   isMultiplayer?: boolean; // Whether this is a multiplayer battle (2-8 players)
+  onIceGolemDefeated?: () => void; // Callback when an Ice Golem is defeated (triggers cutscene)
 }
 
 interface BattleState {
@@ -94,7 +95,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   onTerraAwakened,
   isTerraAwakened = false,
   isForestStageActive = false,
-  isMultiplayer = false
+  isMultiplayer = false,
+  onIceGolemDefeated
 }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
@@ -151,7 +153,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Active status effects on player and opponent
   interface ActiveEffect {
-    type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze';
+    type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce';
     duration: number;
     damagePerTurn?: number;
     ppLossPerTurn?: number;
@@ -159,6 +161,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     healPerTurn?: number;
     chance?: number; // For confuse
     intensity?: number; // Legacy support
+    damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
   }
 
   const [playerEffects, setPlayerEffects] = useState<ActiveEffect[]>([]);
@@ -1027,12 +1030,66 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
 
-      // Select best target (weakest enemy)
-      const targetId = selectOptimalCPUTarget(allies, opponents, opponent.id);
-      if (!targetId) return;
+      // Select best target - CPU opponents should target allies (players), not other opponents
+      // For Ice Golems and other CPU enemies, they should attack the player(s)
+      const targetId = selectOptimalCPUTarget(opponents, allies, opponent.id);
+      if (!targetId) {
+        console.warn(`⚠️ No target found for ${opponent.name}. Available allies: ${allies.length}, opponents: ${opponents.length}`);
+        // Fallback: target the first ally (player) if available
+        if (allies.length > 0) {
+          const fallbackTargetId = allies[0].id;
+          console.log(`🔄 Using fallback target for ${opponent.name}: ${allies[0].name} (${fallbackTargetId})`);
+          
+          // Still try to select a move with the fallback target
+          const target = allies[0];
+          const situation: BattleSituation = {
+            cpuHealth: opponent.currentPP,
+            cpuMaxHealth: opponent.maxPP,
+            cpuShield: opponent.shieldStrength,
+            cpuMaxShield: opponent.maxShieldStrength,
+            cpuLevel: opponent.level,
+            targetHealth: target.currentPP,
+            targetMaxHealth: target.maxPP,
+            targetShield: target.shieldStrength,
+            targetMaxShield: target.maxShieldStrength,
+            targetLevel: target.level,
+            availableMoves: opponentMoves.map((move: any) => ({
+              name: move.name,
+              type: move.type || 'attack',
+              baseDamage: move.baseDamage,
+              damageRange: move.damageRange,
+              healingRange: move.healingRange,
+              shieldBoost: move.shieldBoost,
+              ppSteal: move.ppSteal,
+              statusEffects: move.statusEffects || (move.statusEffect ? [move.statusEffect] : []),
+              priority: move.priority,
+              level: move.level || 1,
+              masteryLevel: move.masteryLevel || 1
+            }))
+          };
+          
+          const selectedMove = selectOptimalCPUMove(situation, fallbackTargetId);
+          if (selectedMove) {
+            setParticipantMoves(prev => {
+              const newMap = new Map(prev);
+              newMap.set(opponent.id, {
+                move: selectedMove.move as any,
+                targetId: fallbackTargetId
+              });
+              return newMap;
+            });
+            console.log(`🤖 ${opponent.name} selected (fallback): ${selectedMove.move.name} on ${target.name}`);
+          }
+        }
+        return;
+      }
 
-      const target = opponents.find(opp => opp.id === targetId) || allies.find(ally => ally.id === targetId);
-      if (!target) return;
+      // Since we swapped parameters, targetId is from the allies array (player)
+      const target = allies.find(ally => ally.id === targetId) || opponents.find(opp => opp.id === targetId);
+      if (!target) {
+        console.error(`❌ Target not found for ${opponent.name}. targetId: ${targetId}, allies: ${allies.map(a => a.id)}, opponents: ${opponents.map(o => o.id)}`);
+        return;
+      }
 
       // Create battle situation for move selection
       const situation: BattleSituation = {
@@ -1077,6 +1134,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.log(`🤖 ${opponent.name} selected: ${selectedMove.move.name} on ${target.name} - ${selectedMove.reason}`);
         console.log(`🤖 ${opponent.name} move details:`, selectedMove.move);
         console.log(`🤖 Available moves for ${opponent.name}:`, opponentMoves);
+      } else {
+        console.error(`❌ Failed to select move for ${opponent.name}. Situation:`, situation);
+        // Fallback: use first available move
+        if (opponentMoves.length > 0 && target) {
+          const fallbackMove = opponentMoves[0];
+          console.log(`🔄 Using fallback move for ${opponent.name}: ${fallbackMove.name}`);
+          setParticipantMoves(prev => {
+            const newMap = new Map(prev);
+            newMap.set(opponent.id, {
+              move: fallbackMove as any,
+              targetId: target.id
+            });
+            return newMap;
+          });
+        } else {
+          console.error(`❌ No fallback available for ${opponent.name}. Moves: ${opponentMoves.length}, Target: ${target ? target.name : 'none'}`);
+        }
       }
     });
   }, [isMultiplayer, allies, opponents, participantMoves, currentUser, vault, cpuOpponentMoves, battleState.turnOrder]);
@@ -1139,8 +1213,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     allParticipants: Opponent[]
   ) => {
     if (!vault) return;
-
-    let newLog = [...battleState.battleLog];
+    
+    // Add round separator at the start
+    setBattleState(prev => {
+      const roundNumber = (prev.turnCount || 0) + 1;
+      return {
+        ...prev,
+        turnCount: roundNumber,
+        battleLog: [...prev.battleLog, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, `🔄 ROUND ${roundNumber} ─ ${allParticipants.length} participants`, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`]
+      };
+    });
+    
+    // Small delay before starting round
+    await new Promise(resolve => setTimeout(resolve, 500));
     
     // Execute each move in turn order
     for (let i = 0; i < turnOrderResults.length; i++) {
@@ -1192,28 +1277,64 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           
           // Update opponents array if target is an opponent
           const targetId = target.id;
+          const targetName = target.name || 'Unknown';
           if (targetId && opponents.some(opp => opp.id === targetId)) {
+            const updatedOpponent = {
+              ...target,
+              shieldStrength: newTargetShield,
+              currentPP: newTargetHealth
+            };
+            
             setOpponents(prev => prev.map(opp => 
-              opp.id === targetId 
-                ? { ...opp, shieldStrength: newTargetShield, currentPP: newTargetHealth }
-                : opp
+              opp.id === targetId ? updatedOpponent : opp
             ));
+            
+            // Check if Ice Golem is defeated
+            const isIceGolem = (targetName.toLowerCase().includes('ice golem') || 
+                               targetId.toLowerCase().includes('ice-golem')) &&
+                               isMultiplayer;
+            
+            if (isIceGolem && newTargetHealth <= 0 && onIceGolemDefeated) {
+              console.log('❄️ Ice Golem defeated in multiplayer! Triggering cutscene...');
+              
+              // Log defeat
+              setBattleState(prev => ({
+                ...prev,
+                battleLog: [...prev.battleLog, `💀 ${targetName} has been defeated!`],
+                phase: 'defeat' // Pause battle
+              }));
+              
+              // Trigger cutscene
+              onIceGolemDefeated();
+              return; // Exit early to prevent further moves
+            }
           }
           
-          // Log the attack
+          // Log the attack using functional state update
+          let logMessage = '';
           if (targetShieldDamage > 0 && targetHealthDamage > 0) {
-            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`);
+            logMessage = `⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`;
           } else if (targetShieldDamage > 0) {
-            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetShieldDamage} damage to shields!`);
+            logMessage = `⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetShieldDamage} damage to shields!`;
           } else if (targetHealthDamage > 0) {
-            newLog.push(`⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetHealthDamage} damage to health!`);
+            logMessage = `⚔️ ${playerName} attacked ${target.name} with ${playerMove.name} for ${targetHealthDamage} damage to health!`;
           } else {
-            newLog.push(`⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`);
+            logMessage = `⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`;
           }
+          
+          // Update battle log immediately
+          setBattleState(prev => ({
+            ...prev,
+            battleLog: [...prev.battleLog, logMessage]
+          }));
         } else {
           // Non-damage move (heal, shield boost, etc.)
           if (target) {
-            newLog.push(`⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`);
+            const logMessage = `⚔️ ${playerName} used ${playerMove.name} on ${target.name}!`;
+            setBattleState(prev => ({
+              ...prev,
+              battleLog: [...prev.battleLog, logMessage]
+            }));
           }
         }
       } else {
@@ -1286,33 +1407,54 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             }
           }
           
-          // Log the attack
+          // Log the attack - use functional state update to ensure it's added
+          let logMessage = '';
           if (targetShieldDamage > 0 && targetHealthDamage > 0) {
-            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`);
+            logMessage = `⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${totalDamage} damage (${targetShieldDamage} to shields, ${targetHealthDamage} to health)!`;
           } else if (targetShieldDamage > 0) {
-            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetShieldDamage} damage to shields!`);
+            logMessage = `⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetShieldDamage} damage to shields!`;
           } else if (targetHealthDamage > 0) {
-            newLog.push(`⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetHealthDamage} damage to health!`);
+            logMessage = `⚔️ ${cpuOpponent.name} attacked ${target.name} with ${cpuMove.name} for ${targetHealthDamage} damage to health!`;
           } else {
-            newLog.push(`⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`);
+            logMessage = `⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`;
           }
+          
+          console.log(`📝 Adding to battle log: ${logMessage}`);
+          
+          // Update battle log immediately using functional state update
+          setBattleState(prev => {
+            const updatedLog = [...prev.battleLog, logMessage];
+            console.log(`📝 Battle log updated. New length: ${updatedLog.length}, Last entry: ${updatedLog[updatedLog.length - 1]}`);
+            return {
+              ...prev,
+              battleLog: updatedLog
+            };
+          });
         } else {
           // Non-damage move (heal, shield boost, etc.)
           if (target) {
-            newLog.push(`⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`);
+            const logMessage = `⚔️ ${cpuOpponent.name} used ${cpuMove.name} on ${target.name}!`;
+            console.log(`📝 Adding to battle log: ${logMessage}`);
+            setBattleState(prev => ({
+              ...prev,
+              battleLog: [...prev.battleLog, logMessage]
+            }));
           }
         }
       }
 
-      // Update battle log immediately after each move so it's visible
-      setBattleState(prev => ({
-        ...prev,
-        battleLog: [...newLog] // Create a new array to trigger React update
-      }));
-
       // Small delay between moves for visual clarity
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
+
+    // Add round end separator
+    setBattleState(prev => ({
+      ...prev,
+      battleLog: [...prev.battleLog, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, `✓ Round ${prev.turnCount || 1} Complete`, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`]
+    }));
+
+    // Small delay before clearing for next round
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Clear participant moves and reset for next round
     setParticipantMoves(new Map());
@@ -1323,10 +1465,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       phase: 'selection',
       isPlayerTurn: true,
       selectedMove: null,
-      selectedTarget: null,
-      battleLog: newLog
+      selectedTarget: null
+      // Keep the battle log - don't reset it
     }));
-  }, [vault, battleState.battleLog, participantMoves, currentUser, opponents, allies, updateVault]);
+  }, [vault, participantMoves, currentUser, opponents, allies, updateVault, battleState.turnCount, onIceGolemDefeated, isMultiplayer]);
 
   const executePlayerMove = useCallback(async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
@@ -1545,6 +1687,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       if (damageReductionApplied > 0) {
         newLog.push(`🛡️ ${opponent.name}'s defensive move reduced incoming damage by ${damageReductionApplied}!`);
+      }
+      
+      // Apply "reduce" status effect damage reduction
+      // Check if the target (opponent) has a "reduce" status effect active
+      const targetEffects = isPvP ? [] : opponentEffects; // For single-player, check opponent effects
+      const reduceEffect = targetEffects.find(effect => effect.type === 'reduce');
+      if (reduceEffect && reduceEffect.damageReduction) {
+        const reductionPercentage = reduceEffect.damageReduction;
+        const reductionAmount = Math.floor(damage * (reductionPercentage / 100));
+        damage = Math.max(0, damage - reductionAmount);
+        damageReductionApplied += reductionAmount;
+        if (reductionAmount > 0) {
+          newLog.push(`🛡️ ${opponent.name}'s Reduce effect reduced incoming damage by ${reductionAmount} (${reductionPercentage}%)!`);
+        }
       }
       
       // Calculate shield damage and remaining damage after reduction
@@ -1777,7 +1933,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ppStealPerTurn: statusEffect.ppStealPerTurn || statusEffect.intensity,
           healPerTurn: statusEffect.healPerTurn,
           chance: statusEffect.chance || statusEffect.intensity,
-          intensity: statusEffect.intensity
+          intensity: statusEffect.intensity,
+          damageReduction: statusEffect.damageReduction // For reduce effect
         };
         const successChance = statusEffect.successChance !== undefined ? statusEffect.successChance : 100;
         const applied = addStatusEffect('opponent', effect, successChance);
@@ -1985,6 +2142,35 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     if (opponentHealthDepleted) {
       newLog.push(`💀 ${targetOpponent.name} has been defeated!`);
+      
+      // Check if this is an Ice Golem being defeated in multiplayer mode
+      const isIceGolem = (targetOpponent.name?.toLowerCase().includes('ice golem') || 
+                         targetOpponent.id?.toLowerCase().includes('ice-golem')) &&
+                         isMultiplayer;
+      
+      if (isIceGolem && onIceGolemDefeated) {
+        // Trigger cutscene instead of normal victory
+        console.log('❄️ Ice Golem defeated! Triggering cutscene...');
+        setBattleState(prev => ({
+          ...prev,
+          phase: 'defeat', // Set to defeat to pause battle
+          battleLog: newLog,
+          isPlayerTurn: false,
+          currentAnimation: null,
+          isAnimating: false
+        }));
+        
+        // Update opponent state
+        if (isMultiplayer) {
+          setOpponents(prev => prev.map(opp => 
+            opp.id === targetOpponent.id ? newTargetOpponent : opp
+          ));
+        }
+        
+        // Trigger cutscene callback
+        onIceGolemDefeated();
+        return;
+      }
       
       // Calculate final PP reward based on defeated opponent's remaining PP
       const defeatedOpponentPP = checkIsCPUOpponent(targetOpponent) 
@@ -2316,7 +2502,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ppStealPerTurn: statusEffect.ppStealPerTurn || statusEffect.intensity,
           healPerTurn: statusEffect.healPerTurn,
           chance: statusEffect.chance || statusEffect.intensity,
-          intensity: statusEffect.intensity
+          intensity: statusEffect.intensity,
+          damageReduction: statusEffect.damageReduction // For reduce effect
         };
         const successChance = statusEffect.successChance !== undefined ? statusEffect.successChance : 100;
         const applied = addStatusEffect('player', effect, successChance);
@@ -2333,6 +2520,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     if (totalDamage > 0) {
+      // Apply "reduce" status effect damage reduction
+      // Check if the player has a "reduce" status effect active
+      const reduceEffect = playerEffects.find(effect => effect.type === 'reduce');
+      if (reduceEffect && reduceEffect.damageReduction) {
+        const reductionPercentage = reduceEffect.damageReduction;
+        const reductionAmount = Math.floor(totalDamage * (reductionPercentage / 100));
+        totalDamage = Math.max(0, totalDamage - reductionAmount);
+        if (reductionAmount > 0) {
+          newLog.push(`🛡️ Your Reduce effect reduced incoming damage by ${reductionAmount} (${reductionPercentage}%)!`);
+        }
+      }
+      
       // Check for overshield first (from Shield artifact)
       let remainingDamage = totalDamage;
       
@@ -2698,8 +2897,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       )}
       
       {/* Battle Status */}
-      {/* Battle Log - Hide in Mindforge mode (Mindforge has its own log) */}
-      {!mindforgeMode && (
+      {/* Battle Log - Hide in Mindforge mode (Mindforge has its own log) and Multiplayer mode (MultiplayerBattleArena has its own log) */}
+      {!mindforgeMode && !isMultiplayer && (
       <div style={{
         marginTop: '1rem',
         padding: '1rem',

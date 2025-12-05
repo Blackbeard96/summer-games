@@ -267,11 +267,20 @@ const Profile = () => {
           chapters: usersSnap.exists() ? usersSnap.data().chapters : userDataFromDB.chapters
         };
         
+        // Determine element: prioritize chosen_element from artifacts (in students collection), then elementalAffinity, then manifestationType
+        // Check both students collection artifacts and the direct field
+        const chosenElement = userDataFromDB.artifacts?.chosen_element || 
+                              userDataFromDB.elementalAffinity || 
+                              userDataFromDB.manifestationType || 
+                              'Fire';
+        // Capitalize the first letter for display
+        const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
+        
         setUserData(mergedUserData);
         setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
         setBio(userDataFromDB.bio || '');
         setManifest(userDataFromDB.manifest || 'None');
-        setStyle(userDataFromDB.manifestationType || 'Fire');
+        setStyle(displayElement);
         setRarity(rarityValue);
         setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
         // Validate cardFrameShape to ensure it's either 'circular' or 'rectangular'
@@ -348,7 +357,7 @@ const Profile = () => {
 
     fetchUserData();
     
-    // Set up real-time listener for manifest updates
+    // Set up real-time listener for manifest and element updates
     const studentsRef = doc(db, 'students', currentUser.uid);
     const unsubscribe = onSnapshot(studentsRef, (docSnapshot) => {
       if (docSnapshot.exists()) {
@@ -365,6 +374,14 @@ const Profile = () => {
           console.log('Profile: Manifest updated via real-time listener:', processedManifest);
           setPlayerManifest(processedManifest);
         }
+        
+        // Update element if it changed
+        const chosenElement = userData.artifacts?.chosen_element || 
+                              userData.elementalAffinity || 
+                              userData.manifestationType || 
+                              'Fire';
+        const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
+        setStyle(displayElement);
       }
     }, (error) => {
       console.error('Profile: Error listening to manifest updates:', error);

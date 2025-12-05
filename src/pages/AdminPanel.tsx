@@ -29,6 +29,7 @@ import MindforgeQuestionManager from '../components/MindforgeQuestionManager';
 import CPUOpponentMovesAdmin from '../components/CPUOpponentMovesAdmin';
 import ActionCardsAdmin from '../components/ActionCardsAdmin';
 import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
+import ArtifactsAdmin from '../components/ArtifactsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -86,7 +87,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -2573,6 +2574,22 @@ const AdminPanel: React.FC = () => {
         >
           🃏 Action Cards
         </button>
+        <button
+          onClick={() => setActiveTab('artifacts')}
+          style={{
+            backgroundColor: activeTab === 'artifacts' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'artifacts' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          🔮 Artifacts
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -2612,6 +2629,11 @@ const AdminPanel: React.FC = () => {
         />
       ) : activeTab === 'action-cards' ? (
         <ActionCardsAdmin
+          isOpen={true}
+          onClose={() => setActiveTab('students')}
+        />
+      ) : activeTab === 'artifacts' ? (
+        <ArtifactsAdmin
           isOpen={true}
           onClose={() => setActiveTab('students')}
         />

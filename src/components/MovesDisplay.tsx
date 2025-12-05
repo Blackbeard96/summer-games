@@ -119,10 +119,33 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
 
   // Filter moves by category and unlocked status
   const manifestMoves = moves.filter(move => move.category === 'manifest' && move.unlocked);
-  const elementalMoves = moves.filter(move => move.category === 'elemental' && move.unlocked);
+  // Filter elemental moves by player's chosen element
+  const elementalMoves = moves.filter(move => {
+    if (move.category !== 'elemental' || !move.unlocked) return false;
+    // If userElement is provided, ONLY show moves matching that element (strict filtering)
+    if (userElement) {
+      const moveElement = move.elementalAffinity?.toLowerCase();
+      const userElementLower = userElement.toLowerCase();
+      const matches = moveElement === userElementLower;
+      if (matches) {
+        console.log(`MovesDisplay: ✅ Move ${move.name} matches user element ${userElementLower}`);
+      }
+      return matches;
+    }
+    // If no userElement provided, don't show any elemental moves (user must choose element first)
+    console.log('MovesDisplay: ⚠️ No userElement provided - hiding all elemental moves');
+    return false;
+  });
   const systemMoves = moves.filter(move => move.category === 'system' && move.unlocked);
   
   console.log('MovesDisplay: Filtered moves - Manifest:', manifestMoves.length, 'Elemental:', elementalMoves.length, 'System:', systemMoves.length);
+  console.log('MovesDisplay: userElement prop:', userElement);
+  if (elementalMoves.length > 0) {
+    console.log('MovesDisplay: Elemental moves found:', elementalMoves.map(m => `${m.name} (${m.elementalAffinity})`));
+  } else {
+    console.log('MovesDisplay: No elemental moves found for element:', userElement);
+    console.log('MovesDisplay: All unlocked elemental moves:', moves.filter(m => m.category === 'elemental' && m.unlocked).map(m => `${m.name} (${m.elementalAffinity})`));
+  }
 
   const getMasteryLabel = (level: number) => {
     switch (level) {
@@ -147,7 +170,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   };
 
   const getElementalColor = (affinity: string) => {
-    switch (affinity) {
+    switch (affinity?.toLowerCase()) {
       case 'fire': return '#dc2626';
       case 'water': return '#2563eb';
       case 'air': return '#7c3aed';
@@ -157,6 +180,48 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       case 'shadow': return '#6b7280';
       case 'metal': return '#9ca3af';
       default: return '#6b7280';
+    }
+  };
+
+  const getElementalIcon = (affinity: string) => {
+    switch (affinity?.toLowerCase()) {
+      case 'fire': return '🔥';
+      case 'water': return '💧';
+      case 'air': return '💨';
+      case 'earth': return '🪨';
+      case 'lightning': return '⚡';
+      case 'light': return '✨';
+      case 'shadow': return '🌑';
+      case 'metal': return '⚙️';
+      default: return '⚡';
+    }
+  };
+
+  const getElementalBackgroundColor = (affinity: string) => {
+    switch (affinity?.toLowerCase()) {
+      case 'fire': return '#fef2f2';
+      case 'water': return '#eff6ff';
+      case 'air': return '#f5f3ff';
+      case 'earth': return '#f0fdf4';
+      case 'lightning': return '#fffbeb';
+      case 'light': return '#fffbeb';
+      case 'shadow': return '#f3f4f6';
+      case 'metal': return '#f9fafb';
+      default: return '#f3f4f6';
+    }
+  };
+
+  const getElementalBorderColor = (affinity: string) => {
+    switch (affinity?.toLowerCase()) {
+      case 'fire': return '#fecaca';
+      case 'water': return '#bfdbfe';
+      case 'air': return '#c4b5fd';
+      case 'earth': return '#bbf7d0';
+      case 'lightning': return '#fde68a';
+      case 'light': return '#fde68a';
+      case 'shadow': return '#d1d5db';
+      case 'metal': return '#e5e7eb';
+      default: return '#d1d5db';
     }
   };
 
@@ -222,7 +287,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     // Get category icon
     const getCategoryIcon = () => {
       if (move.category === 'manifest') return '⭐';
-      if (move.category === 'elemental') return '🔥';
+      if (move.category === 'elemental') {
+        return getElementalIcon(move.elementalAffinity || '');
+      }
       return '⚙️';
     };
 
@@ -1107,20 +1174,27 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       {renderMoveSection('Manifest Moves', manifestMoves, '🌟', '#8b5cf6')}
 
       {/* Elemental Moves Section */}
-      {renderMoveSection('Elemental Moves', elementalMoves, '🔥', '#dc2626')}
+      {elementalMoves.length > 0 && userElement && (
+        renderMoveSection(
+          `Elemental Moves (${elementalMoves.length} Available)`, 
+          elementalMoves, 
+          getElementalIcon(userElement), 
+          getElementalColor(userElement)
+        )
+      )}
       
       {/* Unlock Elemental Moves Button */}
       {elementalMoves.length === 0 && onUnlockElementalMoves && userElement && (
         <div style={{ 
-          background: '#fef2f2',
-          border: '1px solid #fecaca',
+          background: getElementalBackgroundColor(userElement),
+          border: `1px solid ${getElementalBorderColor(userElement)}`,
           borderRadius: '0.75rem',
           padding: '1.5rem',
           textAlign: 'center',
           marginBottom: '2rem'
         }}>
-          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🔥</div>
-          <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#dc2626' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>{getElementalIcon(userElement)}</div>
+          <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: getElementalColor(userElement) }}>
             Unlock Your {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Elemental Moves
           </h4>
           <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
@@ -1129,7 +1203,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           <button
             onClick={() => onUnlockElementalMoves(userElement)}
             style={{
-              background: '#dc2626',
+              background: getElementalColor(userElement),
               color: 'white',
               border: 'none',
               padding: '0.75rem 1.5rem',
@@ -1139,8 +1213,16 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               fontWeight: 'bold',
               transition: 'all 0.2s'
             }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.opacity = '0.9';
+              e.currentTarget.style.transform = 'translateY(-2px)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.opacity = '1';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }}
           >
-            🔥 Unlock {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Moves
+            {getElementalIcon(userElement)} Unlock {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Moves
           </button>
         </div>
       )}

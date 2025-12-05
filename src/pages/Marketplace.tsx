@@ -53,7 +53,7 @@ const artifacts: Artifact[] = [
     id: 'lunch-mosley',
     name: 'Lunch on Mosley', 
     description: 'Enjoy a special lunch with Mr. Mosley', 
-    price: 3600, 
+    price: 5400, 
     icon: '🍽️', 
     image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'food',

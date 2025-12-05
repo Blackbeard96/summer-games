@@ -21,7 +21,7 @@ export interface ChapterRequirement {
 }
 
 export interface ChapterReward {
-  type: 'xp' | 'pp' | 'level' | 'artifact' | 'manifest' | 'reflection' | 'wisdom' | 'blessing' | 'ability' | 'title' | 'team' | 'rival' | 'veil' | 'leadership' | 'ethics' | 'ninth';
+  type: 'xp' | 'pp' | 'level' | 'artifact' | 'manifest' | 'reflection' | 'wisdom' | 'blessing' | 'ability' | 'title' | 'team' | 'rival' | 'veil' | 'leadership' | 'ethics' | 'ninth' | 'truthMetal';
   value: any;
   description: string;
 }
@@ -58,7 +58,7 @@ export interface ChallengeRequirement {
 }
 
 export interface ChallengeReward {
-  type: 'xp' | 'pp' | 'level' | 'artifact' | 'manifest' | 'reflection' | 'wisdom' | 'blessing' | 'ability' | 'title' | 'team' | 'rival' | 'veil' | 'leadership' | 'ethics' | 'ninth';
+  type: 'xp' | 'pp' | 'level' | 'artifact' | 'manifest' | 'reflection' | 'wisdom' | 'blessing' | 'ability' | 'title' | 'team' | 'rival' | 'veil' | 'leadership' | 'ethics' | 'ninth' | 'truthMetal';
   value: any;
   description: string;
 }
@@ -258,40 +258,29 @@ export const CHAPTERS: Chapter[] = [
       },
       {
         id: 'ep1-view-power-card',
-        title: 'View Player Power Card',
-        description: 'Examine your personalized Power Card based on your profile and manifest choices',
+        title: 'Artifacts and Elements',
+        description: 'After the Giant Ice Golem\'s devastating attack, discover the power of Artifacts and Elements',
         type: 'personal',
-        requirements: [{ type: 'profile', value: 'completed', description: 'Must have completed profile' }],
+        requirements: [{ type: 'artifact', value: 'giant_ice_golem_cutscene_seen', description: 'Must have seen the Giant Ice Golem cutscene' }],
         rewards: [
-          { type: 'xp', value: 80, description: 'Power card viewed XP' },
-          { type: 'pp', value: 100, description: 'Power card viewed PP' }
+          { type: 'xp', value: 80, description: 'Artifacts and Elements discovery XP' },
+          { type: 'pp', value: 100, description: 'Artifacts and Elements discovery PP' },
+          { type: 'artifact', value: 'artifacts_unlocked', description: 'Artifacts system unlocked' },
+          { type: 'artifact', value: 'elemental_ring_level_1', description: 'Elemental Ring: Level 1 - Grants access to elemental moves' }
         ],
         isCompleted: false
       },
       {
-        id: 'ep1-combat-drill',
-        title: '1st Combat Drill',
-        description: 'Complete your first combat training drill to test your awakened abilities',
-        type: 'personal',
-        requirements: [{ type: 'profile', value: 'power_card_viewed', description: 'Must have viewed power card' }],
+        id: 'ep1-where-it-started',
+        title: 'Where it all started',
+        description: 'Zeke intervenes to end the battle between you and Hela, bringing the first chapter of your journey to a close',
+        type: 'final',
+        requirements: [{ type: 'artifact', value: 'elemental_ring_level_1', description: 'Must have received the Elemental Ring from Zeke' }],
         rewards: [
-          { type: 'xp', value: 90, description: 'Combat drill XP' },
-          { type: 'pp', value: 100, description: 'Combat drill PP' },
-          { type: 'ability', value: 'first_combat', description: 'First combat ability unlocked' }
-        ],
-        isCompleted: false
-      },
-      {
-        id: 'ep1-enter-xiotein',
-        title: 'Enter Xiotein School',
-        description: 'Cross the threshold and officially enter Xiotein School to begin your mystical education',
-        type: 'personal',
-        requirements: [{ type: 'ability', value: 'first_combat', description: 'Must have completed first combat drill' }],
-        rewards: [
-          { type: 'xp', value: 100, description: 'School entry XP' },
-          { type: 'pp', value: 100, description: 'School entry PP' },
-          { type: 'level', value: 1, description: 'Unlock Level 1' },
-          { type: 'artifact', value: 'school_access', description: 'Xiotein School access granted' }
+          { type: 'xp', value: 100, description: 'Chapter 1 completion XP' },
+          { type: 'pp', value: 150, description: 'Chapter 1 completion PP' },
+          { type: 'truthMetal', value: 1, description: '1 Truth Metal shard' },
+          { type: 'artifact', value: 'chapter_1_completed', description: 'Chapter 1 completed' }
         ],
         isCompleted: false
       }

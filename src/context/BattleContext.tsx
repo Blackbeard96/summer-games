@@ -431,10 +431,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               };
               
               if (move.category === 'elemental' && move.level === 1) {
-                // Keep elemental moves locked - they will be unlocked when Challenge 7 is completed
-                // Don't unlock based on element match alone anymore
-                console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - keeping locked until Challenge 7`);
-                return { ...updatedMove, unlocked: false };
+                // Preserve the unlocked state from the database
+                // Elemental moves are unlocked when the player chooses their element in the Artifacts page
+                // Once unlocked, they should remain unlocked
+                console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - unlocked state: ${move.unlocked}`);
+                return { ...updatedMove, unlocked: move.unlocked || false };
               } else if (move.category === 'manifest') {
                 // Only unlock if it matches user's manifest
                 const shouldUnlock = move.manifestType === userManifest;
@@ -570,23 +571,58 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const vaultRef = doc(db, 'vaults', currentUser.uid);
     const studentRef = doc(db, 'students', currentUser.uid);
     
+    // Helper function to check if error is a Firestore internal assertion error
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      return errorString.includes('INTERNAL ASSERTION FAILED') || 
+             errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+             errorString.includes('ID: ca9') ||
+             errorString.includes('ID: b815');
+    };
+    
+    // Debounce timer for vault PP sync
+    let vaultSyncTimeout: NodeJS.Timeout | null = null;
+    
     const unsubscribeVault = onSnapshot(vaultRef, (vaultDoc) => {
-      if (vaultDoc.exists()) {
-        setVault(vaultDoc.data() as Vault);
+      try {
+        if (vaultDoc.exists()) {
+          setVault(vaultDoc.data() as Vault);
+        }
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in vault listener callback - ignoring');
+          return;
+        }
+        console.error('BattleContext: Error processing vault snapshot:', error);
       }
+    }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in vault listener - ignoring');
+        return;
+      }
+      console.error('BattleContext: Error in vault listener:', error);
     });
 
     const unsubscribeStudent = onSnapshot(studentRef, async (studentDoc) => {
-      if (studentDoc.exists()) {
-        const studentData = studentDoc.data();
-        const studentPP = studentData.powerPoints || 0;
-        
-        // Update inventory and artifacts in real-time
-        setInventory(studentData.inventory || []);
-        setArtifacts(studentData.artifacts || []);
-        
-        // Sync vault PP with student PP in real-time
-        try {
+      try {
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          const studentPP = studentData.powerPoints || 0;
+          
+          // Update inventory and artifacts in real-time
+          setInventory(studentData.inventory || []);
+          setArtifacts(studentData.artifacts || []);
+          
+          // Sync vault PP with student PP in real-time
+          // Use a debounce to prevent circular updates
+          // Clear any pending sync
+          if (vaultSyncTimeout) {
+            clearTimeout(vaultSyncTimeout);
+          }
+          
+          // Only sync if there's a difference
           const vaultRef = doc(db, 'vaults', currentUser.uid);
           const vaultDoc = await getDoc(vaultRef);
           
@@ -596,20 +632,44 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             
             // Only update if they differ to avoid unnecessary writes
             if (currentVaultPP !== studentPP) {
-              await updateDoc(vaultRef, {
-                currentPP: studentPP,
-                lastUpdated: serverTimestamp()
-              });
-              console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
+              // Use setTimeout to debounce and prevent circular updates
+              vaultSyncTimeout = setTimeout(async () => {
+                try {
+                  await updateDoc(vaultRef, {
+                    currentPP: studentPP,
+                    lastUpdated: serverTimestamp()
+                  });
+                  console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
+                } catch (updateError) {
+                  if (isFirestoreInternalError(updateError)) {
+                    console.warn('[BattleContext] Firestore internal assertion error during vault sync - ignoring');
+                    return;
+                  }
+                  console.error('[BattleContext] Error syncing vault PP:', updateError);
+                }
+              }, 500); // Increased debounce time to 500ms
             }
           }
-        } catch (error) {
-          console.error('[BattleContext] Error syncing vault PP:', error);
         }
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('[BattleContext] Firestore internal assertion error in student listener callback - ignoring');
+          return;
+        }
+        console.error('[BattleContext] Error processing student snapshot:', error);
       }
+    }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in student listener - ignoring');
+        return;
+      }
+      console.error('BattleContext: Error in student listener:', error);
     });
 
     return () => {
+      if (vaultSyncTimeout) {
+        clearTimeout(vaultSyncTimeout);
+      }
       unsubscribeVault();
       unsubscribeStudent();
     };
@@ -626,16 +686,39 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       where('status', 'in', ['waiting', 'starting'])
     );
     
+    // Helper function to check if error is a Firestore internal assertion error
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      return errorString.includes('INTERNAL ASSERTION FAILED') || 
+             errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+             errorString.includes('ID: ca9') ||
+             errorString.includes('ID: b815');
+    };
+    
     const unsubscribeLobbies = onSnapshot(lobbiesQuery, (snapshot) => {
-      const lobbies: BattleLobby[] = [];
-      snapshot.forEach((doc) => {
-        const lobbyData = { id: doc.id, ...doc.data() } as BattleLobby;
-        logger.battle.debug('Found battle lobby:', lobbyData);
-        lobbies.push(lobbyData);
-      });
-      logger.battle.debug('Setting battle lobbies:', lobbies);
-      setBattleLobbies(lobbies);
+      try {
+        const lobbies: BattleLobby[] = [];
+        snapshot.forEach((doc) => {
+          const lobbyData = { id: doc.id, ...doc.data() } as BattleLobby;
+          logger.battle.debug('Found battle lobby:', lobbyData);
+          lobbies.push(lobbyData);
+        });
+        logger.battle.debug('Setting battle lobbies:', lobbies);
+        setBattleLobbies(lobbies);
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in lobbies listener callback - ignoring');
+          return;
+        }
+        logger.battle.error('Error processing battle lobbies snapshot:', error);
+      }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in lobbies listener - ignoring');
+        return;
+      }
       logger.battle.error('Error listening to battle lobbies:', error);
     });
 
@@ -653,43 +736,66 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       where('userId', '==', currentUser.uid)
     );
     
+    // Helper function to check if error is a Firestore internal assertion error
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      return errorString.includes('INTERNAL ASSERTION FAILED') || 
+             errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+             errorString.includes('ID: ca9') ||
+             errorString.includes('ID: b815');
+    };
+    
     const unsubscribeMoves = onSnapshot(movesQuery, (snapshot) => {
-      const moves: OfflineMove[] = [];
-      snapshot.forEach((doc) => {
-        const moveData = { id: doc.id, ...doc.data() } as OfflineMove;
-        // logger.battle.debug('Found offline move:', moveData);
-        moves.push(moveData);
-      });
-      // logger.battle.debug('Setting offline moves:', moves);
-      // logger.battle.debug('Total offline moves count:', moves.length);
-      // logger.battle.debug('Vault attack moves count:', moves.filter(m => m.type === 'vault_attack').length);
-      // logger.battle.debug('Move restore moves count:', moves.filter(m => m.type === 'move_restore').length);
-      
-      // Check if this is a new vault_attack record (indicating a move was just consumed)
-      const newVaultAttacks = moves.filter(m => m.type === 'vault_attack');
-      const previousVaultAttacks = offlineMoves.filter(m => m.type === 'vault_attack');
-      const hasNewVaultAttack = newVaultAttacks.length > previousVaultAttacks.length;
-      
-      setOfflineMoves(moves);
-      
-      // Trigger a recalculation of remaining offline moves
-      const remainingMoves = getRemainingOfflineMoves();
-      // logger.battle.debug('Offline moves updated, remaining moves:', remainingMoves);
-      
-      // If a new vault_attack was added, this means a move was consumed
-      if (hasNewVaultAttack) {
-        logger.battle.info('New vault_attack detected - move was consumed!');
-        logger.battle.debug('Previous vault attacks:', previousVaultAttacks.length);
-        logger.battle.debug('New vault attacks:', newVaultAttacks.length);
-        logger.battle.debug('Remaining moves after consumption:', remainingMoves);
+      try {
+        const moves: OfflineMove[] = [];
+        snapshot.forEach((doc) => {
+          const moveData = { id: doc.id, ...doc.data() } as OfflineMove;
+          // logger.battle.debug('Found offline move:', moveData);
+          moves.push(moveData);
+        });
+        // logger.battle.debug('Setting offline moves:', moves);
+        // logger.battle.debug('Total offline moves count:', moves.length);
+        // logger.battle.debug('Vault attack moves count:', moves.filter(m => m.type === 'vault_attack').length);
+        // logger.battle.debug('Move restore moves count:', moves.filter(m => m.type === 'move_restore').length);
+        
+        // Check if this is a new vault_attack record (indicating a move was just consumed)
+        const newVaultAttacks = moves.filter(m => m.type === 'vault_attack');
+        const previousVaultAttacks = offlineMoves.filter(m => m.type === 'vault_attack');
+        const hasNewVaultAttack = newVaultAttacks.length > previousVaultAttacks.length;
+        
+        setOfflineMoves(moves);
+        
+        // Trigger a recalculation of remaining offline moves
+        const remainingMoves = getRemainingOfflineMoves();
+        // logger.battle.debug('Offline moves updated, remaining moves:', remainingMoves);
+        
+        // If a new vault_attack was added, this means a move was consumed
+        if (hasNewVaultAttack) {
+          logger.battle.info('New vault_attack detected - move was consumed!');
+          logger.battle.debug('Previous vault attacks:', previousVaultAttacks.length);
+          logger.battle.debug('New vault attacks:', newVaultAttacks.length);
+          logger.battle.debug('Remaining moves after consumption:', remainingMoves);
+        }
+        
+        // Automatically trigger debug update to ensure UI consistency
+        // logger.battle.debug('Auto-triggering debug update after offline moves change');
+        // logger.battle.debug('Current offline moves count:', moves.length);
+        // logger.battle.debug('Current attack history count:', attackHistory.length);
+        // logger.battle.debug('Calculated remaining moves:', remainingMoves);
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in offline moves listener callback - ignoring');
+          return;
+        }
+        logger.battle.error('Error processing offline moves snapshot:', error);
       }
-      
-      // Automatically trigger debug update to ensure UI consistency
-      // logger.battle.debug('Auto-triggering debug update after offline moves change');
-      // logger.battle.debug('Current offline moves count:', moves.length);
-      // logger.battle.debug('Current attack history count:', attackHistory.length);
-      // logger.battle.debug('Calculated remaining moves:', remainingMoves);
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in offline moves listener - ignoring');
+        return;
+      }
       logger.battle.error('Error listening to offline moves:', error);
     });
 
@@ -701,6 +807,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentUser) return;
 
     logger.battle.debug('Setting up attack history listener');
+    
+    // Helper function to check if error is a Firestore internal assertion error
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      return errorString.includes('INTERNAL ASSERTION FAILED') || 
+             errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+             errorString.includes('ID: ca9') ||
+             errorString.includes('ID: b815');
+    };
     
     // Get all attacks where user is attacker (outgoing attacks)
     const outgoingAttacksQuery = query(
@@ -731,26 +848,50 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
     
     const unsubscribeOutgoingAttacks = onSnapshot(outgoingAttacksQuery, (snapshot) => {
-      outgoingAttacks = [];
-      snapshot.forEach((doc) => {
-        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
-        logger.battle.debug('Found outgoing attack by user:', attackData);
-        outgoingAttacks.push(attackData);
-      });
-      updateAttackHistory();
+      try {
+        outgoingAttacks = [];
+        snapshot.forEach((doc) => {
+          const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
+          logger.battle.debug('Found outgoing attack by user:', attackData);
+          outgoingAttacks.push(attackData);
+        });
+        updateAttackHistory();
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in outgoing attacks listener callback - ignoring');
+          return;
+        }
+        logger.battle.error('Error processing outgoing attacks snapshot:', error);
+      }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in outgoing attacks listener - ignoring');
+        return;
+      }
       logger.battle.error('Error listening to outgoing attack history:', error);
     });
     
     const unsubscribeIncomingAttacks = onSnapshot(incomingAttacksQuery, (snapshot) => {
-      incomingAttacks = [];
-      snapshot.forEach((doc) => {
-        const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
-        logger.battle.debug('Found incoming attack to user:', attackData);
-        incomingAttacks.push(attackData);
-      });
-      updateAttackHistory();
+      try {
+        incomingAttacks = [];
+        snapshot.forEach((doc) => {
+          const attackData = { id: doc.id, ...doc.data() } as VaultSiegeAttack;
+          logger.battle.debug('Found incoming attack to user:', attackData);
+          incomingAttacks.push(attackData);
+        });
+        updateAttackHistory();
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in incoming attacks listener callback - ignoring');
+          return;
+        }
+        logger.battle.error('Error processing incoming attacks snapshot:', error);
+      }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in incoming attacks listener - ignoring');
+        return;
+      }
       logger.battle.error('Error listening to incoming attack history:', error);
     });
 
@@ -1497,16 +1638,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
       
       // Update existing moves with correct element and manifest filtering
+      // IMPORTANT: Preserve unlocked state - if a move is already unlocked, keep it unlocked
       const updatedMoves = moves.map((move: Move) => {
         if (move.category === 'elemental' && move.level === 1) {
-          // Only unlock if it matches user's element
-          const shouldUnlock = move.elementalAffinity === userElement;
-          console.log(`BattleContext: Move ${move.name} (${move.elementalAffinity}) - should unlock: ${shouldUnlock}`);
+          // If already unlocked, keep it unlocked (preserve state)
+          // Otherwise, unlock if it matches user's element
+          const shouldUnlock = move.unlocked || move.elementalAffinity === userElement;
+          console.log(`BattleContext: Move ${move.name} (${move.elementalAffinity}) - already unlocked: ${move.unlocked}, should unlock: ${shouldUnlock}`);
           return { ...move, unlocked: shouldUnlock };
         } else if (move.category === 'manifest') {
-          // Only unlock if it matches user's manifest
-          const shouldUnlock = move.manifestType === userManifest;
-          console.log(`BattleContext: Move ${move.name} (${move.manifestType}) - should unlock: ${shouldUnlock}`);
+          // If already unlocked, keep it unlocked (preserve state)
+          // Otherwise, unlock if it matches user's manifest
+          const shouldUnlock = move.unlocked || move.manifestType === userManifest;
+          console.log(`BattleContext: Move ${move.name} (${move.manifestType}) - already unlocked: ${move.unlocked}, should unlock: ${shouldUnlock}`);
           return { ...move, unlocked: shouldUnlock };
         }
         return move;

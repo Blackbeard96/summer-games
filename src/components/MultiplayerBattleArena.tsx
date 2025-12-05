@@ -431,7 +431,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
             <div style={{
               width: '100%',
               maxWidth: '500px',
-              maxHeight: '200px',
+              maxHeight: '300px',
               background: 'rgba(0, 0, 0, 0.7)',
               border: '2px solid #8B4513',
               borderRadius: '0.5rem',
@@ -449,8 +449,58 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   </div>
                 </div>
               ) : battleLog.length > 0 ? (
-                <div>
-                  {battleLog[battleLog.length - 1]}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ 
+                    fontSize: '0.75rem', 
+                    fontWeight: 'bold', 
+                    color: '#fbbf24', 
+                    marginBottom: '0.5rem',
+                    textAlign: 'center',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.3)',
+                    paddingBottom: '0.5rem'
+                  }}>
+                    📜 BATTLE LOG
+                  </div>
+                  {battleLog.map((logEntry, index) => {
+                    // Check if this is a round separator
+                    const isRoundSeparator = logEntry.includes('━━━━') || logEntry.includes('ROUND') || logEntry.includes('Round') && logEntry.includes('Complete');
+                    const isRoundHeader = logEntry.includes('ROUND') && !logEntry.includes('Complete');
+                    const isRoundEnd = logEntry.includes('Round') && logEntry.includes('Complete');
+                    
+                    return (
+                      <div 
+                        key={index}
+                        style={{
+                          padding: isRoundSeparator ? '0.5rem' : '0.25rem 0.5rem',
+                          borderRadius: '0.25rem',
+                          backgroundColor: isRoundSeparator 
+                            ? 'rgba(59, 130, 246, 0.3)' 
+                            : isRoundHeader || isRoundEnd
+                            ? 'rgba(34, 197, 94, 0.2)'
+                            : index === battleLog.length - 1 
+                            ? 'rgba(251, 191, 36, 0.2)' 
+                            : 'rgba(255, 255, 255, 0.05)',
+                          borderLeft: isRoundSeparator 
+                            ? 'none'
+                            : isRoundHeader || isRoundEnd
+                            ? '3px solid #22c55e'
+                            : index === battleLog.length - 1 
+                            ? '3px solid #fbbf24' 
+                            : '1px solid rgba(255, 255, 255, 0.2)',
+                          fontSize: isRoundHeader || isRoundEnd ? '0.875rem' : '0.875rem',
+                          fontWeight: isRoundHeader || isRoundEnd ? 'bold' : 'normal',
+                          lineHeight: '1.4',
+                          wordWrap: 'break-word',
+                          textAlign: isRoundSeparator ? 'center' : 'left',
+                          color: isRoundHeader || isRoundEnd ? '#22c55e' : '#fff',
+                          marginTop: isRoundHeader ? '0.5rem' : '0',
+                          marginBottom: isRoundEnd ? '0.5rem' : '0'
+                        }}
+                      >
+                        {logEntry}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ opacity: 0.7 }}>Battle log will appear here...</div>

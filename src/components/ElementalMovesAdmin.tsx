@@ -10,7 +10,7 @@ interface ElementalMovesAdminProps {
 }
 
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -19,6 +19,7 @@ interface StatusEffect {
   healPerTurn?: number;
   chance?: number;
   successChance?: number;
+  damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
 }
 
 interface MoveEditData {
@@ -778,6 +779,7 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
                                         <option value="drain">Drain (Steal PP and heal each turn)</option>
                                         <option value="cleanse">Cleanse (Removes all negative effects)</option>
                                         <option value="freeze">Freeze (Legacy)</option>
+                                        <option value="reduce">Reduce (Reduce incoming damage)</option>
                                       </select>
                                     </div>
                                     <div>
@@ -944,13 +946,38 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
                                             fontSize: '0.875rem'
                                           }}
                                         />
-                                      </div>
                                     </div>
-                                  )}
-                                </div>
-                              ))
-                            )}
-                          </div>
+                                  </div>
+                                )}
+
+                                {effect.type === 'reduce' && (
+                                  <div style={{ marginBottom: '0.5rem' }}>
+                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                      Damage Reduction (%)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      value={effect.damageReduction || ''}
+                                      onChange={(e) => {
+                                        const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
+                                        updateStatusEffect(move.id, effectIndex, 'damageReduction', value);
+                                      }}
+                                      style={{
+                                        width: '100%',
+                                        padding: '0.5rem',
+                                        border: '1px solid #d1d5db',
+                                        borderRadius: '0.25rem',
+                                        fontSize: '0.875rem'
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
                         </div>
                       );
                     })}

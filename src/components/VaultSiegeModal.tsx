@@ -1985,7 +1985,20 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               // Get move type icon
               const getMoveIcon = () => {
                 if (move.category === 'manifest') return '⭐';
-                if (move.category === 'elemental') return '🔥';
+                if (move.category === 'elemental') {
+                  // Return element-specific icon
+                  const elementIcons: { [key: string]: string } = {
+                    fire: '🔥',
+                    water: '💧',
+                    air: '💨',
+                    earth: '🪨',
+                    lightning: '⚡',
+                    light: '✨',
+                    shadow: '🌑',
+                    metal: '⚙️'
+                  };
+                  return elementIcons[move.elementalAffinity?.toLowerCase() || ''] || '⚡';
+                }
                 return '⚙️';
               };
 

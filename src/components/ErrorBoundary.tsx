@@ -31,10 +31,22 @@ class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     // Check if this is a Firestore internal assertion error
-    const isFirestoreError = error.message && 
-      (error.message.includes('INTERNAL ASSERTION FAILED') || 
-       error.message.includes('FIRESTORE') ||
-       error.message.includes('Unexpected state'));
+    const errorMessage = error.message || '';
+    const errorStack = error.stack || '';
+    const errorString = String(error);
+    
+    const isFirestoreError = (
+      errorMessage.includes('INTERNAL ASSERTION FAILED') || 
+      errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state') ||
+      errorMessage.includes('ID: ca9') ||
+      errorMessage.includes('ID: b815') ||
+      errorStack.includes('INTERNAL ASSERTION FAILED') ||
+      errorStack.includes('ID: ca9') ||
+      errorStack.includes('ID: b815') ||
+      errorString.includes('INTERNAL ASSERTION FAILED') ||
+      errorString.includes('ID: ca9') ||
+      errorString.includes('ID: b815')
+    );
     
     if (isFirestoreError) {
       // For Firestore errors, don't show error UI
@@ -54,14 +66,25 @@ class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     // Check if this is a Firestore internal assertion error
-    const isFirestoreError = error.message && 
-      (error.message.includes('INTERNAL ASSERTION FAILED') || 
-       error.message.includes('FIRESTORE') ||
-       error.message.includes('Unexpected state'));
+    const errorMessage = error.message || '';
+    const errorStack = error.stack || '';
+    const errorString = String(error);
+    
+    const isFirestoreError = (
+      errorMessage.includes('INTERNAL ASSERTION FAILED') || 
+      errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state') ||
+      errorMessage.includes('ID: ca9') ||
+      errorMessage.includes('ID: b815') ||
+      errorStack.includes('INTERNAL ASSERTION FAILED') ||
+      errorStack.includes('ID: ca9') ||
+      errorStack.includes('ID: b815') ||
+      errorString.includes('INTERNAL ASSERTION FAILED') ||
+      errorString.includes('ID: ca9') ||
+      errorString.includes('ID: b815')
+    );
     
     if (isFirestoreError) {
-      // For Firestore errors, just log a warning and don't show error UI
-      console.warn('🚨 ErrorBoundary caught Firestore error - suppressing UI error:', error.message);
+      // For Firestore errors, completely suppress - don't even log
       return;
     }
     

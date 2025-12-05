@@ -90,13 +90,37 @@ const Battle: React.FC = () => {
         const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          const element = userData.manifestationType?.toLowerCase() || 'fire';
-          console.log('Battle: User element fetched:', element);
-          setUserElement(element);
+          // Check for chosen_element first (set when player selects element in Artifacts page)
+          // Then check elementalAffinity, then manifestationType as fallback
+          const chosenElement = userData.artifacts?.chosen_element;
+          const elementalAffinity = userData.elementalAffinity;
+          const manifestationType = userData.manifestationType;
+          
+          console.log('Battle: Element data from database:', {
+            chosen_element: chosenElement,
+            elementalAffinity: elementalAffinity,
+            manifestationType: manifestationType,
+            fullArtifacts: userData.artifacts
+          });
+          
+          // Prioritize chosen_element, then elementalAffinity, then manifestationType
+          // Only use 'fire' as fallback if NONE of these are set
+          const element = chosenElement?.toLowerCase() || 
+                         elementalAffinity?.toLowerCase() || 
+                         manifestationType?.toLowerCase() || 
+                         null; // Don't default to fire - let the user choose
+          
+          if (element) {
+            console.log('Battle: User element set to:', element);
+            setUserElement(element);
+          } else {
+            console.warn('Battle: No element found for user, not setting userElement (will show all elemental moves)');
+            // Don't set a default - this way if no element is chosen, all moves show (or we could show a message)
+          }
         }
       } catch (error) {
         console.error('Battle: Error fetching user element:', error);
-        setUserElement('fire'); // Fallback to fire
+        // Don't set default to fire on error - let it be null/undefined
       }
     };
 

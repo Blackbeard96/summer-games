@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import BattleEngine from './BattleEngine';
+import GiantIceGolemCutscene from './GiantIceGolemCutscene';
 
 // CSS for glow animation
 const glowStyle = `
@@ -35,6 +36,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
   const [battlePhase, setBattlePhase] = useState<'intro' | 'hela_awakened_intro' | 'hela_summoning' | 'hela_revealed' | 'choice' | 'battle' | 'victory' | 'reawakened' | 'defeat'>('intro');
   const [showBattleEngine, setShowBattleEngine] = useState(false);
   const [playerChoice, setPlayerChoice] = useState<'fight' | 'run' | null>(null);
+  const [showCutscene, setShowCutscene] = useState(false);
   const { currentUser } = useAuth();
   const { vault } = useBattle();
 
@@ -105,6 +107,26 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
         onDefeat();
       }, 2000);
     }
+  };
+
+  const handleIceGolemDefeated = () => {
+    // Pause battle and show cutscene
+    setShowBattleEngine(false);
+    setShowCutscene(true);
+  };
+
+  const handleCutsceneComplete = async () => {
+    // After cutscene, mark Challenge 7 as complete and navigate to Challenge 8
+    setShowCutscene(false);
+    
+    // Mark the cutscene as seen and complete Challenge 7
+    // The onVictory callback will handle the database updates
+    onVictory();
+    
+    // Close the modal after a brief delay to allow database updates
+    setTimeout(() => {
+      onClose();
+    }, 500);
   };
 
   // Hela opponent configuration for BattleEngine
@@ -645,6 +667,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
                 maxVaultHealth: Math.floor((vault.capacity || 1000) * 0.1) // Always 10% of capacity
               }] : undefined}
               isMultiplayer={propIsIceGolemBattle}
+              onIceGolemDefeated={propIsIceGolemBattle ? handleIceGolemDefeated : undefined}
             />
           </div>
         )}
@@ -816,6 +839,12 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
         )}
       </div>
       </div>
+
+      {/* Giant Ice Golem Cutscene */}
+      <GiantIceGolemCutscene
+        isOpen={showCutscene}
+        onComplete={handleCutsceneComplete}
+      />
     </>
   );
 };

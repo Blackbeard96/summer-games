@@ -9,7 +9,7 @@ interface CPUOpponentMovesAdminProps {
 }
 
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -18,6 +18,7 @@ interface StatusEffect {
   healPerTurn?: number;
   chance?: number;
   successChance?: number;
+  damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
 }
 
 interface CPUOpponentMove {
@@ -991,6 +992,7 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                                       <option value="drain">Drain (Steal PP and heal each turn)</option>
                                       <option value="cleanse">Cleanse (Removes all negative effects)</option>
                                       <option value="freeze">Freeze (Legacy)</option>
+                                      <option value="reduce">Reduce (Reduce incoming damage)</option>
                                     </select>
                                   </div>
                                   <div>
