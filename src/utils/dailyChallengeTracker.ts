@@ -16,7 +16,7 @@ interface PlayerChallengeProgress {
  */
 export const updateDailyChallengeProgress = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom',
   amount: number = 1
 ) => {
   try {
@@ -119,7 +119,7 @@ export const updateChallengeProgressById = async (
  */
 export const updateChallengeProgressByType = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom',
   amount: number = 1
 ) => {
   try {

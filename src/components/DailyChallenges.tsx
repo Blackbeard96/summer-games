@@ -7,7 +7,7 @@ interface DailyChallenge {
   id: string;
   title: string;
   description: string;
-  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'custom';
+  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom';
   target: number;
   rewardPP: number;
   rewardXP: number;
@@ -338,10 +338,53 @@ const DailyChallenges: React.FC = () => {
     }
   };
 
+  // Helper to extract target from title if it contains a number (e.g., "THREE (3)" or "5 enemies")
+  const getEffectiveTarget = (challenge: DailyChallenge): number => {
+    // Check if title contains a number in parentheses or as a word
+    const title = challenge.title;
+    
+    // Look for patterns like "THREE (3)", "FIVE (5)", etc.
+    const parenMatch = title.match(/\((\d+)\)/);
+    if (parenMatch) {
+      const extractedTarget = parseInt(parenMatch[1]);
+      if (extractedTarget > 0) {
+        // Always use extracted target from parentheses if found (more reliable than stored value)
+        if (extractedTarget !== challenge.target) {
+          console.log(`[DailyChallenges] Extracted target ${extractedTarget} from title "${title}" (stored: ${challenge.target})`);
+        }
+        return extractedTarget;
+      }
+    }
+    
+    // Look for number words followed by numbers: "THREE 3", "FIVE 5", etc.
+    const numberWordMap: { [key: string]: number } = {
+      'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+      'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+    };
+    
+    const titleLower = title.toLowerCase();
+    for (const [word, num] of Object.entries(numberWordMap)) {
+      if (titleLower.includes(word)) {
+        // Check if there's also a digit that matches
+        const digitMatch = title.match(/\b(\d+)\b/);
+        if (digitMatch && parseInt(digitMatch[1]) === num) {
+          if (num !== challenge.target) {
+            console.log(`[DailyChallenges] Extracted target ${num} from title "${title}" (stored: ${challenge.target})`);
+          }
+          return num;
+        }
+      }
+    }
+    
+    // Fallback to stored target
+    return challenge.target;
+  };
+
   const getProgressPercentage = (challenge: DailyChallenge) => {
     const challengeProgress = progress[challenge.id];
     if (!challengeProgress) return 0;
-    return Math.min(100, (challengeProgress.progress / challenge.target) * 100);
+    const effectiveTarget = getEffectiveTarget(challenge);
+    return Math.min(100, (challengeProgress.progress / effectiveTarget) * 100);
   };
 
   const getTypeIcon = (type: string) => {
@@ -352,6 +395,7 @@ const DailyChallenges: React.FC = () => {
       use_action_card: '🃏',
       win_battle: '🏆',
       earn_pp: '🪙',
+      use_manifest_ability: '✨',
       custom: '⭐'
     };
     return icons[type] || '⭐';
@@ -437,7 +481,7 @@ const DailyChallenges: React.FC = () => {
                   <div style={{ marginBottom: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                       <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
-                        Progress: {challengeProgress?.progress || 0} / {challenge.target}
+                        Progress: {challengeProgress?.progress || 0} / {getEffectiveTarget(challenge)}
                       </span>
                       <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                         {Math.round(progressPercent)}%

@@ -1839,6 +1839,37 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.error('Error updating daily challenge progress:', err)
       );
     }
+    
+    // Track daily challenge: Use Manifest Ability
+    // Check if move is a manifest ability by checking move category or if it matches manifest patterns
+    if (currentUser && move.category === 'manifest') {
+      updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err => 
+        console.error('Error updating daily challenge progress for manifest ability:', err)
+      );
+    } else if (currentUser && moveName) {
+      // Also check by move name patterns (in case category isn't set)
+      // This is a fallback to catch manifest moves that might not have the category set
+      const manifestMovePatterns = [
+        'read the room', 'emotional read', 'pattern shield', 'team read', 'environment read',
+        'reality rewrite', 'narrative barrier', 'story weave', 'world rewrite',
+        'illusion strike', 'mirage shield', 'visual deception', 'reality illusion',
+        'flow strike', 'rhythm guard', 'team flow', 'athletic mastery',
+        'harmonic blast', 'melody shield', 'chorus power', 'song of power',
+        'pattern break', 'strategy matrix', 'game mastery', 'ultimate strategy',
+        'precision strike', 'memory shield', 'perfect observation', 'omniscient view',
+        'emotional resonance', 'empathic barrier', 'group empathy', 'universal connection',
+        'tool strike', 'construct shield', 'creative mastery', 'divine creation',
+        'energy feast', 'nourishing barrier', 'feast of power', 'divine nourishment'
+      ];
+      const moveNameLower = moveName.toLowerCase();
+      const isManifestMove = manifestMovePatterns.some(pattern => moveNameLower.includes(pattern));
+      if (isManifestMove) {
+        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err => 
+          console.error('Error updating daily challenge progress for manifest ability:', err)
+        );
+      }
+    }
+    
     if (currentUser?.uid) {
       trackMoveUsage(currentUser.uid, moveName).catch(err => {
         console.error('[BattleEngine] Error tracking move usage:', err);
