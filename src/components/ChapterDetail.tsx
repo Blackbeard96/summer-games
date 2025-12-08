@@ -60,29 +60,66 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     const userRef = doc(db, 'users', currentUser.uid);
     const studentRef = doc(db, 'students', currentUser.uid);
 
+    // Helper to check for Firestore internal errors
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      const errorStack = error?.stack || '';
+      return (
+        errorString.includes('INTERNAL ASSERTION FAILED') ||
+        errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+        errorStack.includes('INTERNAL ASSERTION FAILED') ||
+        errorString.includes('ID: ca9') ||
+        errorString.includes('ID: b815') ||
+        (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state'))
+      );
+    };
+
     const unsubscribeUser = onSnapshot(userRef, (userDoc) => {
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        console.log('ChapterDetail: User data updated (real-time):', {
-          chapterId: chapter.id,
-          chapterData: userData.chapters?.[chapter.id],
-          challengeData: userData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
-        });
-        setUserProgress(userData);
+      try {
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          console.log('ChapterDetail: User data updated (real-time):', {
+            chapterId: chapter.id,
+            chapterData: userData.chapters?.[chapter.id],
+            challengeData: userData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+          });
+          setUserProgress(userData);
+          setLoading(false);
+        }
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          return; // Ignore Firestore internal errors
+        }
+        console.error('ChapterDetail: Error processing user snapshot:', error);
         setLoading(false);
       }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        return; // Ignore Firestore internal errors
+      }
       console.error('ChapterDetail: Error in user listener:', error);
       setLoading(false);
     });
 
     const unsubscribeStudent = onSnapshot(studentRef, (studentDoc) => {
-      if (studentDoc.exists()) {
-        const studentData = studentDoc.data();
-        console.log('ChapterDetail: Student data updated (real-time):', studentData);
-        setStudentData(studentData);
+      try {
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          console.log('ChapterDetail: Student data updated (real-time):', studentData);
+          setStudentData(studentData);
+        }
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          return; // Ignore Firestore internal errors
+        }
+        console.error('ChapterDetail: Error processing student snapshot:', error);
       }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        return; // Ignore Firestore internal errors
+      }
       console.error('ChapterDetail: Error in student listener:', error);
     });
 
@@ -3371,20 +3408,48 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     </div>
   );
 
-  // Block access to Chapter 2 - it's locked and disabled for now
+  // Block access to Chapter 2 - show "Coming Soon" if Chapter 1 is completed
   if (chapter.id === 2) {
+    const chapter1Completed = userProgress?.chapters?.[1]?.isCompleted;
+    
     return (
       <div style={{
         padding: '2rem',
         textAlign: 'center',
-        background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
+        background: chapter1Completed 
+          ? 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)'
+          : 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
         borderRadius: '1rem',
-        border: '2px solid #e5e7eb'
+        border: chapter1Completed 
+          ? '2px solid #f59e0b'
+          : '2px solid #e5e7eb'
       }}>
-        <h2 style={{ color: '#6b7280', marginBottom: '1rem' }}>🔒 Chapter 2 is Locked</h2>
-        <p style={{ color: '#9ca3af', marginBottom: '1.5rem' }}>
-          This chapter is currently disabled and will be available in a future update.
-        </p>
+        {chapter1Completed ? (
+          <>
+            <h2 style={{ color: '#92400e', marginBottom: '1rem', fontSize: '2rem' }}>🚀 Coming Soon</h2>
+            <p style={{ color: '#78350f', marginBottom: '1.5rem', fontSize: '1.1rem', fontWeight: '500' }}>
+              Congratulations on completing Chapter 1! Chapter 2 is currently in development and will be available soon.
+            </p>
+            <div style={{
+              background: 'white',
+              padding: '1rem',
+              borderRadius: '0.5rem',
+              marginBottom: '1.5rem',
+              border: '1px solid #fbbf24'
+            }}>
+              <p style={{ color: '#78350f', margin: 0 }}>
+                Stay tuned for the next chapter of your journey at Xiotein School!
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 style={{ color: '#6b7280', marginBottom: '1rem' }}>🔒 Chapter 2 is Locked</h2>
+            <p style={{ color: '#9ca3af', marginBottom: '1.5rem' }}>
+              Complete Chapter 1 to unlock Chapter 2.
+            </p>
+          </>
+        )}
         {onBack && (
           <button
             onClick={onBack}

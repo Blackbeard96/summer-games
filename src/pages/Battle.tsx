@@ -65,7 +65,16 @@ const Battle: React.FC = () => {
   } = useBattle();
   const navigate = useNavigate();
   
-  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle'>('battle');
+  // Check URL hash to set initial tab
+  const getInitialTab = (): 'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle' => {
+    const hash = window.location.hash.replace('#', '');
+    if (hash === 'vault') return 'vault';
+    if (hash === 'moves') return 'moves';
+    if (hash === 'cards') return 'cards';
+    return 'battle';
+  };
+  
+  const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle'>(getInitialTab());
   const [selectedBattleMode, setSelectedBattleMode] = useState<'pvp' | 'offline' | 'practice' | 'mindforge' | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
@@ -433,7 +442,6 @@ const Battle: React.FC = () => {
           { id: 'vault', label: 'Vault Management', icon: '🏦' },
           { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
           { id: 'cards', label: 'Action Cards', icon: '🃏' },
-          { id: 'offline', label: 'Vault Siege', icon: '🏰' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -1741,190 +1749,6 @@ const Battle: React.FC = () => {
             </div>
           </div>
         )}
-
-        {activeTab === 'offline' && (
-          <div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#1f2937' }}>Vault Siege</h3>
-            <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
-              You have {remainingOfflineMoves} vault siege attacks remaining today. Launch strategic attacks on player vaults to steal PP and break shields.
-            </p>
-            
-            {/* Purchase Vault Siege Moves Button */}
-            <div style={{ 
-              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-              border: '2px solid #fbbf24',
-              borderRadius: '0.75rem',
-              padding: '1rem',
-              marginBottom: '2rem',
-              textAlign: 'center'
-            }}>
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                marginBottom: '0.5rem'
-              }}>
-                <span style={{ fontSize: '1.5rem', marginRight: '0.5rem' }}>⏰</span>
-                <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#92400e' }}>
-                  Purchase Additional Vault Siege Moves
-                </span>
-              </div>
-              <p style={{ color: '#92400e', fontSize: '0.875rem', marginBottom: '1rem' }}>
-                Buy extra vault siege attacks to increase your daily action capacity
-              </p>
-              <button
-                onClick={() => handlePurchaseOfflineMoves()}
-                disabled={!vault || vault.currentPP < 20}
-                style={{
-                  background: (!vault || vault.currentPP < 20) ? '#9ca3af' : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  cursor: (!vault || vault.currentPP < 20) ? 'not-allowed' : 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  if (vault && vault.currentPP >= 20) {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(245, 158, 11, 0.3)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                💰 Purchase Move (20 PP)
-              </button>
-              {vault && vault.currentPP < 20 && (
-                <div style={{ 
-                  fontSize: '0.75rem', 
-                  color: '#dc2626', 
-                  marginTop: '0.5rem',
-                  fontWeight: 'bold'
-                }}>
-                  ⚠️ Insufficient PP (Need 20 PP)
-                </div>
-              )}
-            </div>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
-              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '1.5rem' }}>
-                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Vault Attack</h4>
-                <p style={{ color: '#6b7280', marginBottom: '1rem', fontSize: '0.875rem' }}>
-                  Attempt to steal PP from another player's vault
-                </p>
-                <input
-                  type="text"
-                  placeholder="Target user ID"
-                  value={selectedTarget}
-                  onChange={(e) => setSelectedTarget(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '0.375rem',
-                    marginBottom: '1rem'
-                  }}
-                />
-                <button
-                  onClick={() => handleOfflineMove('vault_attack')}
-                  disabled={remainingOfflineMoves <= 0}
-                  style={{
-                    background: remainingOfflineMoves <= 0 ? '#9ca3af' : '#dc2626',
-                    color: 'white',
-                    border: 'none',
-                    padding: '0.75rem 1.5rem',
-                    borderRadius: '0.375rem',
-                    cursor: remainingOfflineMoves <= 0 ? 'not-allowed' : 'pointer',
-                    width: '100%'
-                  }}
-                >
-                  Launch Attack
-                </button>
-              </div>
-
-              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '1.5rem' }}>
-                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Shield Buff</h4>
-                <p style={{ color: '#6b7280', marginBottom: '1rem', fontSize: '0.875rem' }}>
-                  Strengthen your vault's shields
-                </p>
-                <button
-                  onClick={() => handleOfflineMove('shield_buff')}
-                  disabled={remainingOfflineMoves <= 0}
-                  style={{
-                    background: remainingOfflineMoves <= 0 ? '#9ca3af' : '#2563eb',
-                    color: 'white',
-                    border: 'none',
-                    padding: '0.75rem 1.5rem',
-                    borderRadius: '0.375rem',
-                    cursor: remainingOfflineMoves <= 0 ? 'not-allowed' : 'pointer',
-                    width: '100%'
-                  }}
-                >
-                  Buff Shields
-                </button>
-              </div>
-
-              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '1.5rem' }}>
-                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Mastery Challenge</h4>
-                <p style={{ color: '#6b7280', marginBottom: '1rem', fontSize: '0.875rem' }}>
-                  Complete a challenge to unlock new moves
-                </p>
-                <button
-                  onClick={() => handleOfflineMove('mastery_challenge')}
-                  disabled={remainingOfflineMoves <= 0}
-                  style={{
-                    background: remainingOfflineMoves <= 0 ? '#9ca3af' : '#059669',
-                    color: 'white',
-                    border: 'none',
-                    padding: '0.75rem 1.5rem',
-                    borderRadius: '0.375rem',
-                    cursor: remainingOfflineMoves <= 0 ? 'not-allowed' : 'pointer',
-                    width: '100%'
-                  }}
-                >
-                  Start Challenge
-                </button>
-              </div>
-            </div>
-
-            {offlineMoves.length > 0 && (
-              <div style={{ marginTop: '2rem' }}>
-                <h4 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Recent Vault Siege Attacks</h4>
-                <div style={{ display: 'grid', gap: '0.5rem' }}>
-                  {offlineMoves.slice(0, 5).map(move => (
-                    <div key={move.id} style={{ 
-                      background: '#f9fafb',
-                      padding: '1rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #e5e7eb'
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#374151' }}>
-                          {move.type.replace('_', ' ').toUpperCase()}
-                        </span>
-                        <span style={{ 
-                          background: move.status === 'pending' ? '#f59e0b' : move.status === 'completed' ? '#059669' : '#dc2626',
-                          color: 'white',
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem'
-                        }}>
-                          {move.status}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
 
       </div>
 

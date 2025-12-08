@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -25,9 +25,13 @@ interface LevelUpProviderProps {
 
 export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) => {
   const { currentUser } = useAuth();
-  const [previousXP, setPreviousXP] = useState<number>(0);
-  const [currentXP, setCurrentXP] = useState<number>(0);
+  const [previousXP, setPreviousXP] = useState<number>(-1);
+  const [currentXP, setCurrentXP] = useState<number>(-1);
   const [showNotification, setShowNotification] = useState(false);
+  
+  // Use refs to track previous values without causing re-renders
+  const previousLevelRef = useRef<number>(-1);
+  const isInitializedRef = useRef<boolean>(false);
 
   // Listen to user's XP changes
   useEffect(() => {
@@ -38,25 +42,40 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
       if (doc.exists()) {
         const userData = doc.data();
         const newXP = userData.xp || 0;
-        
-        // Check if this is a level up
         const newLevel = getLevelFromXP(newXP);
-        const oldLevel = getLevelFromXP(currentXP);
         
-        if (newLevel > oldLevel && currentXP > 0) {
+        // Initialize on first load
+        if (!isInitializedRef.current) {
+          setCurrentXP(newXP);
+          setPreviousXP(newXP);
+          previousLevelRef.current = newLevel;
+          isInitializedRef.current = true;
+          return;
+        }
+        
+        // Check if this is a level up (new level is higher than previous level)
+        if (newLevel > previousLevelRef.current) {
           // Level up detected!
+          console.log('🎉 Level up detected!', { 
+            previousLevel: previousLevelRef.current, 
+            newLevel, 
+            previousXP: currentXP, 
+            newXP 
+          });
           setPreviousXP(currentXP);
           setCurrentXP(newXP);
+          previousLevelRef.current = newLevel;
           setShowNotification(true);
         } else {
-          // Just update the current XP
+          // Same level or level decreased, just update XP
           setCurrentXP(newXP);
+          previousLevelRef.current = newLevel;
         }
       }
     });
 
     return () => unsubscribe();
-  }, [currentUser]); // Removed currentXP to prevent infinite loops
+  }, [currentUser, currentXP]); // Only depend on currentUser and currentXP
 
   const handleCloseNotification = () => {
     setShowNotification(false);

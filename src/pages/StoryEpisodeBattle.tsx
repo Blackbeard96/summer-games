@@ -8,6 +8,11 @@ import { Move, ActionCard } from '../types/battle';
 import EpisodeRewardsModal from '../components/EpisodeRewardsModal';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { getMoveNameSync } from '../utils/moveOverrides';
+import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getElementalRingLevel } from '../utils/artifactUtils';
+import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 const StoryEpisodeBattle: React.FC = () => {
   const { episodeId } = useParams<{ episodeId: string }>();
@@ -90,8 +95,8 @@ const StoryEpisodeBattle: React.FC = () => {
     setSelectedActionCard(null);
   };
 
-  const executeMove = (move: Move) => {
-    if (!boss || !vault) return;
+  const executeMove = async (move: Move) => {
+    if (!boss || !vault || !currentUser) return;
 
     // Check energy cost
     if (playerEnergy < move.cost) {
@@ -101,7 +106,15 @@ const StoryEpisodeBattle: React.FC = () => {
 
     // Track move usage for manifest progress
     const moveName = getMoveNameSync(move.name) || move.name;
-    if (currentUser?.uid) {
+    
+    // Track daily challenge: Use Elemental Move
+    if (move.category === 'elemental' && currentUser) {
+      updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err => 
+        console.error('Error updating daily challenge progress:', err)
+      );
+    }
+    
+    if (currentUser.uid) {
       trackMoveUsage(currentUser.uid, moveName).catch(err => {
         console.error('Error tracking move usage:', err);
       });
@@ -110,41 +123,73 @@ const StoryEpisodeBattle: React.FC = () => {
     // Consume energy
     setPlayerEnergy(prev => prev - move.cost);
 
-    // Calculate damage based on move properties
-    // Use the move's actual damage if it exists (from upgrades), which already includes boosts
+    // Get student data for equipped artifacts and player level
+    const studentRef = doc(db, 'students', currentUser.uid);
+    const studentDoc = await getDoc(studentRef);
+    const studentData = studentDoc.exists() ? studentDoc.data() : null;
+    const equippedArtifacts = studentData?.equippedArtifacts || null;
+    const playerLevel = studentData?.level || 1;
+    
+    // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
+    const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
+
+    // Calculate damage based on move properties using proper damage calculation system
     let totalDamage = 0;
     let healing = 0;
     let shieldBoost = 0;
 
     if (move.damage && move.damage > 0) {
-      // Use the upgraded damage directly (already includes boost multiplier)
-      totalDamage = calculateDamage(move.damage);
-    } else {
-      // Fall back to base damage calculation if not upgraded yet
-      const baseDamage = move.damage || 0;
-      if (baseDamage > 0) {
-        totalDamage = calculateDamage(baseDamage + (move.masteryLevel - 1) * 2);
+      // Use the upgraded damage as base damage, then calculate with effective mastery level
+      const baseDamage = move.damage;
+      const damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
+      const damageResult = rollDamage(damageRange, playerLevel, move.level, effectiveMasteryLevel);
+      totalDamage = damageResult.damage;
+      
+      // Apply artifact damage multiplier for elemental moves
+      if (move.category === 'elemental' && equippedArtifacts) {
+        const ringLevel = getElementalRingLevel(equippedArtifacts);
+        const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+        if (artifactMultiplier > 1.0) {
+          totalDamage = Math.floor(totalDamage * artifactMultiplier);
+          addToBattleLog(`💍 Elemental Ring (Level ${ringLevel}) boosts ${move.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%!`);
+        }
+      }
+      
+      // Log ring boost if applicable
+      if (effectiveMasteryLevel > move.masteryLevel && equippedArtifacts) {
+        const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+        const moveElement = move.elementalAffinity?.toLowerCase();
+        for (const slot of ringSlots) {
+          const ring = equippedArtifacts[slot];
+          if (!ring) continue;
+          if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+            addToBattleLog(`🔥 Blaze Ring: ${move.name} effective mastery level ${effectiveMasteryLevel} (base: ${move.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+            addToBattleLog(`🌍 Terra Ring: ${move.name} effective mastery level ${effectiveMasteryLevel} (base: ${move.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+            addToBattleLog(`💧 Aqua Ring: ${move.name} effective mastery level ${effectiveMasteryLevel} (base: ${move.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+            addToBattleLog(`💨 Air Ring: ${move.name} effective mastery level ${effectiveMasteryLevel} (base: ${move.masteryLevel})`);
+            break;
+          }
+        }
       }
     }
     
     if (move.healing && move.healing > 0) {
       // Use the upgraded healing directly (already includes boost multiplier)
-      healing = calculateDamage(move.healing);
-    } else {
-      const baseHealing = move.healing || 0;
-      if (baseHealing > 0) {
-        healing = calculateDamage(baseHealing + (move.masteryLevel - 1) * 2);
-      }
+      healing = move.healing;
     }
     
     if (move.shieldBoost && move.shieldBoost > 0) {
       // Use the upgraded shield boost directly (already includes boost multiplier)
       shieldBoost = move.shieldBoost;
-    } else {
-      const baseShieldBoost = move.shieldBoost || 0;
-      if (baseShieldBoost > 0) {
-        shieldBoost = baseShieldBoost + (move.masteryLevel - 1) * 2;
-      }
     }
 
     // Apply damage to boss

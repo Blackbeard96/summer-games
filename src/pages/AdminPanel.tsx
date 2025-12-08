@@ -30,6 +30,7 @@ import CPUOpponentMovesAdmin from '../components/CPUOpponentMovesAdmin';
 import ActionCardsAdmin from '../components/ActionCardsAdmin';
 import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
 import ArtifactsAdmin from '../components/ArtifactsAdmin';
+import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -87,7 +88,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'daily-challenges'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -2590,6 +2591,22 @@ const AdminPanel: React.FC = () => {
         >
           🔮 Artifacts
         </button>
+        <button
+          onClick={() => setActiveTab('daily-challenges')}
+          style={{
+            backgroundColor: activeTab === 'daily-challenges' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'daily-challenges' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          📅 Daily Challenges
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -2637,6 +2654,8 @@ const AdminPanel: React.FC = () => {
           isOpen={true}
           onClose={() => setActiveTab('students')}
         />
+      ) : activeTab === 'daily-challenges' ? (
+        <DailyChallengesAdmin />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',

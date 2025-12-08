@@ -15,6 +15,7 @@ import { loadMoveOverrides } from '../utils/moveOverrides';
 import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move | null) => void;
@@ -61,6 +62,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   const [showBagModal, setShowBagModal] = useState(false);
   const [showVaultModal, setShowVaultModal] = useState(false);
   const [cooldownRemaining, setCooldownRemaining] = useState<{ hours: number; minutes: number; seconds: number } | null>(null);
+  const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
 
   // Load move overrides when component mounts
   useEffect(() => {
@@ -911,7 +913,15 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-            {availableMoves.map((move, index) => (
+            {availableMoves.map((move, index) => {
+              // Calculate effective mastery level once for this move (includes ring bonuses)
+              const effectiveMasteryLevel = move.category === 'elemental' && equippedArtifacts 
+                ? getEffectiveMasteryLevel(move, equippedArtifacts)
+                : move.masteryLevel;
+              // Effective move level should match effective mastery level when artifacts boost it
+              const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
+              
+              return (
               <button
                 key={move.id}
                 onClick={() => handleMoveClick(move)}
@@ -941,7 +951,17 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                   {getElementalIcon(move.elementalAffinity)}
-                  <span>{getMoveDataWithOverrides(move.name).name} [Level {move.masteryLevel}]</span>
+                  <span>{getMoveDataWithOverrides(move.name).name} [Level {effectiveMasteryLevel}]</span>
+                  {effectiveMasteryLevel > move.masteryLevel && (
+                    <span style={{
+                      fontSize: '0.625rem',
+                      color: '#f59e0b',
+                      marginLeft: '0.25rem',
+                      fontWeight: 'normal'
+                    }}>
+                      (+{effectiveMasteryLevel - move.masteryLevel} from Ring)
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
@@ -967,8 +987,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   }
                   
                   if (baseDamage > 0) {
-                    // Calculate range based on the actual damage and mastery level
-                    let damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
+                    // Calculate range based on the actual damage and effective mastery level
+                    let damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
                     
                     const rangeString = formatDamageRange(damageRange);
                     console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString, '(from override:', moveOverrides[move.name] ? 'YES' : 'NO', ')');
@@ -1034,7 +1054,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   return null;
                 })()}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

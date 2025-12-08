@@ -149,6 +149,108 @@ const DEFAULT_OPPONENTS: CPUOpponent[] = [
         description: 'A powerful frozen punch attack'
       }
     ]
+  },
+  {
+    id: 'powered-zombie',
+    name: 'Powered Zombie',
+    moves: [
+      { 
+        id: 'energy-strike', 
+        name: 'Energy Strike', 
+        baseDamage: 9, 
+        type: 'attack',
+        description: 'A basic energy-based attack'
+      },
+      { 
+        id: 'vault-breach', 
+        name: 'Vault Breach', 
+        baseDamage: 8, 
+        type: 'attack',
+        description: 'A direct attack on the vault'
+      },
+      { 
+        id: 'pp-drain', 
+        name: 'PP Drain', 
+        baseDamage: 6, 
+        type: 'attack',
+        description: 'Drains power points from the target'
+      },
+      { 
+        id: 'shield-bash', 
+        name: 'Shield Bash', 
+        baseDamage: 7, 
+        type: 'attack',
+        description: 'A bash attack that damages shields'
+      }
+    ]
+  },
+  {
+    id: 'zombie-captain',
+    name: 'Zombie Captain',
+    moves: [
+      { 
+        id: 'energy-strike', 
+        name: 'Energy Strike', 
+        baseDamage: 9, 
+        type: 'attack',
+        description: 'A basic energy-based attack'
+      },
+      { 
+        id: 'vault-breach', 
+        name: 'Vault Breach', 
+        baseDamage: 8, 
+        type: 'attack',
+        description: 'A direct attack on the vault'
+      },
+      { 
+        id: 'pp-drain', 
+        name: 'PP Drain', 
+        baseDamage: 6, 
+        type: 'attack',
+        description: 'Drains power points from the target'
+      },
+      { 
+        id: 'shield-bash', 
+        name: 'Shield Bash', 
+        baseDamage: 7, 
+        type: 'attack',
+        description: 'A bash attack that damages shields'
+      }
+    ]
+  },
+  {
+    id: 'zombie',
+    name: 'Zombie',
+    moves: [
+      { 
+        id: 'energy-strike', 
+        name: 'Energy Strike', 
+        baseDamage: 9, 
+        type: 'attack',
+        description: 'A basic energy-based attack'
+      },
+      { 
+        id: 'vault-breach', 
+        name: 'Vault Breach', 
+        baseDamage: 8, 
+        type: 'attack',
+        description: 'A direct attack on the vault'
+      },
+      { 
+        id: 'pp-drain', 
+        name: 'PP Drain', 
+        baseDamage: 6, 
+        type: 'attack',
+        description: 'Drains power points from the target'
+      },
+      { 
+        id: 'shield-bash', 
+        name: 'Shield Bash', 
+        baseDamage: 7, 
+        type: 'attack',
+        description: 'A bash attack that damages shields'
+      }
+    ]
   }
 ];
 
@@ -176,7 +278,23 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
       if (cpuMovesDoc.exists()) {
         const data = cpuMovesDoc.data();
         if (data.opponents && Array.isArray(data.opponents)) {
-          setOpponents(data.opponents);
+          // Merge with defaults to ensure new opponents are included
+          const existingOpponentIds = new Set(data.opponents.map((opp: CPUOpponent) => opp.id));
+          const newOpponents = DEFAULT_OPPONENTS.filter(opp => !existingOpponentIds.has(opp.id));
+          const mergedOpponents = [...data.opponents, ...newOpponents];
+          setOpponents(mergedOpponents);
+          
+          // If new opponents were added, save the merged list
+          if (newOpponents.length > 0) {
+            const cleanedOpponents = removeUndefined(mergedOpponents);
+            await setDoc(cpuMovesRef, { opponents: cleanedOpponents });
+            setSaveMessage(`✅ Added ${newOpponents.length} new opponent(s) to the list!`);
+            setTimeout(() => setSaveMessage(''), 3000);
+          }
+        } else {
+          // Invalid data structure, use defaults
+          await setDoc(cpuMovesRef, { opponents: DEFAULT_OPPONENTS });
+          setOpponents(DEFAULT_OPPONENTS);
         }
       } else {
         // Initialize with defaults

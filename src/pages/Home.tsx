@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { getLevelFromXP } from '../utils/leveling';
 import BattlePass from '../components/BattlePass';
 import Season0IntroModal from '../components/Season0IntroModal';
+import DailyChallenges from '../components/DailyChallenges';
 import { CHAPTERS } from '../types/chapters';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
@@ -44,6 +45,7 @@ const Home: React.FC = () => {
   const [userLevel, setUserLevel] = useState(1);
   const [showBattlePass, setShowBattlePass] = useState(false);
   const [showSeason0Intro, setShowSeason0Intro] = useState(false);
+  const [showVideoReplay, setShowVideoReplay] = useState(false);
   const [battlePassXP, setBattlePassXP] = useState(0);
   const [battlePassTier, setBattlePassTier] = useState(0);
   const [currentChapter, setCurrentChapter] = useState<number | null>(null);
@@ -67,6 +69,9 @@ const Home: React.FC = () => {
           if (userData.season0IntroSeen !== true) {
             setShowSeason0Intro(true);
           }
+          
+          // Check if video has been auto-played (for showing replay button)
+          // Video replay button will always be available after first login
           
           // Fetch Battle Pass progress - use player's actual XP
           const playerXP = userData.xp || 0;
@@ -206,12 +211,54 @@ const Home: React.FC = () => {
         padding: '2rem',
         borderRadius: '1rem',
         marginBottom: '2rem',
-        textAlign: 'center'
+        textAlign: 'center',
+        position: 'relative'
       }}>
         <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🏠 MST Home</h1>
         <p style={{ fontSize: '1.1rem', opacity: 0.9, margin: 0 }}>
           "Master Space & Time" — Your journey begins here
         </p>
+        {/* Video Replay Button */}
+        <button
+          onClick={() => setShowVideoReplay(true)}
+          style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '1rem',
+            background: 'rgba(255, 255, 255, 0.2)',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            borderRadius: '0.5rem',
+            padding: '0.5rem 1rem',
+            color: 'white',
+            fontSize: '0.875rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            transition: 'all 0.2s'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+          }}
+        >
+          <span>▶️</span>
+          <span>Watch Season 0 Intro</span>
+        </button>
+      </div>
+
+      {/* Daily Challenges Section */}
+      <div style={{
+        background: 'white',
+        border: '2px solid #e5e7eb',
+        borderRadius: '1rem',
+        padding: '1.5rem',
+        marginBottom: '2rem'
+      }}>
+        <DailyChallenges />
       </div>
 
       {/* Main Action Buttons - Big Rectangular Billboards */}
@@ -540,10 +587,18 @@ const Home: React.FC = () => {
         />
       )}
 
-      {/* Season 0 Introduction Modal */}
+      {/* Season 0 Introduction Modal (auto-play on first login) */}
       <Season0IntroModal
         isOpen={showSeason0Intro}
         onClose={() => setShowSeason0Intro(false)}
+        autoPlayVideo={true}
+      />
+      
+      {/* Season 0 Video Replay Modal */}
+      <Season0IntroModal
+        isOpen={showVideoReplay}
+        onClose={() => setShowVideoReplay(false)}
+        autoPlayVideo={false}
       />
       </div>
     </div>

@@ -49,3 +49,54 @@ export const calculateUpgradeCost = (currentLevel: number): { pp: number; truthM
   return { pp, truthMetal };
 };
 
+/**
+ * Get the effective mastery level for a move considering equipped artifacts
+ * Blaze Ring adds +1 to Fire elemental moves' mastery level
+ * Terra Ring adds +1 to Earth elemental moves' mastery level
+ * Aqua Ring adds +1 to Water elemental moves' mastery level
+ * Air Ring adds +1 to Air elemental moves' mastery level
+ * @param move The move to check (should have category and elementalAffinity)
+ * @param equippedArtifacts The user's equipped artifacts
+ * @returns The effective mastery level (original + artifact bonuses)
+ */
+export const getEffectiveMasteryLevel = (move: { category: string; masteryLevel: number; elementalAffinity?: string }, equippedArtifacts: any): number => {
+  let effectiveLevel = move.masteryLevel;
+  
+  // Only apply ring bonuses to elemental moves
+  if (move.category === 'elemental' && equippedArtifacts) {
+    const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+    const moveElement = move.elementalAffinity?.toLowerCase();
+    
+    for (const slot of ringSlots) {
+      const ring = equippedArtifacts[slot];
+      if (!ring) continue;
+      
+      // Blaze Ring adds +1 to Fire moves
+      if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+        effectiveLevel = Math.min(effectiveLevel + 1, 10); // Cap at level 10
+        break; // Only apply once
+      }
+      
+      // Terra Ring adds +1 to Earth moves
+      if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+        effectiveLevel = Math.min(effectiveLevel + 1, 10); // Cap at level 10
+        break; // Only apply once
+      }
+      
+      // Aqua Ring adds +1 to Water moves
+      if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+        effectiveLevel = Math.min(effectiveLevel + 1, 10); // Cap at level 10
+        break; // Only apply once
+      }
+      
+      // Air Ring adds +1 to Air moves
+      if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+        effectiveLevel = Math.min(effectiveLevel + 1, 10); // Cap at level 10
+        break; // Only apply once
+      }
+    }
+  }
+  
+  return effectiveLevel;
+};
+

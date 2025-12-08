@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -6,37 +6,111 @@ import { db } from '../firebase';
 interface Season0IntroModalProps {
   isOpen: boolean;
   onClose: () => void;
+  autoPlayVideo?: boolean; // Whether to auto-play video (only true on first login)
 }
 
-const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose }) => {
+const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose, autoPlayVideo = false }) => {
   const { currentUser } = useAuth();
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Reset to first slide when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setCurrentSlide(0);
+    }
+  }, [isOpen]);
+
+  // Check if video has been auto-played before and auto-play on first login
+  useEffect(() => {
+    const checkAndAutoPlayVideo = async () => {
+      if (!currentUser || !isOpen || currentSlide !== 0) return;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const videoAutoPlayed = userData.season0VideoAutoPlayed || false;
+          setHasAutoPlayed(videoAutoPlayed);
+          
+          // Auto-play video if it hasn't been auto-played before and autoPlayVideo is true
+          if (autoPlayVideo && !videoAutoPlayed && videoRef.current) {
+            // Small delay to ensure video element is ready
+            setTimeout(async () => {
+              if (videoRef.current) {
+                try {
+                  await videoRef.current.play();
+                  // Mark as auto-played
+                  await setDoc(doc(db, 'students', currentUser.uid), {
+                    season0VideoAutoPlayed: true,
+                    season0VideoAutoPlayedAt: serverTimestamp()
+                  }, { merge: true });
+                  setHasAutoPlayed(true);
+                } catch (err) {
+                  console.error('Error auto-playing video:', err);
+                  // Browser may block auto-play, that's okay
+                }
+              }
+            }, 300);
+          }
+        } else {
+          // New user - auto-play video
+          if (autoPlayVideo && videoRef.current) {
+            setTimeout(async () => {
+              if (videoRef.current) {
+                try {
+                  await videoRef.current.play();
+                  await setDoc(doc(db, 'students', currentUser.uid), {
+                    season0VideoAutoPlayed: true,
+                    season0VideoAutoPlayedAt: serverTimestamp()
+                  }, { merge: true });
+                  setHasAutoPlayed(true);
+                } catch (err) {
+                  console.error('Error auto-playing video:', err);
+                }
+              }
+            }, 300);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking video status:', error);
+      }
+    };
+    
+    checkAndAutoPlayVideo();
+  }, [currentUser, isOpen, autoPlayVideo, currentSlide]);
 
   const slides = [
     {
-      title: "Welcome to MST: Season 0!",
+      title: "Welcome to MST: Season 0 - Timu Island!",
       content: "We're leveling up to help YOU level up. Check out what's new.",
-      icon: "🎉"
+      icon: "🎉",
+      hasVideo: true
     },
     {
       title: "New Battle Pass",
       content: "Check out the new Battle pass. It may not be much now, but it will be expanding more and more each season.",
-      icon: "🎁"
+      icon: "🎁",
+      hasVideo: false
     },
     {
       title: "Practice Mode Challenges",
       content: "The Practice Mode has some new challenges. Check them out and see how powerful you truly are.",
-      icon: "⚔️"
+      icon: "⚔️",
+      hasVideo: false
     },
     {
       title: "Battle Mode Changes",
       content: "The Battle Mode has changed. Instead of all of your PP being your health, now your health is 10% of your total PP. Meaning, you can only lose 10% of your PP at a time.",
-      icon: "🛡️"
+      icon: "🛡️",
+      hasVideo: false
     },
     {
       title: "Coming Soon",
       content: "Artifacts, Multiplayer Mode and More",
-      icon: "🚀"
+      icon: "🚀",
+      hasVideo: false
     }
   ];
 
@@ -95,7 +169,7 @@ const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose }
         color: 'white',
         borderRadius: '1.5rem',
         padding: '3rem',
-        maxWidth: '600px',
+        maxWidth: currentSlide === 0 && currentSlideData.hasVideo ? '900px' : '600px',
         width: '100%',
         boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7)',
         border: '2px solid rgba(139, 92, 246, 0.5)',
@@ -128,30 +202,80 @@ const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose }
 
         {/* Slide Content */}
         <div style={{ marginBottom: '2rem' }}>
-          <div style={{
-            fontSize: '5rem',
-            marginBottom: '1.5rem'
-          }}>
-            {currentSlideData.icon}
-          </div>
-          <h2 style={{
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
-            marginBottom: '1.5rem',
-            background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent'
-          }}>
-            {currentSlideData.title}
-          </h2>
-          <p style={{
-            fontSize: '1.25rem',
-            lineHeight: '1.8',
-            color: '#cbd5e1',
-            marginBottom: '2rem'
-          }}>
-            {currentSlideData.content}
-          </p>
+          {currentSlide === 0 && currentSlideData.hasVideo ? (
+            // Video slide
+            <div>
+              <h2 style={{
+                fontSize: '2.5rem',
+                fontWeight: 'bold',
+                marginBottom: '1.5rem',
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent'
+              }}>
+                {currentSlideData.title}
+              </h2>
+              <div style={{
+                marginBottom: '1.5rem',
+                borderRadius: '0.75rem',
+                overflow: 'hidden',
+                background: '#000'
+              }}>
+                <video
+                  ref={videoRef}
+                  src="/videos/MST Season 0 Launch.mp4"
+                  controls
+                  style={{
+                    width: '100%',
+                    maxHeight: '500px',
+                    display: 'block'
+                  }}
+                  onEnded={() => {
+                    // Auto-advance to next slide when video ends (only if auto-played)
+                    if (autoPlayVideo && currentSlide < slides.length - 1) {
+                      setTimeout(() => setCurrentSlide(1), 500);
+                    }
+                  }}
+                />
+              </div>
+              <p style={{
+                fontSize: '1.25rem',
+                lineHeight: '1.8',
+                color: '#cbd5e1',
+                marginBottom: '2rem'
+              }}>
+                {currentSlideData.content}
+              </p>
+            </div>
+          ) : (
+            // Regular slide
+            <>
+              <div style={{
+                fontSize: '5rem',
+                marginBottom: '1.5rem'
+              }}>
+                {currentSlideData.icon}
+              </div>
+              <h2 style={{
+                fontSize: '2.5rem',
+                fontWeight: 'bold',
+                marginBottom: '1.5rem',
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent'
+              }}>
+                {currentSlideData.title}
+              </h2>
+              <p style={{
+                fontSize: '1.25rem',
+                lineHeight: '1.8',
+                color: '#cbd5e1',
+                marginBottom: '2rem'
+              }}>
+                {currentSlideData.content}
+              </p>
+            </>
+          )}
         </div>
 
         {/* Slide Indicators */}

@@ -47,7 +47,14 @@ const Chapters = withRouteSplitting(() => import('./pages/Chapters'));
 const Squads = withRouteSplitting(() => import('./pages/Squads'));
 const Battle = withRouteSplitting(() => import('./pages/Battle'));
 const Artifacts = withRouteSplitting(() => import('./pages/Artifacts'));
+const Story = withRouteSplitting(() => import('./pages/Story'));
 const StoryEpisodeBattle = withRouteSplitting(() => import('./pages/StoryEpisodeBattle'));
+const IslandRaid = withRouteSplitting(() => import('./pages/IslandRun'));
+const IslandRaidLobby = withRouteSplitting(() => import('./components/IslandRunLobby'));
+const IslandRaidGame = withRouteSplitting(() => import('./components/IslandRaidGame'));
+const InSession = withRouteSplitting(() => import('./pages/InSession'));
+const InSessionRoom = withRouteSplitting(() => import('./components/InSessionRoom'));
+const InSessionCreate = withRouteSplitting(() => import('./components/InSessionCreate'));
 
 // Loading component for lazy-loaded routes
 const PageLoader = () => (
@@ -240,6 +247,7 @@ const AppContent = () => {
       '/': { title: 'Dashboard', description: 'Your manifestation journey begins here' },
       '/profile': { title: 'My Profile', description: 'View and manage your manifestation profile' },
       '/chapters': { title: "Player's Journey", description: 'Explore your story chapters and challenges' },
+      '/story': { title: 'Story Mode', description: 'Your journey through the Nine Knowings Universe' },
       '/battle': { title: 'Battle Arena', description: 'Engage in MST battles and challenges' },
       '/leaderboard': { title: 'Hall of Fame', description: 'See the top manifesters' },
       '/marketplace': { title: 'MST MKT', description: 'Browse and purchase artifacts' },
@@ -316,6 +324,11 @@ const AppContent = () => {
                 <Artifacts />
               </ProtectedRoute>
             } />
+            <Route path="/story" element={
+              <ProtectedRoute user={true}>
+                <Story />
+              </ProtectedRoute>
+            } />
             <Route path="/story/:episodeId/battle" element={
               <ProtectedRoute user={true}>
                 <StoryEpisodeBattle />
@@ -324,6 +337,52 @@ const AppContent = () => {
             <Route path="/scorekeeper" element={
               <ProtectedRoute user={true} roles={['scorekeeper', 'admin']}>
                 <ScorekeeperInterface />
+              </ProtectedRoute>
+            } />
+            <Route path="/island-raid" element={
+              <ProtectedRoute user={true}>
+                <IslandRaid />
+              </ProtectedRoute>
+            } />
+            <Route path="/island-raid/lobby/:lobbyId" element={
+              <ProtectedRoute user={true}>
+                <IslandRaidLobby />
+              </ProtectedRoute>
+            } />
+            <Route path="/island-raid/game/:gameId" element={
+              <ProtectedRoute user={true}>
+                <IslandRaidGame />
+              </ProtectedRoute>
+            } />
+            {/* Legacy routes for backwards compatibility */}
+            <Route path="/island-run" element={
+              <ProtectedRoute user={true}>
+                <IslandRaid />
+              </ProtectedRoute>
+            } />
+            <Route path="/island-run/lobby/:lobbyId" element={
+              <ProtectedRoute user={true}>
+                <IslandRaidLobby />
+              </ProtectedRoute>
+            } />
+            <Route path="/island-run/game/:gameId" element={
+              <ProtectedRoute user={true}>
+                <IslandRaidGame />
+              </ProtectedRoute>
+            } />
+            <Route path="/in-session" element={
+              <ProtectedRoute user={true}>
+                <InSession />
+              </ProtectedRoute>
+            } />
+            <Route path="/in-session/room/:roomId" element={
+              <ProtectedRoute user={true}>
+                <InSessionRoom />
+              </ProtectedRoute>
+            } />
+            <Route path="/in-session/create" element={
+              <ProtectedRoute user={true}>
+                <InSessionCreate />
               </ProtectedRoute>
             } />
             {/* Catch-all route for 404 */}

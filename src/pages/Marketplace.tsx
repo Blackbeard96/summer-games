@@ -131,6 +131,46 @@ const artifacts: Artifact[] = [
     category: 'special',
     rarity: 'legendary'
   },
+  { 
+    id: 'blaze-ring',
+    name: 'Blaze Ring', 
+    description: 'Adds +1 Level to all Fire Elemental Moves. Equip to a ring slot to activate.', 
+    price: 540, 
+    icon: '💍', 
+    image: '/images/Blaze Ring.png',
+    category: 'special',
+    rarity: 'epic'
+  },
+  { 
+    id: 'terra-ring',
+    name: 'Terra Ring', 
+    description: 'Adds +1 Level to all Earth Elemental Moves. Equip to a ring slot to activate.', 
+    price: 540, 
+    icon: '💍', 
+    image: '/images/Terra Ring.png',
+    category: 'special',
+    rarity: 'epic'
+  },
+  { 
+    id: 'aqua-ring',
+    name: 'Aqua Ring', 
+    description: 'Adds +1 Level to all Water Elemental Moves. Equip to a ring slot to activate.', 
+    price: 540, 
+    icon: '💍', 
+    image: '/images/Aqua Ring.png',
+    category: 'special',
+    rarity: 'epic'
+  },
+  { 
+    id: 'air-ring',
+    name: 'Air Ring', 
+    description: 'Adds +1 Level to all Air Elemental Moves. Equip to a ring slot to activate.', 
+    price: 540, 
+    icon: '💍', 
+    image: '/images/Air Ring.png',
+    category: 'special',
+    rarity: 'epic'
+  },
 ];
 
 const Marketplace = () => {
@@ -965,11 +1005,27 @@ const Marketplace = () => {
       const userSnap = await getDoc(userRef);
       const currentUserData = userSnap.exists() ? userSnap.data() : {};
       
+      // Handle artifacts - can be either array or object
+      const currentArtifacts = currentUserData.artifacts || {};
+      let updatedArtifacts;
+      
+      if (Array.isArray(currentArtifacts)) {
+        // If artifacts is an array, add to it
+        updatedArtifacts = [...currentArtifacts, purchasedArtifact];
+      } else {
+        // If artifacts is an object, add the artifact with its ID as key
+        updatedArtifacts = {
+          ...currentArtifacts,
+          [item.id]: true, // Mark as owned
+          [`${item.id}_purchase`]: purchasedArtifact // Store purchase details
+        };
+      }
+      
       // Update user's power points and add artifact to inventory
       await updateDoc(userRef, {
         powerPoints: powerPoints - item.price,
         inventory: [...inventory, item.name],
-        artifacts: [...(currentUserData.artifacts || []), purchasedArtifact]
+        artifacts: updatedArtifacts
       });
       
       // Also update the users collection to keep both in sync
@@ -977,8 +1033,21 @@ const Marketplace = () => {
       const usersSnap = await getDoc(usersRef);
       if (usersSnap.exists()) {
         const usersData = usersSnap.data();
+        const usersArtifacts = usersData.artifacts || {};
+        let updatedUsersArtifacts;
+        
+        if (Array.isArray(usersArtifacts)) {
+          updatedUsersArtifacts = [...usersArtifacts, purchasedArtifact];
+        } else {
+          updatedUsersArtifacts = {
+            ...usersArtifacts,
+            [item.id]: true,
+            [`${item.id}_purchase`]: purchasedArtifact
+          };
+        }
+        
         await updateDoc(usersRef, {
-          artifacts: [...(usersData.artifacts || []), purchasedArtifact]
+          artifacts: updatedUsersArtifacts
         });
       }
       

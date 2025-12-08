@@ -101,9 +101,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   const getChapterStatus = (chapter: Chapter) => {
     if (!userProgress) return 'locked';
     
-    // Force Chapter 2 to be locked and disabled for now
+    // Check if Chapter 2 should show "Coming Soon" (if Chapter 1 is completed)
     if (chapter.id === 2) {
-      return 'locked';
+      const chapter1Completed = userProgress.chapters?.[1]?.isCompleted;
+      return chapter1Completed ? 'coming_soon' : 'locked';
     }
     
     const chapterProgress = userProgress.chapters?.[chapter.id];
@@ -162,6 +163,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
       case 'completed': return 'Completed';
       case 'active': return 'Active';
       case 'available': return 'Available';
+      case 'coming_soon': return 'Coming Soon';
       case 'locked': return 'Locked';
       default: return 'Unknown';
     }
@@ -406,13 +408,16 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   fontWeight: '600',
                   backgroundColor: status === 'completed' ? '#dcfce7' : 
                                 status === 'active' ? '#dbeafe' : 
-                                status === 'available' ? '#fef3c7' : '#f3f4f6',
+                                status === 'available' ? '#fef3c7' : 
+                                status === 'coming_soon' ? '#fef3c7' : '#f3f4f6',
                   color: status === 'completed' ? '#166534' : 
                         status === 'active' ? '#1e40af' : 
-                        status === 'available' ? '#92400e' : '#374151',
+                        status === 'available' ? '#92400e' : 
+                        status === 'coming_soon' ? '#92400e' : '#374151',
                   border: `1px solid ${status === 'completed' ? '#86efac' : 
                                     status === 'active' ? '#93c5fd' : 
-                                    status === 'available' ? '#fde047' : '#d1d5db'}`
+                                    status === 'available' ? '#fde047' : 
+                                    status === 'coming_soon' ? '#fde047' : '#d1d5db'}`
                 }}>
                   {getStatusText(status)}
                 </span>
@@ -509,7 +514,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                 )}
 
                 {/* Requirements */}
-                {status === 'locked' && (
+                {status === 'locked' && !(chapter.id === 2 && userProgress?.chapters?.[1]?.isCompleted) && (
                   <div style={{ 
                     marginBottom: '1rem', 
                     padding: '12px', 

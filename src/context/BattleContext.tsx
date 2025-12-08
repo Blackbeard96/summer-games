@@ -17,6 +17,7 @@ import {
   deleteField
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 import { 
   Vault, 
   Move, 
@@ -34,7 +35,8 @@ import {
 } from '../types/battle';
 import { getMoveDamage } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
-import { getElementalRingLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel } from '../utils/artifactUtils';
+import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 
 interface BattleContextType {
   // Vault Management
@@ -2961,12 +2963,22 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ppStolen = 0;
         } else {
           // This is an offensive move
+          // Get student data for equipped artifacts and player level
+          const studentRef = doc(db, 'students', currentUser.uid);
+          const studentDoc = await getDoc(studentRef);
+          const studentData = studentDoc.exists() ? studentDoc.data() : null;
+          const equippedArtifacts = studentData?.equippedArtifacts || null;
+          const playerLevel = studentData?.level || 1;
+          
+          // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
+          const effectiveMasteryLevel = getEffectiveMasteryLevel(selectedMove, equippedArtifacts);
+          
           // Use the move's actual damage property if it exists (from upgrades), otherwise use lookup
-          let totalDamage: number;
+          let baseDamage: number;
           if (selectedMove.damage && selectedMove.damage > 0) {
             // Use the upgraded damage directly (already includes boost multiplier)
-            totalDamage = selectedMove.damage;
-            console.log(`🔍 Using upgraded damage for ${selectedMove.name}:`, totalDamage);
+            baseDamage = selectedMove.damage;
+            console.log(`🔍 Using upgraded damage for ${selectedMove.name}:`, baseDamage);
           } else {
             // Fall back to lookup for moves that haven't been upgraded yet
             const moveDamageValue = await getMoveDamage(selectedMove.name);
@@ -2976,35 +2988,58 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               // Handle both single damage values and damage ranges
               if (typeof moveDamageValue === 'object') {
                 // It's a range, use the max value for damage calculation
-                totalDamage = moveDamageValue.max;
+                baseDamage = moveDamageValue.max;
               } else {
                 // It's a single value
-                totalDamage = moveDamageValue;
+                baseDamage = moveDamageValue;
               }
             } else {
-              totalDamage = 0;
+              baseDamage = 0;
             }
           }
           
-          // Apply artifact damage multiplier for elemental moves
-          if (selectedMove.category === 'elemental') {
-            try {
-              const studentRef = doc(db, 'students', currentUser.uid);
-              const studentDoc = await getDoc(studentRef);
-              if (studentDoc.exists()) {
-                const studentData = studentDoc.data();
-                const equippedArtifacts = studentData.equippedArtifacts || null;
-                if (equippedArtifacts) {
-                  const ringLevel = getElementalRingLevel(equippedArtifacts);
-                  const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
-                  if (artifactMultiplier > 1.0) {
-                    totalDamage = Math.floor(totalDamage * artifactMultiplier);
-                    console.log(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%`);
-                  }
+          // Calculate damage using proper damage range system with effective mastery level
+          let totalDamage = 0;
+          if (baseDamage > 0) {
+            const damageRange = calculateDamageRange(baseDamage, selectedMove.level, effectiveMasteryLevel);
+            const damageResult = rollDamage(damageRange, playerLevel, selectedMove.level, effectiveMasteryLevel);
+            totalDamage = damageResult.damage;
+            
+            // Apply artifact damage multiplier for elemental moves
+            let artifactMultiplier = 1.0;
+            if (selectedMove.category === 'elemental' && equippedArtifacts) {
+              const ringLevel = getElementalRingLevel(equippedArtifacts);
+              artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+              if (artifactMultiplier > 1.0) {
+                totalDamage = Math.floor(totalDamage * artifactMultiplier);
+                console.log(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%`);
+              }
+            }
+            
+            // Log ring boost if applicable
+            if (effectiveMasteryLevel > selectedMove.masteryLevel && equippedArtifacts) {
+              const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+              const moveElement = selectedMove.elementalAffinity?.toLowerCase();
+              for (const slot of ringSlots) {
+                const ring = equippedArtifacts[slot];
+                if (!ring) continue;
+                if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+                  console.log(`🔥 Blaze Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+                  break;
+                }
+                if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+                  console.log(`🌍 Terra Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+                  break;
+                }
+                if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+                  console.log(`💧 Aqua Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+                  break;
+                }
+                if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+                  console.log(`💨 Air Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+                  break;
                 }
               }
-            } catch (error) {
-              console.error('Error applying artifact multiplier:', error);
             }
           }
           
@@ -3103,6 +3138,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       if (selectedCard) {
+        // Track daily challenge: Use Action Card
+        if (currentUser) {
+          updateChallengeProgressByType(currentUser.uid, 'use_action_card', 1).catch(err => 
+            console.error('Error updating daily challenge progress:', err)
+          );
+        }
+        
         // Process action card
         switch (selectedCard.effect.type) {
           case 'shield_breach':
@@ -3356,6 +3398,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
       }
 
+      // Track daily challenge: Attack Vault (if any damage was done or attack was attempted)
+      if (currentUser && (ppStolen > 0 || shieldDamage > 0 || (selectedMove || selectedCard))) {
+        updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch(err => 
+          console.error('Error updating daily challenge progress:', err)
+        );
+      }
+      
+      // Track daily challenge: Earn PP (if PP was stolen)
+      if (currentUser && ppStolen > 0) {
+        updateChallengeProgressByType(currentUser.uid, 'earn_pp', ppStolen).catch(err => 
+          console.error('Error updating daily challenge progress:', err)
+        );
+      }
+      
       // Award minimum XP for any successful attack (even if no PP stolen and no shield damage)
       if (ppStolen === 0 && shieldDamage === 0 && !overshieldAbsorbed && (selectedMove || selectedCard)) {
         const minimumXpReward = 1; // Always give at least 1 XP for a successful attack

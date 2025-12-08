@@ -4,6 +4,11 @@ import { useBattle } from '../context/BattleContext';
 import { Move, ActionCard } from '../types/battle';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { getMoveNameSync } from '../utils/moveOverrides';
+import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getElementalRingLevel } from '../utils/artifactUtils';
+import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface CPUChallengerProps {
   isOpen: boolean;
@@ -111,13 +116,21 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
   };
 
   const executePlayerMove = async () => {
-    if (!selectedMove) return;
+    if (!selectedMove || !currentUser) return;
     
     // Track move usage for manifest progress
     const originalMoveName = selectedMove.name;
     const moveName = getMoveNameSync(selectedMove.name) || selectedMove.name;
     console.log(`[CPUChallenger] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
-    if (currentUser?.uid) {
+    
+    // Track daily challenge: Use Elemental Move
+    if (selectedMove.category === 'elemental' && currentUser) {
+      updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err => 
+        console.error('Error updating daily challenge progress:', err)
+      );
+    }
+    
+    if (currentUser.uid) {
       trackMoveUsage(currentUser.uid, moveName).catch(err => {
         console.error('[CPUChallenger] Error tracking move usage:', err);
       });
@@ -127,13 +140,63 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
     
     addToBattleLog(`You used ${selectedMove.name}!`);
     
+    // Get student data for equipped artifacts and player level
+    const studentRef = doc(db, 'students', currentUser.uid);
+    const studentDoc = await getDoc(studentRef);
+    const studentData = studentDoc.exists() ? studentDoc.data() : null;
+    const equippedArtifacts = studentData?.equippedArtifacts || null;
+    const playerLevel = studentData?.level || 1;
+    
+    // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
+    const effectiveMasteryLevel = getEffectiveMasteryLevel(selectedMove, equippedArtifacts);
+    
     let damage = 0;
     let shieldDamage = 0;
     let ppStolen = 0;
     
-    // Calculate damage based on move
-    if (selectedMove.damage) {
-      damage = selectedMove.damage;
+    // Calculate damage using proper damage calculation system with effective mastery level
+    if (selectedMove.damage && selectedMove.damage > 0) {
+      const baseDamage = selectedMove.damage;
+      const damageRange = calculateDamageRange(baseDamage, selectedMove.level, effectiveMasteryLevel);
+      const damageResult = rollDamage(damageRange, playerLevel, selectedMove.level, effectiveMasteryLevel);
+      damage = damageResult.damage;
+      
+      // Apply artifact damage multiplier for elemental moves
+      if (selectedMove.category === 'elemental' && equippedArtifacts) {
+        const ringLevel = getElementalRingLevel(equippedArtifacts);
+        const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+        if (artifactMultiplier > 1.0) {
+          damage = Math.floor(damage * artifactMultiplier);
+          addToBattleLog(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%!`);
+        }
+      }
+      
+      // Log ring boost if applicable
+      if (effectiveMasteryLevel > selectedMove.masteryLevel && equippedArtifacts) {
+        const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+        const moveElement = selectedMove.elementalAffinity?.toLowerCase();
+        for (const slot of ringSlots) {
+          const ring = equippedArtifacts[slot];
+          if (!ring) continue;
+          if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+            addToBattleLog(`🔥 Blaze Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+            addToBattleLog(`🌍 Terra Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+            addToBattleLog(`💧 Aqua Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+            break;
+          }
+          if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+            addToBattleLog(`💨 Air Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
+            break;
+          }
+        }
+      }
+      
       shieldDamage = Math.min(damage, cpuStats.shieldStrength);
       const remainingDamage = Math.max(0, damage - cpuStats.shieldStrength);
       

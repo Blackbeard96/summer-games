@@ -1,4 +1,4 @@
-import React, { useState, useEffect, CSSProperties, MouseEvent, memo, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, CSSProperties, MouseEvent, memo, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
@@ -24,15 +24,29 @@ const tooltipStyle: CSSProperties = {
   zIndex: 1000,
 };
 
-const navItemStyle: CSSProperties = {
-  color: 'white',
-  textDecoration: 'none',
-  padding: '0.5rem 1rem',
-  borderRadius: '0.25rem',
-  transition: 'background-color 0.2s',
-  position: 'relative' as CSSProperties['position'],
-  display: 'inline-block',
-  cursor: 'pointer',
+// Responsive nav item style function
+const getNavItemStyle = (screenSize: 'mobile' | 'tablet' | 'desktop'): CSSProperties => {
+  const baseStyle: CSSProperties = {
+    color: 'white',
+    textDecoration: 'none',
+    borderRadius: '0.25rem',
+    transition: 'background-color 0.2s',
+    position: 'relative' as CSSProperties['position'],
+    display: 'inline-block',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap' as CSSProperties['whiteSpace'],
+  };
+
+  switch (screenSize) {
+    case 'mobile':
+      return { ...baseStyle, padding: '0.25rem 0.5rem', fontSize: '0.75rem' };
+    case 'tablet':
+      return { ...baseStyle, padding: '0.375rem 0.75rem', fontSize: '0.875rem' };
+    case 'desktop':
+      return { ...baseStyle, padding: '0.5rem 1rem', fontSize: '1rem' };
+    default:
+      return baseStyle;
+  }
 };
 
 interface Notification {
@@ -61,30 +75,54 @@ const NavBar = memo(() => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [userRole, setUserRole] = useState<UserRole>('student');
+  const [showBattleDropdown, setShowBattleDropdown] = useState(false);
+  const battleDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Accessibility features
   const { announce } = useAriaLive();
   const notificationsId = generateId('notifications');
   const mobileMenuId = generateId('mobile-menu');
 
-  // Check if device is mobile with throttled resize handler
+  // Check screen size with responsive breakpoints
+  const [screenSize, setScreenSize] = useState<'mobile' | 'tablet' | 'desktop'>('desktop');
+  
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
     
-    const checkMobile = () => {
+    const checkScreenSize = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        setIsMobile(window.innerWidth <= 768);
+        const width = window.innerWidth;
+        if (width <= 768) {
+          setIsMobile(true);
+          setScreenSize('mobile');
+        } else if (width <= 1024) {
+          setIsMobile(false);
+          setScreenSize('tablet');
+        } else {
+          setIsMobile(false);
+          setScreenSize('desktop');
+        }
       }, 100);
     };
     
     // Initial check
-    setIsMobile(window.innerWidth <= 768);
+    const width = window.innerWidth;
+    if (width <= 768) {
+      setIsMobile(true);
+      setScreenSize('mobile');
+    } else if (width <= 1024) {
+      setIsMobile(false);
+      setScreenSize('tablet');
+    } else {
+      setIsMobile(false);
+      setScreenSize('desktop');
+    }
     
-    window.addEventListener('resize', checkMobile);
+    window.addEventListener('resize', checkScreenSize);
     
     return () => {
-      window.removeEventListener('resize', checkMobile);
+      window.removeEventListener('resize', checkScreenSize);
       clearTimeout(timeoutId);
     };
   }, []);
@@ -427,11 +465,21 @@ const NavBar = memo(() => {
     announce('Mobile menu closed');
   }, [announce]);
 
+  // Battle Arena sub-menu items
+  const battleSubItems = useMemo(() => [
+    { to: '/battle#vault', label: 'Vault Management', icon: '🏦' },
+    { to: '/battle#moves', label: 'Move Mastery', icon: '🎯' },
+    { to: '/battle#cards', label: 'Action Cards', icon: '🃏' },
+  ], []);
+
   // Memoize navigation items to prevent unnecessary re-renders
   const navItems = useMemo(() => [
     { to: '/home', label: 'Home', tooltip: 'Home Hub' },
-    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges & Story Episodes' },
-    { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System' },
+    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges' },
+    { to: '/story', label: '📖 Story Mode', tooltip: 'Your journey through the Nine Knowings Universe' },
+    { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System', hasDropdown: true },
+    { to: '/island-raid', label: '🏝️ Island Raid', tooltip: 'PvE Co-op Campaign Mode' },
+    { to: '/in-session', label: '📚 In Session', tooltip: 'Class Battle Mode' },
     { to: '/artifacts', label: 'Artifacts', tooltip: 'Artifacts System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ], []);
@@ -502,92 +550,198 @@ const NavBar = memo(() => {
       )}
       <nav className="nav" style={{
         backgroundColor: '#1f2937',
-        padding: isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-      position: 'sticky',
-      top: 0,
-      zIndex: 50
-    }}>
+        padding: screenSize === 'mobile' ? '0.75rem 1rem' : screenSize === 'tablet' ? '0.875rem 1.25rem' : '1rem 1.5rem',
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 50
+      }}>
       <div style={{
         maxWidth: '1200px',
         margin: '0 auto',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
+        gap: screenSize === 'tablet' ? '0.5rem' : '1rem',
+        flexWrap: screenSize === 'tablet' ? 'wrap' : 'nowrap',
+        width: '100%'
       }}>
         {/* Logo/Brand */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: screenSize === 'tablet' ? '0.5rem' : '0.75rem', flexShrink: 0 }}>
           <div style={{
-            width: isMobile ? '32px' : '40px',
-            height: isMobile ? '32px' : '40px',
+            width: screenSize === 'mobile' ? '32px' : screenSize === 'tablet' ? '36px' : '40px',
+            height: screenSize === 'mobile' ? '32px' : screenSize === 'tablet' ? '36px' : '40px',
             backgroundColor: '#4f46e5',
             borderRadius: '0.5rem',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             color: 'white',
-            fontSize: isMobile ? '1rem' : '1.25rem',
+            fontSize: screenSize === 'mobile' ? '1rem' : screenSize === 'tablet' ? '1.125rem' : '1.25rem',
             fontWeight: 'bold'
           }}>
             X
           </div>
-          <span style={{
-            fontSize: isMobile ? '1.125rem' : '1.25rem',
-            fontWeight: 'bold',
-            color: 'white'
-          }}>
-            Xiotein School
-          </span>
+          {screenSize !== 'tablet' && (
+            <span style={{
+              fontSize: screenSize === 'mobile' ? '1.125rem' : '1.25rem',
+              fontWeight: 'bold',
+              color: 'white',
+              whiteSpace: 'nowrap'
+            }}>
+              Xiotein School
+            </span>
+          )}
         </div>
 
         {/* Desktop Navigation */}
         {!isMobile && (
           <div style={{
             display: 'flex',
-            gap: '1rem',
-            alignItems: 'center'
+            gap: screenSize === 'tablet' ? '0.5rem' : screenSize === 'desktop' ? '0.75rem' : '0.5rem',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            flex: '1 1 auto',
+            minWidth: 0,
+            maxWidth: '100%'
           }}>
             {navItems.map((item) => (
-              <div key={item.to} style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+              <div 
+                key={item.to} 
+                style={{ ...getNavItemStyle(screenSize), position: 'relative' }} 
+                onMouseEnter={(e) => {
+                  showTooltip(e);
+                  if (item.hasDropdown) {
+                    // Clear any pending timeout
+                    if (battleDropdownTimeoutRef.current) {
+                      clearTimeout(battleDropdownTimeoutRef.current);
+                      battleDropdownTimeoutRef.current = null;
+                    }
+                    setShowBattleDropdown(true);
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  hideTooltip(e);
+                  if (item.hasDropdown) {
+                    // Add delay before hiding dropdown (500ms gives time to move to dropdown)
+                    battleDropdownTimeoutRef.current = setTimeout(() => {
+                      setShowBattleDropdown(false);
+                      battleDropdownTimeoutRef.current = null;
+                    }, 500);
+                  }
+                }}
+              >
                 <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+                
+                {/* Battle Arena Dropdown */}
+                {item.hasDropdown && showBattleDropdown && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: '0',
+                    marginTop: '0.5rem',
+                    backgroundColor: '#1f2937',
+                    borderRadius: '0.5rem',
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+                    border: '1px solid #374151',
+                    zIndex: 1000,
+                    minWidth: '200px',
+                    padding: '0.5rem 0'
+                  }}
+                  onMouseEnter={() => {
+                    // Clear any pending timeout when mouse enters dropdown
+                    if (battleDropdownTimeoutRef.current) {
+                      clearTimeout(battleDropdownTimeoutRef.current);
+                      battleDropdownTimeoutRef.current = null;
+                    }
+                    setShowBattleDropdown(true);
+                  }}
+                  onMouseLeave={() => {
+                    // Add delay before hiding dropdown (500ms gives time to move back)
+                    battleDropdownTimeoutRef.current = setTimeout(() => {
+                      setShowBattleDropdown(false);
+                      battleDropdownTimeoutRef.current = null;
+                    }, 500);
+                  }}
+                  >
+                    {battleSubItems.map((subItem) => (
+                      <Link
+                        key={subItem.to}
+                        to={subItem.to}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          color: 'white',
+                          textDecoration: 'none',
+                          padding: '0.75rem 1rem',
+                          transition: 'background-color 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        <span>{subItem.icon}</span>
+                        <span>{subItem.label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
 
-            {userNavItems.map((item) => (
-              <div key={item.to} style={navItemStyle} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                {item.isButton ? (
-                  <button
-                    onClick={item.onClick}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'inherit',
-                      textDecoration: 'none',
-                      cursor: 'pointer',
-                      fontSize: 'inherit',
-                      fontFamily: 'inherit'
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ) : (
-                  <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
-                )}
-                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
-              </div>
-            ))}
+            {userNavItems.map((item) => {
+              // Hide "Review Tutorials" on smaller screens to save space
+              if (screenSize === 'tablet' && item.label.includes('Review Tutorials')) {
+                return null;
+              }
+              return (
+                <div key={item.to} style={getNavItemStyle(screenSize)} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                  {item.isButton ? (
+                    <button
+                      onClick={item.onClick}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'inherit',
+                        textDecoration: 'none',
+                        cursor: 'pointer',
+                        fontSize: 'inherit',
+                        fontFamily: 'inherit',
+                        padding: 0
+                      }}
+                    >
+                      {screenSize === 'tablet' ? item.label.replace('📚 Review Tutorials', '📚') : item.label}
+                    </button>
+                  ) : (
+                    <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+                      {screenSize === 'tablet' && item.label === 'MST MKT' ? 'MKT' : item.label}
+                    </Link>
+                  )}
+                  <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+                </div>
+              );
+            })}
 
             {scorekeeperNavItems.map((item) => (
-              <div key={item.to} style={{ ...navItemStyle, backgroundColor: '#059669' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+              <div key={item.to} style={{ ...getNavItemStyle(screenSize), backgroundColor: '#059669' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+                  {screenSize === 'tablet' ? '📊' : item.label}
+                </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
               </div>
             ))}
 
             {adminNavItems.map((item) => (
-              <div key={item.to} style={{ ...navItemStyle, backgroundColor: '#dc2626' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+              <div key={item.to} style={{ ...getNavItemStyle(screenSize), backgroundColor: '#dc2626' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+                  {screenSize === 'tablet' ? "Sage's" : item.label}
+                </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
               </div>
             ))}
@@ -598,7 +752,8 @@ const NavBar = memo(() => {
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: isMobile ? '0.5rem' : '1rem'
+          gap: screenSize === 'mobile' ? '0.5rem' : screenSize === 'tablet' ? '0.5rem' : '1rem',
+          flexShrink: 0
         }}>
           {currentUser && (
             <>
@@ -619,17 +774,17 @@ const NavBar = memo(() => {
                     background: 'none',
                     border: 'none',
                     color: 'white',
-                    fontSize: isMobile ? '1rem' : '1.25rem',
+                    fontSize: screenSize === 'mobile' ? '1rem' : screenSize === 'tablet' ? '1.125rem' : '1.25rem',
                     cursor: 'pointer',
-                    padding: isMobile ? '0.75rem' : '0.5rem',
+                    padding: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.5rem' : '0.5rem',
                     borderRadius: '0.25rem',
                     position: 'relative',
                     transition: 'background-color 0.2s',
-                    minWidth: isMobile ? '44px' : 'auto',
-                    minHeight: isMobile ? '44px' : 'auto'
+                    minWidth: screenSize === 'mobile' ? '44px' : 'auto',
+                    minHeight: screenSize === 'mobile' ? '44px' : 'auto'
                   }}
-                  onMouseEnter={e => !isMobile && (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
-                  onMouseLeave={e => !isMobile && (e.currentTarget.style.backgroundColor = 'transparent')}
+                  onMouseEnter={e => screenSize !== 'mobile' && (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
+                  onMouseLeave={e => screenSize !== 'mobile' && (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   🔔
                   {notifications.filter(n => !n.read).length > 0 && (
@@ -642,9 +797,9 @@ const NavBar = memo(() => {
                         background: '#ef4444',
                         color: 'white',
                         borderRadius: '50%',
-                        width: isMobile ? '20px' : '18px',
-                        height: isMobile ? '20px' : '18px',
-                        fontSize: isMobile ? '0.875rem' : '0.75rem',
+                        width: screenSize === 'mobile' ? '20px' : screenSize === 'tablet' ? '19px' : '18px',
+                        height: screenSize === 'mobile' ? '20px' : screenSize === 'tablet' ? '19px' : '18px',
+                        fontSize: screenSize === 'mobile' ? '0.875rem' : screenSize === 'tablet' ? '0.8125rem' : '0.75rem',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -654,7 +809,7 @@ const NavBar = memo(() => {
                       {notifications.filter(n => !n.read).length}
                     </span>
                   )}
-                  {!isMobile && <span className="tooltip" style={tooltipStyle}>Notifications</span>}
+                  {screenSize !== 'mobile' && <span className="tooltip" style={tooltipStyle}>Notifications</span>}
                 </button>
 
                 {/* Notifications Dropdown */}
@@ -667,7 +822,7 @@ const NavBar = memo(() => {
                       position: 'absolute',
                       top: '100%',
                       right: '0',
-                      width: isMobile ? '280px' : '350px',
+                      width: screenSize === 'mobile' ? '280px' : screenSize === 'tablet' ? '320px' : '350px',
                       maxHeight: '400px',
                       backgroundColor: 'white',
                       borderRadius: '0.5rem',
@@ -918,7 +1073,11 @@ const NavBar = memo(() => {
                 fontWeight: '500',
                 color: 'white'
               }}>
-                {isMobile ? displayNameWithRole.substring(0, 8) + '...' : displayNameWithRole}
+                {screenSize === 'mobile' 
+                  ? displayNameWithRole.substring(0, 8) + '...' 
+                  : screenSize === 'tablet' 
+                    ? displayNameWithRole.substring(0, 12) + (displayNameWithRole.length > 12 ? '...' : '')
+                    : displayNameWithRole}
               </span>
               <button
                 onClick={handleLogout}
@@ -927,13 +1086,13 @@ const NavBar = memo(() => {
                   background: 'rgba(255,255,255,0.1)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   color: 'white',
-                  padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
+                  padding: screenSize === 'mobile' ? '0.5rem 0.75rem' : screenSize === 'tablet' ? '0.5rem 0.875rem' : '0.5rem 1rem',
                   borderRadius: '0.25rem',
                   cursor: 'pointer',
-                  fontSize: isMobile ? '0.75rem' : '0.875rem',
+                  fontSize: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.8125rem' : '0.875rem',
                   transition: 'all 0.2s',
-                  minWidth: isMobile ? '60px' : 'auto',
-                  minHeight: isMobile ? '36px' : 'auto'
+                  minWidth: screenSize === 'mobile' ? '60px' : 'auto',
+                  minHeight: screenSize === 'mobile' ? '36px' : 'auto'
                 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
@@ -953,14 +1112,14 @@ const NavBar = memo(() => {
                   background: 'rgba(255,255,255,0.1)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   color: 'white',
-                  padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
+                  padding: screenSize === 'mobile' ? '0.5rem 0.75rem' : screenSize === 'tablet' ? '0.5rem 0.875rem' : '0.5rem 1rem',
                   borderRadius: '0.25rem',
                   cursor: 'pointer',
-                  fontSize: isMobile ? '0.75rem' : '0.875rem',
+                  fontSize: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.8125rem' : '0.875rem',
                   transition: 'all 0.2s',
                   textDecoration: 'none',
-                  minWidth: isMobile ? '60px' : 'auto',
-                  minHeight: isMobile ? '36px' : 'auto'
+                  minWidth: screenSize === 'mobile' ? '60px' : 'auto',
+                  minHeight: screenSize === 'mobile' ? '36px' : 'auto'
                 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}

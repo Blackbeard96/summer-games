@@ -357,33 +357,59 @@ const Profile = () => {
 
     fetchUserData();
     
+    // Helper to check for Firestore internal errors
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      const errorStack = error?.stack || '';
+      return (
+        errorString.includes('INTERNAL ASSERTION FAILED') ||
+        errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+        errorStack.includes('INTERNAL ASSERTION FAILED') ||
+        errorString.includes('ID: ca9') ||
+        errorString.includes('ID: b815') ||
+        (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state'))
+      );
+    };
+
     // Set up real-time listener for manifest and element updates
     const studentsRef = doc(db, 'students', currentUser.uid);
     const unsubscribe = onSnapshot(studentsRef, (docSnapshot) => {
-      if (docSnapshot.exists()) {
-        const userData = docSnapshot.data();
-        const manifestData = userData.manifest;
-        if (manifestData) {
-          // Convert Firestore timestamp to Date if needed
-          const processedManifest = {
-            ...manifestData,
-            lastAscension: manifestData.lastAscension?.toDate ? 
-              manifestData.lastAscension.toDate() : 
-              (manifestData.lastAscension ? new Date(manifestData.lastAscension) : new Date())
-          };
-          console.log('Profile: Manifest updated via real-time listener:', processedManifest);
-          setPlayerManifest(processedManifest);
+      try {
+        if (docSnapshot.exists()) {
+          const userData = docSnapshot.data();
+          const manifestData = userData.manifest;
+          if (manifestData) {
+            // Convert Firestore timestamp to Date if needed
+            const processedManifest = {
+              ...manifestData,
+              lastAscension: manifestData.lastAscension?.toDate ? 
+                manifestData.lastAscension.toDate() : 
+                (manifestData.lastAscension ? new Date(manifestData.lastAscension) : new Date())
+            };
+            console.log('Profile: Manifest updated via real-time listener:', processedManifest);
+            setPlayerManifest(processedManifest);
+          }
+          
+          // Update element if it changed
+          const chosenElement = userData.artifacts?.chosen_element || 
+                                userData.elementalAffinity || 
+                                userData.manifestationType || 
+                                'Fire';
+          const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
+          setStyle(displayElement);
         }
-        
-        // Update element if it changed
-        const chosenElement = userData.artifacts?.chosen_element || 
-                              userData.elementalAffinity || 
-                              userData.manifestationType || 
-                              'Fire';
-        const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
-        setStyle(displayElement);
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          return; // Ignore Firestore internal errors
+        }
+        console.error('Profile: Error processing manifest snapshot:', error);
       }
     }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        return; // Ignore Firestore internal errors
+      }
       console.error('Profile: Error listening to manifest updates:', error);
     });
     

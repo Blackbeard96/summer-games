@@ -1225,10 +1225,25 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             justifyContent: 'space-between', 
             alignItems: 'center',
             fontSize: '0.875rem',
-            color: '#6b7280'
+            color: '#6b7280',
+            marginBottom: '0.5rem'
           }}>
             <span>{getStatusIcon((remainingOfflineMoves / maxOfflineMoves) * 100)} Daily Remaining</span>
             <span>Resets Daily</span>
+          </div>
+          
+          {/* Reset Timer */}
+          <div style={{
+            background: '#fef3c7',
+            border: '1px solid #f59e0b',
+            borderRadius: '0.5rem',
+            padding: '0.5rem',
+            textAlign: 'center',
+            fontSize: '0.875rem',
+            color: '#92400e',
+            fontWeight: '500'
+          }}>
+            ⏰ Resets in: {resetTimer || 'Calculating...'}
           </div>
           
           {/* Debug button for fixing moves count */}

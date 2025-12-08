@@ -7,6 +7,10 @@ import {
   formatDamageRange 
 } from '../utils/damageCalculator';
 import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
+import { useAuth } from '../context/AuthContext';
+import { getArtifactDamageMultiplier, getEffectiveMasteryLevel } from '../utils/artifactUtils';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -52,6 +56,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [overridesLoaded, setOverridesLoaded] = useState(false);
   const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
+  const { currentUser } = useAuth();
+  const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
 
   // Load move overrides when component mounts and periodically refresh
   useEffect(() => {
@@ -77,6 +83,26 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     
     return () => clearInterval(refreshInterval);
   }, []);
+
+  // Load equipped artifacts to check for Elemental Ring
+  useEffect(() => {
+    const loadEquippedArtifacts = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          setEquippedArtifacts(studentData.equippedArtifacts || null);
+        }
+      } catch (error) {
+        console.error('Error loading equipped artifacts:', error);
+      }
+    };
+
+    loadEquippedArtifacts();
+  }, [currentUser]);
 
   console.log('MovesDisplay: movesRemaining:', movesRemaining, 'offlineMovesRemaining:', offlineMovesRemaining);
   console.log('MovesDisplay: Total moves loaded:', moves.length);
@@ -242,6 +268,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   };
 
   const renderMoveCard = (move: Move) => {
+    // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
+    const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
+    
     // Check if move can be upgraded (up to level 10)
     const canUpgrade = move.masteryLevel < 10;
     const canAscend = move.masteryLevel === 5;
@@ -345,7 +374,64 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             textAlign: 'center'
           }}>
-            {getMoveDataWithOverrides(move.name).name} [Level {move.masteryLevel}]
+            {getMoveDataWithOverrides(move.name).name} [Level {effectiveMasteryLevel}]
+            {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
+              const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+              const moveElement = move.elementalAffinity?.toLowerCase();
+              for (const slot of ringSlots) {
+                const ring = equippedArtifacts[slot];
+                if (!ring) continue;
+                if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+                  return (
+                    <span style={{
+                      fontSize: '0.875rem',
+                      color: '#f59e0b',
+                      marginLeft: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      (Base: {move.masteryLevel} + Blaze Ring)
+                    </span>
+                  );
+                }
+                if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+                  return (
+                    <span style={{
+                      fontSize: '0.875rem',
+                      color: '#8b5cf6',
+                      marginLeft: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      (Base: {move.masteryLevel} + Terra Ring)
+                    </span>
+                  );
+                }
+                if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+                  return (
+                    <span style={{
+                      fontSize: '0.875rem',
+                      color: '#8b5cf6',
+                      marginLeft: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      (Base: {move.masteryLevel} + Aqua Ring)
+                    </span>
+                  );
+                }
+                if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+                  return (
+                    <span style={{
+                      fontSize: '0.875rem',
+                      color: '#8b5cf6',
+                      marginLeft: '0.5rem',
+                      fontWeight: 'normal'
+                    }}>
+                      (Base: {move.masteryLevel} + Air Ring)
+                    </span>
+                  );
+                }
+              }
+              return null;
+            })()}
           </h3>
           {move.level > 1 && (
             <span style={{ 
@@ -461,8 +547,33 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             }
             
             if (baseDamage > 0) {
-              // Calculate range based on the actual damage and mastery level
-              let damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
+              // Calculate range based on the actual damage and effective mastery level
+              // (effectiveMasteryLevel is already calculated at the top of renderMoveCard)
+              let damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
+              
+              // Apply Elemental Ring damage multiplier for elemental moves (apply to range, not base damage)
+              let artifactMultiplier = 1.0;
+              let ringLevel = 1;
+              if (move.category === 'elemental' && equippedArtifacts) {
+                // Check all ring slots for Elemental Ring
+                const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+                for (const slot of ringSlots) {
+                  const ring = equippedArtifacts[slot];
+                  if (ring && 
+                      (ring.id === 'elemental-ring-level-1' || 
+                       (ring.name && ring.name.includes('Elemental Ring')))) {
+                    ringLevel = ring.level || 1;
+                    artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+                    // Apply multiplier to the damage range (not base damage)
+                    damageRange = {
+                      min: Math.floor(damageRange.min * artifactMultiplier),
+                      max: Math.floor(damageRange.max * artifactMultiplier),
+                      average: Math.floor(damageRange.average * artifactMultiplier)
+                    };
+                    break; // Only apply once
+                  }
+                }
+              }
               
               const rangeString = formatDamageRange(damageRange);
               return (
@@ -476,6 +587,48 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }}>
                   <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE RANGE</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{rangeString}</div>
+                  {artifactMultiplier > 1.0 && (
+                    <div style={{ fontSize: '0.7rem', color: '#f59e0b', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      💍 Elemental Ring (Level {ringLevel}) +{Math.round((artifactMultiplier - 1) * 100)}%
+                    </div>
+                  )}
+                  {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
+                    const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+                    const moveElement = move.elementalAffinity?.toLowerCase();
+                    for (const slot of ringSlots) {
+                      const ring = equippedArtifacts[slot];
+                      if (!ring) continue;
+                      if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+                        return (
+                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                            🔥 Blaze Ring: +1 Level (Effective Level {effectiveMasteryLevel})
+                          </div>
+                        );
+                      }
+                      if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+                        return (
+                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                            🌍 Terra Ring: +1 Level (Effective Level {effectiveMasteryLevel})
+                          </div>
+                        );
+                      }
+                      if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+                        return (
+                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                            💧 Aqua Ring: +1 Level (Effective Level {effectiveMasteryLevel})
+                          </div>
+                        );
+                      }
+                      if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+                        return (
+                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                            💨 Air Ring: +1 Level (Effective Level {effectiveMasteryLevel})
+                          </div>
+                        );
+                      }
+                    }
+                    return null;
+                  })()}
                   {moveOverrides[move.name] && (
                     <div style={{ fontSize: '0.6rem', color: '#10B981', marginTop: '0.25rem' }}>
                       ⭐ CUSTOM VALUE
@@ -551,8 +704,65 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
             <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Mastery Level</span>
-            <span style={{ fontSize: '0.875rem', color: getMasteryColor(move.masteryLevel), fontWeight: 'bold' }}>
-              {getMasteryLabel(move.masteryLevel)} ({move.masteryLevel}/{move.masteryLevel <= 5 ? 5 : 10})
+            <span style={{ fontSize: '0.875rem', color: getMasteryColor(effectiveMasteryLevel), fontWeight: 'bold' }}>
+              {getMasteryLabel(effectiveMasteryLevel)} ({effectiveMasteryLevel}/{effectiveMasteryLevel <= 5 ? 5 : 10})
+              {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
+                const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+                const moveElement = move.elementalAffinity?.toLowerCase();
+                for (const slot of ringSlots) {
+                  const ring = equippedArtifacts[slot];
+                  if (!ring) continue;
+                  if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
+                    return (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        color: '#8b5cf6',
+                        marginLeft: '0.5rem',
+                        fontWeight: 'normal'
+                      }}>
+                        (+1 Blaze Ring)
+                      </span>
+                    );
+                  }
+                  if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
+                    return (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        color: '#8b5cf6',
+                        marginLeft: '0.5rem',
+                        fontWeight: 'normal'
+                      }}>
+                        (+1 Terra Ring)
+                      </span>
+                    );
+                  }
+                  if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
+                    return (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        color: '#8b5cf6',
+                        marginLeft: '0.5rem',
+                        fontWeight: 'normal'
+                      }}>
+                        (+1 Aqua Ring)
+                      </span>
+                    );
+                  }
+                  if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
+                    return (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        color: '#8b5cf6',
+                        marginLeft: '0.5rem',
+                        fontWeight: 'normal'
+                      }}>
+                        (+1 Air Ring)
+                      </span>
+                    );
+                  }
+                }
+                return null;
+              })()}
             </span>
           </div>
           <div style={{ 
@@ -562,9 +772,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             width: '100%',
             overflow: 'hidden'
           }}>
-            <div style={{ 
-              width: `${(move.masteryLevel / (move.masteryLevel <= 5 ? 5 : 10)) * 100}%`, 
-              background: getMasteryColor(move.masteryLevel), 
+              <div style={{ 
+                width: `${(effectiveMasteryLevel / (effectiveMasteryLevel <= 5 ? 5 : 10)) * 100}%`, 
+                background: getMasteryColor(effectiveMasteryLevel),
               height: '100%', 
               borderRadius: '0.5rem',
               transition: 'width 0.3s'

@@ -4,8 +4,8 @@ import { useBattle } from '../context/BattleContext';
 import { Move } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
 import { trackMoveUsage } from '../utils/manifestTracking';
-import { getElementalRingLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
-import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel } from '../utils/artifactUtils';
+import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   calculateDamageRange, 
@@ -21,6 +21,7 @@ import MultiplayerBattleArena from './MultiplayerBattleArena';
 import BattleAnimations from './BattleAnimations';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 
 interface Opponent {
   id: string;
@@ -59,6 +60,7 @@ interface BattleEngineProps {
   isForestStageActive?: boolean; // Whether the forest stage is active (for field bonus)
   isMultiplayer?: boolean; // Whether this is a multiplayer battle (2-8 players)
   onIceGolemDefeated?: () => void; // Callback when an Ice Golem is defeated (triggers cutscene)
+  gameId?: string; // Game ID for Island Raid battles (to sync move selections)
 }
 
 interface BattleState {
@@ -97,7 +99,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   isTerraAwakened = false,
   isForestStageActive = false,
   isMultiplayer = false,
-  onIceGolemDefeated
+  onIceGolemDefeated,
+  gameId
 }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
@@ -144,6 +147,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   // Track selected moves for all participants in multiplayer mode
   // Key: participantId, Value: { move: Move | null, targetId: string | null }
   const [participantMoves, setParticipantMoves] = useState<Map<string, { move: Move | null; targetId: string | null }>>(new Map());
+  
+  // Track other players' move selections from Firestore (for Island Raid)
+  const [firestorePlayerMoves, setFirestorePlayerMoves] = useState<Map<string, { moveId: string; moveName: string; targetId: string }>>(new Map());
 
   const [cpuOpponentMoves, setCpuOpponentMoves] = useState<any>(null);
   const [activeDefensiveMoves, setActiveDefensiveMoves] = useState<Array<{
@@ -566,19 +572,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   }, [battleState.battleLog, mindforgeMode, onBattleLogUpdate]);
   
-  // Initialize battle log from prop when it changes (for Mindforge continuity across rounds)
+  // Initialize battle log from prop when it changes (for Mindforge and Island Raid continuity across rounds)
   useEffect(() => {
-    if (mindforgeMode && initialBattleLog && initialBattleLog.length > 0) {
+    if (initialBattleLog && initialBattleLog.length > 0) {
       setBattleState(prev => {
         // Only update if the initial log has more entries than current (to avoid resetting)
         if (initialBattleLog.length > prev.battleLog.length) {
           // Merge: keep existing entries, add new ones from initialBattleLog
-          const merged = [...prev.battleLog];
-          initialBattleLog.forEach(entry => {
-            if (!merged.includes(entry)) {
-              merged.push(entry);
-            }
-          });
+          // Use the last N entries from initialBattleLog where N is the difference
+          const newEntries = initialBattleLog.slice(prev.battleLog.length);
+          const merged = [...prev.battleLog, ...newEntries];
+          console.log('📝 BattleEngine: Merged battle log entries:', newEntries);
           return {
             ...prev,
             battleLog: merged
@@ -587,7 +591,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         return prev;
       });
     }
-  }, [mindforgeMode, initialBattleLog]);
+  }, [initialBattleLog]);
   
   // Note: Animation clearing is now handled by BattleAnimations component calling handleAnimationComplete
   // No need for separate auto-clear effect - the animation component handles its own lifecycle
@@ -627,6 +631,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     }
   }, [propOpponent, mindforgeMode]);
+
+  // Update opponents when prop changes (for multiplayer mode)
+  useEffect(() => {
+    if (propOpponents && isMultiplayer) {
+      setOpponents(propOpponents);
+    }
+  }, [propOpponents, isMultiplayer]);
+
+  // Update allies when prop changes (for multiplayer mode)
+  useEffect(() => {
+    if (propAllies && isMultiplayer) {
+      console.log('BattleEngine: Updating allies from props:', propAllies.length, propAllies.map(a => a.name));
+      setAllies(propAllies);
+    }
+  }, [propAllies, isMultiplayer]);
 
   // Apply opponent move from Firestore
   const applyOpponentMove = useCallback(async (moveData: any) => {
@@ -959,16 +978,76 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   // Store player's move selection for multiplayer turn order
   useEffect(() => {
     if (isMultiplayer && battleState.selectedMove && battleState.selectedTarget && currentUser) {
+      // Store locally
       setParticipantMoves(prev => {
         const newMap = new Map(prev);
         newMap.set(currentUser.uid, {
           move: battleState.selectedMove,
           targetId: battleState.selectedTarget
         });
+        console.log(`✅ Stored local move selection: ${battleState.selectedMove?.name} on ${battleState.selectedTarget}`);
         return newMap;
       });
+      
+      // Also store in Firestore for Island Raid battles (so other players can see it)
+      // Check if we're in an Island Raid by checking if opponents have vaultHealth (Island Raid enemies use vaultHealth)
+      const isIslandRaid = opponents.length > 0 && opponents[0].vaultHealth !== undefined;
+      if (isIslandRaid && gameId) {
+        const storeMoveInFirestore = async () => {
+          try {
+            const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+            await updateDoc(battleRoomRef, {
+              [`playerMoves.${currentUser.uid}`]: {
+                moveId: battleState.selectedMove?.id,
+                moveName: battleState.selectedMove?.name,
+                targetId: battleState.selectedTarget,
+                timestamp: serverTimestamp()
+              },
+              updatedAt: serverTimestamp()
+            });
+            console.log(`💾 Stored move selection in Firestore for ${currentUser.uid}`);
+          } catch (error) {
+            console.error('Error storing move in Firestore:', error);
+          }
+        };
+        storeMoveInFirestore();
+      }
     }
-  }, [battleState.selectedMove, battleState.selectedTarget, isMultiplayer, currentUser]);
+  }, [battleState.selectedMove, battleState.selectedTarget, isMultiplayer, currentUser, opponents, gameId]);
+
+  // Listen for other players' move selections from Firestore (for Island Raid)
+  useEffect(() => {
+    if (!isMultiplayer || !gameId || !currentUser) return;
+
+    const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+    const unsubscribe = onSnapshot(battleRoomRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data();
+        const playerMoves = data.playerMoves || {};
+        
+        // Update firestorePlayerMoves with other players' moves (not current user)
+        const newFirestoreMoves = new Map<string, { moveId: string; moveName: string; targetId: string }>();
+        Object.keys(playerMoves).forEach((userId) => {
+          if (userId !== currentUser.uid && playerMoves[userId]) {
+            newFirestoreMoves.set(userId, playerMoves[userId]);
+          }
+        });
+        setFirestorePlayerMoves(newFirestoreMoves);
+        
+        if (newFirestoreMoves.size > 0) {
+          console.log('📡 Updated Firestore player moves:', Array.from(newFirestoreMoves.entries()).map(([id, move]) => `${id}: ${move.moveName}`));
+        }
+      }
+    }, (error) => {
+      // Suppress known Firefox Firestore errors
+      if (error?.code === 'failed-precondition' || error?.message?.includes('INTERNAL ASSERTION')) {
+        return;
+      }
+      console.error('Error listening to player moves:', error);
+    });
+
+    return () => unsubscribe();
+  }, [isMultiplayer, gameId, currentUser]);
 
   // Automatically select moves for CPU opponents in multiplayer mode
   useEffect(() => {
@@ -990,7 +1069,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const opponentName = opponent.name?.toLowerCase() || '';
         
         // Try to find opponent by ID or name
-        // For Ice Golems, match by name since IDs are like "ice-golem-1", "ice-golem-2", etc.
+        // For Ice Golems and Powered Zombies, match by name since IDs might vary
         const opponentData = cpuOpponentMoves.find((opp: any) => {
           const oppId = opp.id?.toLowerCase() || '';
           const oppName = opp.name?.toLowerCase() || '';
@@ -1007,21 +1086,60 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             return true;
           }
           
+          // For Powered Zombies, match by name (e.g., "Powered Zombie 1" matches "Powered Zombie")
+          if (opponentName.includes('powered zombie') && oppName === 'powered zombie') {
+            return true;
+          }
+          
+          // For Unpowered Zombies, match by name (e.g., "Zombie 1" matches "Zombie")
+          if (opponentName.includes('zombie') && !opponentName.includes('powered') && !opponentName.includes('captain') && 
+              (oppName === 'zombie' || oppName.includes('zombie'))) {
+            return true;
+          }
+          
+          // For Zombie Captain, match by name
+          if ((opponentName.includes('zombie captain') || opponentName === 'zombie captain') && 
+              (oppName === 'zombie captain' || oppName.includes('zombie captain'))) {
+            return true;
+          }
+          
           return false;
         });
         
         if (opponentData && opponentData.moves) {
           opponentMoves = opponentData.moves;
+          console.log(`✅ Found moves for ${opponent.name} from Firestore:`, opponentMoves.map((m: any) => m.name));
+          console.log(`📋 Full opponent data:`, opponentData);
+        } else {
+          console.warn(`⚠️ No moves found in Firestore for ${opponent.name} (ID: ${opponentId}, Name: ${opponentName})`);
+          console.log(`🔍 Available opponents in Firestore:`, cpuOpponentMoves.map((opp: any) => ({ id: opp.id, name: opp.name })));
         }
       }
 
       // Fallback to default moves if not found
       if (opponentMoves.length === 0) {
+        console.warn(`⚠️ No moves found for ${opponent.name}, using fallback moves`);
         // Check if this is an Ice Golem
         if (opponent.name?.toLowerCase().includes('ice golem') || opponent.id?.toLowerCase().includes('ice-golem')) {
           opponentMoves = [
             { name: 'Ice Shard', damageRange: { min: 20, max: 50 }, type: 'attack', level: 1, masteryLevel: 1 },
             { name: 'Ice Punch', damageRange: { min: 25, max: 40 }, type: 'attack', level: 1, masteryLevel: 1 }
+          ];
+        } else if (opponent.name?.toLowerCase().includes('powered zombie')) {
+          // Fallback for Powered Zombie if not found in Firestore
+          opponentMoves = [
+            { name: 'Energy Strike', baseDamage: 9, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Vault Breach', baseDamage: 8, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'PP Drain', baseDamage: 6, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Shield Bash', baseDamage: 7, type: 'attack', level: 1, masteryLevel: 1 }
+          ];
+        } else if (opponent.name?.toLowerCase().includes('zombie') && !opponent.name?.toLowerCase().includes('powered') && !opponent.name?.toLowerCase().includes('captain')) {
+          // Fallback for Unpowered Zombie if not found in Firestore
+          opponentMoves = [
+            { name: 'Energy Strike', baseDamage: 9, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Vault Breach', baseDamage: 8, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'PP Drain', baseDamage: 6, type: 'attack', level: 1, masteryLevel: 1 },
+            { name: 'Shield Bash', baseDamage: 7, type: 'attack', level: 1, masteryLevel: 1 }
           ];
         } else {
           // Default training dummy moves
@@ -1166,11 +1284,52 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Check if all participants have selected moves
     const allParticipants = [...allies, ...opponents];
     const allHaveMoves = allParticipants.every(participant => {
-      const moveData = participantMoves.get(participant.id);
-      return moveData && moveData.move !== null && moveData.targetId !== null;
+      // Check local participantMoves first (for current player and CPU opponents)
+      let moveData = participantMoves.get(participant.id);
+      
+      // If not found locally and this is a player (not CPU), check Firestore
+      if (!moveData && participant.id !== currentUser?.uid && allies.some(a => a.id === participant.id)) {
+        const firestoreMove = firestorePlayerMoves.get(participant.id);
+        if (firestoreMove) {
+          // Convert Firestore move data to local format
+          // We need to find the actual Move object from available moves
+          const availableMoves = moves || [];
+          const actualMove = availableMoves.find(m => m.id === firestoreMove.moveId || m.name === firestoreMove.moveName);
+          if (actualMove) {
+            moveData = {
+              move: actualMove,
+              targetId: firestoreMove.targetId
+            };
+            // Also store it locally for consistency
+            setParticipantMoves(prev => {
+              const newMap = new Map(prev);
+              newMap.set(participant.id, moveData!);
+              return newMap;
+            });
+          } else {
+            // If we can't find the move, create a minimal move object from Firestore data
+            moveData = {
+              move: { id: firestoreMove.moveId, name: firestoreMove.moveName } as Move,
+              targetId: firestoreMove.targetId
+            };
+            setParticipantMoves(prev => {
+              const newMap = new Map(prev);
+              newMap.set(participant.id, moveData!);
+              return newMap;
+            });
+          }
+        }
+      }
+      
+      const hasMove = moveData && moveData.move !== null && moveData.targetId !== null;
+      if (!hasMove) {
+        console.log(`⏳ Waiting for ${participant.name} (${participant.id}) to select move`);
+      }
+      return hasMove;
     });
 
     if (allHaveMoves && !battleState.turnOrder) {
+      console.log('✅ All participants have selected moves. Calculating turn order...');
       // Calculate turn order
       const participants: TurnOrderParticipant[] = allParticipants.map(participant => {
         const moveData = participantMoves.get(participant.id);
@@ -1201,29 +1360,38 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
       setBattleState(prev => ({
         ...prev,
+        phase: 'execution', // Set phase to execution when turn order is calculated
         turnOrder: turnOrderResults.map(r => ({ participantId: r.participantId, orderScore: r.orderScore })),
         currentTurnIndex: 0,
+        isPlayerTurn: false, // Disable player input during execution
         battleLog: [...prev.battleLog, '⚡ Turn Order Calculated:', ...turnOrderLog]
       }));
 
       // Start executing moves in turn order
       executeTurnOrderMoves(turnOrderResults, allParticipants);
     }
-  }, [participantMoves, allies, opponents, isMultiplayer, currentUser, battleState.turnOrder]);
+  }, [participantMoves, allies, opponents, isMultiplayer, currentUser, battleState.turnOrder, firestorePlayerMoves, moves]);
 
   // Execute moves in turn order for multiplayer battles
   const executeTurnOrderMoves = useCallback(async (
     turnOrderResults: Array<{ participantId: string; participantName: string; orderScore: number; priority: number; speed: number; random: number }>,
     allParticipants: Opponent[]
   ) => {
-    if (!vault) return;
+    if (!vault) {
+      console.warn('⚠️ Cannot execute moves: vault is null');
+      return;
+    }
+    
+    console.log(`🎯 Starting turn order execution: ${turnOrderResults.length} moves to execute`);
     
     // Add round separator at the start
     setBattleState(prev => {
       const roundNumber = (prev.turnCount || 0) + 1;
       return {
         ...prev,
+        phase: 'execution', // Ensure phase is set to execution
         turnCount: roundNumber,
+        isPlayerTurn: false, // Disable player input during execution
         battleLog: [...prev.battleLog, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, `🔄 ROUND ${roundNumber} ─ ${allParticipants.length} participants`, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`]
       };
     });
@@ -1237,7 +1405,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const participant = allParticipants.find(p => p.id === turnResult.participantId);
       const moveData = participantMoves.get(turnResult.participantId);
       
-      if (!participant || !moveData || !moveData.move) continue;
+      if (!participant || !moveData || !moveData.move) {
+        console.warn(`⚠️ Skipping move ${i + 1}/${turnOrderResults.length}: missing data`, { 
+          participant: participant?.name, 
+          hasMoveData: !!moveData,
+          hasMove: !!moveData?.move 
+        });
+        continue;
+      }
+      
+      console.log(`⚔️ [${i + 1}/${turnOrderResults.length}] ${participant.name} → ${moveData.move.name} on ${moveData.targetId}`);
 
       const isCurrentPlayer = participant.id === currentUser?.uid;
       const targetId = moveData.targetId;
@@ -1266,18 +1443,46 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const playerMove = moveData.move;
         const playerName = currentUser?.displayName || 'Player';
         
-        // Calculate damage - player moves use the Move interface which has 'damage' property
-        let totalDamage = playerMove.damage || 0;
+        // Calculate damage using proper damage calculation system
+        let totalDamage = 0;
+        if (playerMove.damage && playerMove.damage > 0) {
+          // Use the move's actual damage property if it exists (from upgrades)
+          const baseDamage = playerMove.damage;
+          const playerLevel = participant.level || 1;
+          
+          // Use equipped artifacts from state (fetched earlier)
+          const effectiveMasteryLevel = getEffectiveMasteryLevel(playerMove, equippedArtifacts);
+          const damageRange = calculateDamageRange(baseDamage, playerMove.level, effectiveMasteryLevel);
+          const damageResult = rollDamage(damageRange, playerLevel, playerMove.level, effectiveMasteryLevel);
+          totalDamage = damageResult.damage;
+          
+          // Apply artifact damage multiplier for elemental moves
+          if (playerMove.category === 'elemental' && equippedArtifacts) {
+            const ringLevel = equippedArtifacts.elementalRing?.level || 0;
+            const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+            if (artifactMultiplier > 1.0) {
+              totalDamage = Math.floor(totalDamage * artifactMultiplier);
+            }
+          }
+          
+          console.log(`🎯 Player move damage calculation: ${playerMove.name}, baseDamage: ${baseDamage}, level: ${playerMove.level}, mastery: ${effectiveMasteryLevel}, finalDamage: ${totalDamage}`);
+        } else {
+          console.warn(`⚠️ Player move ${playerMove.name} has no damage (damage: ${playerMove.damage})`);
+        }
         
         // Apply damage to target
         if (totalDamage > 0 && target) {
+          // For Island Raid enemies, use vaultHealth instead of currentPP
+          const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
+          const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
+          
           const targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
           const remainingDamage = totalDamage - targetShieldDamage;
-          const targetHealthDamage = Math.min(remainingDamage, target.currentPP || 0);
+          const targetHealthDamage = Math.min(remainingDamage, targetHealth);
           
           // Update target stats
           const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
-          const newTargetHealth = Math.max(0, (target.currentPP || 0) - targetHealthDamage);
+          const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
           
           // Update opponents array if target is an opponent
           const targetId = target.id;
@@ -1286,12 +1491,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             const updatedOpponent = {
               ...target,
               shieldStrength: newTargetShield,
-              currentPP: newTargetHealth
+              currentPP: target.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
+              vaultHealth: target.vaultHealth !== undefined ? newTargetHealth : undefined, // Update vaultHealth if it exists
+              maxVaultHealth: target.maxVaultHealth !== undefined ? targetMaxHealth : undefined
             };
             
-            setOpponents(prev => prev.map(opp => 
-              opp.id === targetId ? updatedOpponent : opp
-            ));
+            setOpponents(prev => {
+              const updated = prev.map(opp => 
+                opp.id === targetId ? updatedOpponent : opp
+              );
+              // Notify parent component of opponents update (for Island Raid)
+              if (isMultiplayer && onOpponentsUpdate) {
+                onOpponentsUpdate(updated);
+              }
+              return updated;
+            });
             
             // Check if Ice Golem is defeated
             const isIceGolem = (targetName.toLowerCase().includes('ice golem') || 
@@ -1365,35 +1579,61 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         // Apply damage to target
         if (totalDamage > 0 && target) {
+          // For Island Raid enemies, use vaultHealth instead of currentPP
+          const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
+          const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
+          
           const targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
           const remainingDamage = totalDamage - targetShieldDamage;
-          const targetHealthDamage = Math.min(remainingDamage, target.currentPP || 0);
+          const targetHealthDamage = Math.min(remainingDamage, targetHealth);
           
           // Update target stats
           const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
-          const newTargetHealth = Math.max(0, (target.currentPP || 0) - targetHealthDamage);
+          const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
           
           // Store target ID for use in closures
           const targetId = target.id;
           
           // Update opponents array if target is an opponent
           if (targetId && opponents.some(opp => opp.id === targetId)) {
-            setOpponents(prev => prev.map(opp => 
-              opp.id === targetId 
-                ? { ...opp, shieldStrength: newTargetShield, currentPP: newTargetHealth }
-                : opp
-            ));
+            setOpponents(prev => {
+              const updated = prev.map(opp => {
+                if (opp.id === targetId) {
+                  return {
+                    ...opp,
+                    shieldStrength: newTargetShield,
+                    currentPP: opp.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
+                    vaultHealth: opp.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Always update vaultHealth for enemies (Island Raid)
+                    maxVaultHealth: opp.maxVaultHealth !== undefined ? targetMaxHealth : (opp.maxVaultHealth || targetMaxHealth) // Preserve or set maxVaultHealth
+                  };
+                }
+                return opp;
+              });
+              // Notify parent component of opponents update (for Island Raid)
+              if (isMultiplayer && onOpponentsUpdate) {
+                onOpponentsUpdate(updated);
+              }
+              return updated;
+            });
           }
           
           // Update allies array if target is an ally (player)
           if (targetId && allies.some(ally => ally.id === targetId)) {
-            setAllies(prev => prev.map(ally => 
-              ally.id === targetId 
-                ? { ...ally, shieldStrength: newTargetShield, currentPP: newTargetHealth }
-                : ally
-            ));
+            setAllies(prev => prev.map(ally => {
+              if (ally.id === targetId) {
+                return {
+                  ...ally,
+                  shieldStrength: newTargetShield,
+                  maxShieldStrength: ally.maxShieldStrength || 100,
+                  currentPP: ally.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
+                  vaultHealth: ally.vaultHealth !== undefined ? newTargetHealth : undefined, // Update vaultHealth if it exists
+                  maxVaultHealth: ally.maxVaultHealth !== undefined ? targetMaxHealth : undefined
+                };
+              }
+              return ally;
+            }));
             
-            // If targeting the player, also update vault
+            // If targeting the player, also update vault in Firestore
             if (targetId === currentUser?.uid) {
               const newShieldStrength = Math.max(0, vault.shieldStrength - targetShieldDamage);
               const maxVaultHealth = Math.floor(vault.capacity * 0.1);
@@ -1405,8 +1645,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                   shieldStrength: newShieldStrength,
                   vaultHealth: newVaultHealth
                 });
+                console.log(`💥 Updated player vault: Health ${currentVaultHealth} → ${newVaultHealth}, Shield ${vault.shieldStrength} → ${newShieldStrength}`);
               } catch (error) {
                 console.error('Failed to update vault after CPU attack:', error);
+              }
+            } else {
+              // For other players, update their vault in Firestore via IslandRaidBattle
+              // This will be handled by the onAlliesUpdate callback if provided
+              if (onAlliesUpdate) {
+                const updatedAllies = allies.map(ally => {
+                  if (ally.id === targetId) {
+                    return {
+                      ...ally,
+                      shieldStrength: newTargetShield,
+                      vaultHealth: ally.vaultHealth !== undefined ? newTargetHealth : undefined,
+                      maxVaultHealth: ally.maxVaultHealth !== undefined ? targetMaxHealth : undefined
+                    };
+                  }
+                  return ally;
+                });
+                onAlliesUpdate(updatedAllies);
               }
             }
           }
@@ -1472,7 +1730,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       selectedTarget: null
       // Keep the battle log - don't reset it
     }));
-  }, [vault, participantMoves, currentUser, opponents, allies, updateVault, battleState.turnCount, onIceGolemDefeated, isMultiplayer]);
+  }, [vault, participantMoves, currentUser, opponents, allies, updateVault, battleState.turnCount, onIceGolemDefeated, isMultiplayer, equippedArtifacts, onOpponentsUpdate]);
 
   const executePlayerMove = useCallback(async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
@@ -1574,6 +1832,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const originalMoveName = move.name;
     const moveName = getMoveNameSync(move.name) || move.name;
     console.log(`[BattleEngine] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
+    
+    // Track daily challenge: Use Elemental Move
+    if (move.category === 'elemental' && currentUser) {
+      updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err => 
+        console.error('Error updating daily challenge progress:', err)
+      );
+    }
     if (currentUser?.uid) {
       trackMoveUsage(currentUser.uid, moveName).catch(err => {
         console.error('[BattleEngine] Error tracking move usage:', err);
@@ -1652,8 +1917,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
       
-      const damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
-      const damageResult = rollDamage(damageRange, playerLevel, move.level, move.masteryLevel);
+      // Get effective mastery level (includes Blaze Ring bonus)
+      const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
+      
+      const damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
+      const damageResult = rollDamage(damageRange, playerLevel, move.level, effectiveMasteryLevel);
       
       // Apply artifact damage multiplier for elemental moves
       let artifactMultiplier = 1.0;
@@ -2204,9 +2472,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             currentPP: newPP
           });
           newLog.push(`💰 You gained ${totalPPReward} PP from the battle! (${battleState.accumulatedPPStolen} stolen + ${defeatedOpponentPP} from defeated opponent)`);
+          
+          // Track daily challenge: Earn PP
+          if (currentUser) {
+            updateChallengeProgressByType(currentUser.uid, 'earn_pp', totalPPReward).catch(err => 
+              console.error('Error updating daily challenge progress:', err)
+            );
+          }
         } catch (error) {
           console.error('❌ Failed to add PP reward:', error);
         }
+      }
+      
+      // Track daily challenge: Defeat Enemies
+      if (currentUser) {
+        updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err => 
+          console.error('Error updating daily challenge progress:', err)
+        );
+      }
+      
+      // Track daily challenge: Win Battle
+      if (currentUser) {
+        updateChallengeProgressByType(currentUser.uid, 'win_battle', 1).catch(err => 
+          console.error('Error updating daily challenge progress:', err)
+        );
       }
       
       if (isPvP) {
@@ -2820,6 +3109,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const getCustomBackground = () => {
     if (mindforgeMode) return '/images/Mind Forge BKG.png';
     if (isMultiplayer) {
+      // Check for Island Raid battle (opponents have vaultHealth and we have gameId)
+      const isIslandRaid = gameId && opponents.length > 0 && opponents[0].vaultHealth !== undefined;
+      if (isIslandRaid) return '/images/Island Raid BKG.png';
+      
       // Check for Ice Golem battle (Chapter 1 - Challenge 7)
       const hasIceGolem = opponents.some(opp => 
         opp.name?.toLowerCase().includes('ice golem') || 
@@ -2869,21 +3162,27 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             maxShieldStrength: ally.maxShieldStrength,
             level: ally.level,
             vaultHealth: ally.vaultHealth,
-            maxVaultHealth: Math.floor((ally.maxPP || 1000) * 0.1), // Always 10% of maxPP
+            maxVaultHealth: ally.maxVaultHealth !== undefined 
+              ? ally.maxVaultHealth 
+              : Math.floor((ally.maxPP || 1000) * 0.1), // Use provided maxVaultHealth or calculate from maxPP
             isPlayer: ally.id === currentUser?.uid
           }))}
-          enemies={opponents.map(opp => ({
-            id: opp.id,
-            name: opp.name,
-            avatar: opp.image || '🏰',
-            currentPP: opp.currentPP,
-            shieldStrength: opp.shieldStrength,
-            maxPP: opp.maxPP,
-            maxShieldStrength: opp.maxShieldStrength,
-            level: opp.level,
-            vaultHealth: opp.vaultHealth,
-            maxVaultHealth: Math.floor((opp.maxPP || 1000) * 0.1) // Always 10% of maxPP
-          }))}
+          enemies={opponents.map(opp => {
+            // For Island Raid enemies, vaultHealth and maxVaultHealth are set in IslandRaidBattle.tsx
+            // For other enemies, use vaultHealth if available, otherwise calculate from maxPP
+            return {
+              id: opp.id,
+              name: opp.name,
+              avatar: opp.image || '🏰',
+              currentPP: opp.currentPP,
+              shieldStrength: opp.shieldStrength,
+              maxPP: opp.maxPP,
+              maxShieldStrength: opp.maxShieldStrength,
+              level: opp.level,
+              vaultHealth: opp.vaultHealth,
+              maxVaultHealth: opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : Math.floor((opp.maxPP || 1000) * 0.1)
+            };
+          })}
           isPlayerTurn={battleState.isPlayerTurn}
           battleLog={battleState.battleLog}
           customBackground={getCustomBackground()}

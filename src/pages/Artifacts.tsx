@@ -98,9 +98,126 @@ const Artifacts: React.FC = () => {
           }
           
           setEquippedArtifacts(loadedEquipped);
-          // Available artifacts will be loaded from a separate collection or computed from owned artifacts
-          // For now, initialize as empty array
-          setAvailableArtifacts([]);
+          
+          // Load available artifacts from purchased items
+          const available: Artifact[] = [];
+          
+          // Check for Blaze Ring (can be equipped to any ring slot)
+          // Check both hyphen and underscore formats for compatibility
+          const hasBlazeRing = studentData.artifacts?.['blaze-ring'] === true || 
+                               studentData.artifacts?.blaze_ring === true ||
+                               studentData.artifacts?.['blaze-ring_purchase'] ||
+                               studentData.artifacts?.blaze_ring_purchase;
+          
+          if (hasBlazeRing) {
+            const purchaseData = studentData.artifacts?.['blaze-ring_purchase'] || 
+                                studentData.artifacts?.blaze_ring_purchase;
+            // Check if it's already equipped
+            const isEquipped = Object.values(loadedEquipped).some(
+              (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'blaze-ring'
+            );
+            
+            if (!isEquipped) {
+              const blazeRing: Artifact = {
+                id: 'blaze-ring',
+                name: purchaseData?.name || 'Blaze Ring',
+                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                level: 1,
+                image: purchaseData?.image || '/images/Blaze Ring.png',
+                stats: {}
+              };
+              available.push(blazeRing);
+            }
+          }
+          
+          // Check for Terra Ring (can be equipped to any ring slot)
+          // Check both hyphen and underscore formats for compatibility
+          const hasTerraRing = studentData.artifacts?.['terra-ring'] === true || 
+                               studentData.artifacts?.terra_ring === true ||
+                               studentData.artifacts?.['terra-ring_purchase'] ||
+                               studentData.artifacts?.terra_ring_purchase;
+          
+          if (hasTerraRing) {
+            const purchaseData = studentData.artifacts?.['terra-ring_purchase'] || 
+                                studentData.artifacts?.terra_ring_purchase;
+            // Check if it's already equipped
+            const isEquipped = Object.values(loadedEquipped).some(
+              (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'terra-ring'
+            );
+            
+            if (!isEquipped) {
+              const terraRing: Artifact = {
+                id: 'terra-ring',
+                name: purchaseData?.name || 'Terra Ring',
+                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                level: 1,
+                image: purchaseData?.image || '/images/Terra Ring.png',
+                stats: {}
+              };
+              available.push(terraRing);
+            }
+          }
+
+          // Check for Aqua Ring (can be equipped to any ring slot)
+          // Check both hyphen and underscore formats for compatibility
+          const hasAquaRing = studentData.artifacts?.['aqua-ring'] === true || 
+                               studentData.artifacts?.aqua_ring === true ||
+                               studentData.artifacts?.['aqua-ring_purchase'] ||
+                               studentData.artifacts?.aqua_ring_purchase;
+          
+          if (hasAquaRing) {
+            const purchaseData = studentData.artifacts?.['aqua-ring_purchase'] || 
+                                studentData.artifacts?.aqua_ring_purchase;
+            // Check if it's already equipped
+            const isEquipped = Object.values(loadedEquipped).some(
+              (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'aqua-ring'
+            );
+            
+            if (!isEquipped) {
+              const aquaRing: Artifact = {
+                id: 'aqua-ring',
+                name: purchaseData?.name || 'Aqua Ring',
+                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                level: 1,
+                image: purchaseData?.image || '/images/Aqua Ring.png',
+                stats: {}
+              };
+              available.push(aquaRing);
+            }
+          }
+
+          // Check for Air Ring (can be equipped to any ring slot)
+          // Check both hyphen and underscore formats for compatibility
+          const hasAirRing = studentData.artifacts?.['air-ring'] === true || 
+                               studentData.artifacts?.air_ring === true ||
+                               studentData.artifacts?.['air-ring_purchase'] ||
+                               studentData.artifacts?.air_ring_purchase;
+          
+          if (hasAirRing) {
+            const purchaseData = studentData.artifacts?.['air-ring_purchase'] || 
+                                studentData.artifacts?.air_ring_purchase;
+            // Check if it's already equipped
+            const isEquipped = Object.values(loadedEquipped).some(
+              (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'air-ring'
+            );
+            
+            if (!isEquipped) {
+              const airRing: Artifact = {
+                id: 'air-ring',
+                name: purchaseData?.name || 'Air Ring',
+                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                level: 1,
+                image: purchaseData?.image || '/images/Air Ring.png',
+                stats: {}
+              };
+              available.push(airRing);
+            }
+          }
+          
+          // Check for other wearable artifacts that might be purchased
+          // Add more wearable artifacts here as they're added to the marketplace
+          
+          setAvailableArtifacts(available);
           
           // Load powerPoints and truthMetal
           setPowerPoints(studentData.powerPoints || 0);
@@ -184,6 +301,227 @@ const Artifacts: React.FC = () => {
 
   const totalStats = calculateTotalStats();
   const hasEquippedArtifacts = Object.values(equippedArtifacts).some(artifact => artifact !== null && artifact !== undefined);
+
+  // Handle equipping an artifact to a slot
+  const handleEquipArtifact = async (artifact: Artifact, slot: keyof EquippedArtifacts) => {
+    if (!currentUser) return;
+
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (!studentDoc.exists()) {
+        alert('Error: Student data not found.');
+        return;
+      }
+
+      const studentData = studentDoc.data();
+      const currentEquipped = studentData.equippedArtifacts || {};
+      
+      // Check if this artifact is already equipped in another slot
+      const currentlyEquippedSlot = Object.keys(currentEquipped).find(
+        s => currentEquipped[s as keyof EquippedArtifacts]?.id === artifact.id
+      );
+      
+      if (currentlyEquippedSlot) {
+        // Remove from old slot
+        currentEquipped[currentlyEquippedSlot as keyof EquippedArtifacts] = null;
+      }
+      
+      // Check if target slot is already occupied
+      if (currentEquipped[slot]) {
+        if (!window.confirm(`This slot already has ${currentEquipped[slot]?.name} equipped. Replace it with ${artifact.name}?`)) {
+          return;
+        }
+      }
+      
+      // Create artifact with correct slot
+      const artifactToEquip: Artifact = {
+        ...artifact,
+        slot: slot
+      };
+      
+      // Update equipped artifacts
+      const updatedEquipped = {
+        ...currentEquipped,
+        [slot]: artifactToEquip
+      };
+      
+      await updateDoc(studentRef, {
+        equippedArtifacts: updatedEquipped
+      });
+      
+      // Update local state
+      setEquippedArtifacts(updatedEquipped);
+      
+      // Refresh available artifacts (remove equipped one)
+      setAvailableArtifacts(prev => prev.filter(a => a.id !== artifact.id));
+      
+      alert(`✅ ${artifact.name} equipped to ${slotConfig.find(s => s.key === slot)?.label || slot}!`);
+    } catch (error) {
+      console.error('Error equipping artifact:', error);
+      alert('Failed to equip artifact. Please try again.');
+    }
+  };
+
+  // Handle unequipping an artifact
+  const handleUnequipArtifact = async (slot: keyof EquippedArtifacts) => {
+    if (!currentUser) return;
+
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (!studentDoc.exists()) {
+        alert('Error: Student data not found.');
+        return;
+      }
+
+      const studentData = studentDoc.data();
+      const currentEquipped = studentData.equippedArtifacts || {};
+      const artifactToUnequip = currentEquipped[slot];
+      
+      if (!artifactToUnequip) return;
+      
+      if (!window.confirm(`Unequip ${artifactToUnequip.name}?`)) {
+        return;
+      }
+      
+      // Remove artifact from slot
+      const updatedEquipped = {
+        ...currentEquipped,
+        [slot]: null
+      };
+      
+      await updateDoc(studentRef, {
+        equippedArtifacts: updatedEquipped
+      });
+      
+      // Update local state
+      setEquippedArtifacts(updatedEquipped);
+      
+      // Reload available artifacts to show the unequipped one
+      const refreshedStudentData = (await getDoc(studentRef)).data();
+      if (refreshedStudentData) {
+        const available: Artifact[] = [];
+        
+        // Check for Blaze Ring
+        // Check both hyphen and underscore formats for compatibility
+        const hasBlazeRing = refreshedStudentData.artifacts?.['blaze-ring'] === true || 
+                             refreshedStudentData.artifacts?.blaze_ring === true ||
+                             refreshedStudentData.artifacts?.['blaze-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.blaze_ring_purchase;
+        
+        if (hasBlazeRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['blaze-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.blaze_ring_purchase;
+          const isEquipped = Object.values(updatedEquipped).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'blaze-ring'
+          );
+          
+          if (!isEquipped) {
+            const blazeRing: Artifact = {
+              id: 'blaze-ring',
+              name: purchaseData?.name || 'Blaze Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Blaze Ring.png',
+              stats: {}
+            };
+            available.push(blazeRing);
+          }
+        }
+        
+        // Check for Terra Ring
+        // Check both hyphen and underscore formats for compatibility
+        const hasTerraRing = refreshedStudentData.artifacts?.['terra-ring'] === true || 
+                             refreshedStudentData.artifacts?.terra_ring === true ||
+                             refreshedStudentData.artifacts?.['terra-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.terra_ring_purchase;
+        
+        if (hasTerraRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['terra-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.terra_ring_purchase;
+          const isEquipped = Object.values(updatedEquipped).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'terra-ring'
+          );
+          
+          if (!isEquipped) {
+            const terraRing: Artifact = {
+              id: 'terra-ring',
+              name: purchaseData?.name || 'Terra Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Terra Ring.png',
+              stats: {}
+            };
+            available.push(terraRing);
+          }
+        }
+
+        // Check for Aqua Ring
+        // Check both hyphen and underscore formats for compatibility
+        const hasAquaRing = refreshedStudentData.artifacts?.['aqua-ring'] === true || 
+                             refreshedStudentData.artifacts?.aqua_ring === true ||
+                             refreshedStudentData.artifacts?.['aqua-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.aqua_ring_purchase;
+        
+        if (hasAquaRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['aqua-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.aqua_ring_purchase;
+          const isEquipped = Object.values(updatedEquipped).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'aqua-ring'
+          );
+          
+          if (!isEquipped) {
+            const aquaRing: Artifact = {
+              id: 'aqua-ring',
+              name: purchaseData?.name || 'Aqua Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Aqua Ring.png',
+              stats: {}
+            };
+            available.push(aquaRing);
+          }
+        }
+
+        // Check for Air Ring
+        // Check both hyphen and underscore formats for compatibility
+        const hasAirRing = refreshedStudentData.artifacts?.['air-ring'] === true || 
+                             refreshedStudentData.artifacts?.air_ring === true ||
+                             refreshedStudentData.artifacts?.['air-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.air_ring_purchase;
+        
+        if (hasAirRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['air-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.air_ring_purchase;
+          const isEquipped = Object.values(updatedEquipped).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'air-ring'
+          );
+          
+          if (!isEquipped) {
+            const airRing: Artifact = {
+              id: 'air-ring',
+              name: purchaseData?.name || 'Air Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Air Ring.png',
+              stats: {}
+            };
+            available.push(airRing);
+          }
+        }
+        
+        setAvailableArtifacts(available);
+      }
+      
+      alert(`✅ ${artifactToUnequip.name} unequipped!`);
+    } catch (error) {
+      console.error('Error unequipping artifact:', error);
+      alert('Failed to unequip artifact. Please try again.');
+    }
+  };
 
   const handleElementSelection = async (element: string) => {
     if (!currentUser || selectedElement) return; // Prevent multiple selections
@@ -752,14 +1090,35 @@ const Artifacts: React.FC = () => {
                     {slot.label}
                   </div>
                   {equipped ? (
-                    <div style={{
-                      fontSize: '0.75rem',
-                      color: '#1e40af',
-                      fontWeight: '600',
-                      textAlign: 'center'
-                    }}>
-                      {equipped.name}
-                    </div>
+                    <>
+                      <div style={{
+                        fontSize: '0.75rem',
+                        color: '#1e40af',
+                        fontWeight: '600',
+                        textAlign: 'center',
+                        marginBottom: '0.5rem'
+                      }}>
+                        {equipped.name}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleUnequipArtifact(slot.key);
+                        }}
+                        style={{
+                          background: '#ef4444',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.375rem',
+                          padding: '0.25rem 0.5rem',
+                          fontSize: '0.625rem',
+                          cursor: 'pointer',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        Unequip
+                      </button>
+                    </>
                   ) : (
                     <div style={{
                       fontSize: '0.75rem',
@@ -773,6 +1132,120 @@ const Artifacts: React.FC = () => {
               );
             })}
           </div>
+          
+          {/* Available Artifacts Section */}
+          {availableArtifacts.length > 0 && (
+            <div style={{ marginTop: '2rem' }}>
+              <h3 style={{
+                fontSize: '1.125rem',
+                fontWeight: 'bold',
+                marginBottom: '1rem',
+                color: '#374151'
+              }}>
+                Available Artifacts
+              </h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                gap: '1rem'
+              }}>
+                {availableArtifacts.map((artifact) => {
+                  // Determine which slots this artifact can be equipped to
+                  // Ring artifacts (like Blaze Ring, Terra Ring, Aqua Ring, Air Ring) can be equipped to any ring slot
+                  const compatibleSlots = (artifact.id === 'blaze-ring' || artifact.id === 'terra-ring' || artifact.id === 'aqua-ring' || artifact.id === 'air-ring' || artifact.slot?.startsWith('ring'))
+                    ? ['ring1', 'ring2', 'ring3', 'ring4'] as const
+                    : artifact.slot 
+                    ? [artifact.slot] as const
+                    : [];
+                  
+                  const isEquipped = Object.values(equippedArtifacts).some(
+                    eq => eq && eq.id === artifact.id
+                  );
+                  
+                  return (
+                    <div
+                      key={artifact.id}
+                      style={{
+                        background: isEquipped ? 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)' : 'white',
+                        border: `2px solid ${isEquipped ? '#3b82f6' : '#d1d5db'}`,
+                        borderRadius: '0.75rem',
+                        padding: '1rem',
+                        textAlign: 'center'
+                      }}
+                    >
+                      {artifact.image && (
+                        <img
+                          src={artifact.image}
+                          alt={artifact.name}
+                          style={{
+                            width: '100%',
+                            maxHeight: '100px',
+                            objectFit: 'contain',
+                            marginBottom: '0.5rem',
+                            borderRadius: '0.25rem'
+                          }}
+                        />
+                      )}
+                      <div style={{
+                        fontSize: '0.875rem',
+                        fontWeight: 'bold',
+                        marginBottom: '0.5rem',
+                        color: '#1f2937'
+                      }}>
+                        {artifact.name}
+                      </div>
+                      {isEquipped ? (
+                        <div style={{
+                          fontSize: '0.75rem',
+                          color: '#3b82f6',
+                          fontWeight: '600'
+                        }}>
+                          ✓ Equipped
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{
+                            fontSize: '0.7rem',
+                            color: '#6b7280',
+                            marginBottom: '0.5rem'
+                          }}>
+                            Equip to:
+                          </div>
+                          <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.25rem'
+                          }}>
+                            {compatibleSlots.map((slot) => {
+                              const slotInfo = slotConfig.find(s => s.key === slot);
+                              return (
+                                <button
+                                  key={slot}
+                                  onClick={() => handleEquipArtifact(artifact, slot)}
+                                  style={{
+                                    background: '#3b82f6',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.375rem',
+                                    padding: '0.375rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    cursor: 'pointer',
+                                    fontWeight: 'bold'
+                                  }}
+                                >
+                                  {slotInfo?.label || slot}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Side: Stats and Perks */}

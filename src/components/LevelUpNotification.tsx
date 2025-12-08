@@ -130,13 +130,28 @@ const LevelUpNotification: React.FC<LevelUpNotificationProps> = ({
           </h2>
           
           <div style={{
-            fontSize: '1.5rem',
+            fontSize: '3rem',
             fontWeight: 'bold',
             marginBottom: '1rem',
-            color: '#fbbf24'
+            color: '#fbbf24',
+            textShadow: '0 0 20px rgba(251, 191, 36, 0.8), 0 0 40px rgba(251, 191, 36, 0.6)',
+            animation: 'pulse 1s ease-in-out infinite',
+            transform: 'scale(1.1)'
           }}>
-            Level {previousLevel} → Level {currentLevel}
+            Level {currentLevel}
           </div>
+          {previousLevel > 0 && (
+            <div style={{
+              fontSize: '1.25rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              color: 'rgba(255, 255, 255, 0.8)',
+              textDecoration: 'line-through',
+              opacity: 0.7
+            }}>
+              Level {previousLevel}
+            </div>
+          )}
           
           <p style={{
             fontSize: '1.125rem',
@@ -219,6 +234,17 @@ const LevelUpNotification: React.FC<LevelUpNotificationProps> = ({
           @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
+          }
+          
+          @keyframes pulse {
+            0%, 100% { 
+              transform: scale(1.1);
+              text-shadow: 0 0 20px rgba(251, 191, 36, 0.8), 0 0 40px rgba(251, 191, 36, 0.6);
+            }
+            50% { 
+              transform: scale(1.2);
+              text-shadow: 0 0 30px rgba(251, 191, 36, 1), 0 0 60px rgba(251, 191, 36, 0.8);
+            }
           }
           
           @keyframes fall {

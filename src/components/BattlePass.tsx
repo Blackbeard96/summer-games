@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import BattlePassRewardModal from './BattlePassRewardModal';
 
 interface BattlePassTier {
   tier: number;
@@ -37,6 +38,8 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
   const [totalXP, setTotalXP] = useState(0);
   const [loading, setLoading] = useState(true);
   const [purchasingPremium, setPurchasingPremium] = useState(false);
+  const [showRewardModal, setShowRewardModal] = useState(false);
+  const [claimedReward, setClaimedReward] = useState<{ reward: any; tier: number; isPremium: boolean } | null>(null);
 
   // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
   const season0Tiers: BattlePassTier[] = [
@@ -283,17 +286,13 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
         claimedTiers: updatedClaimedTiers
       });
 
-      const rewardMessage = reward.type === 'pp' 
-        ? `${reward.amount} PP`
-        : reward.type === 'xp' 
-        ? `${reward.amount} XP`
-        : reward.type === 'shard'
-        ? `${reward.amount} Truth Metal Shards`
-        : reward.type === 'actionCard'
-        ? `${reward.actionCardName} Action Card`
-        : 'Reward';
-      
-      alert(`Claimed ${rewardMessage}!`);
+      // Show reward modal instead of alert
+      setClaimedReward({
+        reward,
+        tier,
+        isPremium
+      });
+      setShowRewardModal(true);
     } catch (error) {
       console.error('Error claiming reward:', error);
       alert('Failed to claim reward. Please try again.');
@@ -757,6 +756,18 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
           </div>
         )}
       </div>
+
+      {/* Reward Modal */}
+      <BattlePassRewardModal
+        isOpen={showRewardModal}
+        onClose={() => {
+          setShowRewardModal(false);
+          setClaimedReward(null);
+        }}
+        reward={claimedReward?.reward || null}
+        tier={claimedReward?.tier || 0}
+        isPremium={claimedReward?.isPremium || false}
+      />
     </div>
   );
 };

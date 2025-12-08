@@ -14,33 +14,34 @@ const isFirestoreInternalError = (error: any): boolean => {
   const errorMessage = error?.message || '';
   const errorStack = error?.stack || '';
   const errorCode = error?.code || '';
+  const errorName = error?.name || '';
+  
+  // Check all possible string representations
+  const allErrorStrings = [
+    errorString,
+    errorMessage,
+    errorStack,
+    errorName,
+    JSON.stringify(error)
+  ].join(' ');
   
   return (
-    errorString.includes('INTERNAL ASSERTION FAILED') || 
-    errorMessage.includes('INTERNAL ASSERTION FAILED') ||
-    errorStack.includes('INTERNAL ASSERTION FAILED') ||
-    errorString.includes('ID: ca9') ||
-    errorString.includes('ID: b815') ||
-    errorMessage.includes('ID: ca9') ||
-    errorMessage.includes('ID: b815') ||
-    errorStack.includes('ID: ca9') ||
-    errorStack.includes('ID: b815') ||
-    (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
-    (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
-    (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
+    allErrorStrings.includes('INTERNAL ASSERTION FAILED') ||
+    allErrorStrings.includes('ID: ca9') ||
+    allErrorStrings.includes('ID: b815') ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('Unexpected state')) ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
+    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815'))) ||
+    // Check for the specific error pattern from the stack trace
+    allErrorStrings.includes('__PRIVATE__fail') ||
+    allErrorStrings.includes('__PRIVATE_hardAssert') ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)'))
   );
 };
 
 // Override console.error to catch Firestore errors before they're displayed
+// This will be set up before React renders to catch all errors
 const originalConsoleError = console.error;
-console.error = function(...args: any[]) {
-  const errorMessage = args.join(' ');
-  if (isFirestoreInternalError(errorMessage) || args.some(arg => isFirestoreInternalError(arg))) {
-    // Suppress Firestore internal errors - don't log them
-    return;
-  }
-  originalConsoleError.apply(console, args);
-};
 
 // Add error handling for debugging Firefox issues - multiple layers for maximum coverage
 window.addEventListener('error', (event) => {
@@ -84,22 +85,52 @@ window.addEventListener('unhandledrejection', (event) => {
   originalConsoleError('Unhandled promise rejection:', event.reason);
 });
 
-// Suppress React error overlay for Firestore errors
+// Suppress React error overlay for Firestore errors - multiple approaches for maximum coverage
 if (typeof window !== 'undefined') {
   // Suppress React error overlay (the red screen in development)
   if ((window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__) {
     const originalOnError = (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError;
     (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError = function(...args: any[]) {
-      const error = args[0];
-      if (isFirestoreInternalError(error)) {
-        // Suppress React error overlay for Firestore errors
-        return;
+      // Check all arguments for Firestore errors
+      for (const arg of args) {
+        if (isFirestoreInternalError(arg)) {
+          // Suppress React error overlay for Firestore errors
+          return;
+        }
       }
       if (originalOnError) {
         return originalOnError.apply(this, args);
       }
     };
   }
+  
+  // Also intercept React DevTools error reporting
+  if ((window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+    const originalOnCommitFiberRoot = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot;
+    if (originalOnCommitFiberRoot) {
+      (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot = function(...args: any[]) {
+        // Check for Firestore errors in React DevTools
+        try {
+          return originalOnCommitFiberRoot.apply(this, args);
+        } catch (error) {
+          if (isFirestoreInternalError(error)) {
+            return;
+          }
+          throw error;
+        }
+      };
+    }
+  }
+  
+  // Intercept console.error calls that might trigger React error overlay
+  console.error = function(...args: any[]) {
+    const errorMessage = args.join(' ');
+    if (isFirestoreInternalError(errorMessage) || args.some(arg => isFirestoreInternalError(arg))) {
+      // Suppress Firestore internal errors - don't log them
+      return;
+    }
+    originalConsoleError.apply(console, args);
+  };
 }
 
 console.log('App starting...', {
