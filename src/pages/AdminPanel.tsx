@@ -1858,6 +1858,18 @@ const AdminPanel: React.FC = () => {
           challenges: updatedLegacyChallenges
         });
         
+        // Unlock the next challenge in the same chapter immediately after approval
+        const currentChapter = CHAPTERS.find(ch => ch.id === sub.chapterId);
+        if (currentChapter) {
+          const currentChallengeIndex = currentChapter.challenges.findIndex(c => c.id === sub.challengeId);
+          if (currentChallengeIndex >= 0 && currentChallengeIndex < currentChapter.challenges.length - 1) {
+            const nextChallenge = currentChapter.challenges[currentChallengeIndex + 1];
+            console.log('Unlocking next challenge after approval:', nextChallenge.id);
+            // The next challenge will be unlocked automatically when requirements are checked
+            // No need to explicitly unlock it here as the requirement check will handle it
+          }
+        }
+
         // Check if all challenges in chapter are completed
         const chapterProgress = updatedChapters[sub.chapterId];
         const allChallengesCompleted = chapterProgress?.challenges && 

@@ -324,6 +324,114 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [pendingSubmissions, setPendingSubmissions] = useState<{[key: string]: boolean}>({});
 
   // Function to check and auto-complete challenges
+  // Function to auto-complete a challenge and unlock the next one
+  const handleAutoCompleteChallenge = async (challenge: ChapterChallenge) => {
+    if (!currentUser) return;
+
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Check if already completed
+      const userDoc = await getDoc(userRef);
+      const userProgress = userDoc.exists() ? userDoc.data() : {};
+      
+      if (userProgress.chapters?.[chapter.id]?.challenges?.[challenge.id]?.isCompleted) {
+        alert('This challenge has already been completed!');
+        return;
+      }
+
+      // Update user progress
+      const updatedChapters = {
+        ...userProgress.chapters,
+        [chapter.id]: {
+          ...userProgress.chapters?.[chapter.id],
+          challenges: {
+            ...userProgress.chapters?.[chapter.id]?.challenges,
+            [challenge.id]: {
+              isCompleted: true,
+              status: 'approved',
+              completedAt: serverTimestamp()
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Apply rewards
+      const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+      const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+      const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+      // Update student data
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const updatedChallenges = {
+          ...studentData.challenges,
+          [challenge.id]: {
+            completed: true,
+            status: 'approved',
+            completedAt: serverTimestamp()
+          }
+        };
+        
+        // Grant artifact rewards
+        const currentArtifacts = studentData.artifacts || {};
+        const updatedArtifacts = { ...currentArtifacts };
+        
+        artifactRewards.forEach(artifactReward => {
+          updatedArtifacts[artifactReward.value] = true;
+        });
+        
+        await updateDoc(studentRef, {
+          challenges: updatedChallenges,
+          xp: (studentData.xp || 0) + xpReward,
+          powerPoints: (studentData.powerPoints || 0) + ppReward,
+          artifacts: updatedArtifacts
+        });
+      }
+
+      // Add notification
+      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+        type: 'challenge_completed',
+        message: `🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`,
+        challengeId: challenge.id,
+        challengeName: challenge.title,
+        xpReward: xpReward,
+        ppReward: ppReward,
+        timestamp: serverTimestamp(),
+        read: false
+      });
+
+      // Unlock the next challenge in the same chapter
+      const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
+      if (currentChallengeIndex >= 0 && currentChallengeIndex < chapter.challenges.length - 1) {
+        const nextChallenge = chapter.challenges[currentChallengeIndex + 1];
+        console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
+      }
+
+      alert(`🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`);
+      
+      // Refresh user progress to trigger requirement checks for next challenge
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        setUserProgress(refreshedUserDoc.data());
+      }
+      
+      // Trigger auto-completion check to unlock next challenge
+      setTimeout(() => {
+        checkAndAutoCompleteChallenges();
+      }, 500);
+    } catch (error) {
+      console.error('Error auto-completing challenge:', error);
+      alert('Failed to complete challenge. Please try again.');
+    }
+  };
+
   const checkAndAutoCompleteChallenges = async () => {
     console.log('ChapterDetail: checkAndAutoCompleteChallenges called', {
       currentUser: !!currentUser,
@@ -529,6 +637,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           timestamp: serverTimestamp(),
           read: false
         });
+
+        // Unlock the next challenge in the same chapter
+        const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
+        if (currentChallengeIndex >= 0 && currentChallengeIndex < chapter.challenges.length - 1) {
+          const nextChallenge = chapter.challenges[currentChallengeIndex + 1];
+          console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
+          // Refresh user progress to trigger requirement checks for next challenge
+          const refreshedUserDoc = await getDoc(userRef);
+          if (refreshedUserDoc.exists()) {
+            setUserProgress(refreshedUserDoc.data());
+          }
+        }
 
         // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
         if (challenge.id === 'ep1-combat-drill') {
@@ -1864,6 +1984,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     if (challenge.id === 'ep1-truth-metal-choice') {
       setShowTruthMetalModal(true);
       setCompletingChallenge(null);
+      return;
+    }
+
+    // Special handling for Challenge 5 (Power Card Intro) - auto-complete on click
+    if (challenge.id === 'ep1-power-card-intro') {
+      await handleAutoCompleteChallenge(challenge);
       return;
     }
 

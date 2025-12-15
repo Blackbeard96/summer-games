@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, doc, getDocs, getDoc, updateDoc, onSnapshot, query, where, addDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, updateDoc, onSnapshot, query, where, addDoc, deleteDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
 import PlayerCard from '../components/PlayerCard';
 import SquadCard from '../components/SquadCard';
 import InviteModal from '../components/InviteModal';
@@ -301,11 +301,46 @@ const Squads: React.FC = () => {
   };
 
   const joinSquad = async (squadId: string) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('You must be logged in to join a squad.');
+      return;
+    }
 
     try {
-      const squad = squads.find(s => s.id === squadId);
-      if (!squad || squad.members.length >= squad.maxMembers) return;
+      // Check if user is already in a squad
+      const userSquad = squads.find(squad => 
+        squad.members.some(member => member.uid === currentUser.uid)
+      );
+      
+      if (userSquad) {
+        alert(`You are already in a squad: ${userSquad.name}. Please leave your current squad before joining another one.`);
+        return;
+      }
+
+      // Get fresh squad data from Firestore to avoid stale data
+      const squadRef = doc(db, 'squads', squadId);
+      const squadDoc = await getDoc(squadRef);
+      
+      if (!squadDoc.exists()) {
+        alert('Squad not found. It may have been deleted.');
+        return;
+      }
+
+      const squadData = squadDoc.data();
+      const currentMembers = squadData.members || [];
+      
+      // Check if squad is full
+      if (currentMembers.length >= (squadData.maxMembers || 4)) {
+        alert('This squad is full. Please choose another squad.');
+        return;
+      }
+
+      // Check if user is already in this squad (double-check)
+      const alreadyMember = currentMembers.some((member: any) => member.uid === currentUser.uid);
+      if (alreadyMember) {
+        alert('You are already a member of this squad.');
+        return;
+      }
 
       // Fetch user's actual data from both collections to get manifest and level
       const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
@@ -340,22 +375,57 @@ const Squads: React.FC = () => {
       
       const newMember: SquadMember = {
         uid: currentUser.uid,
-        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Unknown',
+        displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
         email: currentUser.email || '',
-        photoURL: currentUser.photoURL || undefined,
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
         level: userData.level || studentData?.level || 1,
         xp: userData.xp || studentData?.xp || 0,
+        powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
         manifest: manifest,
         role: 'Member',
         isLeader: false,
         isAdmin: false
       };
 
-      await updateDoc(doc(db, 'squads', squadId), {
-        members: [...squad.members, newMember]
+      // Use arrayUnion for better concurrency handling
+      await updateDoc(squadRef, {
+        members: arrayUnion(newMember),
+        updatedAt: serverTimestamp()
       });
-    } catch (error) {
+
+      alert(`🎉 Successfully joined ${squadData.name}!`);
+      
+      // Refresh squads list
+      const squadsSnapshot = await getDocs(collection(db, 'squads'));
+      const squadsData: Squad[] = squadsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Squad));
+      
+      const updatedUserSquad = squadsData.find(squad => 
+        squad.members.some(member => member.uid === currentUser.uid)
+      );
+      
+      setSquads(squadsData);
+      setCurrentSquad(updatedUserSquad || null);
+      
+      // Switch to "My Squad" tab if user joined a squad
+      if (updatedUserSquad) {
+        setActiveTab('my-squad');
+      }
+    } catch (error: any) {
       console.error('Error joining squad:', error);
+      let errorMessage = 'Failed to join squad. Please try again.';
+      
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. You may not have permission to join this squad.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Service unavailable. Please try again in a moment.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      alert(errorMessage);
     }
   };
 
