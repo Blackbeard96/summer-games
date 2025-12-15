@@ -264,39 +264,124 @@ const Squads: React.FC = () => {
   }, [currentUser]);
 
   const createSquad = async () => {
-    if (!currentUser || !newSquadName.trim()) return;
+    if (!currentUser) {
+      alert('You must be logged in to create a squad.');
+      return;
+    }
+
+    if (!newSquadName.trim()) {
+      alert('Please enter a squad name.');
+      return;
+    }
 
     try {
+      // Check if user is already in a squad
+      const userSquad = squads.find(squad => 
+        squad.members.some(member => member.uid === currentUser.uid)
+      );
+      
+      if (userSquad) {
+        alert(`You are already in a squad: ${userSquad.name}. Please leave your current squad before creating a new one.`);
+        return;
+      }
+
+      // Fetch user's actual data from both collections
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+      
+      const userData = userDoc.exists() ? userDoc.data() : {};
+      const studentData = studentDoc.exists() ? studentDoc.data() : {};
+      
+      // Try to get manifest from multiple sources
+      let manifest = 'Unknown';
+      if (userData.manifest) {
+        if (typeof userData.manifest === 'string') {
+          manifest = userData.manifest;
+        } else if (typeof userData.manifest === 'object' && userData.manifest.manifestId) {
+          manifest = userData.manifest.manifestId;
+        } else if (typeof userData.manifest === 'object' && userData.manifest.manifestationType) {
+          manifest = userData.manifest.manifestationType;
+        }
+      } else if (userData.manifestationType) {
+        manifest = userData.manifestationType;
+      } else if (studentData?.manifest) {
+        if (typeof studentData.manifest === 'string') {
+          manifest = studentData.manifest;
+        } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          manifest = studentData.manifest.manifestId;
+        } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestationType) {
+          manifest = studentData.manifest.manifestationType;
+        }
+      } else if (studentData?.manifestationType) {
+        manifest = studentData.manifestationType;
+      }
+
+      const leaderMember: SquadMember = {
+        uid: currentUser.uid,
+        displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
+        email: currentUser.email || '',
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
+        level: userData.level || studentData?.level || 1,
+        xp: userData.xp || studentData?.xp || 0,
+        powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
+        manifest: manifest,
+        role: 'Leader',
+        isLeader: true,
+        isAdmin: true
+      };
+
       const squadData = {
         name: newSquadName.trim(),
-        description: newSquadDescription.trim(),
+        description: newSquadDescription.trim() || undefined,
         abbreviation: newSquadAbbreviation.trim().slice(0, 4) || undefined,
         leader: currentUser.uid,
-        members: [{
-          uid: currentUser.uid,
-          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Unknown',
-          email: currentUser.email || '',
-          photoURL: currentUser.photoURL || undefined,
-          level: 1, // Will be fetched from user data
-          xp: 0,
-          manifest: 'Unknown',
-          role: 'Leader',
-          isLeader: true,
-          isAdmin: true
-        }],
-        createdAt: new Date(),
+        members: [leaderMember],
+        createdAt: serverTimestamp(),
         maxMembers: 4
       };
 
       const docRef = await addDoc(collection(db, 'squads'), squadData);
       console.log('Squad created with ID:', docRef.id);
       
+      alert(`🎉 Squad "${newSquadName.trim()}" created successfully!`);
+      
+      // Reset form
       setIsCreatingSquad(false);
       setNewSquadName('');
       setNewSquadDescription('');
       setNewSquadAbbreviation('');
-    } catch (error) {
+      
+      // Refresh squads list
+      const squadsSnapshot = await getDocs(collection(db, 'squads'));
+      const squadsData: Squad[] = squadsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Squad));
+      
+      const updatedUserSquad = squadsData.find(squad => 
+        squad.members.some(member => member.uid === currentUser.uid)
+      );
+      
+      setSquads(squadsData);
+      setCurrentSquad(updatedUserSquad || null);
+      
+      // Switch to "My Squad" tab
+      if (updatedUserSquad) {
+        setActiveTab('my-squad');
+      }
+    } catch (error: any) {
       console.error('Error creating squad:', error);
+      let errorMessage = 'Failed to create squad. Please try again.';
+      
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. You may not have permission to create a squad.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Service unavailable. Please try again in a moment.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      alert(errorMessage);
     }
   };
 
@@ -387,13 +472,62 @@ const Squads: React.FC = () => {
         isAdmin: false
       };
 
-      // Use arrayUnion for better concurrency handling
+      // Re-read squad data to ensure we have the latest before updating
+      const finalSquadDoc = await getDoc(squadRef);
+      if (!finalSquadDoc.exists()) {
+        alert('Squad not found. It may have been deleted.');
+        return;
+      }
+
+      const finalSquadData = finalSquadDoc.data();
+      const finalMembers = finalSquadData.members || [];
+      
+      // Double-check user isn't already a member (race condition check)
+      const isAlreadyMember = finalMembers.some((member: any) => member.uid === currentUser.uid);
+      if (isAlreadyMember) {
+        alert('You are already a member of this squad.');
+        return;
+      }
+
+      // Check if squad is still not full
+      if (finalMembers.length >= (finalSquadData.maxMembers || 4)) {
+        alert('This squad is now full. Please choose another squad.');
+        return;
+      }
+
+      // Clean member object to ensure no undefined values
+      const cleanMember: SquadMember = {
+        uid: newMember.uid,
+        displayName: newMember.displayName || 'Unknown',
+        email: newMember.email || '',
+        photoURL: newMember.photoURL || undefined,
+        level: newMember.level || 1,
+        xp: newMember.xp || 0,
+        powerPoints: newMember.powerPoints || 0,
+        manifest: newMember.manifest || 'Unknown',
+        role: newMember.role || 'Member',
+        isLeader: false,
+        isAdmin: false
+      };
+
+      // Use array spread (more reliable than arrayUnion for complex objects)
+      const updatedMembers = [...finalMembers, cleanMember];
+      
+      console.log('Squads: Adding member to squad:', {
+        squadId: squadId,
+        currentMembersCount: finalMembers.length,
+        newMember: cleanMember,
+        updatedMembersCount: updatedMembers.length
+      });
+
       await updateDoc(squadRef, {
-        members: arrayUnion(newMember),
+        members: updatedMembers,
         updatedAt: serverTimestamp()
       });
 
-      alert(`🎉 Successfully joined ${squadData.name}!`);
+      console.log('Squads: UpdateDoc completed successfully');
+
+      alert(`🎉 Successfully joined ${finalSquadData.name}!`);
       
       // Refresh squads list
       const squadsSnapshot = await getDocs(collection(db, 'squads'));
@@ -569,7 +703,9 @@ const Squads: React.FC = () => {
     }
   };
 
-  const openInviteModal = () => {
+  const openInviteModal = (squadId?: string) => {
+    // squadId parameter is provided for interface compatibility
+    // The modal uses currentSquad which is already set
     setIsInviteModalOpen(true);
   };
 
@@ -1284,7 +1420,7 @@ const Squads: React.FC = () => {
                     </div>
                     {currentSquad && currentSquad.members.length < currentSquad.maxMembers && (
                       <button
-                        onClick={openInviteModal}
+                        onClick={() => openInviteModal()}
                         style={{
                           backgroundColor: '#10b981',
                           color: 'white',

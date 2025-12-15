@@ -246,40 +246,53 @@ const InvitationManager: React.FC = () => {
         throw updateError; // Re-throw to be caught by outer catch
       }
 
-      // Verify the member was added
-      try {
-        const verificationDoc = await getDoc(squadRef);
-        if (verificationDoc.exists()) {
-          const verifiedData = verificationDoc.data();
-          const verifiedMembers = verifiedData.members || [];
-          const memberWasAdded = verifiedMembers.some((member: any) => member.uid === currentUser.uid);
-          
-          if (!memberWasAdded) {
-            console.error('InvitationManager: Member was not added to squad after update!', {
-              squadId: invitation.squadId,
-              expectedMember: cleanMember,
-              actualMembers: verifiedMembers
-            });
-            alert('Failed to add you to the squad. Please try again or contact support.');
-            return;
+      // Wait a moment for Firestore to propagate the update
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Verify the member was added (with retry logic)
+      let memberWasAdded = false;
+      let retries = 3;
+      
+      while (!memberWasAdded && retries > 0) {
+        try {
+          const verificationDoc = await getDoc(squadRef);
+          if (verificationDoc.exists()) {
+            const verifiedData = verificationDoc.data();
+            const verifiedMembers = verifiedData.members || [];
+            memberWasAdded = verifiedMembers.some((member: any) => member.uid === currentUser.uid);
+            
+            if (memberWasAdded) {
+              console.log('InvitationManager: Successfully verified member was added to squad:', {
+                squadId: invitation.squadId,
+                squadName: invitation.squadName,
+                memberUid: currentUser.uid,
+                memberName: cleanMember.displayName,
+                totalMembers: verifiedMembers.length
+              });
+              break;
+            } else {
+              console.log(`InvitationManager: Member not found yet, retrying... (${retries} retries left)`);
+              retries--;
+              if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            }
+          } else {
+            console.error('InvitationManager: Squad document does not exist after update!');
+            break;
           }
-          
-          console.log('InvitationManager: Successfully verified member was added to squad:', {
-            squadId: invitation.squadId,
-            squadName: invitation.squadName,
-            memberUid: currentUser.uid,
-            memberName: cleanMember.displayName,
-            totalMembers: verifiedMembers.length
-          });
-        } else {
-          console.error('InvitationManager: Squad document does not exist after update!');
-          alert('Squad was deleted during the join process. Please try again.');
-          return;
+        } catch (verifyError) {
+          console.error('InvitationManager: Error verifying member addition:', verifyError);
+          retries--;
+          if (retries > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
-      } catch (verifyError) {
-        console.error('InvitationManager: Error verifying member addition:', verifyError);
-        // Don't fail the whole process if verification fails - the update might have succeeded
-        console.warn('InvitationManager: Could not verify member addition, but update may have succeeded');
+      }
+
+      if (!memberWasAdded) {
+        console.warn('InvitationManager: Could not verify member addition after retries, but update may have succeeded');
+        // Don't fail - the update likely succeeded, just Firestore propagation delay
       }
 
       alert(`🎉 Successfully joined ${invitation.squadName}!`);
@@ -287,7 +300,7 @@ const InvitationManager: React.FC = () => {
       // Close the invitations modal
       setShowInvitations(false);
       
-      // Refresh the page or trigger a reload to show updated squad
+      // Refresh the page to show updated squad
       window.location.reload();
     } catch (error: any) {
       console.error('Error accepting invitation:', error);

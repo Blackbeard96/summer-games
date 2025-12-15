@@ -63,9 +63,22 @@ const SquadCard: React.FC<SquadCardProps> = ({
   
 
   const currentMember = squad.members.find(m => m.uid === currentUserId);
-  const isAdmin = currentMember?.isLeader || currentMember?.isAdmin;
-  const isLeader = currentMember?.isLeader || false;
+  const isLeader = currentMember?.isLeader === true;
+  const isAdmin = currentMember?.isAdmin === true || isLeader; // Leaders are also admins
   const canJoin = !isCurrentUserInSquad && squad.members.length < squad.maxMembers;
+  
+  // Debug logging for invite button visibility
+  if (process.env.NODE_ENV === 'development') {
+    console.log('SquadCard invite check:', {
+      currentUserId,
+      squadId: squad.id,
+      currentMember: currentMember ? { uid: currentMember.uid, isLeader: currentMember.isLeader, isAdmin: currentMember.isAdmin } : null,
+      isLeader,
+      isAdmin,
+      canInvite: (isLeader || isAdmin) && onInvite,
+      hasOnInvite: !!onInvite
+    });
+  }
 
   // Sync abbreviation value when squad changes
   useEffect(() => {
@@ -319,34 +332,78 @@ const SquadCard: React.FC<SquadCardProps> = ({
         })}
         
         {/* Empty Slots */}
-        {Array.from({ length: squad.maxMembers - squad.members.length }).map((_, index) => (
-          <div key={`empty-${index}`} style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1rem',
-            backgroundColor: '#f3f4f6',
-            borderRadius: '0.5rem',
-            border: '2px dashed #d1d5db',
-            minHeight: '120px'
-          }}>
-            <div style={{
-              fontSize: '2rem',
-              color: '#9ca3af',
-              marginBottom: '0.5rem'
-            }}>
-              +
+        {Array.from({ length: squad.maxMembers - squad.members.length }).map((_, index) => {
+          const canInvite = (isLeader || isAdmin) && onInvite;
+          
+          return (
+            <div 
+              key={`empty-${index}`} 
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+                backgroundColor: '#f3f4f6',
+                borderRadius: '0.5rem',
+                border: '2px dashed #d1d5db',
+                minHeight: '120px',
+                position: 'relative',
+                gap: '0.5rem'
+              }}
+            >
+              <div style={{
+                fontSize: '2rem',
+                color: '#9ca3af',
+                marginBottom: '0.25rem'
+              }}>
+                +
+              </div>
+              <div style={{
+                fontSize: '0.75rem',
+                color: '#9ca3af',
+                textAlign: 'center',
+                marginBottom: canInvite ? '0.5rem' : '0'
+              }}>
+                Empty Slot
+              </div>
+              {canInvite && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onInvite(squad.id);
+                  }}
+                  style={{
+                    backgroundColor: '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '0.375rem',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: '600',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#059669';
+                    e.currentTarget.style.transform = 'scale(1.05)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#10b981';
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }}
+                >
+                  <span>🤝</span>
+                  Invite Player
+                </button>
+              )}
             </div>
-            <div style={{
-              fontSize: '0.75rem',
-              color: '#9ca3af',
-              textAlign: 'center'
-            }}>
-              Empty Slot
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Squad Management Section */}
