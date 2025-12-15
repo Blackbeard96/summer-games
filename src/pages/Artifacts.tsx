@@ -16,6 +16,7 @@ const artifactPrices: { [key: string]: number } = {
   'health-potion-25': 40,
   'lunch-mosley': 5400,
   'forge-token': 1000,
+  'uxp-credit-1': 30,
   'uxp-credit': 60,
   'uxp-credit-4': 100,
   'double-pp': 75,

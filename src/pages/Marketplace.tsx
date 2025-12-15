@@ -17,6 +17,7 @@ interface Artifact {
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   originalPrice?: number;
   discount?: number;
+  disabled?: boolean;
 }
 
 const artifacts: Artifact[] = [
@@ -71,6 +72,16 @@ const artifacts: Artifact[] = [
     rarity: 'legendary'
   },
   { 
+    id: 'uxp-credit-1',
+    name: '+1 UXP Credit', 
+    description: 'Credit to be added to any non-assessment assignment', 
+    price: 30, 
+    icon: '📕', 
+    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
+    category: 'special',
+    rarity: 'common'
+  },
+  { 
     id: 'uxp-credit',
     name: '+2 UXP Credit', 
     description: 'Credit to be added to any non-assessment assignment', 
@@ -82,13 +93,14 @@ const artifacts: Artifact[] = [
   },
   { 
     id: 'uxp-credit-4',
-    name: '+4 UXP Credit', 
+    name: '+4 UXP Credit',
     description: 'Enhanced credit to be added to any non-assessment assignment', 
     price: 100, 
     icon: '📖', 
     image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
-    rarity: 'rare'
+    rarity: 'rare',
+    disabled: true
   },
   { 
     id: 'double-pp',
@@ -958,6 +970,11 @@ const Marketplace = () => {
     // Check for artifact limits
     const artifactCount = await getArtifactCount(item.name);
     
+    if (item.name === '+1 UXP Credit' && artifactCount >= 2) {
+      alert('You can only own a maximum of 2 +1 UXP Credit artifacts at a time!');
+      return;
+    }
+    
     if (item.name === '+2 UXP Credit' && artifactCount >= 2) {
       alert('You can only own a maximum of 2 +2 UXP Credit artifacts at a time!');
       return;
@@ -1103,6 +1120,9 @@ const Marketplace = () => {
   };
 
   const filteredArtifacts = artifacts.filter(artifact => {
+    // Filter out disabled artifacts
+    if (artifact.disabled) return false;
+    
     const matchesSearch = artifact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          artifact.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = selectedCategory === 'all' || artifact.category === selectedCategory;
@@ -1595,7 +1615,7 @@ const Marketplace = () => {
               {filteredArtifacts.map((artifact) => {
                 const artifactCount = artifactCounts[artifact.name] || 0;
                 const purchased = artifactCount > 0;
-                const isAtLimit = (artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
+                const isAtLimit = (artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
                 // Shield limit: check both artifact count and active overshield
                 const hasActiveOvershield = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0;
                 const isShieldAtLimit = artifact.name === 'Shield' && (artifactCount >= 1 || hasActiveOvershield);
@@ -1764,7 +1784,7 @@ const Marketplace = () => {
                               textAlign: 'right'
                             }}>
                               Owned: {artifactCount}
-                              {(artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
+                              {(artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
                               {artifact.name === 'Shield' && ` (Max: 1)`}
                             </div>
                           )}

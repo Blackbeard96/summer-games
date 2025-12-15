@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField, onSnapshot, increment } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -373,19 +373,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
       const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
 
-      // Get current user data to calculate new totals
-      const userDocRewards = await getDoc(userRef);
-      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
-      const currentXP = userDataRewards.xp || 0;
-      const currentPP = userDataRewards.powerPoints || 0;
-      const currentTruthMetal = userDataRewards.truthMetal || 0;
-
-      // Update user progress with rewards
+      // Update user progress with rewards using increment for atomic updates
       await updateDoc(userRef, {
         chapters: updatedChapters,
-        xp: currentXP + xpReward,
-        powerPoints: currentPP + ppReward,
-        truthMetal: currentTruthMetal + truthMetalReward
+        xp: increment(xpReward),
+        powerPoints: increment(ppReward),
+        truthMetal: increment(truthMetalReward)
       });
 
       // Update student data
@@ -409,11 +402,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           updatedArtifacts[artifactReward.value] = true;
         });
         
+        // Use increment for atomic updates
         await updateDoc(studentRef, {
           challenges: updatedChallenges,
-          xp: (studentData.xp || 0) + xpReward,
-          powerPoints: (studentData.powerPoints || 0) + ppReward,
-          truthMetal: (studentData.truthMetal || 0) + truthMetalReward,
+          xp: increment(xpReward),
+          powerPoints: increment(ppReward),
+          truthMetal: increment(truthMetalReward),
           artifacts: updatedArtifacts
         });
       }
@@ -439,11 +433,24 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
       // Show reward modal only if requested
       if (showModal) {
+        // Format rewards for the modal
+        const rewardModalRewards = [
+          ...artifactRewards.map(r => ({
+            type: r.type as 'artifact',
+            value: r.value,
+            name: r.description
+          })),
+          ...(truthMetalReward > 0 ? [{
+            type: 'truthMetal' as const,
+            value: truthMetalReward
+          }] : [])
+        ];
+
         setRewardModalData({
           challengeTitle: challenge.title,
-          rewards: challenge.rewards,
-          xpReward,
-          ppReward
+          rewards: rewardModalRewards,
+          xpReward: xpReward as number,
+          ppReward: ppReward as number
         });
         setShowRewardModal(true);
       }
@@ -2107,11 +2114,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           challengeData: updatedChapters[chapterKey].challenges['ep1-where-it-started']
         });
 
+        // Get reward values
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+        // Grant rewards to users collection using increment for atomic updates
         await updateDoc(userRef, {
-          chapters: updatedChapters
+          chapters: updatedChapters,
+          xp: increment(xpReward),
+          powerPoints: increment(ppReward),
+          truthMetal: increment(truthMetalReward)
         });
         
-        console.log('ChapterDetail: Challenge 9 completion saved to users collection');
+        console.log('ChapterDetail: Challenge 9 completion saved to users collection with rewards');
 
         // Grant rewards and update students collection
         const studentData = await getDoc(studentRef);
@@ -2130,13 +2147,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             studentChallenges,
             allChapterKeys: Object.keys(studentChapters)
           });
-          
-          let updatedPowerPoints = (studentDataObj.powerPoints || 0) + 150;
-          let updatedXP = (studentDataObj.xp || 0) + 100;
-          
-          // Grant Truth Metal reward
-          const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
-          let updatedTruthMetal = (studentDataObj.truthMetal || 0) + truthMetalReward;
 
           // Grant artifact rewards
           const currentArtifacts = studentDataObj.artifacts || {};
@@ -2175,16 +2185,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             challengeData: updatedStudentChapters[chapterKey].challenges['ep1-where-it-started']
           });
 
+          // Grant rewards to students collection using increment for atomic updates
           await updateDoc(studentRef, {
-            powerPoints: updatedPowerPoints,
-            xp: updatedXP,
-            truthMetal: updatedTruthMetal,
+            powerPoints: increment(ppReward),
+            xp: increment(xpReward),
+            truthMetal: increment(truthMetalReward),
             artifacts: updatedArtifacts,
             chapters: updatedStudentChapters
             // storyChapter: 2 // Disabled for now
           });
           
-          console.log('ChapterDetail: Challenge 9 completion saved to students collection');
+          console.log('ChapterDetail: Challenge 9 completion saved to students collection with rewards');
         }
 
         // Wait a moment for Firestore to propagate the changes
@@ -2218,11 +2229,35 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         const refreshedChapterData = refreshedUserDoc.exists() ? refreshedUserDoc.data().chapters?.[chapter.id] : null;
         const isChapterComplete = refreshedChapterData?.isCompleted === true;
         
-        if (isChapterComplete) {
-          alert('✅ Chapter 1 Complete!');
-        } else {
-          alert('✅ Challenge 9 Complete! Continue working on remaining challenges to complete Chapter 1.');
-        }
+        // Prepare reward modal data
+        const rewardModalRewards = [
+          ...artifactRewards.map(r => ({
+            type: r.type as 'artifact',
+            value: r.value,
+            name: r.description
+          })),
+          ...(truthMetalReward > 0 ? [{
+            type: 'truthMetal' as const,
+            value: truthMetalReward
+          }] : [])
+        ];
+
+        // Show reward modal
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: rewardModalRewards,
+          xpReward: xpReward as number,
+          ppReward: ppReward as number
+        });
+        setShowRewardModal(true);
+        
+        console.log('ChapterDetail: Challenge 9 completed successfully with rewards:', {
+          xpReward,
+          ppReward,
+          truthMetalReward,
+          artifactRewards: artifactRewards.length,
+          isChapterComplete
+        });
       }
     } catch (error) {
       console.error('Error completing Challenge 9:', error);
