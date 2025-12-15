@@ -14,6 +14,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import { getUserSquadAbbreviation } from '../utils/squadUtils';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -90,6 +91,7 @@ const Profile = () => {
   const [showManifestSelection, setShowManifestSelection] = useState(false);
   const [nextChallenge, setNextChallenge] = useState<any>(null);
   const [showPPEarningModal, setShowPPEarningModal] = useState(false);
+  const [squadAbbreviation, setSquadAbbreviation] = useState<string | null>(null);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -148,6 +150,10 @@ const Profile = () => {
           } else if (requirement.value === 'power_card_discovered') {
             const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             requirementMet = powerCardChallenge?.isCompleted;
+          } else if (requirement.value === 'elemental_ring_level_1') {
+            // Check if Challenge 8 is completed (which grants the Elemental Ring)
+            const challenge8Completed = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card']?.isCompleted;
+            requirementMet = challenge8Completed === true;
           }
           break;
         case 'manifest':
@@ -315,6 +321,10 @@ const Profile = () => {
           // No manifest found - automatically show selection
           setShowManifestSelection(true);
         }
+        
+        // Fetch squad abbreviation
+        const abbreviation = await getUserSquadAbbreviation(currentUser.uid);
+        setSquadAbbreviation(abbreviation);
       } else {
         // Create user document if it doesn't exist
         setUserData({ xp: 0, powerPoints: 0, truthMetal: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
@@ -608,7 +618,7 @@ const Profile = () => {
       
       if (userSnap.exists()) {
         const userData = userSnap.data();
-        const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+        const updatedArtifacts = Array.isArray(userData?.artifacts) ? userData.artifacts.map((artifact: any) => {
           if (artifact.name === artifactName && artifact.pending) {
             if (approved) {
               // Mark as used and remove from inventory
@@ -619,7 +629,7 @@ const Profile = () => {
             }
           }
           return artifact;
-        }) || [];
+        }) : [];
         
         await updateDoc(userRef, {
           artifacts: updatedArtifacts
@@ -736,6 +746,7 @@ const Profile = () => {
               userId={currentUser?.uid}
               onManifestReselect={() => setShowManifestSelection(true)}
               ordinaryWorld={userData?.ordinaryWorld}
+              squadAbbreviation={squadAbbreviation}
             />
           </div>
         </div>
@@ -1064,7 +1075,7 @@ const Profile = () => {
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexShrink: 0 }}>
               <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5', margin: 0, lineHeight: '1.5rem' }}>🛒 Purchased Artifacts</h2>
-              {userData?.artifacts && userData.artifacts.length > 0 && (
+              {Array.isArray(userData?.artifacts) && userData.artifacts.length > 0 && (
                 <div style={{ 
                   background: '#f3f4f6', 
                   padding: '0.5rem 1rem', 
@@ -1077,10 +1088,10 @@ const Profile = () => {
               )}
             </div>
             
-            {userData?.artifacts && userData.artifacts.length > 0 ? (
+            {Array.isArray(userData?.artifacts) && userData.artifacts.length > 0 ? (
               <div>
               {/* Available Artifacts - 2 columns with vertical scroll */}
-                {userData.artifacts.filter((artifact: any) => !artifact.used).length > 0 && (
+                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => !artifact.used).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
                       Available Artifacts ({userData.artifacts.filter((a: any) => !a.used).length})
@@ -1329,7 +1340,7 @@ const Profile = () => {
                                         const userData = userSnap.data();
                                         // Only mark ONE instance as used, not all of them
                                         let foundOne = false;
-                                        const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                        const updatedArtifacts = Array.isArray(userData?.artifacts) ? userData.artifacts.map((artifact: any) => {
                                           if (foundOne) return artifact;
                                           
                                           // Handle both legacy artifacts (strings) and new artifacts (objects)
@@ -1361,7 +1372,7 @@ const Profile = () => {
                                             }
                                             return artifact;
                                           }
-                                        }) || [];
+                                        }) : [];
                                         
                                         await updateDoc(userRef, {
                                           artifacts: updatedArtifacts
@@ -1525,7 +1536,7 @@ const Profile = () => {
                                     const userData = userSnap.data();
                                     // Only mark ONE instance as used, not all of them
                                     let foundOne = false;
-                                    const updatedArtifacts = userData.artifacts?.map((artifact: any) => {
+                                    const updatedArtifacts = Array.isArray(userData?.artifacts) ? userData.artifacts.map((artifact: any) => {
                                       if (foundOne) return artifact;
                                       
                                       if (typeof artifact === 'string') {
@@ -1554,7 +1565,7 @@ const Profile = () => {
                                         }
                                         return artifact;
                                       }
-                                    }) || [];
+                                    }) : [];
                                     
                                     // For UXP artifacts, mark as "pending" instead of "used"
                                     const isUXPArtifact = enhancedArtifact.name.includes('UXP');
@@ -1698,7 +1709,7 @@ const Profile = () => {
                                         
                                         // Remove ONE instance of the artifact from users collection
                                         let foundOne = false;
-                                        const updatedArtifacts = userData.artifacts?.filter((art: any) => {
+                                        const updatedArtifacts = Array.isArray(userData?.artifacts) ? userData.artifacts.filter((art: any) => {
                                           if (foundOne) return true;
                                           
                                           if (typeof art === 'string') {
@@ -1716,7 +1727,7 @@ const Profile = () => {
                                             }
                                             return true;
                                           }
-                                        }) || [];
+                                        }) : [];
                                         
                                         // Remove ONE instance from students inventory
                                         const currentInventory = studentsData.inventory || [];
@@ -1817,7 +1828,7 @@ const Profile = () => {
                 )}
 
                 {/* Used Artifacts */}
-                {userData.artifacts.filter((artifact: any) => artifact.used).length > 0 && (
+                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => artifact.used).length > 0 && (
                   <div>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
                       Used Artifacts ({userData.artifacts.filter((a: any) => a.used).length})
@@ -1994,7 +2005,11 @@ const Profile = () => {
       </div>
 
       {/* Admin Debug Section for UXP Artifact Management */}
-      {userData?.artifacts?.some((artifact: any) => artifact.pending) && (
+      {(() => {
+        const artifacts = userData?.artifacts;
+        if (!Array.isArray(artifacts)) return false;
+        return artifacts.some((artifact: any) => artifact.pending);
+      })() && (
         <div style={{
           marginTop: '2rem',
           padding: '1rem',
@@ -2006,7 +2021,7 @@ const Profile = () => {
             🔧 Admin Debug: Pending UXP Artifacts
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {userData.artifacts.filter((artifact: any) => artifact.pending).map((artifact: any) => (
+            {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => artifact.pending).map((artifact: any) => (
               <div key={artifact.name} style={{
                 display: 'flex',
                 alignItems: 'center',

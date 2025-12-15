@@ -57,6 +57,67 @@ export const isUserScorekeeper = async (userId: string) => {
 };
 
 /**
+ * Check if a user is an admin
+ * @param userId - The user's UID
+ * @param userEmail - Optional user email for fallback check
+ * @returns Promise<boolean>
+ */
+export const isUserAdmin = async (userId: string, userEmail?: string | null): Promise<boolean> => {
+  try {
+    // First check the userRoles collection
+    const roleData = await getUserRole(userId);
+    const hasAdminRole = roleData?.role === 'admin' || 
+                         (roleData?.roles && Array.isArray(roleData?.roles) && roleData.roles.includes('admin'));
+    
+    if (hasAdminRole) {
+      return true;
+    }
+    
+    // Fallback: Check specific admin emails (exact matches only, not substring)
+    if (userEmail) {
+      const adminEmails = [
+        'eddymosley@compscihigh.org',
+        'admin@mstgames.net',
+        'edm21179@gmail.com',
+        'eddymosley9@gmail.com'
+      ];
+      
+      // Check exact match
+      if (adminEmails.includes(userEmail)) {
+        return true;
+      }
+      
+      // Check domain-based admin (strict domain matching)
+      if (userEmail.endsWith('@mstgames.net') || userEmail.endsWith('@compscihigh.org')) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    // On error, fall back to email check only
+    if (userEmail) {
+      const adminEmails = [
+        'eddymosley@compscihigh.org',
+        'admin@mstgames.net',
+        'edm21179@gmail.com',
+        'eddymosley9@gmail.com'
+      ];
+      
+      if (adminEmails.includes(userEmail)) {
+        return true;
+      }
+      
+      if (userEmail.endsWith('@mstgames.net') || userEmail.endsWith('@compscihigh.org')) {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+/**
  * Helper function to set up common roles for testing
  */
 export const setupTestRoles = async () => {

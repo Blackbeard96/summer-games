@@ -5,7 +5,6 @@ import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs, q
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { trackMoveUsage } from '../utils/manifestTracking';
-import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 
 interface MindforgeProps {
   onBack: () => void;
@@ -194,7 +193,7 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
   const [showResultsModal, setShowResultsModal] = useState(false);
   const [battleResults, setBattleResults] = useState<{
     result: 'victory' | 'defeat' | 'escape';
-    rewards: { pp: number; xp: number; tmShards: number; originalPP?: number };
+    rewards: { pp: number; xp: number; tmShards: number };
     stats: MindforgeStats;
   } | null>(null);
   const [battleLog, setBattleLog] = useState<string[]>(['Welcome to Mindforge Battle!']);
@@ -749,22 +748,9 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
           setLevelCompletions(newLevelCompletions);
         }
         
-        // Apply PP boost if active
-        const originalPP = rewards.pp;
-        let finalPP = rewards.pp;
-        try {
-          const activeBoost = await getActivePPBoost(currentUser.uid);
-          if (activeBoost) {
-            finalPP = applyPPBoost(rewards.pp, currentUser.uid, activeBoost);
-            console.log(`⚡ PP Boost applied to Mindforge reward: ${rewards.pp} → ${finalPP}`);
-          }
-        } catch (error) {
-          console.error('Error applying PP boost to Mindforge reward:', error);
-        }
-        
         // Update PP, XP, and Truth Metal
         await updateDoc(userRef, {
-          powerPoints: currentPP + finalPP,
+          powerPoints: currentPP + rewards.pp,
           xp: currentXP + rewards.xp,
           truthMetal: newTruthMetal, // Add TM Shards to Truth Metal currency
           mindforgeStats: {
@@ -803,11 +789,7 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
         // Show results modal instead of alert
         setBattleResults({
           result,
-          rewards: {
-            ...rewards,
-            pp: finalPP,
-            originalPP: originalPP !== finalPP ? originalPP : undefined
-          },
+          rewards,
           stats: { ...stats }
         });
         setShowResultsModal(true);
@@ -1705,24 +1687,7 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
                       textAlign: 'center'
                     }}>
                       <div style={{ fontSize: '0.875rem', marginBottom: '0.25rem', opacity: 0.8 }}>Power Points</div>
-                      <div style={{ fontSize: '1.75rem', fontWeight: 'bold', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                        {battleResults.rewards.originalPP && battleResults.rewards.originalPP !== battleResults.rewards.pp ? (
-                          <>
-                            <div style={{ fontSize: '0.875rem', opacity: 0.7, textDecoration: 'line-through' }}>
-                              {battleResults.rewards.originalPP}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <span>+{battleResults.rewards.pp}</span>
-                              <span style={{ fontSize: '1rem', color: '#f59e0b', fontWeight: 'bold' }}>×2</span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: '#059669', fontWeight: 'bold' }}>
-                              ⚡ Double PP Boost!
-                            </div>
-                          </>
-                        ) : (
-                          <span>+{battleResults.rewards.pp}</span>
-                        )}
-                      </div>
+                      <div style={{ fontSize: '1.75rem', fontWeight: 'bold' }}>+{battleResults.rewards.pp}</div>
                     </div>
                     <div style={{
                       background: '#3b82f6',

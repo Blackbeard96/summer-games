@@ -1287,6 +1287,15 @@ const ensureChaptersInitialized = async () => {
           } else if (requirement.value === 'power_card_discovered') {
             const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             requirementMet = powerCardChallenge?.isCompleted;
+          } else if (requirement.value === 'elemental_ring_level_1') {
+            // Check if Challenge 8 is completed (which grants the Elemental Ring)
+            const challenge8Completed = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card']?.isCompleted;
+            console.log('Checking elemental_ring_level_1 requirement:', {
+              challenge8Completed,
+              challenge8Data: userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card']
+            });
+            requirementMet = challenge8Completed === true;
+            console.log(requirementMet ? '✅ Elemental Ring requirement met (Challenge 8 completed)' : '❌ Elemental Ring requirement not met');
           } else {
             console.warn(`❌ Unknown artifact requirement: ${requirement.value}`);
             requirementMet = false;

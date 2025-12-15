@@ -5,6 +5,7 @@ import { useBattle } from '../context/BattleContext';
 interface BagModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
 }
 
 // Items that can be used during battle
@@ -16,7 +17,7 @@ const artifactImages: Record<string, string> = {
   'Double PP Boost': '/images/Double PP.png',
 };
 
-const BagModal: React.FC<BagModalProps> = ({ isOpen, onClose }) => {
+const BagModal: React.FC<BagModalProps> = ({ isOpen, onClose, onArtifactUsed }) => {
   const { currentUser } = useAuth();
   const { inventory, artifacts, activateArtifact, loading } = useBattle();
 
@@ -32,8 +33,13 @@ const BagModal: React.FC<BagModalProps> = ({ isOpen, onClose }) => {
 
   const handleUseArtifact = async (artifactName: string) => {
     if (window.confirm(`Use ${artifactName}?`)) {
-      await activateArtifact(artifactName);
-      // Don't close modal - let user use multiple items
+      // Pass the callback to activateArtifact - for Health Potion, this will end the turn
+      await activateArtifact(artifactName, onArtifactUsed);
+      // Close modal after using Health Potion (it ends the turn)
+      if (artifactName === 'Health Potion (25)') {
+        onClose();
+      }
+      // Don't close modal for other items - let user use multiple items
     }
   };
 

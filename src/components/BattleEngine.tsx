@@ -61,6 +61,8 @@ interface BattleEngineProps {
   isMultiplayer?: boolean; // Whether this is a multiplayer battle (2-8 players)
   onIceGolemDefeated?: () => void; // Callback when an Ice Golem is defeated (triggers cutscene)
   gameId?: string; // Game ID for Island Raid battles (to sync move selections)
+  onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
+  isInSession?: boolean; // Whether this is an In Session battle (no CPU moves, no turn order)
 }
 
 interface BattleState {
@@ -100,7 +102,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   isForestStageActive = false,
   isMultiplayer = false,
   onIceGolemDefeated,
-  gameId
+  gameId,
+  onArtifactUsed,
+  isInSession = false
 }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
@@ -565,12 +569,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     loadCpuOpponentMoves();
   }, []);
 
-  // Update parent component with battle log changes (for Mindforge mode)
+  // Update parent component with battle log changes (for Mindforge mode and In Session)
   useEffect(() => {
-    if (mindforgeMode && onBattleLogUpdate) {
+    if (onBattleLogUpdate && (mindforgeMode || isMultiplayer)) {
       onBattleLogUpdate(battleState.battleLog);
     }
-  }, [battleState.battleLog, mindforgeMode, onBattleLogUpdate]);
+  }, [battleState.battleLog, mindforgeMode, isMultiplayer, onBattleLogUpdate]);
   
   // Initialize battle log from prop when it changes (for Mindforge and Island Raid continuity across rounds)
   useEffect(() => {
@@ -1050,7 +1054,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [isMultiplayer, gameId, currentUser]);
 
   // Automatically select moves for CPU opponents in multiplayer mode
+  // Skip this in In Session mode (all players are human-controlled)
   useEffect(() => {
+    if (isInSession) return; // No CPU moves in In Session mode
     if (!isMultiplayer || !allies.length || !opponents.length || !vault) return;
     if (battleState.turnOrder) return; // Don't select if turn order already calculated
 
@@ -1278,7 +1284,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [isMultiplayer, allies, opponents, participantMoves, currentUser, vault, cpuOpponentMoves, battleState.turnOrder]);
 
   // Calculate turn order when all participants have selected moves (multiplayer only)
+  // Skip this in In Session mode (no turn order, moves execute immediately)
   useEffect(() => {
+    if (isInSession) return; // No turn order in In Session mode
     if (!isMultiplayer || !allies.length || !opponents.length) return;
 
     // Check if all participants have selected moves
@@ -1557,6 +1565,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       } else {
         // Execute CPU/opponent move - CPU moves have a different structure (from selectOptimalCPUMove)
+        // Skip CPU moves in In Session mode (all players are human-controlled)
+        if (isInSession) {
+          console.log(`⏭️ Skipping CPU move execution in In Session mode for ${participant.name}`);
+          continue;
+        }
+        
         const cpuMove = moveData.move as any; // CPU moves have damageRange/baseDamage which aren't in Move interface
         const cpuOpponent = participant;
         
@@ -1738,18 +1752,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const move = battleState.selectedMove;
     
     // In multiplayer, wait for all participants to select moves before executing
-    if (isMultiplayer) {
+    // EXCEPT in In Session mode, where moves execute immediately
+    if (isMultiplayer && !isInSession) {
       // Just store the move - execution will happen when turn order is calculated
       return;
     }
     
-    // Start animation (single player mode)
+    // In In Session mode or single player mode, execute immediately
+    // Start animation
     setBattleState(prev => ({
       ...prev,
       currentAnimation: move,
       isAnimating: true
     }));
-  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer]);
+  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession]);
 
   const handleAnimationComplete = async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
@@ -3102,6 +3118,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove]);
 
+  // Listen for external move selection events (for In Session mode)
+  useEffect(() => {
+    const handleExternalMoveSelect = (event: CustomEvent) => {
+      const { move, targetId } = event.detail;
+      if (move && targetId) {
+        handleMoveSelect(move);
+        // Small delay to ensure move is set before selecting target
+        setTimeout(() => {
+          handleTargetSelect(targetId);
+        }, 100);
+      }
+    };
+
+    window.addEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
+    return () => {
+      window.removeEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
+    };
+  }, [handleMoveSelect, handleTargetSelect]);
+
   // Handle battle end (non-PvP battles only - PvP battles call onBattleEnd immediately)
   useEffect(() => {
     if (!isPvP) {
@@ -3119,6 +3154,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Immediately call onBattleEnd - don't wait
     onBattleEnd('escape');
+  };
+
+  // Handle artifact used (e.g., Health Potion ends turn)
+  const handleArtifactUsed = () => {
+    if (onArtifactUsed) {
+      onArtifactUsed();
+    }
   };
 
   if (!vault) {
@@ -3181,6 +3223,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           selectedMove={battleState.selectedMove}
           selectedTarget={battleState.selectedTarget}
           availableMoves={availableMoves}
+          onArtifactUsed={handleArtifactUsed}
           allies={allies.map(ally => ({
             id: ally.id,
             name: ally.name,
@@ -3237,6 +3280,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           playerEffects={playerEffects}
           opponentEffects={opponentEffects}
           isTerraAwakened={isTerraAwakened}
+        onArtifactUsed={handleArtifactUsed}
       />
       )}
       

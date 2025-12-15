@@ -1,4 +1,3 @@
-
 import React, { Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { 
@@ -30,9 +29,70 @@ import FirebaseStatus from './components/FirebaseStatus';
 import TutorialManager from './components/TutorialManager';
 import InvitationManager from './components/InvitationManager';
 import NavigationDebugger from './components/NavigationDebugger';
+import InSessionNotification from './components/InSessionNotification';
 
 // Load debug commands
 import './utils/consoleCommands';
+
+// Suppress Firestore internal assertion errors globally - MUST run after imports
+const isFirestoreInternalError = (error: any): boolean => {
+  if (!error) return false;
+  const errorString = String(error);
+  const errorMessage = error?.message || '';
+  const errorStack = error?.stack || '';
+  const errorCode = error?.code || '';
+  
+  return (
+    errorString.includes('INTERNAL ASSERTION FAILED') || 
+    errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+    errorStack.includes('INTERNAL ASSERTION FAILED') ||
+    errorString.includes('ID: ca9') ||
+    errorString.includes('ID: b815') ||
+    errorMessage.includes('ID: ca9') ||
+    errorMessage.includes('ID: b815') ||
+    errorStack.includes('ID: ca9') ||
+    errorStack.includes('ID: b815') ||
+    (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
+    (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
+    (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
+  );
+};
+
+// Override console.error immediately to catch Firestore errors
+const originalConsoleError = console.error;
+console.error = function(...args: any[]) {
+  const message = args.join(' ');
+  if (isFirestoreInternalError(message) || args.some(arg => isFirestoreInternalError(arg))) {
+    return; // Completely suppress
+  }
+  originalConsoleError.apply(console, args);
+};
+
+// Global error handlers - set up immediately
+window.addEventListener('error', (event) => {
+  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    return false;
+  }
+}, true);
+
+window.addEventListener('error', (event) => {
+  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }
+}, false);
+
+window.addEventListener('unhandledrejection', (event) => {
+  if (isFirestoreInternalError(event.reason)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }
+});
 
 // Lazy load pages for better performance with route splitting
 const Dashboard = withRouteSplitting(() => import('./pages/Dashboard'));
@@ -55,6 +115,7 @@ const IslandRaidGame = withRouteSplitting(() => import('./components/IslandRaidG
 const InSession = withRouteSplitting(() => import('./pages/InSession'));
 const InSessionRoom = withRouteSplitting(() => import('./components/InSessionRoom'));
 const InSessionCreate = withRouteSplitting(() => import('./components/InSessionCreate'));
+const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
 
 // Loading component for lazy-loaded routes
 const PageLoader = () => (
@@ -84,70 +145,7 @@ const PageLoader = () => (
   </div>
 );
 
-// Helper function to check if error is a Firestore internal assertion error
-const isFirestoreInternalError = (error: any): boolean => {
-  if (!error) return false;
-  const errorString = String(error);
-  const errorMessage = error?.message || '';
-  const errorStack = error?.stack || '';
-  const errorCode = error?.code || '';
-  
-  return (
-    errorString.includes('INTERNAL ASSERTION FAILED') || 
-    errorMessage.includes('INTERNAL ASSERTION FAILED') ||
-    errorStack.includes('INTERNAL ASSERTION FAILED') ||
-    errorString.includes('ID: ca9') ||
-    errorString.includes('ID: b815') ||
-    errorMessage.includes('ID: ca9') ||
-    errorMessage.includes('ID: b815') ||
-    errorStack.includes('ID: ca9') ||
-    errorStack.includes('ID: b815') ||
-    (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
-    (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
-    (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
-  );
-};
-
-// Global error handler for Firestore assertion errors (capture phase)
-window.addEventListener('error', (event) => {
-  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    // Completely suppress - don't log anything
-    event.preventDefault(); // Prevent the error from crashing the app
-    event.stopPropagation(); // Stop event propagation
-    event.stopImmediatePropagation(); // Stop immediate propagation
-    return false;
-  }
-}, true); // Use capture phase to catch errors earlier
-
-// Additional error listener in bubble phase for Firefox compatibility
-window.addEventListener('error', (event) => {
-  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    event.preventDefault();
-    event.stopPropagation();
-    return false;
-  }
-}, false);
-
-// Global unhandled promise rejection handler
-window.addEventListener('unhandledrejection', (event) => {
-  if (isFirestoreInternalError(event.reason)) {
-    // Completely suppress - don't log anything
-    event.preventDefault(); // Prevent the error from crashing the app
-    event.stopPropagation(); // Stop event propagation
-    return false;
-  }
-});
-
-// Additional error handler for console errors
-const originalConsoleError = console.error;
-console.error = function(...args: any[]) {
-  const message = args.join(' ');
-  if (isFirestoreInternalError(message) || args.some(arg => isFirestoreInternalError(arg))) {
-    // Completely suppress - don't even warn
-    return;
-  }
-  originalConsoleError.apply(console, args);
-};
+// Error handlers already set up at the top of the file
 
 // Protected Admin Route Component
 const ProtectedAdminRoute = () => {
@@ -385,6 +383,11 @@ const AppContent = () => {
                 <InSessionCreate />
               </ProtectedRoute>
             } />
+            <Route path="/in-session/:sessionId" element={
+              <ProtectedRoute user={true}>
+                <InSessionBattleView />
+              </ProtectedRoute>
+            } />
             {/* Catch-all route for 404 */}
             <Route path="*" element={
               <div style={{
@@ -428,6 +431,7 @@ const AppContent = () => {
       <TutorialManager />
       <InvitationManager />
       <BadgeRewardNotifier />
+      <InSessionNotification />
       
       {/* Milestone Modal */}
       {currentMilestone && (

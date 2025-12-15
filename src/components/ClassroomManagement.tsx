@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import StudentListItem from './StudentListItem';
 import { useGoogleLogin } from '@react-oauth/google';
 import SearchBar from './SearchBar';
 import { searchStudents } from '../utils/searchUtils';
+import { useAuth } from '../context/AuthContext';
+import InSessionBattle from './InSessionBattle';
 
 // Classroom interface
 interface Classroom {
@@ -113,6 +116,8 @@ interface Student {
 }
 
 const ClassroomManagement: React.FC = () => {
+  const { currentUser, isAdmin: isAdminFromAuth } = useAuth();
+  const navigate = useNavigate();
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
@@ -136,6 +141,76 @@ const ClassroomManagement: React.FC = () => {
   const [googleAuthToken, setGoogleAuthToken] = useState<string>('');
   const [showOAuthSetupModal, setShowOAuthSetupModal] = useState(false);
   const [showClassPPView, setShowClassPPView] = useState<string | null>(null);
+  
+  // In Session states
+  const [inSessionActive, setInSessionActive] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionClassId, setSessionClassId] = useState<string | null>(null);
+  const [sessionClassName, setSessionClassName] = useState<string>('');
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Check if user is admin
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      if (!currentUser) {
+        console.log('[ClassroomManagement] No current user, setting isAdmin to false');
+        setIsAdmin(false);
+        return;
+      }
+      
+      // First check AuthContext's isAdmin function (email-based)
+      const isAdminFromAuthContext = isAdminFromAuth();
+      
+      // Also check email-based admin directly (as additional check)
+      const isAdminByEmail = currentUser.email === 'eddymosley@compscihigh.org' || 
+                             currentUser.email === 'admin@mstgames.net' ||
+                             currentUser.email === 'edm21179@gmail.com' ||
+                             currentUser.email === 'eddymosley9@gmail.com' ||
+                             currentUser.email?.includes('eddymosley') ||
+                             currentUser.email?.includes('admin') ||
+                             currentUser.email?.includes('mstgames');
+      
+      try {
+        const roleDoc = await getDoc(doc(db, 'userRoles', currentUser.uid));
+        if (roleDoc.exists()) {
+          const roleData = roleDoc.data();
+          const hasAdminRole = roleData.role === 'admin' || 
+                             (roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('admin'));
+          console.log('[ClassroomManagement] Admin check results:', {
+            userId: currentUser.uid,
+            email: currentUser.email,
+            role: roleData.role,
+            roles: roleData.roles,
+            hasAdminRole,
+            isAdminByEmail: !!isAdminByEmail,
+            isAdminFromAuthContext
+          });
+          // Use any of: role-based admin OR email-based admin OR AuthContext admin check
+          setIsAdmin(hasAdminRole || !!isAdminByEmail || isAdminFromAuthContext);
+        } else {
+          // No role document, use email check or AuthContext
+          console.log('[ClassroomManagement] No userRoles document, using email/AuthContext check:', {
+            userId: currentUser.uid,
+            email: currentUser.email,
+            isAdminByEmail: !!isAdminByEmail,
+            isAdminFromAuthContext
+          });
+          setIsAdmin(!!isAdminByEmail || isAdminFromAuthContext);
+        }
+      } catch (error) {
+        console.error('[ClassroomManagement] Error checking admin status:', error);
+        // On error, fall back to email check or AuthContext
+        console.log('[ClassroomManagement] Error occurred, falling back to email/AuthContext check:', {
+          email: currentUser.email,
+          isAdminByEmail: !!isAdminByEmail,
+          isAdminFromAuthContext
+        });
+        setIsAdmin(!!isAdminByEmail || isAdminFromAuthContext);
+      }
+    };
+    
+    checkAdminStatus();
+  }, [currentUser, isAdminFromAuth]);
 
   // Fetch classrooms and students
   useEffect(() => {
@@ -241,6 +316,14 @@ const ClassroomManagement: React.FC = () => {
         ...doc.data()
       } as Classroom));
       setClassrooms(classroomsData);
+    }, (error) => {
+      // Suppress Firestore internal assertion errors (known issue)
+      if (error instanceof Error && 
+          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
+           error.message?.includes('Unexpected state'))) {
+        return;
+      }
+      console.error('Error listening to classrooms:', error);
     });
 
     return () => unsubscribe();
@@ -826,6 +909,34 @@ const ClassroomManagement: React.FC = () => {
       }
     };
 
+  // If session is active, show the battle interface
+  if (inSessionActive && sessionId && sessionClassId) {
+    const classStudents = students
+      .filter(s => {
+        const classroom = classrooms.find(c => c.id === sessionClassId);
+        return classroom?.students.includes(s.id);
+      })
+      .map(s => ({
+        ...s,
+        powerPoints: s.powerPoints || 0 // Ensure powerPoints is always a number
+      }));
+    
+    return (
+      <InSessionBattle
+        sessionId={sessionId}
+        classId={sessionClassId}
+        className={sessionClassName}
+        students={classStudents}
+        onEndSession={() => {
+          setInSessionActive(false);
+          setSessionId(null);
+          setSessionClassId(null);
+          setSessionClassName('');
+        }}
+      />
+    );
+  }
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
@@ -926,7 +1037,100 @@ const ClassroomManagement: React.FC = () => {
                   </p>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  onClick={async () => {
+                    if (!isAdmin) {
+                      alert('Only administrators can start In Session battles.');
+                      return;
+                    }
+                    
+                    try {
+                      // Get students for this classroom
+                      const classStudents = classroom.students
+                        .map(studentId => students.find(s => s.id === studentId))
+                        .filter(Boolean) as Student[];
+                      
+                      if (classStudents.length === 0) {
+                        alert('No students in this classroom. Add students before starting a session.');
+                        return;
+                      }
+                      
+                      // Helper function to remove undefined values (Firestore doesn't allow undefined)
+                      const removeUndefined = (obj: any): any => {
+                        if (obj === null || obj === undefined) {
+                          return null;
+                        }
+                        if (Array.isArray(obj)) {
+                          return obj.map(item => removeUndefined(item));
+                        }
+                        if (typeof obj === 'object' && obj.constructor === Object) {
+                          const cleaned: any = {};
+                          for (const key in obj) {
+                            if (obj.hasOwnProperty(key) && obj[key] !== undefined) {
+                              cleaned[key] = removeUndefined(obj[key]);
+                            }
+                          }
+                          return cleaned;
+                        }
+                        return obj;
+                      };
+
+                      // Create a new session room
+                      // Start with empty players array - students must join manually
+                      const sessionData = {
+                        classId: classroom.id,
+                        className: classroom.name,
+                        teacherId: currentUser?.uid || '',
+                        status: 'active',
+                        players: [], // Start empty - students join via notification button
+                        activeViewers: [currentUser?.uid || ''], // Initialize with teacher/admin who started the session
+                        createdAt: serverTimestamp(),
+                        startedAt: serverTimestamp(),
+                        battleLog: ['📚 In Session Battle Started!']
+                      };
+                      
+                      // Remove any undefined values before saving
+                      const cleanedSessionData = removeUndefined(sessionData);
+                      const sessionRef = await addDoc(collection(db, 'inSessionRooms'), cleanedSessionData);
+                        // Navigate to the session view
+                        navigate(`/in-session/${sessionRef.id}`);
+                    } catch (error) {
+                      // Suppress Firestore internal assertion errors (known issue)
+                      if (error instanceof Error && 
+                          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
+                           error.message?.includes('Unexpected state'))) {
+                        // Still try to navigate if we have a session ID
+                        console.warn('Firestore internal assertion error (suppressed):', error);
+                        return;
+                      }
+                      console.error('Error starting session:', error);
+                      alert('Failed to start session. Please try again.');
+                    }
+                  }}
+                  disabled={!isAdmin}
+                  style={{
+                    background: isAdmin 
+                      ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)' 
+                      : 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.75rem',
+                    cursor: isAdmin ? 'pointer' : 'not-allowed',
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    boxShadow: isAdmin ? '0 2px 4px rgba(139, 92, 246, 0.3)' : 'none',
+                    whiteSpace: 'nowrap',
+                    opacity: isAdmin ? 1 : 0.6
+                  }}
+                  title={isAdmin ? "Start an In Session battle for this class" : "Only administrators can start In Session battles"}
+                >
+                  📚 Start In Session
+                </button>
                 <button
                   onClick={() => setShowAddStudentsModal(classroom.id)}
                   style={{
@@ -937,7 +1141,11 @@ const ClassroomManagement: React.FC = () => {
                     padding: '0.5rem 0.75rem',
                     fontSize: '0.75rem',
                     cursor: 'pointer',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   👥 Add Students
@@ -952,7 +1160,11 @@ const ClassroomManagement: React.FC = () => {
                     padding: '0.5rem 0.75rem',
                     fontSize: '0.75rem',
                     cursor: 'pointer',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   ⚡ View PP
@@ -971,7 +1183,11 @@ const ClassroomManagement: React.FC = () => {
                     padding: '0.5rem 0.75rem',
                     fontSize: '0.75rem',
                     cursor: 'pointer',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   📚 Import from Google
@@ -986,7 +1202,11 @@ const ClassroomManagement: React.FC = () => {
                     padding: '0.5rem 0.75rem',
                     fontSize: '0.75rem',
                     cursor: 'pointer',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    whiteSpace: 'nowrap'
                   }}
                   title="OAuth Setup Help"
                 >
@@ -1002,7 +1222,11 @@ const ClassroomManagement: React.FC = () => {
                     padding: '0.5rem 0.75rem',
                     fontSize: '0.75rem',
                     cursor: 'pointer',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   🗑️ Delete

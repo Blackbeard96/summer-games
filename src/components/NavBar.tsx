@@ -30,11 +30,12 @@ const getNavItemStyle = (screenSize: 'mobile' | 'tablet' | 'desktop'): CSSProper
     color: 'white',
     textDecoration: 'none',
     borderRadius: '0.25rem',
-    transition: 'background-color 0.2s',
+    transition: 'background-color 0.2s ease',
     position: 'relative' as CSSProperties['position'],
     display: 'inline-block',
     cursor: 'pointer',
     whiteSpace: 'nowrap' as CSSProperties['whiteSpace'],
+    backgroundColor: 'transparent',
   };
 
   switch (screenSize) {
@@ -476,10 +477,8 @@ const NavBar = memo(() => {
   const navItems = useMemo(() => [
     { to: '/home', label: 'Home', tooltip: 'Home Hub' },
     { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges' },
-    { to: '/story', label: '📖 Story Mode', tooltip: 'Your journey through the Nine Knowings Universe' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System', hasDropdown: true },
     { to: '/island-raid', label: '🏝️ Island Raid', tooltip: 'PvE Co-op Campaign Mode' },
-    { to: '/in-session', label: '📚 In Session', tooltip: 'Class Battle Mode' },
     { to: '/artifacts', label: 'Artifacts', tooltip: 'Artifacts System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ], []);
@@ -612,6 +611,8 @@ const NavBar = memo(() => {
                 style={{ ...getNavItemStyle(screenSize), position: 'relative' }} 
                 onMouseEnter={(e) => {
                   showTooltip(e);
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
+                  e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
                   if (item.hasDropdown) {
                     // Clear any pending timeout
                     if (battleDropdownTimeoutRef.current) {
@@ -623,6 +624,8 @@ const NavBar = memo(() => {
                 }}
                 onMouseLeave={(e) => {
                   hideTooltip(e);
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
                   if (item.hasDropdown) {
                     // Add delay before hiding dropdown (500ms gives time to move to dropdown)
                     battleDropdownTimeoutRef.current = setTimeout(() => {
@@ -632,7 +635,18 @@ const NavBar = memo(() => {
                   }
                 }}
               >
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>{item.label}</Link>
+                <Link 
+                  to={item.to} 
+                  style={{ 
+                    color: 'inherit', 
+                    textDecoration: 'none',
+                    display: 'block',
+                    width: '100%',
+                    height: '100%'
+                  }}
+                >
+                  {item.label}
+                </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
                 
                 {/* Battle Arena Dropdown */}
@@ -701,7 +715,20 @@ const NavBar = memo(() => {
                 return null;
               }
               return (
-                <div key={item.to} style={getNavItemStyle(screenSize)} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
+                <div 
+                  key={item.to} 
+                  style={getNavItemStyle(screenSize)} 
+                  onMouseEnter={(e) => {
+                    showTooltip(e);
+                    e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
+                    e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
+                  }} 
+                  onMouseLeave={(e) => {
+                    hideTooltip(e);
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
+                  }}
+                >
                   {item.isButton ? (
                     <button
                       onClick={item.onClick}
@@ -713,13 +740,24 @@ const NavBar = memo(() => {
                         cursor: 'pointer',
                         fontSize: 'inherit',
                         fontFamily: 'inherit',
-                        padding: 0
+                        padding: 0,
+                        width: '100%',
+                        height: '100%'
                       }}
                     >
                       {screenSize === 'tablet' ? item.label.replace('📚 Review Tutorials', '📚') : item.label}
                     </button>
                   ) : (
-                    <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+                    <Link 
+                      to={item.to} 
+                      style={{ 
+                        color: 'inherit', 
+                        textDecoration: 'none',
+                        display: 'block',
+                        width: '100%',
+                        height: '100%'
+                      }}
+                    >
                       {screenSize === 'tablet' && item.label === 'MST MKT' ? 'MKT' : item.label}
                     </Link>
                   )}
@@ -729,8 +767,28 @@ const NavBar = memo(() => {
             })}
 
             {scorekeeperNavItems.map((item) => (
-              <div key={item.to} style={{ ...getNavItemStyle(screenSize), backgroundColor: '#059669' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+              <div 
+                key={item.to} 
+                style={{ ...getNavItemStyle(screenSize), backgroundColor: '#059669' }} 
+                onMouseEnter={(e) => {
+                  showTooltip(e);
+                  e.currentTarget.style.backgroundColor = '#047857';
+                }} 
+                onMouseLeave={(e) => {
+                  hideTooltip(e);
+                  e.currentTarget.style.backgroundColor = '#059669';
+                }}
+              >
+                <Link 
+                  to={item.to} 
+                  style={{ 
+                    color: 'inherit', 
+                    textDecoration: 'none',
+                    display: 'block',
+                    width: '100%',
+                    height: '100%'
+                  }}
+                >
                   {screenSize === 'tablet' ? '📊' : item.label}
                 </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
@@ -738,8 +796,28 @@ const NavBar = memo(() => {
             ))}
 
             {adminNavItems.map((item) => (
-              <div key={item.to} style={{ ...getNavItemStyle(screenSize), backgroundColor: '#dc2626' }} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                <Link to={item.to} style={{ color: 'inherit', textDecoration: 'none' }}>
+              <div 
+                key={item.to} 
+                style={{ ...getNavItemStyle(screenSize), backgroundColor: '#dc2626' }} 
+                onMouseEnter={(e) => {
+                  showTooltip(e);
+                  e.currentTarget.style.backgroundColor = '#b91c1c';
+                }} 
+                onMouseLeave={(e) => {
+                  hideTooltip(e);
+                  e.currentTarget.style.backgroundColor = '#dc2626';
+                }}
+              >
+                <Link 
+                  to={item.to} 
+                  style={{ 
+                    color: 'inherit', 
+                    textDecoration: 'none',
+                    display: 'block',
+                    width: '100%',
+                    height: '100%'
+                  }}
+                >
                   {screenSize === 'tablet' ? "Sage's" : item.label}
                 </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>

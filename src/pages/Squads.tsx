@@ -34,6 +34,7 @@ interface Squad {
   createdAt: Date;
   description?: string;
   maxMembers: number;
+  abbreviation?: string;
 }
 
 const Squads: React.FC = () => {
@@ -45,6 +46,7 @@ const Squads: React.FC = () => {
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [newSquadName, setNewSquadName] = useState('');
   const [newSquadDescription, setNewSquadDescription] = useState('');
+  const [newSquadAbbreviation, setNewSquadAbbreviation] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'my-squad' | 'all-squads' | 'available-players'>('my-squad');
 
@@ -268,6 +270,7 @@ const Squads: React.FC = () => {
       const squadData = {
         name: newSquadName.trim(),
         description: newSquadDescription.trim(),
+        abbreviation: newSquadAbbreviation.trim().slice(0, 4) || undefined,
         leader: currentUser.uid,
         members: [{
           uid: currentUser.uid,
@@ -291,6 +294,7 @@ const Squads: React.FC = () => {
       setIsCreatingSquad(false);
       setNewSquadName('');
       setNewSquadDescription('');
+      setNewSquadAbbreviation('');
     } catch (error) {
       console.error('Error creating squad:', error);
     }
@@ -468,6 +472,30 @@ const Squads: React.FC = () => {
       });
     } catch (error) {
       console.error('Error removing member:', error);
+    }
+  };
+
+  const updateAbbreviation = async (squadId: string, abbreviation: string) => {
+    if (!currentUser) return;
+
+    try {
+      const squad = squads.find(s => s.id === squadId);
+      if (!squad) return;
+
+      // Check if current user is the leader (only leaders can update abbreviation)
+      const currentMember = squad.members.find(m => m.uid === currentUser.uid);
+      if (!currentMember || !currentMember.isLeader) {
+        console.error('Only squad leaders can update the abbreviation');
+        return;
+      }
+
+      const cleanedAbbreviation = abbreviation.trim().slice(0, 4) || null;
+
+      await updateDoc(doc(db, 'squads', squadId), {
+        abbreviation: cleanedAbbreviation || null
+      });
+    } catch (error) {
+      console.error('Error updating abbreviation:', error);
     }
   };
 
@@ -958,6 +986,23 @@ const Squads: React.FC = () => {
                 resize: 'vertical'
               }}
             />
+            <input
+              type="text"
+              placeholder="Squad Abbreviation (up to 4 characters) - Optional"
+              value={newSquadAbbreviation}
+              onChange={(e) => {
+                const value = e.target.value.slice(0, 4);
+                setNewSquadAbbreviation(value);
+              }}
+              maxLength={4}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '0.375rem',
+                marginBottom: '1rem'
+              }}
+            />
             <div style={{ display: 'flex', gap: '1rem' }}>
               <button
                 onClick={createSquad}
@@ -1052,6 +1097,7 @@ const Squads: React.FC = () => {
               onPromoteToAdmin={promoteToAdmin}
               onDemoteFromAdmin={demoteFromAdmin}
               onRemoveMember={removeMember}
+              onUpdateAbbreviation={updateAbbreviation}
               currentUserId={currentUser?.uid || undefined}
               isCurrentUserInSquad={true}
             />
@@ -1101,6 +1147,7 @@ const Squads: React.FC = () => {
                 onPromoteToAdmin={promoteToAdmin}
                 onDemoteFromAdmin={demoteFromAdmin}
                 onRemoveMember={removeMember}
+                onUpdateAbbreviation={updateAbbreviation}
                 currentUserId={currentUser?.uid || undefined}
                 isCurrentUserInSquad={squad.members.some(member => member.uid === currentUser?.uid)}
               />

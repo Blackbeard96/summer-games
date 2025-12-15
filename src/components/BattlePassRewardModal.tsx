@@ -282,3 +282,5 @@ const BattlePassRewardModal: React.FC<BattlePassRewardModalProps> = ({
 export default BattlePassRewardModal;
 
 
+
+

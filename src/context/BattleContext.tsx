@@ -105,7 +105,7 @@ interface BattleContextType {
   // Inventory Management
   inventory: string[];
   artifacts: any[];
-  activateArtifact: (artifactName: string) => Promise<void>;
+  activateArtifact: (artifactName: string, onArtifactUsed?: () => void) => Promise<void>;
   refreshInventory: () => Promise<void>;
   
   // Loading States
@@ -3847,7 +3847,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // Use an artifact during battle
-  const activateArtifact = async (artifactName: string) => {
+  const activateArtifact = async (artifactName: string, onArtifactUsed?: () => void) => {
     if (!currentUser || !vault) return;
 
     try {
@@ -3940,6 +3940,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         
         setSuccess(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
+        
+        // Call callback to signal that Health Potion was used (ends turn in battle)
+        if (onArtifactUsed) {
+          onArtifactUsed();
+        }
+        
         return; // Exit early since we've handled everything
       }
 

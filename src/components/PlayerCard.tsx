@@ -21,6 +21,7 @@ interface PlayerCardProps {
   userId?: string;
   onManifestReselect?: () => void;
   ordinaryWorld?: string;
+  squadAbbreviation?: string | null;
 }
 
 const styleIcons: Record<string, string> = {
@@ -78,6 +79,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   userId,
   onManifestReselect,
   ordinaryWorld,
+  squadAbbreviation,
 }) => {
   const [flipped, setFlipped] = useState(false);
   const [showBadges, setShowBadges] = useState(false);
@@ -302,6 +304,16 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 {/* Player Name */}
                 <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {name}
+                  {squadAbbreviation && (
+                    <span style={{
+                      fontSize: '16px',
+                      color: '#4f46e5',
+                      fontWeight: '600',
+                      marginLeft: '4px'
+                    }}>
+                      [{squadAbbreviation}]
+                    </span>
+                  )}
                   {ppBoostStatus.isActive && (
                     <span 
                       style={{ 

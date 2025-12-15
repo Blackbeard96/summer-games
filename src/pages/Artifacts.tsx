@@ -5,6 +5,25 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { calculateUpgradeCost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 
+// Artifact price definitions for refund calculations
+const artifactPrices: { [key: string]: number } = {
+  'blaze-ring': 540,
+  'terra-ring': 540,
+  'aqua-ring': 540,
+  'air-ring': 540,
+  'checkin-free': 50,
+  'shield': 50,
+  'health-potion-25': 40,
+  'lunch-mosley': 5400,
+  'forge-token': 1000,
+  'uxp-credit': 60,
+  'uxp-credit-4': 100,
+  'double-pp': 75,
+  'skip-the-line': 50,
+  'work-extension': 50,
+  'instant-a': 99
+};
+
 interface Artifact {
   id: string;
   name: string;
@@ -14,6 +33,7 @@ interface Artifact {
   };
   level?: number;
   image?: string;
+  price?: number; // Original purchase price for refund calculations
 }
 
 interface EquippedArtifacts {
@@ -124,7 +144,8 @@ const Artifacts: React.FC = () => {
                 slot: 'ring1', // Default slot, but can be equipped to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Blaze Ring.png',
-                stats: {}
+                stats: {},
+                price: purchaseData?.price || artifactPrices['blaze-ring'] || 0
               };
               available.push(blazeRing);
             }
@@ -152,7 +173,8 @@ const Artifacts: React.FC = () => {
                 slot: 'ring1', // Default slot, but can be equipped to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Terra Ring.png',
-                stats: {}
+                stats: {},
+                price: purchaseData?.price || artifactPrices['terra-ring'] || 0
               };
               available.push(terraRing);
             }
@@ -180,7 +202,8 @@ const Artifacts: React.FC = () => {
                 slot: 'ring1', // Default slot, but can be equipped to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Aqua Ring.png',
-                stats: {}
+                stats: {},
+                price: purchaseData?.price || artifactPrices['aqua-ring'] || 0
               };
               available.push(aquaRing);
             }
@@ -208,7 +231,8 @@ const Artifacts: React.FC = () => {
                 slot: 'ring1', // Default slot, but can be equipped to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Air Ring.png',
-                stats: {}
+                stats: {},
+                price: purchaseData?.price || artifactPrices['air-ring'] || 0
               };
               available.push(airRing);
             }
@@ -426,7 +450,8 @@ const Artifacts: React.FC = () => {
               slot: 'ring1',
               level: 1,
               image: purchaseData?.image || '/images/Blaze Ring.png',
-              stats: {}
+              stats: {},
+              price: purchaseData?.price || artifactPrices['blaze-ring'] || 0
             };
             available.push(blazeRing);
           }
@@ -453,7 +478,8 @@ const Artifacts: React.FC = () => {
               slot: 'ring1',
               level: 1,
               image: purchaseData?.image || '/images/Terra Ring.png',
-              stats: {}
+              stats: {},
+              price: purchaseData?.price || artifactPrices['terra-ring'] || 0
             };
             available.push(terraRing);
           }
@@ -480,7 +506,8 @@ const Artifacts: React.FC = () => {
               slot: 'ring1',
               level: 1,
               image: purchaseData?.image || '/images/Aqua Ring.png',
-              stats: {}
+              stats: {},
+              price: purchaseData?.price || artifactPrices['aqua-ring'] || 0
             };
             available.push(aquaRing);
           }
@@ -507,7 +534,8 @@ const Artifacts: React.FC = () => {
               slot: 'ring1',
               level: 1,
               image: purchaseData?.image || '/images/Air Ring.png',
-              stats: {}
+              stats: {},
+              price: purchaseData?.price || artifactPrices['air-ring'] || 0
             };
             available.push(airRing);
           }
@@ -520,6 +548,261 @@ const Artifacts: React.FC = () => {
     } catch (error) {
       console.error('Error unequipping artifact:', error);
       alert('Failed to unequip artifact. Please try again.');
+    }
+  };
+
+  // Handle refunding an artifact
+  const handleRefundArtifact = async (artifact: Artifact) => {
+    if (!currentUser) return;
+
+    try {
+      // Get current user data
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (!studentDoc.exists() || !userDoc.exists()) {
+        alert('Error: User data not found.');
+        return;
+      }
+
+      const studentData = studentDoc.data();
+      const userData = userDoc.data();
+
+      // Get the original price - check multiple sources
+      let artifactPrice = 0;
+      
+      // First, check purchase data in students.artifacts
+      const purchaseData = studentData.artifacts?.[`${artifact.id}_purchase`] || 
+                          studentData.artifacts?.[`${artifact.id.replace('-', '_')}_purchase`];
+      if (purchaseData && purchaseData.price) {
+        artifactPrice = purchaseData.price;
+      }
+      // Second, check artifactPrices map
+      else if (artifactPrices[artifact.id]) {
+        artifactPrice = artifactPrices[artifact.id];
+      }
+      
+      // Only allow refund if artifact has a price (was purchased from MST MKT)
+      if (artifactPrice === 0) {
+        alert('This artifact cannot be refunded (no purchase price found).');
+        return;
+      }
+
+      const returnPrice = Math.floor(artifactPrice * 0.5);
+      
+      if (!window.confirm(`Return ${artifact.name} for ${returnPrice} PP (50% of original ${artifactPrice} PP)?`)) {
+        return;
+      }
+
+      // Check if artifact is equipped - must unequip first
+      const isEquipped = Object.values(studentData.equippedArtifacts || {}).some(
+        (eq: any) => eq && typeof eq === 'object' && 'id' in eq && eq.id === artifact.id
+      );
+      
+      if (isEquipped) {
+        alert('Please unequip this artifact before returning it.');
+        return;
+      }
+
+      // Remove artifact from students.artifacts
+      const currentArtifacts = studentData.artifacts || {};
+      const updatedArtifacts = { ...currentArtifacts };
+      
+      // Remove the artifact flag and purchase data
+      delete updatedArtifacts[artifact.id];
+      delete updatedArtifacts[`${artifact.id}_purchase`];
+      delete updatedArtifacts[artifact.id.replace('-', '_')];
+      delete updatedArtifacts[`${artifact.id.replace('-', '_')}_purchase`];
+
+      // Remove ONE instance from students.inventory
+      const currentInventory = studentData.inventory || [];
+      const artifactIndex = currentInventory.indexOf(artifact.name);
+      const updatedInventory = artifactIndex > -1 
+        ? currentInventory.filter((item: string, index: number) => index !== artifactIndex)
+        : currentInventory;
+
+      // Calculate new PP (add 50% of original price)
+      const currentPP = studentData.powerPoints || 0;
+      const newPP = currentPP + returnPrice;
+
+      // Remove artifact from users.artifacts array
+      const usersArtifacts = userData.artifacts || [];
+      let foundOne = false;
+      const updatedUsersArtifacts = usersArtifacts.filter((art: any) => {
+        if (foundOne) return true;
+        
+        if (typeof art === 'string') {
+          if (art === artifact.name) {
+            foundOne = true;
+            return false; // Remove this artifact
+          }
+          return true;
+        } else {
+          // Match by ID or name, and ensure it's not used
+          const isNotUsed = art.used === false || art.used === undefined || art.used === null;
+          if ((art.id === artifact.id || art.name === artifact.name) && isNotUsed) {
+            foundOne = true;
+            return false; // Remove this artifact
+          }
+          return true;
+        }
+      });
+
+      // Update both collections
+      await updateDoc(studentRef, {
+        artifacts: updatedArtifacts,
+        inventory: updatedInventory,
+        powerPoints: newPP
+      });
+
+      await updateDoc(userRef, {
+        artifacts: updatedUsersArtifacts
+      });
+
+      // Also update vault directly to ensure consistency
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const vaultDoc = await getDoc(vaultRef);
+      if (vaultDoc.exists()) {
+        const vaultData = vaultDoc.data();
+        const maxVaultHealth = vaultData.maxVaultHealth || Math.floor((vaultData.capacity || 1000) * 0.1);
+        const correctVaultHealth = newPP >= maxVaultHealth
+          ? maxVaultHealth
+          : Math.min(newPP, maxVaultHealth);
+        
+        await updateDoc(vaultRef, {
+          currentPP: newPP,
+          vaultHealth: correctVaultHealth
+        });
+      }
+
+      // Update local state
+      setPowerPoints(newPP);
+      
+      // Reload available artifacts to reflect the refund
+      const refreshedStudentData = (await getDoc(studentRef)).data();
+      if (refreshedStudentData) {
+        const available: Artifact[] = [];
+        
+        // Check for Blaze Ring
+        const hasBlazeRing = refreshedStudentData.artifacts?.['blaze-ring'] === true || 
+                             refreshedStudentData.artifacts?.blaze_ring === true ||
+                             refreshedStudentData.artifacts?.['blaze-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.blaze_ring_purchase;
+        
+        if (hasBlazeRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['blaze-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.blaze_ring_purchase;
+          const isEquipped = Object.values(refreshedStudentData.equippedArtifacts || {}).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'blaze-ring'
+          );
+          
+          if (!isEquipped) {
+            const blazeRing: Artifact = {
+              id: 'blaze-ring',
+              name: purchaseData?.name || 'Blaze Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Blaze Ring.png',
+              stats: {},
+              price: purchaseData?.price || artifactPrices['blaze-ring'] || 0
+            };
+            available.push(blazeRing);
+          }
+        }
+        
+        // Check for Terra Ring
+        const hasTerraRing = refreshedStudentData.artifacts?.['terra-ring'] === true || 
+                             refreshedStudentData.artifacts?.terra_ring === true ||
+                             refreshedStudentData.artifacts?.['terra-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.terra_ring_purchase;
+        
+        if (hasTerraRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['terra-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.terra_ring_purchase;
+          const isEquipped = Object.values(refreshedStudentData.equippedArtifacts || {}).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'terra-ring'
+          );
+          
+          if (!isEquipped) {
+            const terraRing: Artifact = {
+              id: 'terra-ring',
+              name: purchaseData?.name || 'Terra Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Terra Ring.png',
+              stats: {},
+              price: purchaseData?.price || artifactPrices['terra-ring'] || 0
+            };
+            available.push(terraRing);
+          }
+        }
+
+        // Check for Aqua Ring
+        const hasAquaRing = refreshedStudentData.artifacts?.['aqua-ring'] === true || 
+                             refreshedStudentData.artifacts?.aqua_ring === true ||
+                             refreshedStudentData.artifacts?.['aqua-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.aqua_ring_purchase;
+        
+        if (hasAquaRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['aqua-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.aqua_ring_purchase;
+          const isEquipped = Object.values(refreshedStudentData.equippedArtifacts || {}).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'aqua-ring'
+          );
+          
+          if (!isEquipped) {
+            const aquaRing: Artifact = {
+              id: 'aqua-ring',
+              name: purchaseData?.name || 'Aqua Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Aqua Ring.png',
+              stats: {},
+              price: purchaseData?.price || artifactPrices['aqua-ring'] || 0
+            };
+            available.push(aquaRing);
+          }
+        }
+
+        // Check for Air Ring
+        const hasAirRing = refreshedStudentData.artifacts?.['air-ring'] === true || 
+                             refreshedStudentData.artifacts?.air_ring === true ||
+                             refreshedStudentData.artifacts?.['air-ring_purchase'] ||
+                             refreshedStudentData.artifacts?.air_ring_purchase;
+        
+        if (hasAirRing) {
+          const purchaseData = refreshedStudentData.artifacts?.['air-ring_purchase'] || 
+                              refreshedStudentData.artifacts?.air_ring_purchase;
+          const isEquipped = Object.values(refreshedStudentData.equippedArtifacts || {}).some(
+            (eq) => eq !== null && eq !== undefined && typeof eq === 'object' && 'id' in eq && eq.id === 'air-ring'
+          );
+          
+          if (!isEquipped) {
+            const airRing: Artifact = {
+              id: 'air-ring',
+              name: purchaseData?.name || 'Air Ring',
+              slot: 'ring1',
+              level: 1,
+              image: purchaseData?.image || '/images/Air Ring.png',
+              stats: {},
+              price: purchaseData?.price || artifactPrices['air-ring'] || 0
+            };
+            available.push(airRing);
+          }
+        }
+        
+        setAvailableArtifacts(available);
+      } else {
+        // Fallback: just remove from list
+        setAvailableArtifacts(prev => prev.filter(a => a.id !== artifact.id));
+      }
+
+      alert(`✅ ${artifact.name} returned! You received ${returnPrice} PP (50% of original ${artifactPrice} PP).`);
+    } catch (error) {
+      console.error('Error returning artifact:', error);
+      alert('Error returning artifact. Please try again.');
     }
   };
 
@@ -1214,7 +1497,8 @@ const Artifacts: React.FC = () => {
                           <div style={{
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: '0.25rem'
+                            gap: '0.25rem',
+                            marginBottom: '0.5rem'
                           }}>
                             {compatibleSlots.map((slot) => {
                               const slotInfo = slotConfig.find(s => s.key === slot);
@@ -1238,6 +1522,43 @@ const Artifacts: React.FC = () => {
                               );
                             })}
                           </div>
+                          {/* Return Artifact Button */}
+                          {(() => {
+                            // Get the original price from artifact object or fallback to artifactPrices
+                            const artifactPrice = artifact.price || artifactPrices[artifact.id] || 0;
+                            
+                            // Only show return button if artifact has a price (was purchased from MST MKT)
+                            if (artifactPrice > 0) {
+                              const returnPrice = Math.floor(artifactPrice * 0.5);
+                              
+                              return (
+                                <button
+                                  onClick={() => handleRefundArtifact(artifact)}
+                                  style={{
+                                    backgroundColor: '#10b981',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.375rem',
+                                    padding: '0.375rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    cursor: 'pointer',
+                                    fontWeight: 'bold',
+                                    width: '100%',
+                                    transition: 'background-color 0.2s ease'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#059669';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#10b981';
+                                  }}
+                                >
+                                  💰 Return ({returnPrice} PP)
+                                </button>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       )}
                     </div>

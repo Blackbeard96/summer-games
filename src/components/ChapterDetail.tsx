@@ -244,6 +244,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           } else if (req.value === 'power_card_discovered') {
             const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
             return powerCardChallenge?.isCompleted;
+          } else if (req.value === 'elemental_ring_level_1') {
+            // Check if Challenge 8 is completed (which grants the Elemental Ring)
+            // OR check if the artifact exists in student's artifacts
+            const challenge8Completed = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card']?.isCompleted;
+            const hasElementalRing = studentData?.artifacts?.elemental_ring_level_1 === true;
+            console.log('ChapterDetail: Checking elemental_ring_level_1 requirement:', {
+              challenge8Completed,
+              hasElementalRing,
+              studentArtifacts: studentData?.artifacts
+            });
+            return challenge8Completed === true || hasElementalRing === true;
           } else {
             // Fallback to generic artifact check
             return userProgress.artifact?.identified;

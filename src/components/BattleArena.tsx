@@ -32,6 +32,7 @@ interface BattleArenaProps {
   playerEffects?: Array<{ type: string; duration: number }>; // Active status effects on player
   opponentEffects?: Array<{ type: string; duration: number }>; // Active status effects on opponent
   isTerraAwakened?: boolean; // Whether Terra is in awakened state
+  onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
 }
 
 const BattleArena: React.FC<BattleArenaProps> = ({
@@ -48,7 +49,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   customBackground,
   hideCenterPrompt = false,
   playerEffects = [],
-  opponentEffects = []
+  opponentEffects = [],
+  onArtifactUsed
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -1326,7 +1328,11 @@ const BattleArena: React.FC<BattleArenaProps> = ({
       </style>
 
       {/* Modals */}
-      <BagModal isOpen={showBagModal} onClose={() => setShowBagModal(false)} />
+      <BagModal 
+        isOpen={showBagModal} 
+        onClose={() => setShowBagModal(false)}
+        onArtifactUsed={onArtifactUsed}
+      />
       <VaultModal isOpen={showVaultModal} onClose={() => setShowVaultModal(false)} />
     </div>
   );

@@ -11,6 +11,7 @@ import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
+import { getUserSquadAbbreviations } from '../utils/squadUtils';
 
 interface Participant {
   id: string;
@@ -41,6 +42,7 @@ interface MultiplayerBattleArenaProps {
   hideCenterPrompt?: boolean;
   playerEffects?: Array<{ type: string; duration: number }>;
   opponentEffects?: Array<{ type: string; duration: number }>;
+  onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
 }
 
 const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
@@ -57,7 +59,8 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   customBackground,
   hideCenterPrompt = false,
   playerEffects = [],
-  opponentEffects = []
+  opponentEffects = [],
+  onArtifactUsed
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -69,6 +72,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   const [showBagModal, setShowBagModal] = useState(false);
   const [showVaultModal, setShowVaultModal] = useState(false);
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
+  const [squadAbbreviations, setSquadAbbreviations] = useState<Map<string, string | null>>(new Map());
 
   // Fetch user level and equipped artifacts
   useEffect(() => {
@@ -100,6 +104,23 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
     };
     fetchPPBoost();
   }, [currentUser]);
+
+  // Fetch squad abbreviations for all participants
+  useEffect(() => {
+    const fetchSquadAbbreviations = async () => {
+      const allParticipantIds = [
+        ...allies.map(p => p.id),
+        ...enemies.map(p => p.id)
+      ].filter(id => id); // Remove any undefined/null IDs
+      
+      if (allParticipantIds.length > 0) {
+        const abbreviations = await getUserSquadAbbreviations(allParticipantIds);
+        setSquadAbbreviations(abbreviations);
+      }
+    };
+    
+    fetchSquadAbbreviations();
+  }, [allies, enemies]);
 
   // Get move type color
   const getMoveTypeColor = (move: Move): string => {
@@ -283,10 +304,27 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              lineHeight: '1.2'
+              lineHeight: '1.2',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
             }}>
-              {participant.name}
-              {isCurrentPlayer && ' (You)'}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {participant.name}
+              </span>
+              {squadAbbreviations.get(participant.id) && (
+                <span style={{
+                  fontSize: '0.7rem',
+                  color: '#4f46e5',
+                  fontWeight: '600',
+                  flexShrink: 0
+                }}>
+                  [{squadAbbreviations.get(participant.id)}]
+                </span>
+              )}
+              {isCurrentPlayer && (
+                <span style={{ flexShrink: 0 }}> (You)</span>
+              )}
             </div>
             {participant.level && (
               <div style={{ fontSize: '0.7rem', color: '#6b7280', lineHeight: '1.2' }}>
@@ -1095,6 +1133,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         <BagModal
           isOpen={showBagModal}
           onClose={() => setShowBagModal(false)}
+          onArtifactUsed={onArtifactUsed}
         />
       )}
 

@@ -27,6 +27,7 @@ interface Squad {
   createdAt: Date;
   description?: string;
   maxMembers: number;
+  abbreviation?: string;
 }
 
 interface SquadCardProps {
@@ -37,6 +38,7 @@ interface SquadCardProps {
   onPromoteToAdmin?: (squadId: string, memberId: string) => void;
   onDemoteFromAdmin?: (squadId: string, memberId: string) => void;
   onRemoveMember?: (squadId: string, memberId: string) => void;
+  onUpdateAbbreviation?: (squadId: string, abbreviation: string) => void;
   currentUserId?: string;
   isCurrentUserInSquad?: boolean;
 }
@@ -49,17 +51,26 @@ const SquadCard: React.FC<SquadCardProps> = ({
   onPromoteToAdmin,
   onDemoteFromAdmin,
   onRemoveMember,
+  onUpdateAbbreviation,
   currentUserId,
   isCurrentUserInSquad
 }) => {
   const [showMemberActions, setShowMemberActions] = useState<string | null>(null);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState<{ memberId: string; memberName: string } | null>(null);
+  const [editingAbbreviation, setEditingAbbreviation] = useState(false);
+  const [abbreviationValue, setAbbreviationValue] = useState(squad.abbreviation || '');
   const dropdownRef = useRef<HTMLDivElement>(null);
   
 
   const currentMember = squad.members.find(m => m.uid === currentUserId);
   const isAdmin = currentMember?.isLeader || currentMember?.isAdmin;
+  const isLeader = currentMember?.isLeader || false;
   const canJoin = !isCurrentUserInSquad && squad.members.length < squad.maxMembers;
+
+  // Sync abbreviation value when squad changes
+  useEffect(() => {
+    setAbbreviationValue(squad.abbreviation || '');
+  }, [squad.abbreviation]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -121,14 +132,29 @@ const SquadCard: React.FC<SquadCardProps> = ({
         marginBottom: '1rem'
       }}>
         <div>
-          <h3 style={{
-            fontSize: '1.25rem',
-            fontWeight: 'bold',
-            color: '#1f2937',
-            margin: '0 0 0.5rem 0'
-          }}>
-            {squad.name}
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+            <h3 style={{
+              fontSize: '1.25rem',
+              fontWeight: 'bold',
+              color: '#1f2937',
+              margin: 0
+            }}>
+              {squad.name}
+            </h3>
+            {squad.abbreviation && (
+              <span style={{
+                backgroundColor: '#4f46e5',
+                color: 'white',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                letterSpacing: '0.05em'
+              }}>
+                {squad.abbreviation}
+              </span>
+            )}
+          </div>
           {squad.description && (
             <p style={{
               color: '#6b7280',
@@ -344,6 +370,137 @@ const SquadCard: React.FC<SquadCardProps> = ({
             🛠️ Squad Management
           </h4>
           
+          {/* Squad Captain Section - Abbreviation Management */}
+          {isLeader && (
+            <div style={{ 
+              marginBottom: '1.5rem',
+              padding: '1rem',
+              backgroundColor: 'white',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.5rem'
+            }}>
+              <h5 style={{
+                fontSize: '1rem',
+                fontWeight: '600',
+                color: '#374151',
+                margin: '0 0 0.75rem 0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                👑 Squad Captain Settings
+              </h5>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{
+                  display: 'block',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  color: '#374151',
+                  marginBottom: '0.5rem'
+                }}>
+                  Squad Abbreviation (up to 4 characters)
+                </label>
+                {editingAbbreviation ? (
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={abbreviationValue}
+                      onChange={(e) => {
+                        const value = e.target.value.slice(0, 4);
+                        setAbbreviationValue(value);
+                      }}
+                      maxLength={4}
+                      placeholder="ABC1"
+                      style={{
+                        padding: '0.5rem',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                        width: '120px'
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        if (onUpdateAbbreviation) {
+                          onUpdateAbbreviation(squad.id, abbreviationValue.trim().toUpperCase());
+                        }
+                        setEditingAbbreviation(false);
+                      }}
+                      style={{
+                        backgroundColor: '#10b981',
+                        color: 'white',
+                        border: 'none',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAbbreviationValue(squad.abbreviation || '');
+                        setEditingAbbreviation(false);
+                      }}
+                      style={{
+                        backgroundColor: '#6b7280',
+                        color: 'white',
+                        border: 'none',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div style={{
+                      backgroundColor: abbreviationValue ? '#4f46e5' : '#f3f4f6',
+                      color: abbreviationValue ? 'white' : '#6b7280',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.375rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      letterSpacing: '0.05em',
+                      minWidth: '80px',
+                      textAlign: 'center'
+                    }}>
+                      {abbreviationValue || 'Not Set'}
+                    </div>
+                    <button
+                      onClick={() => setEditingAbbreviation(true)}
+                      style={{
+                        backgroundColor: '#4f46e5',
+                        color: 'white',
+                        border: 'none',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {abbreviationValue ? 'Edit' : 'Set Abbreviation'}
+                    </button>
+                  </div>
+                )}
+                <p style={{
+                  fontSize: '0.75rem',
+                  color: '#6b7280',
+                  margin: '0.5rem 0 0 0'
+                }}>
+                  Set a unique abbreviation (up to 4 characters, can include letters, numbers, and symbols) for your squad
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Member Management */}
           {isAdmin && (
             <div style={{ marginBottom: '1rem' }}>

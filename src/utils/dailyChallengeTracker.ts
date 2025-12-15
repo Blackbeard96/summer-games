@@ -116,6 +116,8 @@ export const updateChallengeProgressById = async (
 
 /**
  * Update challenge progress by type (more efficient for real-time updates)
+ * This function updates daily challenge progress when a player performs an action
+ * that matches a challenge type (e.g., defeats an enemy, uses a manifest ability)
  */
 export const updateChallengeProgressByType = async (
   userId: string,
@@ -123,11 +125,17 @@ export const updateChallengeProgressByType = async (
   amount: number = 1
 ) => {
   try {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Daily Challenge] updateChallengeProgressByType called:', { userId, challengeType, amount });
+    }
     // First, get player's current challenges
     const playerChallengesRef = doc(db, 'students', userId, 'dailyChallenges', 'current');
     const playerChallengesDoc = await getDoc(playerChallengesRef);
 
     if (!playerChallengesDoc.exists()) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Daily Challenge] No challenges document found for user:', userId);
+      }
       return;
     }
 
@@ -135,30 +143,47 @@ export const updateChallengeProgressByType = async (
     const today = getTodayDateString();
 
     if (data.assignedDate !== today) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Daily Challenge] Challenges are not for today. Assigned date:', data.assignedDate, 'Today:', today);
+      }
       return;
     }
 
     const challenges: PlayerChallengeProgress[] = data.challenges || [];
+    
+    if (challenges.length === 0) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Daily Challenge] No challenges found in document');
+      }
+      return;
+    }
 
     // Get challenge details to match by type
-    const { collection, getDocs, query, where } = await import('firebase/firestore');
-    const challengesRef = collection(db, 'adminSettings', 'dailyChallenges', 'challenges');
+    const challengeDetails: { [id: string]: any } = {};
+    const challengeIds = challenges.map(c => c.challengeId).filter(Boolean);
+    
+    if (challengeIds.length === 0) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Daily Challenge] No challenge IDs found');
+      }
+      return;
+    }
     
     // Fetch all challenge details
-    const challengeDetails: { [id: string]: any } = {};
-    const challengeIds = challenges.map(c => c.challengeId);
-    
-    // We'll need to fetch each challenge to get its type
-    // For efficiency, we could cache this or store type in the progress object
-    const challengeDocs = await Promise.all(
-      challengeIds.map(id => getDoc(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', id)))
-    );
+    try {
+      const challengeDocs = await Promise.all(
+        challengeIds.map(id => getDoc(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', id)))
+      );
 
-    challengeDocs.forEach((docSnap, index) => {
-      if (docSnap.exists()) {
-        challengeDetails[challengeIds[index]] = docSnap.data();
-      }
-    });
+      challengeDocs.forEach((docSnap, index) => {
+        if (docSnap.exists()) {
+          challengeDetails[challengeIds[index]] = docSnap.data();
+        }
+      });
+    } catch (error) {
+      console.error('[Daily Challenge] Error fetching challenge details:', error);
+      // Continue with what we have (might have type stored in progress object)
+    }
 
     // Update matching challenges
     let hasUpdates = false;
@@ -167,15 +192,50 @@ export const updateChallengeProgressByType = async (
       const storedType = challenge.type || challengeDetails[challenge.challengeId]?.type;
       const challengeTarget = challenge.target || challengeDetails[challenge.challengeId]?.target;
       
-      if (storedType === challengeType && !challenge.completed && challengeTarget) {
-        const newProgress = Math.min(challenge.progress + amount, challengeTarget);
-        const completed = newProgress >= challengeTarget;
+      // Normalize types for comparison (handle case sensitivity and whitespace)
+      const normalizedStoredType = storedType?.toLowerCase().trim();
+      const normalizedChallengeType = challengeType.toLowerCase().trim();
+      
+      // Debug logging
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Daily Challenge] Checking challenge:', {
+          challengeId: challenge.challengeId,
+          storedType,
+          normalizedStoredType,
+          challengeType,
+          normalizedChallengeType,
+          matches: normalizedStoredType === normalizedChallengeType,
+          completed: challenge.completed,
+          currentProgress: challenge.progress,
+          target: challengeTarget
+        });
+      }
+      
+      if (normalizedStoredType === normalizedChallengeType && !challenge.completed) {
+        // If target is not set, default to a high number to allow progress tracking
+        const target = challengeTarget || 999999;
+        const newProgress = Math.min((challenge.progress || 0) + amount, target);
+        const completed = newProgress >= target;
         
         hasUpdates = true;
+        
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Daily Challenge] Updating challenge:', {
+            challengeId: challenge.challengeId,
+            oldProgress: challenge.progress,
+            newProgress,
+            amount,
+            target,
+            completed
+          });
+        }
+        
         return {
           ...challenge,
           progress: newProgress,
-          completed: completed
+          completed: completed,
+          type: storedType || challengeType, // Store type for future lookups
+          target: challengeTarget || target // Store target for future lookups
         };
       }
       return challenge;
@@ -186,6 +246,17 @@ export const updateChallengeProgressByType = async (
         challenges: updatedChallenges,
         updatedAt: serverTimestamp()
       });
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Daily Challenge] Successfully updated challenges for type:', challengeType);
+      }
+    } else {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Daily Challenge] No matching challenges found for type:', challengeType, {
+          availableTypes: challenges.map(c => c.type || challengeDetails[c.challengeId]?.type),
+          challengeIds: challenges.map(c => c.challengeId)
+        });
+      }
     }
   } catch (error) {
     console.error('Error updating challenge progress by type:', error);
