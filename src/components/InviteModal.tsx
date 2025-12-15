@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, doc, addDoc, updateDoc, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, query, where, getDocs, Timestamp, serverTimestamp } from 'firebase/firestore';
 
 interface SquadMember {
   uid: string;
@@ -58,24 +58,72 @@ const InviteModal: React.FC<InviteModalProps> = ({
       try {
         // Fetch all users
         const usersSnapshot = await getDocs(collection(db, 'users'));
+        const studentsSnapshot = await getDocs(collection(db, 'students'));
+        
+        // Create a map of student data by UID
+        const studentDataMap = new Map();
+        studentsSnapshot.docs.forEach(doc => {
+          studentDataMap.set(doc.id, doc.data());
+        });
+        
         const allUsers: SquadMember[] = usersSnapshot.docs.map(doc => {
           const data = doc.data();
+          const studentData = studentDataMap.get(doc.id);
+          
+          // Get manifest from multiple sources
+          let manifest = 'Unknown';
+          if (data.manifest) {
+            if (typeof data.manifest === 'string') {
+              manifest = data.manifest;
+            } else if (typeof data.manifest === 'object' && data.manifest.manifestId) {
+              manifest = data.manifest.manifestId;
+            } else if (typeof data.manifest === 'object' && data.manifest.manifestationType) {
+              manifest = data.manifest.manifestationType;
+            }
+          } else if (data.manifestationType) {
+            manifest = data.manifestationType;
+          } else if (studentData?.manifest) {
+            if (typeof studentData.manifest === 'string') {
+              manifest = studentData.manifest;
+            } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+              manifest = studentData.manifest.manifestId;
+            }
+          } else if (studentData?.manifestationType) {
+            manifest = studentData.manifestationType;
+          }
+          
           return {
             uid: doc.id,
-            displayName: data.displayName || data.email?.split('@')[0] || 'Unknown',
+            displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
             email: data.email || '',
-            photoURL: data.photoURL,
-            level: data.level || 1,
-            xp: data.xp || 0,
-            manifest: data.manifest || data.manifestationType,
+            photoURL: data.photoURL || studentData?.photoURL,
+            level: data.level || studentData?.level || 1,
+            xp: data.xp || studentData?.xp || 0,
+            manifest: manifest,
             role: data.role || 'Member'
           };
         });
 
-        // Filter out current squad members and the current user
+        // Fetch all squads to find players who are already in squads
+        const squadsSnapshot = await getDocs(collection(db, 'squads'));
+        const playersInSquads = new Set<string>();
+        squadsSnapshot.docs.forEach(doc => {
+          const squadData = doc.data();
+          if (squadData.members && Array.isArray(squadData.members)) {
+            squadData.members.forEach((member: any) => {
+              if (member.uid) {
+                playersInSquads.add(member.uid);
+              }
+            });
+          }
+        });
+
+        // Filter out current squad members, the current user, and players already in other squads
         const currentMemberIds = currentMembers.map(member => member.uid);
         const available = allUsers.filter(user => 
-          !currentMemberIds.includes(user.uid) && user.uid !== currentUser.uid
+          !currentMemberIds.includes(user.uid) && 
+          user.uid !== currentUser.uid &&
+          !playersInSquads.has(user.uid)
         );
 
         setAvailablePlayers(available);
@@ -107,7 +155,40 @@ const InviteModal: React.FC<InviteModalProps> = ({
   }, [isOpen, currentUser, squadId, currentMembers]);
 
   const sendInvitation = async (player: SquadMember) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('You must be logged in to send an invitation.');
+      return;
+    }
+
+    // Check if player is already in a squad
+    try {
+      const squadsSnapshot = await getDocs(collection(db, 'squads'));
+      const playerInSquad = squadsSnapshot.docs.some(doc => {
+        const squadData = doc.data();
+        return squadData.members?.some((member: any) => member.uid === player.uid);
+      });
+
+      if (playerInSquad) {
+        alert(`${player.displayName} is already in a squad.`);
+        return;
+      }
+
+      // Check if there's already a pending invitation
+      const existingInvitesQuery = query(
+        collection(db, 'squadInvitations'),
+        where('squadId', '==', squadId),
+        where('toUserId', '==', player.uid),
+        where('status', '==', 'pending')
+      );
+      const existingInvites = await getDocs(existingInvitesQuery);
+      
+      if (!existingInvites.empty) {
+        alert(`An invitation has already been sent to ${player.displayName}.`);
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking player status:', error);
+    }
 
     setSendingInvites(prev => [...prev, player.uid]);
     
@@ -120,17 +201,33 @@ const InviteModal: React.FC<InviteModalProps> = ({
         toUserId: player.uid,
         toUserName: player.displayName,
         status: 'pending' as const,
-        createdAt: new Date()
+        createdAt: serverTimestamp()
       };
 
       const docRef = await addDoc(collection(db, 'squadInvitations'), invitationData);
       console.log(`Invitation sent to ${player.displayName} with ID: ${docRef.id}`);
       
       // Add to local state
-      setInvitations(prev => [...prev, { id: docRef.id, ...invitationData } as Invitation]);
+      const newInvitation: Invitation = {
+        id: docRef.id,
+        ...invitationData,
+        createdAt: new Date() // For local display
+      } as Invitation;
+      setInvitations(prev => [...prev, newInvitation]);
       
-    } catch (error) {
+      alert(`✅ Invitation sent to ${player.displayName}!`);
+      
+    } catch (error: any) {
       console.error('Error sending invitation:', error);
+      let errorMessage = 'Failed to send invitation. Please try again.';
+      
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. You may not have permission to send invitations.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      alert(errorMessage);
     } finally {
       setSendingInvites(prev => prev.filter(id => id !== player.uid));
     }

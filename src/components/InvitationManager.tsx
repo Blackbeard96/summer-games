@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, doc, updateDoc, onSnapshot, query, where, getDocs, getDoc, Timestamp } from 'firebase/firestore';
+import { collection, doc, updateDoc, onSnapshot, query, where, getDocs, getDoc, Timestamp, arrayUnion, serverTimestamp } from 'firebase/firestore';
 
 interface SquadMember {
   uid: string;
@@ -10,6 +10,7 @@ interface SquadMember {
   photoURL?: string;
   level: number;
   xp: number;
+  powerPoints?: number;
   manifest?: string;
   role?: string;
   isLeader?: boolean;
@@ -76,49 +77,135 @@ const InvitationManager: React.FC = () => {
   }, [currentUser]);
 
   const acceptInvitation = async (invitation: Invitation) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('You must be logged in to accept an invitation.');
+      return;
+    }
 
     console.log('InvitationManager: Accepting invitation:', invitation);
 
     try {
-      // Update invitation status
-      console.log('InvitationManager: Updating invitation status to accepted');
-      await updateDoc(doc(db, 'squadInvitations', invitation.id), {
-        status: 'accepted'
+      // Check if user is already in a squad
+      const allSquadsSnapshot = await getDocs(collection(db, 'squads'));
+      const userSquad = allSquadsSnapshot.docs.find(doc => {
+        const squadData = doc.data();
+        return squadData.members?.some((member: any) => member.uid === currentUser.uid);
       });
 
-      // Get squad data
-      console.log('InvitationManager: Getting squad data for squadId:', invitation.squadId);
-      const squadDoc = await getDoc(doc(db, 'squads', invitation.squadId));
+      if (userSquad) {
+        alert('You are already in a squad. Please leave your current squad before accepting this invitation.');
+        return;
+      }
+
+      // Get fresh squad data from Firestore
+      const squadRef = doc(db, 'squads', invitation.squadId);
+      const squadDoc = await getDoc(squadRef);
+      
       if (!squadDoc.exists()) {
-        console.error('InvitationManager: Squad not found');
+        alert('Squad not found. It may have been deleted.');
         return;
       }
 
       const squadData = squadDoc.data() as Squad;
-      console.log('InvitationManager: Squad data retrieved:', squadData);
+      const currentMembers = squadData.members || [];
       
-      // Add user to squad
+      // Check if squad is full
+      if (currentMembers.length >= (squadData.maxMembers || 4)) {
+        alert('This squad is full. The invitation is no longer valid.');
+        // Mark invitation as declined since squad is full
+        await updateDoc(doc(db, 'squadInvitations', invitation.id), {
+          status: 'declined'
+        });
+        return;
+      }
+
+      // Check if user is already in this squad
+      const alreadyMember = currentMembers.some((member: any) => member.uid === currentUser.uid);
+      if (alreadyMember) {
+        alert('You are already a member of this squad.');
+        await updateDoc(doc(db, 'squadInvitations', invitation.id), {
+          status: 'accepted'
+        });
+        return;
+      }
+
+      // Fetch user's actual data from both collections
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+      
+      const userData = userDoc.exists() ? userDoc.data() : {};
+      const studentData = studentDoc.exists() ? studentDoc.data() : {};
+      
+      // Try to get manifest from multiple sources
+      let manifest = 'Unknown';
+      if (userData.manifest) {
+        if (typeof userData.manifest === 'string') {
+          manifest = userData.manifest;
+        } else if (typeof userData.manifest === 'object' && userData.manifest.manifestId) {
+          manifest = userData.manifest.manifestId;
+        } else if (typeof userData.manifest === 'object' && userData.manifest.manifestationType) {
+          manifest = userData.manifest.manifestationType;
+        }
+      } else if (userData.manifestationType) {
+        manifest = userData.manifestationType;
+      } else if (studentData?.manifest) {
+        if (typeof studentData.manifest === 'string') {
+          manifest = studentData.manifest;
+        } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          manifest = studentData.manifest.manifestId;
+        } else if (typeof studentData.manifest === 'object' && studentData.manifest.manifestationType) {
+          manifest = studentData.manifest.manifestationType;
+        }
+      } else if (studentData?.manifestationType) {
+        manifest = studentData.manifestationType;
+      }
+      
+      // Create new member with proper data
       const newMember: SquadMember = {
         uid: currentUser.uid,
-        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Unknown',
+        displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
         email: currentUser.email || '',
-        photoURL: currentUser.photoURL || undefined,
-        level: 1, // Will be fetched from user data
-        xp: 0,
-        manifest: 'Unknown',
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
+        level: userData.level || studentData?.level || 1,
+        xp: userData.xp || studentData?.xp || 0,
+        powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
+        manifest: manifest,
         role: 'Member',
         isLeader: false,
         isAdmin: false
       };
 
-      await updateDoc(doc(db, 'squads', invitation.squadId), {
-        members: [...squadData.members, newMember]
+      // Update invitation status first
+      await updateDoc(doc(db, 'squadInvitations', invitation.id), {
+        status: 'accepted'
       });
 
-      console.log(`Accepted invitation to ${invitation.squadName}`);
-    } catch (error) {
+      // Add user to squad using arrayUnion for concurrent-safe updates
+      await updateDoc(squadRef, {
+        members: arrayUnion(newMember),
+        updatedAt: serverTimestamp()
+      });
+
+      alert(`🎉 Successfully joined ${invitation.squadName}!`);
+      
+      // Close the invitations modal
+      setShowInvitations(false);
+      
+      // Refresh the page or trigger a reload to show updated squad
+      window.location.reload();
+    } catch (error: any) {
       console.error('Error accepting invitation:', error);
+      let errorMessage = 'Failed to accept invitation. Please try again.';
+      
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. You may not have permission to join this squad.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Service unavailable. Please try again in a moment.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      alert(errorMessage);
     }
   };
 
