@@ -99,7 +99,19 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   };
 
   const getChapterStatus = (chapter: Chapter) => {
-    if (!userProgress) return 'locked';
+    if (!userProgress) {
+      // Chapter 1 is always available, even without userProgress
+      if (chapter.id === 1) return 'available';
+      return 'locked';
+    }
+    
+    // Chapter 1 is always available to all players - no requirements
+    if (chapter.id === 1) {
+      const chapterProgress = userProgress.chapters?.[1];
+      if (chapterProgress?.isCompleted) return 'completed';
+      if (chapterProgress?.isActive) return 'active';
+      return 'available'; // Always available, even if not active yet
+    }
     
     // Check if Chapter 2 should show "Coming Soon" (if Chapter 1 is completed)
     if (chapter.id === 2) {

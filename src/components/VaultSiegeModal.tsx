@@ -318,8 +318,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               player.maxShieldStrength = vaultData.maxShieldStrength || 50;
               player.overshield = vaultData.overshield || 0;
               player.capacity = vaultData.capacity || 1000;
-              // Max vault health is always 10% of vault capacity
-              player.maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
+              // Max vault health is always 10% of max PP (capacity is the max PP)
+              const maxPP = vaultData.capacity || 1000;
+              player.maxVaultHealth = Math.floor(maxPP * 0.1);
               // Current vault health is capped at current PP if PP < max health
               const maxVaultHealth = player.maxVaultHealth;
               const currentVaultHealth = vaultData.vaultHealth !== undefined 

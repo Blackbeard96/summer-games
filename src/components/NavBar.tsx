@@ -65,7 +65,7 @@ interface Notification {
 }
 
 const NavBar = memo(() => {
-  const { currentUser, logout, currentRole } = useAuth();
+  const { currentUser, logout, currentRole, userProfile } = useAuth();
   const navigate = useNavigate();
   console.log('🎯 NavBar component rendered - currentUser:', currentUser?.email, 'currentRole:', currentRole);
   
@@ -142,8 +142,8 @@ const NavBar = memo(() => {
 
   // Memoize expensive computations
   const displayName = useMemo(() => 
-    currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student',
-    [currentUser?.displayName, currentUser?.email]
+    userProfile?.displayName || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student',
+    [userProfile?.displayName, currentUser?.displayName, currentUser?.email]
   );
   
   const roleIndicator = useMemo(() => 

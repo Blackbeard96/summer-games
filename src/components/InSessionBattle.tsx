@@ -343,8 +343,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             const vaultData = vaultDoc.data();
             const student = students.find(s => s.id === player.userId);
             const currentPP = student?.powerPoints || player.powerPoints;
-            const maxPP = vaultData.capacity || 1000;
-            const maxVaultHealth = Math.floor(maxPP * 0.1);
+            const maxPP = vaultData.capacity || 1000; // Capacity is the max PP
+            const maxVaultHealth = Math.floor(maxPP * 0.1); // Health is 10% of max PP
             const vaultHealth = vaultData.vaultHealth !== undefined 
               ? Math.min(vaultData.vaultHealth, maxVaultHealth, currentPP)
               : Math.min(currentPP, maxVaultHealth);

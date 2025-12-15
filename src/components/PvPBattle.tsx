@@ -633,7 +633,9 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         const opponentLevel = getLevelFromXP(studentData.xp || 0);
 
         // Max vault health is always 10% of vault capacity (maxPP)
-        const maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
+        // Max vault health is always 10% of max PP (capacity is the max PP)
+        const maxPP = vaultData.capacity || 1000;
+        const maxVaultHealth = Math.floor(maxPP * 0.1);
         const vaultHealth = vaultData.vaultHealth !== undefined 
           ? vaultData.vaultHealth 
           : Math.min(vaultData.currentPP || 0, maxVaultHealth);

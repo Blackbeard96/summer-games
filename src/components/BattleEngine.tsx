@@ -307,11 +307,38 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
         }
         
+        const newVaultHealth = Math.max(0, (vault.vaultHealth || vault.maxVaultHealth || 0) - healthDamage);
         await updateVault({
           shieldStrength: Math.max(0, vault.shieldStrength - shieldDamage),
-          vaultHealth: Math.max(0, (vault.vaultHealth || vault.maxVaultHealth || 0) - healthDamage)
+          vaultHealth: newVaultHealth
         });
         await refreshVaultData();
+        
+        // Check for defeat immediately after health update
+        if (newVaultHealth <= 0) {
+          newLog.push('💀 Your vault health has been completely depleted!');
+          if (isPvP && opponent) {
+            newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
+          } else {
+            const opponentName = opponent?.name || opponents?.[0]?.name || 'your opponent';
+            newLog.push(`💀 Defeat! ${opponentName} has successfully defeated you!`);
+          }
+          
+          setBattleState(prev => ({
+            ...prev,
+            phase: 'defeat',
+            battleLog: newLog,
+            isPlayerTurn: false
+          }));
+          
+          // End battle immediately
+          if (isPvP && opponent && currentUser) {
+            onBattleEnd('defeat', opponent.id, currentUser.uid);
+          } else {
+            onBattleEnd('defeat');
+          }
+          return { newLog, skipTurn: true };
+        }
       }
       
       if (totalPPLoss > 0) {
@@ -353,8 +380,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       if (totalHealing > 0) {
         const currentHealth = vault.vaultHealth || vault.maxVaultHealth || 0;
-        // Max vault health is always 10% of vault capacity
-        const maxHealth = Math.floor((vault.capacity || 1000) * 0.1);
+        // Max vault health is always 10% of max PP (capacity is the max PP)
+        const maxPP = vault.capacity || 1000;
+        const maxHealth = Math.floor(maxPP * 0.1);
         const actualHealthHealed = Math.min(maxHealth - currentHealth, totalHealing);
         const actualShieldHealed = Math.min((vault.maxShieldStrength || 100) - vault.shieldStrength, Math.floor(totalHealing * 0.5));
         await updateVault({
@@ -637,9 +665,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [propOpponent, mindforgeMode]);
 
   // Update opponents when prop changes (for multiplayer mode)
+  // Only update if opponents haven't been modified in battle (preserve damage)
   useEffect(() => {
-    if (propOpponents && isMultiplayer) {
-      setOpponents(propOpponents);
+    if (propOpponents && isMultiplayer && propOpponents.length > 0) {
+      // Only update if this is the initial load (opponents are empty or match initial state)
+      // This prevents resetting opponents that have taken damage during battle
+      setOpponents(prev => {
+        // If opponents haven't been set yet, use props
+        if (prev.length === 0) {
+          return propOpponents;
+        }
+        
+        // If opponents have been modified (damage taken), preserve their state
+        // Only update if the prop opponents have different IDs (new battle)
+        const prevIds = prev.map(opp => opp.id).sort().join(',');
+        const propIds = propOpponents.map(opp => opp.id).sort().join(',');
+        
+        // If IDs are different, it's a new battle - use new opponents
+        if (prevIds !== propIds) {
+          return propOpponents;
+        }
+        
+        // Otherwise, keep existing opponents (preserve damage)
+        return prev;
+      });
     }
   }, [propOpponents, isMultiplayer]);
 
@@ -706,8 +755,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         if (opponentVaultDoc.exists()) {
           const opponentVaultData = opponentVaultDoc.data();
-          // Max vault health is always 10% of vault capacity
-          const maxVaultHealth = Math.floor((opponentVaultData.capacity || 1000) * 0.1);
+          // Max vault health is always 10% of max PP (capacity is the max PP)
+          const maxPP = opponentVaultData.capacity || 1000;
+          const maxVaultHealth = Math.floor(maxPP * 0.1);
           const vaultHealth = opponentVaultData.vaultHealth !== undefined 
             ? opponentVaultData.vaultHealth 
             : Math.min(opponentVaultData.currentPP || 0, maxVaultHealth);
@@ -783,8 +833,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const updatedVaultDoc = await getDoc(updatedVaultRef);
         if (updatedVaultDoc.exists()) {
           const updatedVaultData = updatedVaultDoc.data();
-          // Max vault health is always 10% of vault capacity
-          const maxVaultHealth = Math.floor((updatedVaultData.capacity || 1000) * 0.1);
+          // Max vault health is always 10% of max PP (capacity is the max PP)
+          const maxPP = updatedVaultData.capacity || 1000;
+          const maxVaultHealth = Math.floor(maxPP * 0.1);
           const updatedVaultHealth = updatedVaultData.vaultHealth !== undefined 
             ? updatedVaultData.vaultHealth 
             : maxVaultHealth;
@@ -1496,13 +1547,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const targetId = target.id;
           const targetName = target.name || 'Unknown';
           if (targetId && opponents.some(opp => opp.id === targetId)) {
+            // For Ice Golems and other CPU opponents, use currentPP as health
+            // For Island Raid enemies, use vaultHealth
             const updatedOpponent = {
               ...target,
-              shieldStrength: newTargetShield,
-              currentPP: target.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
-              vaultHealth: target.vaultHealth !== undefined ? newTargetHealth : undefined, // Update vaultHealth if it exists
-              maxVaultHealth: target.maxVaultHealth !== undefined ? targetMaxHealth : undefined
+              shieldStrength: newTargetShield
             };
+            
+            if (target.vaultHealth !== undefined) {
+              // Island Raid enemy - use vaultHealth
+              updatedOpponent.vaultHealth = newTargetHealth;
+              updatedOpponent.maxVaultHealth = targetMaxHealth;
+            } else {
+              // CPU opponent (like Ice Golems) - use currentPP as health
+              updatedOpponent.currentPP = newTargetHealth;
+            }
+            
+            console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${targetHealth} → ${newTargetHealth}, shield ${target.shieldStrength} → ${newTargetShield}`);
             
             setOpponents(prev => {
               const updated = prev.map(opp => 
@@ -1613,13 +1674,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             setOpponents(prev => {
               const updated = prev.map(opp => {
                 if (opp.id === targetId) {
-                  return {
+                  // For Ice Golems and other CPU opponents, use currentPP as health
+                  // For Island Raid enemies, use vaultHealth
+                  const updatedOpponent = {
                     ...opp,
-                    shieldStrength: newTargetShield,
-                    currentPP: opp.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
-                    vaultHealth: opp.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Always update vaultHealth for enemies (Island Raid)
-                    maxVaultHealth: opp.maxVaultHealth !== undefined ? targetMaxHealth : (opp.maxVaultHealth || targetMaxHealth) // Preserve or set maxVaultHealth
+                    shieldStrength: newTargetShield
                   };
+                  
+                  if (opp.vaultHealth !== undefined) {
+                    // Island Raid enemy - use vaultHealth
+                    updatedOpponent.vaultHealth = newTargetHealth;
+                    updatedOpponent.maxVaultHealth = targetMaxHealth;
+                  } else {
+                    // CPU opponent (like Ice Golems) - use currentPP as health
+                    updatedOpponent.currentPP = newTargetHealth;
+                  }
+                  
+                  console.log(`📝 [Turn Order] Updated opponent ${opp.name} (${opp.id}): health ${targetHealth} → ${newTargetHealth}, shield ${opp.shieldStrength} → ${newTargetShield}`);
+                  return updatedOpponent;
                 }
                 return opp;
               });
@@ -1650,7 +1722,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             // If targeting the player, also update vault in Firestore
             if (targetId === currentUser?.uid) {
               const newShieldStrength = Math.max(0, vault.shieldStrength - targetShieldDamage);
-              const maxVaultHealth = Math.floor(vault.capacity * 0.1);
+              // Max vault health is always 10% of max PP (capacity is the max PP)
+              const maxPP = vault.capacity || 1000;
+              const maxVaultHealth = Math.floor(maxPP * 0.1);
               const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
               const newVaultHealth = Math.max(0, currentVaultHealth - targetHealthDamage);
               
@@ -1792,6 +1866,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Apply turn effects for player (before move execution)
     const playerEffectResult = await applyTurnEffects('player', battleState.battleLog);
     if (playerEffectResult.skipTurn) {
+      // Player is stunned or defeated, skip their turn
+      // Check if defeat occurred (skipTurn will be true if health reached 0)
+      if (battleState.phase === 'defeat') {
+        // Defeat already handled in applyTurnEffects
+        return;
+      }
+      
       // Player is stunned, skip their turn
       setBattleState(prev => ({
         ...prev,
@@ -1806,6 +1887,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       setTimeout(() => {
         executeOpponentTurn(playerEffectResult.newLog, targetOpponent, 1.0);
       }, 1000);
+      return;
+    }
+    
+    // Double-check vault health after effects (in case it was updated)
+    // The defeat check in applyTurnEffects should have caught it, but verify here too
+    if (battleState.phase === 'defeat') {
+      // Defeat already handled in applyTurnEffects
       return;
     }
 
@@ -2161,15 +2249,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // Check if this is a CPU opponent (they use currentPP as health)
       const isCPUOpponentForLabel = checkIsCPUOpponent(targetOpponent);
       const healthLabel = isCPUOpponentForLabel ? 'health' : 'vault health';
+      let playerLogMessage = '';
       if (shieldDamage > 0 && remainingDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to ${healthLabel})${rangeInfo}!`);
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to ${healthLabel})${rangeInfo}!`;
       } else if (shieldDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields${rangeInfo}!`);
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields${rangeInfo}!`;
       } else if (remainingDamage > 0) {
-        newLog.push(`⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${remainingDamage} damage to ${healthLabel}${rangeInfo}!`);
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${remainingDamage} damage to ${healthLabel}${rangeInfo}!`;
       } else {
-        newLog.push(`⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}${rangeInfo}!`);
+        playerLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}${rangeInfo}!`;
       }
+      newLog.push(playerLogMessage);
+      console.log(`📝 [Player Move] Adding to battle log: ${playerLogMessage}`);
       
       console.log('Damage Roll Debug:', {
         moveName: move.name,
@@ -2323,8 +2414,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newTargetOpponent.currentPP = Math.max(0, targetOpponent.currentPP - healthDamage);
     } else {
       // For PvP opponents, damage vault health, not PP
-      // Max vault health is always 10% of maxPP (vault capacity)
-      const maxVaultHealth = Math.floor((targetOpponent.maxPP || 1000) * 0.1);
+      // Max vault health is always 10% of max PP
+      const maxPP = targetOpponent.maxPP || 1000;
+      const maxVaultHealth = Math.floor(maxPP * 0.1);
       const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : maxVaultHealth;
       const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
       const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
@@ -2376,8 +2468,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         if (opponentVaultDoc.exists()) {
           const vaultData = opponentVaultDoc.data();
-          // Max vault health is always 10% of maxPP (vault capacity)
-          const maxVaultHealth = Math.floor((targetOpponent.maxPP || 1000) * 0.1);
+          // Max vault health is always 10% of max PP
+          const maxPP = targetOpponent.maxPP || 1000;
+          const maxVaultHealth = Math.floor(maxPP * 0.1);
           const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : (vaultData.vaultHealth || maxVaultHealth);
           const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
           const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
@@ -2585,15 +2678,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Update battle state - keep animation state so BattleAnimations can play
     // The animation will be cleared when handleAnimationComplete is called by BattleAnimations
-    setBattleState(prev => ({
-      ...prev,
-      phase: mindforgeMode ? 'execution' : 'opponent_turn', // Keep in execution phase for Mindforge so animation plays
-      battleLog: newLog,
-      isPlayerTurn: mindforgeMode ? true : false,
-      selectedMove: null, // Clear selected move but keep animation
-      selectedTarget: null, // Clear selected target but keep animation
-      // Keep currentAnimation and isAnimating so BattleAnimations component can display
-    }));
+    console.log(`📝 [Player Move] Updating battle state with ${newLog.length} log entries. Last entry: ${newLog[newLog.length - 1]}`);
+    console.log(`📝 [Player Move] Full battle log:`, newLog);
+    setBattleState(prev => {
+      const updatedState: BattleState = {
+        ...prev,
+        phase: mindforgeMode ? 'execution' : 'opponent_turn', // Keep in execution phase for Mindforge so animation plays
+        battleLog: newLog,
+        isPlayerTurn: mindforgeMode ? true : false,
+        selectedMove: null, // Clear selected move but keep animation
+        selectedTarget: null, // Clear selected target but keep animation
+        // Keep currentAnimation and isAnimating so BattleAnimations component can display
+      };
+      console.log(`📝 [Player Move] Battle state updated. New log length: ${updatedState.battleLog.length}`);
+      return updatedState;
+    });
     
     // In Mindforge mode, execute opponent turn after animation completes
     if (mindforgeMode) {
@@ -2925,19 +3024,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       
       // Log attack with damage breakdown and range info
-        const rangeInfo = damageResult?.isMaxDamage ? ' (MAX DAMAGE!)' : '';
+      const rangeInfo = damageResult?.isMaxDamage ? ' (MAX DAMAGE!)' : '';
+      let cpuLogMessage = '';
       if (shieldDamage > 0 && ppStolen > 0) {
-          newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to vault health)${rangeInfo}!`);
+        cpuLogMessage = `⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to vault health)${rangeInfo}!`;
       } else if (shieldDamage > 0) {
-        newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${shieldDamage} damage to shields${rangeInfo}!`);
+        cpuLogMessage = `⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${shieldDamage} damage to shields${rangeInfo}!`;
       } else if (ppStolen > 0) {
-          newLog.push(`⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${ppStolen} damage to vault health${rangeInfo}!`);
+        cpuLogMessage = `⚔️ ${opponent.name} attacked you with ${opponentMove.name} for ${ppStolen} damage to vault health${rangeInfo}!`;
       } else {
-        newLog.push(`⚔️ ${opponent.name} used ${opponentMove.name} on you${rangeInfo}!`);
-        }
+        cpuLogMessage = `⚔️ ${opponent.name} used ${opponentMove.name} on you${rangeInfo}!`;
+      }
+      newLog.push(cpuLogMessage);
+      console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
       }
     } else {
-      newLog.push(`⚔️ ${opponent.name} used ${opponentMove.name}!`);
+      const cpuLogMessage = `⚔️ ${opponent.name} used ${opponentMove.name}!`;
+      newLog.push(cpuLogMessage);
+      console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
     }
     
     // Update player vault (only if overshield didn't absorb the attack)
@@ -3066,15 +3170,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       onOpponentUpdate(currentOpponent);
     }
     
-    setBattleState(prev => ({
-      ...prev,
-      phase: 'selection',
-      battleLog: newLog,
-      isPlayerTurn: true,
-      turnCount: prev.turnCount + 1,
-      currentAnimation: null, // Ensure animation is cleared
-      isAnimating: false // Ensure animation flag is cleared
-    }));
+    console.log(`📝 [CPU Move] Updating battle state with ${newLog.length} log entries. Last entry: ${newLog[newLog.length - 1]}`);
+    console.log(`📝 [CPU Move] Full battle log:`, newLog);
+    setBattleState(prev => {
+      const updatedState: BattleState = {
+        ...prev,
+        phase: 'selection' as const,
+        battleLog: newLog,
+        isPlayerTurn: true,
+        turnCount: prev.turnCount + 1,
+        currentAnimation: null, // Ensure animation is cleared
+        isAnimating: false // Ensure animation flag is cleared
+      };
+      console.log(`📝 [CPU Move] Battle state updated. New log length: ${updatedState.battleLog.length}`);
+      return updatedState;
+    });
     
     // In Mindforge mode, call onMoveExecuted callback after opponent turn completes
     if (mindforgeMode && onMoveExecuted) {
@@ -3157,11 +3267,70 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   // Handle artifact used (e.g., Health Potion ends turn)
-  const handleArtifactUsed = () => {
+  // Using an item from the bag counts as a move and ends the player's turn
+  const handleArtifactUsed = useCallback(async () => {
+    console.log('📦 [Artifact Used] Item used from bag - consuming move and ending turn');
+    
+    // Consume a move (same as using a regular move)
+    if (onMoveConsumption) {
+      try {
+        const moveConsumed = await onMoveConsumption();
+        if (!moveConsumed) {
+          console.warn('⚠️ [Artifact Used] No moves available to consume');
+          // Still end turn even if move consumption fails (item was used)
+        }
+      } catch (error) {
+        console.error('❌ [Artifact Used] Failed to consume move:', error);
+        // Still end turn even if move consumption fails (item was used)
+      }
+    }
+    
+    // End the player's turn - switch to opponent turn
+    // In multiplayer mode, this will wait for other participants
+    // In single player mode, this will immediately trigger opponent turn
+    if (isMultiplayer && !isInSession) {
+      // In multiplayer mode with turn order, just mark that player has acted
+      // The turn order system will handle execution
+      setBattleState(prev => ({
+        ...prev,
+        phase: 'selection',
+        isPlayerTurn: false, // Player has used their action
+        selectedMove: null,
+        selectedTarget: null
+      }));
+    } else {
+      // In single player or In Session mode, immediately end turn and trigger opponent
+      let currentLog: string[] = [];
+      setBattleState(prev => {
+        const newLog = [...prev.battleLog];
+        newLog.push('📦 Item used! Turn ended.');
+        currentLog = newLog; // Capture log for executeOpponentTurn
+        
+        return {
+          ...prev,
+          phase: 'opponent_turn',
+          isPlayerTurn: false,
+          battleLog: newLog,
+          selectedMove: null,
+          selectedTarget: null,
+          currentAnimation: null,
+          isAnimating: false
+        };
+      });
+      
+      // Execute opponent turn after a delay (for single player mode)
+      if (!isMultiplayer && opponent) {
+        setTimeout(() => {
+          executeOpponentTurn(currentLog, opponent, 1.0);
+        }, 1000);
+      }
+    }
+    
+    // Call the original callback if provided
     if (onArtifactUsed) {
       onArtifactUsed();
     }
-  };
+  }, [onMoveConsumption, isMultiplayer, isInSession, opponent, onArtifactUsed, executeOpponentTurn]);
 
   if (!vault) {
     return (
@@ -3382,6 +3551,88 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         </div>
       )}
 
+      {/* Defeat Overlay - Show when player health reaches 0 */}
+      {battleState.phase === 'defeat' && !isPvP && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.9)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          animation: 'fadeIn 0.5s ease-in'
+        }}>
+          <div style={{
+            background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+            color: 'white',
+            padding: '2.5rem',
+            borderRadius: '1rem',
+            textAlign: 'center',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+            border: '3px solid #fbbf24',
+            maxWidth: '500px',
+            animation: 'defeatPulse 2s infinite'
+          }}>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💀</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>
+              DEFEAT
+            </div>
+            <div style={{ fontSize: '1.1rem', opacity: 0.95, lineHeight: '1.6', marginBottom: '1.5rem' }}>
+              {(() => {
+                // Check if this is a Hela battle (opponent name contains "Hela" or "Ice Golem")
+                const opponentName = opponent?.name?.toLowerCase() || '';
+                const hasHelaOpponent = opponentName.includes('hela');
+                const hasIceGolemOpponents = opponents?.some(opp => {
+                  const oppName = opp.name?.toLowerCase() || '';
+                  return oppName.includes('hela') || oppName.includes('ice golem');
+                });
+                const isHelaBattle = hasHelaOpponent || hasIceGolemOpponents;
+                
+                if (isHelaBattle) {
+                  return "You were crushed by Hela's Overwhelming Might. Level up and try again.";
+                } else {
+                  // Generic defeat message for other battles
+                  const defeatedBy = opponent?.name || opponents?.[0]?.name || 'your opponent';
+                  return `You were defeated by ${defeatedBy}! Level up and try again.`;
+                }
+              })()}
+            </div>
+            <button
+              onClick={() => {
+                // Close the modal and end the battle
+                onBattleEnd('defeat');
+              }}
+              style={{
+                background: 'rgba(255, 255, 255, 0.2)',
+                color: 'white',
+                border: '2px solid rgba(255, 255, 255, 0.3)',
+                borderRadius: '0.5rem',
+                padding: '0.75rem 2rem',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                marginTop: '1rem'
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Battle Animations - Re-enabled for Mindforge mode with proper completion handling */}
       {battleState.isAnimating && battleState.currentAnimation && (
         <BattleAnimations
@@ -3402,6 +3653,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           @keyframes victoryPulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.05); }
+          }
+          
+          @keyframes defeatPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); }
+            50% { transform: scale(1.02); box-shadow: 0 12px 40px rgba(220, 38, 38, 0.6); }
           }
         `}
       </style>

@@ -273,18 +273,28 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   };
 
   // Helper function to calculate max vault health (always 10% of capacity)
-  const calculateMaxVaultHealth = (capacity: number): number => {
-    return Math.floor(capacity * 0.1);
+  // Health is always 10% of Max PP (not capacity)
+  const calculateMaxVaultHealth = (maxPP: number): number => {
+    return Math.floor(maxPP * 0.1);
   };
   
   // Helper function to calculate current vault health (capped at current PP if PP < max health)
-  const calculateCurrentVaultHealth = (capacity: number, currentPP: number, storedVaultHealth?: number): number => {
-    const maxVaultHealth = calculateMaxVaultHealth(capacity);
-    if (storedVaultHealth !== undefined) {
-      // If we have a stored value, cap it at both max health and current PP
+  // Health defaults to max health (10% of max PP) if not set or is 0, unless currentPP is less than max health
+  const calculateCurrentVaultHealth = (maxPP: number, currentPP: number, storedVaultHealth?: number): number => {
+    const maxVaultHealth = calculateMaxVaultHealth(maxPP);
+    // If stored health is 0 or undefined/null, and player has enough PP, default to max health
+    if ((storedVaultHealth === undefined || storedVaultHealth === null || storedVaultHealth === 0) && currentPP >= maxVaultHealth) {
+      return maxVaultHealth;
+    }
+    if (storedVaultHealth !== undefined && storedVaultHealth !== null && storedVaultHealth > 0) {
+      // If we have a stored value > 0, cap it at both max health and current PP
       return Math.min(storedVaultHealth, maxVaultHealth, currentPP);
     }
-    // Default: min of current PP and max health
+    // Default: if currentPP >= max health, start at max health. Otherwise, use currentPP
+    // This ensures health is always visible and starts at max (10% of max PP) when player has enough PP
+    if (currentPP >= maxVaultHealth) {
+      return maxVaultHealth;
+    }
     return Math.min(currentPP, maxVaultHealth);
   };
 
@@ -526,15 +536,17 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             <div style={{
               width: `${(() => {
                 if (!vault) return 0;
-                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
-                const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
+                const maxPP = vault.capacity || 1000;
+                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
+                const currentVaultHealth = calculateCurrentVaultHealth(maxPP, vault.currentPP, vault.vaultHealth);
                 return maxVaultHealth > 0 ? (currentVaultHealth / maxVaultHealth) * 100 : 0;
               })()}%`,
               height: '100%',
               background: (() => {
                 if (!vault) return 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)';
-                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
-                const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
+                const maxPP = vault.capacity || 1000;
+                const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
+                const currentVaultHealth = calculateCurrentVaultHealth(maxPP, vault.currentPP, vault.vaultHealth);
                 return currentVaultHealth === 0 ? 'linear-gradient(90deg, #6b7280 0%, #9ca3af 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
               })(),
               transition: 'width 0.3s ease'
@@ -543,8 +555,9 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           <div style={{ fontSize: '0.75rem', textAlign: 'right', marginTop: '0.125rem' }}>
             {(() => {
               if (!vault) return '0/0';
-              const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
-              const currentVaultHealth = calculateCurrentVaultHealth(vault.capacity, vault.currentPP, vault.vaultHealth);
+              const maxPP = vault.capacity || 1000; // Capacity is the max PP
+              const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
+              const currentVaultHealth = calculateCurrentVaultHealth(maxPP, vault.currentPP, vault.vaultHealth);
               return `${currentVaultHealth}/${maxVaultHealth}`;
             })()}
           </div>

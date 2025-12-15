@@ -19,6 +19,7 @@ import MSTInterfaceTutorial from './MSTInterfaceTutorial';
 import HelaBattle from './HelaBattle';
 import IcyDeathCutscene from './IcyDeathCutscene';
 import ZekeEndsBattleCutscene from './ZekeEndsBattleCutscene';
+import ChallengeRewardModal from './ChallengeRewardModal';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -52,6 +53,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showMSTTutorial, setShowMSTTutorial] = useState(false);
   const [showIcyDeathCutscene, setShowIcyDeathCutscene] = useState(false);
   const [showZekeEndsBattleCutscene, setShowZekeEndsBattleCutscene] = useState(false);
+  const [showRewardModal, setShowRewardModal] = useState(false);
+  const [rewardModalData, setRewardModalData] = useState<{
+    challengeTitle: string;
+    rewards: any[];
+    xpReward: number;
+    ppReward: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -325,7 +333,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
   // Function to check and auto-complete challenges
   // Function to auto-complete a challenge and unlock the next one
-  const handleAutoCompleteChallenge = async (challenge: ChapterChallenge) => {
+  const handleAutoCompleteChallenge = async (challenge: ChapterChallenge, showModal: boolean = true) => {
     if (!currentUser) return;
 
     try {
@@ -333,21 +341,23 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       const studentRef = doc(db, 'students', currentUser.uid);
       
       // Check if already completed
-      const userDoc = await getDoc(userRef);
-      const userProgress = userDoc.exists() ? userDoc.data() : {};
+      const userDocCheck = await getDoc(userRef);
+      const userProgressCheck = userDocCheck.exists() ? userDocCheck.data() : {};
       
-      if (userProgress.chapters?.[chapter.id]?.challenges?.[challenge.id]?.isCompleted) {
-        alert('This challenge has already been completed!');
+      if (userProgressCheck.chapters?.[chapter.id]?.challenges?.[challenge.id]?.isCompleted) {
+        if (showModal) {
+          alert('This challenge has already been completed!');
+        }
         return;
       }
 
       // Update user progress
       const updatedChapters = {
-        ...userProgress.chapters,
+        ...userProgressCheck.chapters,
         [chapter.id]: {
-          ...userProgress.chapters?.[chapter.id],
+          ...userProgressCheck.chapters?.[chapter.id],
           challenges: {
-            ...userProgress.chapters?.[chapter.id]?.challenges,
+            ...userProgressCheck.chapters?.[chapter.id]?.challenges,
             [challenge.id]: {
               isCompleted: true,
               status: 'approved',
@@ -357,14 +367,26 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         }
       };
 
-      await updateDoc(userRef, {
-        chapters: updatedChapters
-      });
-
       // Apply rewards
       const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
       const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+      const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
       const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+      // Get current user data to calculate new totals
+      const userDocRewards = await getDoc(userRef);
+      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+      const currentXP = userDataRewards.xp || 0;
+      const currentPP = userDataRewards.powerPoints || 0;
+      const currentTruthMetal = userDataRewards.truthMetal || 0;
+
+      // Update user progress with rewards
+      await updateDoc(userRef, {
+        chapters: updatedChapters,
+        xp: currentXP + xpReward,
+        powerPoints: currentPP + ppReward,
+        truthMetal: currentTruthMetal + truthMetalReward
+      });
 
       // Update student data
       const studentDoc = await getDoc(studentRef);
@@ -391,6 +413,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           challenges: updatedChallenges,
           xp: (studentData.xp || 0) + xpReward,
           powerPoints: (studentData.powerPoints || 0) + ppReward,
+          truthMetal: (studentData.truthMetal || 0) + truthMetalReward,
           artifacts: updatedArtifacts
         });
       }
@@ -414,7 +437,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
       }
 
-      alert(`🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`);
+      // Show reward modal only if requested
+      if (showModal) {
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
+      }
       
       // Refresh user progress to trigger requirement checks for next challenge
       const refreshedUserDoc = await getDoc(userRef);
@@ -428,7 +460,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }, 500);
     } catch (error) {
       console.error('Error auto-completing challenge:', error);
-      alert('Failed to complete challenge. Please try again.');
+      if (showModal) {
+        alert('Failed to complete challenge. Please try again.');
+      }
     }
   };
 
@@ -585,14 +619,26 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           }
         };
 
-        await updateDoc(userRef, {
-          chapters: updatedChapters
-        });
-
         // Apply rewards
         const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
         const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
         const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+        // Get current user data to calculate new totals
+        const userDocBefore = await getDoc(userRef);
+        const userDataBefore = userDocBefore.exists() ? userDocBefore.data() : {};
+        const currentXP = userDataBefore.xp || 0;
+        const currentPP = userDataBefore.powerPoints || 0;
+        const currentTruthMetal = userDataBefore.truthMetal || 0;
+
+        // Update user progress with rewards
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          xp: currentXP + xpReward,
+          powerPoints: currentPP + ppReward,
+          truthMetal: currentTruthMetal + truthMetalReward
+        });
 
         // Update student data (legacy system)
         const studentDoc = await getDoc(studentRef);
@@ -619,6 +665,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             challenges: updatedChallenges,
             xp: (studentData.xp || 0) + xpReward,
             powerPoints: (studentData.powerPoints || 0) + ppReward,
+            truthMetal: (studentData.truthMetal || 0) + truthMetalReward,
             artifacts: updatedArtifacts
           });
           
@@ -637,6 +684,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           timestamp: serverTimestamp(),
           read: false
         });
+
+        // Show reward modal
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
 
         // Unlock the next challenge in the same chapter
         const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
@@ -863,11 +919,28 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             read: false
           });
 
+          // Apply rewards to both collections
+          const studentRef = doc(db, 'students', currentUser.uid);
+          const userDocRewards = await getDoc(userRef);
+          const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+          await updateDoc(userRef, {
+            xp: (userDataRewards.xp || 0) + xpGained,
+            powerPoints: (userDataRewards.powerPoints || 0) + ppGained
+          });
+
+          const studentDocRewards = await getDoc(studentRef);
+          if (studentDocRewards.exists()) {
+            const studentDataRewards = studentDocRewards.data();
+            await updateDoc(studentRef, {
+              xp: (studentDataRewards.xp || 0) + xpGained,
+              powerPoints: (studentDataRewards.powerPoints || 0) + ppGained
+            });
+          }
+
           // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
           if (challengeId === 'ep1-combat-drill') {
             try {
               // Get user's element from student data
-              const studentRef = doc(db, 'students', currentUser.uid);
               const studentDoc = await getDoc(studentRef);
               if (studentDoc.exists()) {
                 const studentData = studentDoc.data();
@@ -890,12 +963,22 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
               console.error('Error unlocking elemental moves:', error);
             }
           }
+
+          // Find challenge to get full rewards list
+          const challenge = chapter.challenges.find(c => c.id === challengeId);
+          if (challenge && !isReplayMode) {
+            setRewardModalData({
+              challengeTitle: challenge.title,
+              rewards: challenge.rewards,
+              xpReward: xpGained,
+              ppReward: ppGained
+            });
+            setShowRewardModal(true);
+          }
         }
         
         if (isReplayMode) {
           alert(`🎉 Battle completed! You defeated the CPU challenger again! This was a replay - no rewards earned.`);
-        } else {
-          alert(`🎉 Challenge "${challengeName}" completed! You defeated the CPU challenger and earned +${xpGained} XP and +${ppGained} PP!`);
         }
       } else {
         alert('💪 The CPU challenger proved too strong this time. Try again to test your awakened abilities!');
@@ -918,22 +1001,56 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     if (!currentUser) return;
 
     try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+
+      // Find challenge to get rewards
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-portal-sequence');
+      const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 20;
+      const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 10;
+
+      // Apply rewards to both collections
+      const userDocRewards = await getDoc(userRef);
+      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+      await updateDoc(userRef, {
+        xp: (userDataRewards.xp || 0) + xpReward,
+        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+      });
+
+      const studentDocRewards = await getDoc(studentRef);
+      if (studentDocRewards.exists()) {
+        const studentDataRewards = studentDocRewards.data();
+        await updateDoc(studentRef, {
+          xp: (studentDataRewards.xp || 0) + xpReward,
+          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+        });
+      }
+
       // Create notification for challenge completion
       await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
         type: 'challenge_completed',
-        message: `🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +20 XP and +10 PP!`,
+        message: `🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +${xpReward} XP and +${ppReward} PP!`,
         challengeId: 'ep1-portal-sequence',
         challengeName: 'Navigate the Portal',
-        xpReward: 20,
-        ppReward: 10,
+        xpReward: xpReward,
+        ppReward: ppReward,
         timestamp: serverTimestamp(),
         read: false
       });
       
       // Close the tutorial modal
       setShowPortalTutorial(false);
-      
-      alert('🎉 Tutorial completed! You now understand how to navigate Xiotein School. You earned +20 XP and +10 PP!');
+
+      // Show reward modal
+      if (challenge) {
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
+      }
       
     } catch (error) {
       console.error('Error handling tutorial completion:', error);
@@ -987,10 +1104,41 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         read: false
       });
       
+      // Find challenge to get rewards
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-view-mst-ui');
+      const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 25;
+      const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 10;
+
+      // Apply rewards to both collections
+      const userDocRewards = await getDoc(userRef);
+      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+      await updateDoc(userRef, {
+        xp: (userDataRewards.xp || 0) + xpReward,
+        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+      });
+
+      const studentDocRewards = await getDoc(studentRef);
+      if (studentDocRewards.exists()) {
+        const studentDataRewards = studentDocRewards.data();
+        await updateDoc(studentRef, {
+          xp: (studentDataRewards.xp || 0) + xpReward,
+          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+        });
+      }
+
       // Close the tutorial modal
       setShowMSTTutorial(false);
-      
-      alert('🎉 MST Interface Tutorial completed! You now understand the four main areas of Xiotein School. You earned +25 XP and +10 PP!');
+
+      // Show reward modal
+      if (challenge) {
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
+      }
       
     } catch (error) {
       console.error('Error handling MST tutorial completion:', error);
@@ -1081,6 +1229,28 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         read: false
       });
       
+      // Find challenge to get rewards
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-truth-metal-choice');
+      const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 15;
+      const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 8;
+
+      // Apply rewards to both collections
+      const userDocRewards = await getDoc(userRef);
+      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+      await updateDoc(userRef, {
+        xp: (userDataRewards.xp || 0) + xpReward,
+        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+      });
+
+      const studentDocRewards = await getDoc(studentRef);
+      if (studentDocRewards.exists()) {
+        const studentDataRewards = studentDocRewards.data();
+        await updateDoc(studentRef, {
+          xp: (studentDataRewards.xp || 0) + xpReward,
+          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+        });
+      }
+
       // Close the modal
       setShowTruthMetalModal(false);
       
@@ -1091,8 +1261,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         setUserProgress(userDataRefresh);
       }
 
+      // Show reward modal
+      if (challenge) {
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
+      }
+
       console.log('Truth Metal Choice completed:', { choice, ordinaryWorld });
-      alert(`🎉 Truth Metal Choice completed! You chose to ${choice === 'touch' ? 'embrace change and unlock your potential' : 'return to your ordinary world'}. Your ordinary world description has been saved to your profile!`);
     } catch (error) {
       console.error('Error completing Truth Metal Choice:', error);
       alert('Failed to complete the Truth Metal Choice. Please try again.');
@@ -1170,12 +1350,48 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           truthRevelation: truthRevealed,
           lastUpdated: serverTimestamp()
         });
+
+        // Find challenge to get rewards
+        const challenge = chapter.challenges.find(c => c.id === 'ep1-touch-truth-metal');
+        const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 25;
+        const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 15;
+        const truthMetalReward = challenge?.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+
+        // Apply rewards to both collections
+        const userDocRewards = await getDoc(userRef);
+        const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+        await updateDoc(userRef, {
+          xp: (userDataRewards.xp || 0) + xpReward,
+          powerPoints: (userDataRewards.powerPoints || 0) + ppReward,
+          truthMetal: (userDataRewards.truthMetal || 0) + truthMetalReward
+        });
+
+        const studentDocRewards = await getDoc(studentRef);
+        if (studentDocRewards.exists()) {
+          const studentDataRewards = studentDocRewards.data();
+          await updateDoc(studentRef, {
+            xp: (studentDataRewards.xp || 0) + xpReward,
+            powerPoints: (studentDataRewards.powerPoints || 0) + ppReward,
+            truthMetal: (studentDataRewards.truthMetal || 0) + truthMetalReward
+          });
+        }
         
         // Refresh user progress
         const userDocRefresh = await getDoc(userRef);
         if (userDocRefresh.exists()) {
           const userDataRefresh = userDocRefresh.data();
           setUserProgress(userDataRefresh);
+        }
+
+        // Show reward modal
+        if (challenge) {
+          setRewardModalData({
+            challengeTitle: challenge.title,
+            rewards: challenge.rewards,
+            xpReward,
+            ppReward
+          });
+          setShowRewardModal(true);
         }
 
         console.log('Touch Truth Metal completed:', { truthRevealed });
@@ -1280,6 +1496,28 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         read: false
       });
       
+      // Find challenge to get rewards
+      const challenge = chapter.challenges.find(c => c.id === 'ep1-get-letter');
+      const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 10;
+      const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 5;
+
+      // Apply rewards to both collections
+      const userDocRewards = await getDoc(userRef);
+      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
+      await updateDoc(userRef, {
+        xp: (userDataRewards.xp || 0) + xpReward,
+        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
+      });
+
+      const studentDocRewards = await getDoc(studentRef);
+      if (studentDocRewards.exists()) {
+        const studentDataRewards = studentDocRewards.data();
+        await updateDoc(studentRef, {
+          xp: (studentDataRewards.xp || 0) + xpReward,
+          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+        });
+      }
+
       // Close the letter modal
       setShowLetterModal(false);
       
@@ -1288,6 +1526,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       if (userDocRefresh.exists()) {
         const userDataRefresh = userDocRefresh.data();
         setUserProgress(userDataRefresh);
+      }
+
+      // Show reward modal
+      if (challenge) {
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
       }
 
       console.log('Letter challenge completed with name:', name);
@@ -1761,7 +2010,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           read: false
         });
 
-        alert(`🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP, ${ppReward} PP, and new artifacts!`);
+        // Show reward modal
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward,
+          ppReward
+        });
+        setShowRewardModal(true);
         
         // Navigate to Artifacts page
         setTimeout(() => {
@@ -1803,22 +2059,38 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           allChapterKeys: Object.keys(currentChapters)
         });
         
-        // Mark Challenge 9 as complete AND mark Chapter 1 as completed in one update
+        // Mark Challenge 9 as complete
+        const updatedChallenges = {
+          ...currentChallenges,
+          'ep1-where-it-started': {
+            isCompleted: true,
+            status: 'approved',
+            completedAt: serverTimestamp()
+          }
+        };
+        
+        // Check if ALL Chapter 1 challenges are now completed before marking chapter as complete
+        const allChapter1Challenges = chapter.challenges.map(c => c.id);
+        const allChallengesCompleted = allChapter1Challenges.every(challengeId => 
+          updatedChallenges[challengeId]?.isCompleted === true
+        );
+        
+        console.log('ChapterDetail: Checking if all Chapter 1 challenges are completed:', {
+          allChapter1Challenges,
+          completedChallenges: allChapter1Challenges.filter(id => updatedChallenges[id]?.isCompleted),
+          allChallengesCompleted,
+          challengeStatuses: allChapter1Challenges.map(id => ({ id, completed: updatedChallenges[id]?.isCompleted }))
+        });
+        
+        // Only mark chapter as complete if ALL challenges are completed
         const updatedChapters = {
           ...currentChapters,
           [chapterKey]: {
             ...currentChapterData,
-            isCompleted: true,
-            completionDate: serverTimestamp(),
-            isActive: false,
-            challenges: {
-              ...currentChallenges,
-              'ep1-where-it-started': {
-                isCompleted: true,
-                status: 'approved',
-                completedAt: serverTimestamp()
-              }
-            }
+            isCompleted: allChallengesCompleted, // Only true if all challenges are done
+            completionDate: allChallengesCompleted ? serverTimestamp() : currentChapterData.completionDate,
+            isActive: allChallengesCompleted ? false : currentChapterData.isActive, // Keep active if not all challenges done
+            challenges: updatedChallenges
           }
           // Chapter 2 unlock disabled - will be enabled later
           // 2: {
@@ -1871,21 +2143,28 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           const updatedArtifacts = { ...currentArtifacts };
           updatedArtifacts.chapter_1_completed = true;
 
+          // Check if ALL Chapter 1 challenges are completed
+          const allChapter1Challenges = chapter.challenges.map(c => c.id);
+          const updatedStudentChallenges = {
+            ...studentChallenges,
+            'ep1-where-it-started': {
+              isCompleted: true,
+              status: 'approved',
+              completedAt: serverTimestamp()
+            }
+          };
+          const allChallengesCompleted = allChapter1Challenges.every(challengeId => 
+            updatedStudentChallenges[challengeId]?.isCompleted === true
+          );
+          
           const updatedStudentChapters = {
             ...studentChapters,
             [chapterKey]: {
               ...studentChapterData,
-              isCompleted: true,
-              completionDate: serverTimestamp(),
-              isActive: false,
-              challenges: {
-                ...studentChallenges,
-                'ep1-where-it-started': {
-                  completed: true,
-                  status: 'approved',
-                  completedAt: serverTimestamp()
-                }
-              }
+              isCompleted: allChallengesCompleted, // Only true if all challenges are done
+              completionDate: allChallengesCompleted ? serverTimestamp() : studentChapterData.completionDate,
+              isActive: allChallengesCompleted ? false : studentChapterData.isActive, // Keep active if not all challenges done
+              challenges: updatedStudentChallenges
             }
           };
 
@@ -1935,7 +2214,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           setStudentData(refreshedStudentData);
         }
 
-        alert('✅ Chapter 1 Complete!');
+        // Check if all challenges are completed using the refreshed data
+        const refreshedChapterData = refreshedUserDoc.exists() ? refreshedUserDoc.data().chapters?.[chapter.id] : null;
+        const isChapterComplete = refreshedChapterData?.isCompleted === true;
+        
+        if (isChapterComplete) {
+          alert('✅ Chapter 1 Complete!');
+        } else {
+          alert('✅ Challenge 9 Complete! Continue working on remaining challenges to complete Chapter 1.');
+        }
       }
     } catch (error) {
       console.error('Error completing Challenge 9:', error);
@@ -2500,7 +2787,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                           {/* Power Card Discovery Challenge Button */}
                           {status === 'available' && challenge.id === 'ep1-power-card-intro' && (
                             <button
-                              onClick={() => navigate('/profile')}
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                // Mark challenge as completed before navigating (without showing modal)
+                                try {
+                                  await handleAutoCompleteChallenge(challenge, false);
+                                  // Small delay to ensure Firestore update completes
+                                  await new Promise(resolve => setTimeout(resolve, 200));
+                                  // Navigate to profile page
+                                  navigate('/profile');
+                                } catch (error) {
+                                  console.error('Error completing Power Card challenge:', error);
+                                  // Still navigate even if there's an error
+                                  navigate('/profile');
+                                }
+                              }}
                               style={{
                                 background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
                                 color: 'white',
@@ -3867,6 +4168,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             isOpen={showZekeEndsBattleCutscene}
             onComplete={handleZekeEndsBattleCutsceneComplete}
           />
+
+          {/* Challenge Reward Modal */}
+          {rewardModalData && (
+            <ChallengeRewardModal
+              isOpen={showRewardModal}
+              onClose={() => {
+                setShowRewardModal(false);
+                setRewardModalData(null);
+              }}
+              challengeTitle={rewardModalData.challengeTitle}
+              rewards={rewardModalData.rewards}
+              xpReward={rewardModalData.xpReward}
+              ppReward={rewardModalData.ppReward}
+            />
+          )}
         </div>
       );
     };

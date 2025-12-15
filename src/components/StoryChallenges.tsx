@@ -37,8 +37,54 @@ const StoryChallenges = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    // Ensure Chapter 1 is active for all users
-    ensureChaptersInitialized();
+    // Ensure Chapter 1 is active for all users - automatically available
+    const ensureChapter1Active = async () => {
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        const studentDoc = await getDoc(studentRef);
+        
+        // Check if chapters exist
+        const userData = userDoc.exists() ? userDoc.data() : null;
+        const studentData = studentDoc.exists() ? studentDoc.data() : null;
+        
+        // If no chapters exist, initialize them
+        if (!userData?.chapters) {
+          console.log('StoryChallenges: Initializing chapters for user...');
+          const { initializeChapterProgress } = await import('../utils/chapterInit');
+          await initializeChapterProgress(currentUser.uid);
+        } else if (!userData.chapters[1]?.isActive) {
+          // If Chapter 1 exists but isn't active, activate it
+          console.log('StoryChallenges: Activating Chapter 1 for user...');
+          await updateDoc(userRef, {
+            'chapters.1.isActive': true,
+            'chapters.1.unlockDate': new Date()
+          });
+        }
+        
+        // Also update students collection
+        if (!studentData?.chapters) {
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, {
+              'chapters.1.isActive': true,
+              'chapters.1.unlockDate': new Date()
+            });
+          }
+        } else if (!studentData.chapters[1]?.isActive) {
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, {
+              'chapters.1.isActive': true,
+              'chapters.1.unlockDate': new Date()
+            });
+          }
+        }
+      } catch (error) {
+        console.error('StoryChallenges: Error ensuring Chapter 1 is active:', error);
+      }
+    };
+    
+    ensureChapter1Active();
 
     const userRef = doc(db, 'users', currentUser.uid);
     const studentRef = doc(db, 'students', currentUser.uid);
@@ -1231,11 +1277,23 @@ const ensureChaptersInitialized = async () => {
   };
 
   const getCurrentChapter = () => {
-    if (!userProgress?.chapters) return null;
+    // Chapter 1 is always available to all players - no requirements
+    // If no chapters exist or no chapter is active, default to Chapter 1
+    if (!userProgress?.chapters) {
+      return CHAPTERS.find(chapter => chapter.id === 1) || null;
+    }
     
-    return CHAPTERS.find(chapter => 
+    // Find active chapter
+    const activeChapter = CHAPTERS.find(chapter => 
       userProgress.chapters[chapter.id]?.isActive
     );
+    
+    // If no active chapter, default to Chapter 1 (always available)
+    if (!activeChapter) {
+      return CHAPTERS.find(chapter => chapter.id === 1) || null;
+    }
+    
+    return activeChapter;
   };
 
   // Function to check if a challenge's requirements are met
@@ -1690,13 +1748,15 @@ const ensureChaptersInitialized = async () => {
       {/* Chapter Challenges Section */}
       {(() => {
         const currentChapter = getCurrentChapter();
+        // Chapter 1 is always available - getCurrentChapter() should always return Chapter 1 if no other chapter is active
+        // This should rarely happen now, but if it does, we'll show a loading state while Chapter 1 is being activated
         if (!currentChapter) {
-          // Show a message and fix button when no active chapter is found
+          // Auto-activate Chapter 1 (should already be handled by useEffect, but show loading state)
           return (
             <div style={{ 
               padding: '2rem', 
-              backgroundColor: '#fef3c7', 
-              border: '1px solid #f59e0b',
+              backgroundColor: '#f0fdf4', 
+              border: '1px solid #22c55e',
               borderRadius: '0.5rem',
               marginBottom: '2rem',
               textAlign: 'center'
@@ -1707,54 +1767,22 @@ const ensureChaptersInitialized = async () => {
                 justifyContent: 'center',
                 marginBottom: '1rem'
               }}>
-                <span style={{ marginRight: '0.5rem', fontSize: '1.5rem' }}>🔒</span>
+                <span style={{ marginRight: '0.5rem', fontSize: '1.5rem' }}>📖</span>
                 <h3 style={{ 
                   fontSize: '1.25rem', 
                   fontWeight: 'bold', 
-                  color: '#92400e'
+                  color: '#166534'
                 }}>
-                  No Active Chapter Found
+                  Activating Chapter 1...
                 </h3>
               </div>
               <p style={{ 
                 fontSize: '0.875rem', 
-                color: '#a16207',
+                color: '#15803d',
                 marginBottom: '1.5rem'
               }}>
-                It looks like Chapter 1 was completed but Chapter 2 wasn't activated. Click the button below to fix this issue.
+                Chapter 1 is being activated for you. This should only take a moment.
               </p>
-              <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-                <button
-                  onClick={diagnoseChapterProgression}
-                  style={{
-                    padding: '0.75rem 1.5rem',
-                    backgroundColor: '#3b82f6',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    cursor: 'pointer',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  🔍 Diagnose & Fix
-                </button>
-                <button
-                  onClick={activateChapter2}
-                  style={{
-                    padding: '0.75rem 1.5rem',
-                    backgroundColor: '#059669',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    cursor: 'pointer',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  🚀 Activate Chapter 2
-                </button>
-              </div>
             </div>
           );
         }

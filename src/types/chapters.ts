@@ -161,7 +161,7 @@ export const CHAPTERS: Chapter[] = [
     description: "Players create their profile, choose their Manifest, identify their Artifact, and complete their first personal mission to unlock Level 1. Then embark on the story adventure by receiving the Xiotein Letter and awakening your powers.",
     storyArc: "Call to Adventure + Story Mode - Episode 1",
     requirements: [
-      { type: 'manifest', value: 'chosen', description: 'Must have chosen a Manifest' }
+      // Chapter 1 is automatically available to all players - no requirements
     ],
     rewards: [
       { type: 'level', value: 1, description: 'Unlock Level 1' },

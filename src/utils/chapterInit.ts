@@ -110,11 +110,13 @@ export const migrateExistingUserToChapters = async (userId: string) => {
   }
 };
 
-// Ensure Chapter 1 is always active for users
+// Ensure Chapter 1 is always active for users (automatically available to all players)
 export const ensureChapter1Active = async (userId: string) => {
   try {
     const userRef = doc(db, 'users', userId);
+    const studentRef = doc(db, 'students', userId);
     const userDoc = await getDoc(userRef);
+    const studentDoc = await getDoc(studentRef);
     
     if (!userDoc.exists()) {
       console.log('User document does not exist');
@@ -122,23 +124,49 @@ export const ensureChapter1Active = async (userId: string) => {
     }
 
     const userData = userDoc.data();
+    const studentData = studentDoc.exists() ? studentDoc.data() : null;
     
     // Check if chapters exist
     if (!userData.chapters) {
       console.log('No chapters found, initializing...');
       await initializeChapterProgress(userId);
+      // Also initialize for students collection if it exists
+      if (studentDoc.exists()) {
+        await updateDoc(studentRef, {
+          'chapters.1.isActive': true,
+          'chapters.1.unlockDate': new Date()
+        });
+      }
       return true;
     }
 
-    // Check if Chapter 1 is active
+    // Check if Chapter 1 is active - if not, activate it (Chapter 1 is always available)
     if (!userData.chapters[1]?.isActive) {
       console.log('Chapter 1 not active, activating it...');
       await updateDoc(userRef, {
         'chapters.1.isActive': true,
         'chapters.1.unlockDate': new Date()
       });
-      console.log('Chapter 1 activated successfully');
+      console.log('Chapter 1 activated successfully in users collection');
+      
+      // Also update students collection
+      if (studentDoc.exists()) {
+        await updateDoc(studentRef, {
+          'chapters.1.isActive': true,
+          'chapters.1.unlockDate': new Date()
+        });
+        console.log('Chapter 1 activated successfully in students collection');
+      }
       return true;
+    }
+
+    // Also ensure students collection is in sync
+    if (studentDoc.exists() && (!studentData?.chapters || !studentData.chapters[1]?.isActive)) {
+      await updateDoc(studentRef, {
+        'chapters.1.isActive': true,
+        'chapters.1.unlockDate': new Date()
+      });
+      console.log('Chapter 1 synced in students collection');
     }
 
     console.log('Chapter 1 is already active');

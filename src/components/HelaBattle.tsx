@@ -141,7 +141,8 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
   };
 
   // Ice Golem opponents configuration (4 golems for Challenge 7)
-  const iceGolems = [
+  // Use useMemo to prevent recreation on every render, which would reset opponent health
+  const iceGolems = React.useMemo(() => [
     {
       id: 'ice-golem-1',
       name: 'Ice Golem',
@@ -182,7 +183,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
       level: 2,
       image: '/images/Ice Golem.png'
     }
-  ];
+  ], []); // Empty dependency array - only create once
 
   if (!isOpen) return null;
 
@@ -664,7 +665,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
                 maxShieldStrength: vault.maxShieldStrength,
                 level: 1,
                 vaultHealth: vault.vaultHealth,
-                maxVaultHealth: Math.floor((vault.capacity || 1000) * 0.1) // Always 10% of capacity
+                maxVaultHealth: Math.floor((vault.capacity || 1000) * 0.1) // Always 10% of max PP
               }] : undefined}
               isMultiplayer={propIsIceGolemBattle}
               onIceGolemDefeated={propIsIceGolemBattle ? handleIceGolemDefeated : undefined}

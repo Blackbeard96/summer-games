@@ -33,14 +33,17 @@ const TestAccountLogin: React.FC<TestAccountLoginProps> = ({ isOpen, onClose }) 
     }
   };
 
-  const handleReturnToAdmin = () => {
+  const handleReturnToAdmin = async () => {
+    setLoading(true);
     try {
-      switchToAdmin();
+      await switchToAdmin();
       alert('✅ Switched back to admin account!');
       onClose();
     } catch (error) {
       console.error('Error switching to admin:', error);
       alert('❌ Failed to switch to admin: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setLoading(false);
     }
   };
 

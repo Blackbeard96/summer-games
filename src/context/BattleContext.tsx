@@ -127,18 +127,28 @@ export const useBattle = () => {
 };
 
 // Helper function to calculate max vault health (always 10% of capacity)
-const calculateMaxVaultHealth = (capacity: number): number => {
-  return Math.floor(capacity * 0.1);
+// Health is always 10% of Max PP (not capacity)
+const calculateMaxVaultHealth = (maxPP: number): number => {
+  return Math.floor(maxPP * 0.1);
 };
 
 // Helper function to calculate current vault health (capped at current PP if PP < max health)
-const calculateCurrentVaultHealth = (capacity: number, currentPP: number, storedVaultHealth?: number): number => {
-  const maxVaultHealth = calculateMaxVaultHealth(capacity);
-  if (storedVaultHealth !== undefined) {
-    // If we have a stored value, cap it at both max health and current PP
+// Health defaults to max health (10% of max PP) if not set or is 0, unless currentPP is less than max health
+const calculateCurrentVaultHealth = (maxPP: number, currentPP: number, storedVaultHealth?: number): number => {
+  const maxVaultHealth = calculateMaxVaultHealth(maxPP);
+  // If stored health is 0 or undefined/null, and player has enough PP, default to max health
+  if ((storedVaultHealth === undefined || storedVaultHealth === null || storedVaultHealth === 0) && currentPP >= maxVaultHealth) {
+    return maxVaultHealth;
+  }
+  if (storedVaultHealth !== undefined && storedVaultHealth !== null && storedVaultHealth > 0) {
+    // If we have a stored value > 0, cap it at both max health and current PP
     return Math.min(storedVaultHealth, maxVaultHealth, currentPP);
   }
-  // Default: min of current PP and max health
+  // Default: if currentPP >= max health, start at max health. Otherwise, use currentPP
+  // This ensures health is always visible and starts at max (10% of max PP) when player has enough PP
+  if (currentPP >= maxVaultHealth) {
+    return maxVaultHealth;
+  }
   return Math.min(currentPP, maxVaultHealth);
 };
 
@@ -199,9 +209,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (!vaultDoc.exists()) {
           // Create new vault with player's current PP
           const initialCapacity = 1000;
-          const maxVaultHealth = Math.floor(initialCapacity * 0.1); // 10% of capacity
-          // Vault health is the minimum of current PP and max vault health
-          const initialVaultHealth = Math.min(playerPP, maxVaultHealth);
+          const maxVaultHealth = Math.floor(initialCapacity * 0.1); // 10% of max PP
+          // Vault health starts at max health if player has enough PP, otherwise at current PP
+          const initialVaultHealth = playerPP >= maxVaultHealth ? maxVaultHealth : Math.min(playerPP, maxVaultHealth);
           const newVault: Vault = {
             id: currentUser.uid,
             ownerId: currentUser.uid,
@@ -231,11 +241,22 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.log('BattleContext: Existing vault PP:', existingVaultData.currentPP, 'Player PP:', playerPP);
           
           // Migrate existing vault to include new move tracking fields and generator
-          // Max vault health is always 10% of capacity
+          // Max vault health is always 10% of max PP (capacity is the max PP)
+          const maxPPForHealth = existingVaultData.capacity || 1000;
           const currentPP = existingVaultData.currentPP || playerPP;
-          const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(existingVaultData.capacity || 1000);
-          // Current vault health is capped at current PP if PP < max health
-          const vaultHealth = calculateCurrentVaultHealth(existingVaultData.capacity || 1000, currentPP, existingVaultData.vaultHealth);
+          const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(maxPPForHealth);
+          // Current vault health: if 0/undefined and player has enough PP, set to max health
+          // Otherwise, cap at current PP if PP < max health
+          const vaultHealth = calculateCurrentVaultHealth(maxPPForHealth, currentPP, existingVaultData.vaultHealth);
+          
+          // If health is 0 but should be max, update it
+          if ((existingVaultData.vaultHealth === undefined || existingVaultData.vaultHealth === null || existingVaultData.vaultHealth === 0) && 
+              currentPP >= maxVaultHealth && vaultHealth !== existingVaultData.vaultHealth) {
+            await updateDoc(vaultRef, {
+              vaultHealth: vaultHealth,
+              maxVaultHealth: maxVaultHealth
+            });
+          }
           
           const existingVault: Vault = {
             ...existingVaultData,
@@ -261,9 +282,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           updatedVault = checkAndGenerateGeneratorResources(updatedVault);
           
           // Always update vault PP to match player's current PP
-          // Max vault health is always 10% of capacity (already set in updatedVault)
+          // Max vault health is always 10% of max PP (capacity is the max PP)
           // Current vault health is capped at current PP if PP < max health
-          const correctVaultHealth = calculateCurrentVaultHealth(updatedVault.capacity, playerPP, updatedVault.vaultHealth);
+          const maxPPForCorrectHealth = updatedVault.capacity || 1000;
+          const correctVaultHealth = calculateCurrentVaultHealth(maxPPForCorrectHealth, playerPP, updatedVault.vaultHealth);
           if (existingVault.currentPP !== playerPP || updatedVault.vaultHealth !== correctVaultHealth ||
               updatedVault.movesRemaining !== existingVault.movesRemaining || 
               updatedVault.generatorPendingPP !== existingVault.generatorPendingPP || 
@@ -935,10 +957,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Helper function to check and reset vault health cooldown
   const checkAndResetVaultHealthCooldown = (vaultData: Vault): Vault => {
     if (!vaultData.vaultHealthCooldown) {
-      // Even if no cooldown, ensure vault health doesn't exceed PP if PP is below threshold
-      // Max vault health is always 10% of vault capacity
-      const maxVaultHealth = Math.floor(vaultData.capacity * 0.1);
-      const correctVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
+      // Even if no cooldown, ensure vault health is set correctly
+      // Max vault health is always 10% of max PP (capacity is the max PP)
+      const maxPP = vaultData.capacity || 1000;
+      const maxVaultHealth = Math.floor(maxPP * 0.1);
+      // If health is 0 or undefined and player has enough PP, set to max health
+      // Otherwise, cap at current PP if PP < max health
+      let correctVaultHealth: number;
+      if ((vaultData.vaultHealth === undefined || vaultData.vaultHealth === null || vaultData.vaultHealth === 0) && vaultData.currentPP >= maxVaultHealth) {
+        correctVaultHealth = maxVaultHealth;
+      } else {
+        correctVaultHealth = Math.min(vaultData.vaultHealth !== undefined && vaultData.vaultHealth !== null ? vaultData.vaultHealth : maxVaultHealth, maxVaultHealth, vaultData.currentPP);
+      }
       if (vaultData.vaultHealth !== correctVaultHealth) {
         return {
           ...vaultData,
@@ -955,8 +985,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // If cooldown has expired, reset vault health to min of PP and max
     if (now >= cooldownEndTime) {
       // Max vault health is always 10% of vault capacity
-      const maxVaultHealth = Math.floor(vaultData.capacity * 0.1);
-      const resetVaultHealth = Math.min(vaultData.currentPP, maxVaultHealth);
+      // Max vault health is always 10% of max PP (capacity is the max PP)
+      const maxPP = vaultData.capacity || 1000;
+      const maxVaultHealth = Math.floor(maxPP * 0.1);
+      const resetVaultHealth = vaultData.currentPP >= maxVaultHealth ? maxVaultHealth : Math.min(vaultData.currentPP, maxVaultHealth);
       return {
         ...vaultData,
         vaultHealth: resetVaultHealth,
@@ -986,7 +1018,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const newCapacity = vault.capacity + 200;
       const newPP = vault.currentPP - upgradeCost;
       const newUpgradeCount = upgradeCount + 1;
-      const newMaxVaultHealth = Math.floor(newCapacity * 0.1); // 10% of new capacity
+      const newMaxVaultHealth = Math.floor(newCapacity * 0.1); // 10% of max PP
       // Vault health should be min of current PP and new max vault health
       const newVaultHealth = Math.min(newPP, newMaxVaultHealth);
       
@@ -1235,12 +1267,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       console.log('🔄 Manual sync - Player PP:', playerPP, 'Vault PP:', vault.currentPP);
       
-      // Max vault health is always 10% of capacity
-      const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(vault.capacity);
+      // Max vault health is always 10% of max PP (capacity is the max PP)
+      const maxPP = vault.capacity || 1000;
+      const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
       
       // Current vault health is capped at current PP if PP < max health
       // Otherwise, it can be up to max health
-      const correctVaultHealth = calculateCurrentVaultHealth(vault.capacity, playerPP, vault.vaultHealth);
+      const correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, vault.vaultHealth);
       
       if (playerPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth) {
         // Update vault PP to match player PP and adjust vault health
@@ -1316,18 +1349,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const studentDoc = await getDoc(studentRef);
         const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : processedVault.currentPP;
         
-        // Max vault health is always 10% of capacity
-        const maxVaultHealth = processedVault.maxVaultHealth || calculateMaxVaultHealth(processedVault.capacity);
+        // Max vault health is always 10% of max PP (capacity is the max PP)
+        const maxPP = processedVault.capacity || 1000;
+        const maxVaultHealth = processedVault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
         if (processedVault.maxVaultHealth !== maxVaultHealth) {
           processedVault.maxVaultHealth = maxVaultHealth;
           await updateDoc(vaultRef, {
             maxVaultHealth: maxVaultHealth
           });
-          console.log(`✅ Updated max vault health to ${maxVaultHealth} (10% of capacity)`);
+          console.log(`✅ Updated max vault health to ${maxVaultHealth} (10% of max PP: ${maxPP})`);
         }
         
         // Current vault health is capped at current PP if PP < max health
-        const correctVaultHealth = calculateCurrentVaultHealth(processedVault.capacity, playerPP, processedVault.vaultHealth);
+        const correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, processedVault.vaultHealth);
         if (processedVault.vaultHealth !== correctVaultHealth) {
           processedVault.vaultHealth = correctVaultHealth;
           await updateDoc(vaultRef, {

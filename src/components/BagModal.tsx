@@ -32,14 +32,11 @@ const BagModal: React.FC<BagModalProps> = ({ isOpen, onClose, onArtifactUsed }) 
   });
 
   const handleUseArtifact = async (artifactName: string) => {
-    if (window.confirm(`Use ${artifactName}?`)) {
-      // Pass the callback to activateArtifact - for Health Potion, this will end the turn
+    if (window.confirm(`Use ${artifactName}? This will count as your move and end your turn.`)) {
+      // Pass the callback to activateArtifact - ALL items end the turn
       await activateArtifact(artifactName, onArtifactUsed);
-      // Close modal after using Health Potion (it ends the turn)
-      if (artifactName === 'Health Potion (25)') {
-        onClose();
-      }
-      // Don't close modal for other items - let user use multiple items
+      // Close modal after using any item (all items end the turn)
+      onClose();
     }
   };
 

@@ -1833,12 +1833,14 @@ const AdminPanel: React.FC = () => {
         // Apply rewards
         let newXP = (userProgress.xp || 0) + (sub.xpReward || 0);
         let newPP = (userProgress.powerPoints || 0) + (sub.ppReward || 0);
+        let newTruthMetal = (userProgress.truthMetal || 0) + (sub.truthMetalReward || 0);
         
         // Update both collections
         await updateDoc(userRef, {
           chapters: updatedChapters,
           xp: newXP,
-          powerPoints: newPP
+          powerPoints: newPP,
+          truthMetal: newTruthMetal
         });
         
         // Also update legacy challenges field for profile display compatibility
@@ -1855,6 +1857,7 @@ const AdminPanel: React.FC = () => {
         await updateDoc(studentRef, {
           xp: (studentData.xp || 0) + (sub.xpReward || 0),
           powerPoints: (studentData.powerPoints || 0) + (sub.ppReward || 0),
+          truthMetal: (studentData.truthMetal || 0) + (sub.truthMetalReward || 0),
           challenges: updatedLegacyChallenges
         });
         

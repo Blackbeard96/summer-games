@@ -237,8 +237,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 maxPP = vaultData.capacity || 1000;
                 currentPP = vaultData.currentPP || 0;
                 
-                // Max vault health is 10% of vault capacity
-                maxVaultHealth = Math.floor((vaultData.capacity || 1000) * 0.1);
+                // Max vault health is 10% of max PP (capacity is the max PP)
+                maxVaultHealth = Math.floor(maxPP * 0.1);
                 vaultHealth = vaultData.vaultHealth !== undefined 
                   ? Math.min(vaultData.vaultHealth, maxVaultHealth, currentPP)
                   : Math.min(currentPP, maxVaultHealth);

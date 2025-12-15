@@ -12,7 +12,8 @@ import {
   sendPasswordResetEmail,
   updatePassword,
   updateEmail,
-  deleteUser
+  deleteUser,
+  getAuth
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { initializeChapterProgress, migrateExistingUserToChapters } from '../utils/chapterInit';
@@ -79,11 +80,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [currentRole, setCurrentRole] = useState<'admin' | 'test' | 'user'>('user');
   const [testAccountData, setTestAccountData] = useState<any | null>(null);
-  const [originalUser, setOriginalUser] = useState<User | null>(null);
-  const [originalProfile, setOriginalProfile] = useState<UserProfile | null>(null);
+  const [originalUser, setOriginalUser] = useState<User | null>(() => {
+    // Try to restore from localStorage on mount
+    const stored = localStorage.getItem('originalUserData');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [originalProfile, setOriginalProfile] = useState<UserProfile | null>(() => {
+    // Try to restore from localStorage on mount
+    const stored = localStorage.getItem('originalProfileData');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [isTestMode, setIsTestMode] = useState(false); // Track if we're in test mode to prevent onAuthStateChanged from overriding
 
   // Fetch user profile from Firestore
-  const fetchUserProfile = async (user: User) => {
+  const fetchUserProfile = useCallback(async (user: User) => {
     try {
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       
@@ -115,10 +125,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('AuthContext: Error fetching user profile:', error);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      // Don't override current user if we're in test mode (test account switching)
+      if (isTestMode && currentRole === 'test') {
+        console.log('🔄 [onAuthStateChanged] Skipping update - in test mode');
+        setLoading(false);
+        return;
+      }
+      
+      console.log('🔄 [onAuthStateChanged] Auth state changed:', user?.uid, user?.email);
       setCurrentUser(user);
       if (user) {
         await fetchUserProfile(user);
@@ -129,7 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return unsubscribe;
-  }, []);
+  }, [isTestMode, currentRole, fetchUserProfile]);
 
   // Helper function to validate allowed domains
   const isAllowedDomain = (email: string): boolean => {
@@ -278,9 +296,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      // Store original user data
+      // Store original user data in both state and localStorage
       setOriginalUser(currentUser);
       setOriginalProfile(userProfile);
+      
+      // Persist to localStorage so it survives page refreshes
+      if (currentUser) {
+        localStorage.setItem('originalUserData', JSON.stringify({
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          photoURL: currentUser.photoURL
+        }));
+      }
+      if (userProfile) {
+        localStorage.setItem('originalProfileData', JSON.stringify(userProfile));
+      }
 
       // Fetch test account data
       const testUserRef = doc(db, 'users', testAccountId);
@@ -316,6 +347,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } as unknown as User;
 
       // Set test account as current user
+      setIsTestMode(true); // Enable test mode to prevent onAuthStateChanged from overriding
       setCurrentUser(mockTestUser);
       setUserProfile(testUserData as UserProfile);
       setTestAccountData(testStudentData);
@@ -327,16 +359,161 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [isAdmin, currentUser, userProfile]);
 
   // Switch back to admin
-  const switchToAdmin = useCallback(() => {
-    if (!originalUser) {
-      throw new Error('No original user data found');
+  const switchToAdmin = useCallback(async () => {
+    console.log('🔄 [switchToAdmin] Starting admin restoration...');
+    console.log('🔄 [switchToAdmin] Current state - originalUser:', originalUser?.uid, originalUser?.email);
+    console.log('🔄 [switchToAdmin] Current state - originalProfile:', originalProfile?.email);
+    
+    // First, try to get the actual Firebase Auth user (should still be logged in as admin)
+    const firebaseAuthUser = getAuth().currentUser;
+    console.log('🔄 [switchToAdmin] Firebase Auth current user:', firebaseAuthUser?.uid, firebaseAuthUser?.email);
+    
+    // Get stored original user data
+    const storedUser = localStorage.getItem('originalUserData');
+    const storedProfile = localStorage.getItem('originalProfileData');
+    console.log('🔄 [switchToAdmin] Stored user data exists:', !!storedUser);
+    console.log('🔄 [switchToAdmin] Stored profile data exists:', !!storedProfile);
+    
+    let userToRestore: User | null = null;
+    let profileToRestore: UserProfile | null = null;
+    
+    // Helper function to check if a user is an admin
+    const checkIsAdminUser = (user: User | null): boolean => {
+      if (!user || !user.email) return false;
+      return user.email === 'eddymosley@compscihigh.org' || 
+             user.email === 'admin@mstgames.net' ||
+             user.email === 'edm21179@gmail.com' ||
+             user.email.includes('eddymosley') ||
+             user.email.includes('admin') ||
+             user.email.includes('mstgames');
+    };
+    
+    // Priority 1: If Firebase Auth user exists and is an admin, use it (most reliable)
+    if (firebaseAuthUser && checkIsAdminUser(firebaseAuthUser)) {
+      console.log('🔄 [switchToAdmin] Firebase Auth user is an admin, using it');
+      userToRestore = firebaseAuthUser;
+    }
+    
+    // Priority 2: Use Firebase Auth user if it matches stored original user
+    if (!userToRestore && firebaseAuthUser && storedUser) {
+      try {
+        const userData = JSON.parse(storedUser);
+        if (firebaseAuthUser.uid === userData.uid) {
+          console.log('🔄 [switchToAdmin] Using Firebase Auth user (matches stored original)');
+          userToRestore = firebaseAuthUser;
+        }
+      } catch (e) {
+        console.error('Error parsing stored user data:', e);
+      }
+    }
+    
+    // Priority 3: Use originalUser from state if it matches Firebase Auth
+    if (!userToRestore && originalUser && firebaseAuthUser && originalUser.uid === firebaseAuthUser.uid) {
+      console.log('🔄 [switchToAdmin] Using Firebase Auth user (matches originalUser state)');
+      userToRestore = firebaseAuthUser;
+    }
+    
+    // Priority 4: Use originalUser from state (if it's a real Firebase Auth user, not a mock)
+    if (!userToRestore && originalUser && originalUser.uid && originalUser.email) {
+      // Check if it's a real Firebase Auth user (has getIdToken method that works)
+      try {
+        const token = await originalUser.getIdToken().catch(() => null);
+        if (token) {
+          console.log('🔄 [switchToAdmin] Using originalUser from state (real Firebase Auth user)');
+          userToRestore = originalUser;
+        }
+      } catch (e) {
+        console.log('🔄 [switchToAdmin] originalUser is not a real Firebase Auth user, skipping');
+      }
+    }
+    
+    // Priority 5: Try to restore from localStorage and match with Firebase Auth
+    if (!userToRestore && storedUser) {
+      try {
+        const userData = JSON.parse(storedUser);
+        // If we have a Firebase Auth user with matching UID, use that
+        if (firebaseAuthUser && firebaseAuthUser.uid === userData.uid) {
+          console.log('🔄 [switchToAdmin] Using Firebase Auth user from stored UID match');
+          userToRestore = firebaseAuthUser;
+        } else if (firebaseAuthUser && checkIsAdminUser(firebaseAuthUser)) {
+          // If Firebase Auth user is an admin (even if UID doesn't match), use it
+          console.log('🔄 [switchToAdmin] Using Firebase Auth user (admin, UID mismatch but admin verified)');
+          userToRestore = firebaseAuthUser;
+        }
+      } catch (e) {
+        console.error('Error parsing stored user data:', e);
+      }
+    }
+    
+    // Final fallback: If we have a Firebase Auth user that's an admin, use it
+    if (!userToRestore && firebaseAuthUser && checkIsAdminUser(firebaseAuthUser)) {
+      console.log('🔄 [switchToAdmin] Final fallback: Using Firebase Auth user (admin verified)');
+      userToRestore = firebaseAuthUser;
+    }
+    
+    if (!userToRestore) {
+      console.error('❌ [switchToAdmin] No user data found to restore');
+      console.error('❌ [switchToAdmin] Debug info:', {
+        hasFirebaseAuthUser: !!firebaseAuthUser,
+        firebaseAuthUserEmail: firebaseAuthUser?.email,
+        hasOriginalUser: !!originalUser,
+        originalUserEmail: originalUser?.email,
+        hasStoredUser: !!storedUser
+      });
+      throw new Error('No original user data found. Please log out and log back in as admin.');
     }
 
+    // Get profile from state or localStorage
+    profileToRestore = originalProfile || (storedProfile ? JSON.parse(storedProfile) : null);
+
+    console.log('🔄 [switchToAdmin] Restoring user:', userToRestore.uid, userToRestore.email);
+
+    // Disable test mode first so onAuthStateChanged can work normally
+    setIsTestMode(false);
+
     // Restore original user data
-    setCurrentUser(originalUser);
-    setUserProfile(originalProfile);
+    setCurrentUser(userToRestore);
+    setUserProfile(profileToRestore);
     setTestAccountData(null);
     setCurrentRole('admin');
+    
+    // Fetch the profile from Firestore to ensure we have the latest data
+    if (userToRestore) {
+      console.log('🔄 [switchToAdmin] Fetching user profile from Firestore...');
+      try {
+        const userDoc = await getDoc(doc(db, 'users', userToRestore.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data() as UserProfile;
+          setUserProfile(userData);
+          
+          // Update Firebase Auth displayName to match Firestore profile
+          if (userData.displayName && userData.displayName !== userToRestore.displayName) {
+            console.log('🔄 [switchToAdmin] Updating Firebase Auth displayName to:', userData.displayName);
+            try {
+              await updateProfile(userToRestore, {
+                displayName: userData.displayName
+              });
+              // Update the currentUser state with the new displayName
+              setCurrentUser({
+                ...userToRestore,
+                displayName: userData.displayName
+              } as User);
+            } catch (updateError) {
+              console.error('Error updating Firebase Auth displayName:', updateError);
+              // Continue anyway - the profile is still set correctly
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+      }
+    }
+    
+    // Clear localStorage after successful restore
+    localStorage.removeItem('originalUserData');
+    localStorage.removeItem('originalProfileData');
+    
+    console.log('✅ [switchToAdmin] Successfully restored to admin account');
   }, [originalUser, originalProfile]);
 
   // Memoize the context value to prevent unnecessary re-renders

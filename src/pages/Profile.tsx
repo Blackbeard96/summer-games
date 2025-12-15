@@ -3,9 +3,9 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate } from 'react-router-dom';
 import { db, storage } from '../firebase';
-import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { updateProfile } from 'firebase/auth';
+import { updateProfile, getAuth } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
 import ManifestProgress from '../components/ManifestProgress';
 import ManifestSelection from '../components/ManifestSelection';
@@ -517,30 +517,86 @@ const Profile = () => {
   };
 
   const handleSaveProfile = async () => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('❌ Error: No user logged in. Please log in and try again.');
+      return;
+    }
 
     try {
-      // Update Firebase Auth profile
-      await updateProfile(currentUser, { displayName });
+      setUploading(true);
       
-      // Update Firestore
-      const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { 
-        displayName,
-        bio,
-        manifest,
-        manifestationType: style, // Save style as manifestationType to keep it consistent
-        rarity,
-        cardBgColor,
-        cardFrameShape,
-        cardBorderColor,
-        cardImageBorderColor,
-        moves,
+      // Get fresh auth user reference to avoid stale user object issues
+      const auth = getAuth();
+      const authUser = auth.currentUser;
+      
+      // Update Firebase Auth profile (only if we have a valid auth user and display name)
+      if (authUser && displayName && displayName.trim() !== '') {
+        try {
+          await updateProfile(authUser, { displayName });
+        } catch (authError) {
+          // If auth update fails, log but continue with Firestore update
+          console.warn('Failed to update Firebase Auth profile:', authError);
+        }
+      }
+      
+      // Prepare update data
+      const updateData: any = {
+        displayName: displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        bio: bio || '',
+        manifest: manifest || 'None',
+        manifestationType: style || 'Fire', // Save style as manifestationType to keep it consistent
+        rarity: rarity || 1,
+        cardBgColor: cardBgColor || '#e0e7ff',
+        cardFrameShape: cardFrameShape || 'circular',
+        cardBorderColor: cardBorderColor || '#a78bfa',
+        cardImageBorderColor: cardImageBorderColor || '#a78bfa',
+        moves: moves || [],
         updatedAt: new Date()
-      });
+      };
       
+      // Update both Firestore collections to keep them in sync
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const userRef = doc(db, 'users', currentUser.uid);
+      
+      // Update students collection
+      await updateDoc(studentRef, updateData);
+      
+      // Update users collection
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await updateDoc(userRef, updateData);
+      } else {
+        // Create user document if it doesn't exist
+        await setDoc(userRef, {
+          ...updateData,
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || null,
+          createdAt: new Date()
+        });
+      }
+      
+      // Update local state
       setEditing(false);
-      setUserData((prev: any) => ({ ...prev, displayName, bio, manifest, manifestationType: style, rarity, cardBgColor, cardFrameShape, cardBorderColor, cardImageBorderColor, moves }));
+      setUserData((prev: any) => ({ 
+        ...prev, 
+        displayName: updateData.displayName, 
+        bio: updateData.bio, 
+        manifest: updateData.manifest, 
+        manifestationType: updateData.manifestationType, 
+        rarity: updateData.rarity, 
+        cardBgColor: updateData.cardBgColor, 
+        cardFrameShape: updateData.cardFrameShape, 
+        cardBorderColor: updateData.cardBorderColor, 
+        cardImageBorderColor: updateData.cardImageBorderColor, 
+        moves: updateData.moves 
+      }));
+      
+      // Refresh user data from Firestore to ensure UI is up to date
+      const refreshedStudentDoc = await getDoc(studentRef);
+      if (refreshedStudentDoc.exists()) {
+        const refreshedData = refreshedStudentDoc.data();
+        setUserData((prev: any) => ({ ...prev, ...refreshedData }));
+      }
       
       // Check if profile is now complete for auto-completion
       const hasDisplayName = displayName && displayName.trim() !== '';
@@ -553,6 +609,9 @@ const Profile = () => {
       }
     } catch (error) {
       console.error('Error updating profile:', error);
+      alert(`❌ Error updating profile: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -1097,7 +1156,7 @@ const Profile = () => {
                       Available Artifacts ({userData.artifacts.filter((a: any) => !a.used).length})
                     </h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                      {userData.artifacts.filter((artifact: any) => !artifact.used).map((artifact: any) => {
+                      {userData.artifacts.filter((artifact: any) => !artifact.used).map((artifact: any, index: number) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
                           switch (rarity) {
@@ -1110,7 +1169,7 @@ const Profile = () => {
                         };
 
                         return (
-                          <div key={enhancedArtifact.id || artifact} style={{ 
+                          <div key={`${enhancedArtifact.id || artifact}-${index}`} style={{ 
                             background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', 
                             borderRadius: '0.75rem', 
                             padding: '1rem', 
