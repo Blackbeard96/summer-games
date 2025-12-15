@@ -48,6 +48,7 @@ const InviteModal: React.FC<InviteModalProps> = ({
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(false);
   const [sendingInvites, setSendingInvites] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Fetch available players and existing invitations
   useEffect(() => {
@@ -322,15 +323,55 @@ const InviteModal: React.FC<InviteModalProps> = ({
             </div>
           ) : (
             <>
+              {/* Search Bar */}
+              <div style={{ marginBottom: '1rem' }}>
+                <input
+                  type="text"
+                  placeholder="Search players by name or email..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.5rem',
+                    fontSize: '0.875rem',
+                    outline: 'none',
+                    transition: 'border-color 0.2s'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#4f46e5'}
+                  onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                />
+              </div>
+
               {/* Available Players */}
               <div style={{ flex: 1, overflow: 'auto' }}>
-                <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', margin: '0 0 1rem 0' }}>
-                  Available Players ({availablePlayers.length})
-                </h3>
+                {(() => {
+                  // Filter players based on search query
+                  const filteredPlayers = availablePlayers.filter(player => {
+                    if (!searchQuery.trim()) return true;
+                    const query = searchQuery.toLowerCase();
+                    return (
+                      player.displayName?.toLowerCase().includes(query) ||
+                      player.email?.toLowerCase().includes(query) ||
+                      player.manifest?.toLowerCase().includes(query)
+                    );
+                  });
+
+                  return (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                        <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', margin: 0 }}>
+                          Available Players
+                        </h3>
+                        <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          {filteredPlayers.length} of {availablePlayers.length}
+                        </span>
+                      </div>
                 
-                {availablePlayers.length > 0 ? (
-                  <div style={{ display: 'grid', gap: '1rem' }}>
-                    {availablePlayers.map((player) => {
+                      {filteredPlayers.length > 0 ? (
+                        <div style={{ display: 'grid', gap: '1rem' }}>
+                          {filteredPlayers.map((player) => {
                       const invited = isInvited(player.uid);
                       const sending = isSendingInvite(player.uid);
                       
@@ -421,9 +462,14 @@ const InviteModal: React.FC<InviteModalProps> = ({
                     padding: '2rem',
                     color: '#6b7280'
                   }}>
-                    No available players found
+                    {searchQuery.trim() 
+                      ? `No players found matching "${searchQuery}"`
+                      : 'No available players found'}
                   </div>
                 )}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Pending Invitations */}

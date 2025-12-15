@@ -180,11 +180,107 @@ const InvitationManager: React.FC = () => {
         status: 'accepted'
       });
 
-      // Add user to squad using arrayUnion for concurrent-safe updates
-      await updateDoc(squadRef, {
-        members: arrayUnion(newMember),
-        updatedAt: serverTimestamp()
+      // Add user to squad - use array spread method for reliability
+      // Check again if user is already in squad (race condition check)
+      const finalSquadDoc = await getDoc(squadRef);
+      if (!finalSquadDoc.exists()) {
+        alert('Squad not found. It may have been deleted.');
+        return;
+      }
+
+      const finalSquadData = finalSquadDoc.data() as Squad;
+      const finalMembers = finalSquadData.members || [];
+      
+      // Double-check user isn't already a member
+      const isAlreadyMember = finalMembers.some((member: any) => member.uid === currentUser.uid);
+      if (isAlreadyMember) {
+        alert('You are already a member of this squad.');
+        return;
+      }
+
+      // Check if squad is still not full
+      if (finalMembers.length >= (finalSquadData.maxMembers || 4)) {
+        alert('This squad is now full. The invitation is no longer valid.');
+        await updateDoc(doc(db, 'squadInvitations', invitation.id), {
+          status: 'declined'
+        });
+        return;
+      }
+
+      // Add member using array spread (more reliable than arrayUnion for complex objects)
+      const updatedMembers = [...finalMembers, newMember];
+      
+      console.log('InvitationManager: Adding member to squad:', {
+        squadId: invitation.squadId,
+        currentMembersCount: finalMembers.length,
+        newMember: newMember,
+        updatedMembersCount: updatedMembers.length
       });
+      
+      // Ensure all member fields are properly set (no undefined values that might cause issues)
+      const cleanMember: SquadMember = {
+        uid: newMember.uid,
+        displayName: newMember.displayName || 'Unknown',
+        email: newMember.email || '',
+        photoURL: newMember.photoURL || undefined,
+        level: newMember.level || 1,
+        xp: newMember.xp || 0,
+        powerPoints: newMember.powerPoints || 0,
+        manifest: newMember.manifest || 'Unknown',
+        role: newMember.role || 'Member',
+        isLeader: false,
+        isAdmin: false
+      };
+      
+      const cleanUpdatedMembers = [...finalMembers, cleanMember];
+      
+      try {
+        await updateDoc(squadRef, {
+          members: cleanUpdatedMembers,
+          updatedAt: serverTimestamp()
+        });
+        
+        console.log('InvitationManager: UpdateDoc completed successfully');
+      } catch (updateError: any) {
+        console.error('InvitationManager: Error updating squad:', updateError);
+        throw updateError; // Re-throw to be caught by outer catch
+      }
+
+      // Verify the member was added
+      try {
+        const verificationDoc = await getDoc(squadRef);
+        if (verificationDoc.exists()) {
+          const verifiedData = verificationDoc.data();
+          const verifiedMembers = verifiedData.members || [];
+          const memberWasAdded = verifiedMembers.some((member: any) => member.uid === currentUser.uid);
+          
+          if (!memberWasAdded) {
+            console.error('InvitationManager: Member was not added to squad after update!', {
+              squadId: invitation.squadId,
+              expectedMember: cleanMember,
+              actualMembers: verifiedMembers
+            });
+            alert('Failed to add you to the squad. Please try again or contact support.');
+            return;
+          }
+          
+          console.log('InvitationManager: Successfully verified member was added to squad:', {
+            squadId: invitation.squadId,
+            squadName: invitation.squadName,
+            memberUid: currentUser.uid,
+            memberName: cleanMember.displayName,
+            totalMembers: verifiedMembers.length
+          });
+        } else {
+          console.error('InvitationManager: Squad document does not exist after update!');
+          alert('Squad was deleted during the join process. Please try again.');
+          return;
+        }
+      } catch (verifyError) {
+        console.error('InvitationManager: Error verifying member addition:', verifyError);
+        // Don't fail the whole process if verification fails - the update might have succeeded
+        console.warn('InvitationManager: Could not verify member addition, but update may have succeeded');
+      }
 
       alert(`🎉 Successfully joined ${invitation.squadName}!`);
       
