@@ -5,7 +5,7 @@ interface SquadMember {
   uid: string;
   displayName: string;
   email: string;
-  photoURL?: string;
+  photoURL?: string | null;
   level: number;
   xp: number;
   powerPoints?: number;

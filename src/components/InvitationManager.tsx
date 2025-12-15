@@ -7,7 +7,7 @@ interface SquadMember {
   uid: string;
   displayName: string;
   email: string;
-  photoURL?: string;
+  photoURL?: string | null;
   level: number;
   xp: number;
   powerPoints?: number;
@@ -160,12 +160,12 @@ const InvitationManager: React.FC = () => {
         manifest = studentData.manifestationType;
       }
       
-      // Create new member with proper data
+      // Create new member with proper data (no undefined values)
       const newMember: SquadMember = {
         uid: currentUser.uid,
         displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
         email: currentUser.email || '',
-        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || null,
         level: userData.level || studentData?.level || 1,
         xp: userData.xp || studentData?.xp || 0,
         powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
@@ -217,12 +217,12 @@ const InvitationManager: React.FC = () => {
         updatedMembersCount: updatedMembers.length
       });
       
-      // Ensure all member fields are properly set (no undefined values that might cause issues)
+      // Ensure all member fields are properly set (no undefined values - use null instead)
       const cleanMember: SquadMember = {
         uid: newMember.uid,
         displayName: newMember.displayName || 'Unknown',
         email: newMember.email || '',
-        photoURL: newMember.photoURL || undefined,
+        photoURL: newMember.photoURL || null,
         level: newMember.level || 1,
         xp: newMember.xp || 0,
         powerPoints: newMember.powerPoints || 0,
@@ -234,9 +234,21 @@ const InvitationManager: React.FC = () => {
       
       const cleanUpdatedMembers = [...finalMembers, cleanMember];
       
+      // Remove any undefined values from members array
+      const sanitizedMembers = cleanUpdatedMembers.map(member => {
+        const sanitized: any = {};
+        Object.keys(member).forEach(key => {
+          const value = (member as any)[key];
+          if (value !== undefined) {
+            sanitized[key] = value;
+          }
+        });
+        return sanitized;
+      });
+      
       try {
         await updateDoc(squadRef, {
-          members: cleanUpdatedMembers,
+          members: sanitizedMembers,
           updatedAt: serverTimestamp()
         });
         

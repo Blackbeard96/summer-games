@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, doc, getDocs, getDoc, updateDoc, onSnapshot, query, where, addDoc, deleteDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, updateDoc, onSnapshot, query, where, addDoc, deleteDoc, arrayUnion, serverTimestamp, deleteField } from 'firebase/firestore';
 import PlayerCard from '../components/PlayerCard';
 import SquadCard from '../components/SquadCard';
 import InviteModal from '../components/InviteModal';
@@ -12,7 +12,7 @@ interface SquadMember {
   uid: string;
   displayName: string;
   email: string;
-  photoURL?: string;
+  photoURL?: string | null;
   level: number;
   xp: number;
   powerPoints?: number;
@@ -36,6 +36,25 @@ interface Squad {
   maxMembers: number;
   abbreviation?: string;
 }
+
+// Helper function to remove undefined values from objects (Firestore doesn't allow undefined)
+const sanitizeForFirestore = (obj: any): any => {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeForFirestore(item));
+  }
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    Object.keys(obj).forEach(key => {
+      const value = obj[key];
+      if (value !== undefined) {
+        sanitized[key] = sanitizeForFirestore(value);
+      }
+    });
+    return sanitized;
+  }
+  return obj;
+};
 
 const Squads: React.FC = () => {
   const { currentUser } = useAuth();
@@ -320,7 +339,7 @@ const Squads: React.FC = () => {
         uid: currentUser.uid,
         displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
         email: currentUser.email || '',
-        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || null,
         level: userData.level || studentData?.level || 1,
         xp: userData.xp || studentData?.xp || 0,
         powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
@@ -330,16 +349,28 @@ const Squads: React.FC = () => {
         isAdmin: true
       };
 
-      const squadData = {
+      // Remove undefined values from squadData
+      const squadData: any = {
         name: newSquadName.trim(),
-        description: newSquadDescription.trim() || undefined,
-        abbreviation: newSquadAbbreviation.trim().slice(0, 4) || undefined,
         leader: currentUser.uid,
-        members: [leaderMember],
+        members: sanitizeForFirestore([leaderMember]),
         createdAt: serverTimestamp(),
         maxMembers: 4
       };
 
+      // Only add optional fields if they have values
+      const description = newSquadDescription.trim();
+      if (description) {
+        squadData.description = description;
+      }
+
+      const abbreviation = newSquadAbbreviation.trim().slice(0, 4);
+      if (abbreviation) {
+        squadData.abbreviation = abbreviation;
+      }
+
+      // Sanitize only the members array, not the whole object (to preserve serverTimestamp)
+      squadData.members = sanitizeForFirestore(squadData.members);
       const docRef = await addDoc(collection(db, 'squads'), squadData);
       console.log('Squad created with ID:', docRef.id);
       
@@ -462,7 +493,7 @@ const Squads: React.FC = () => {
         uid: currentUser.uid,
         displayName: currentUser.displayName || userData.displayName || studentData?.displayName || currentUser.email?.split('@')[0] || 'Unknown',
         email: currentUser.email || '',
-        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || undefined,
+        photoURL: currentUser.photoURL || userData.photoURL || studentData?.photoURL || null,
         level: userData.level || studentData?.level || 1,
         xp: userData.xp || studentData?.xp || 0,
         powerPoints: userData.powerPoints || studentData?.powerPoints || 0,
@@ -500,7 +531,7 @@ const Squads: React.FC = () => {
         uid: newMember.uid,
         displayName: newMember.displayName || 'Unknown',
         email: newMember.email || '',
-        photoURL: newMember.photoURL || undefined,
+        photoURL: newMember.photoURL || null,
         level: newMember.level || 1,
         xp: newMember.xp || 0,
         powerPoints: newMember.powerPoints || 0,
@@ -513,15 +544,18 @@ const Squads: React.FC = () => {
       // Use array spread (more reliable than arrayUnion for complex objects)
       const updatedMembers = [...finalMembers, cleanMember];
       
+      // Sanitize members array to remove any undefined values
+      const sanitizedMembers = sanitizeForFirestore(updatedMembers);
+      
       console.log('Squads: Adding member to squad:', {
         squadId: squadId,
         currentMembersCount: finalMembers.length,
         newMember: cleanMember,
-        updatedMembersCount: updatedMembers.length
+        updatedMembersCount: sanitizedMembers.length
       });
 
       await updateDoc(squadRef, {
-        members: updatedMembers,
+        members: sanitizedMembers,
         updatedAt: serverTimestamp()
       });
 
@@ -583,7 +617,7 @@ const Squads: React.FC = () => {
         newLeader.isAdmin = true;
         
         await updateDoc(doc(db, 'squads', squadId), {
-          members: updatedMembers,
+          members: sanitizeForFirestore(updatedMembers),
           leader: newLeader.uid
         });
       }
@@ -613,7 +647,7 @@ const Squads: React.FC = () => {
       );
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: updatedMembers
+        members: sanitizeForFirestore(updatedMembers)
       });
     } catch (error) {
       console.error('Error promoting member:', error);
@@ -641,7 +675,7 @@ const Squads: React.FC = () => {
       );
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: updatedMembers
+        members: sanitizeForFirestore(updatedMembers)
       });
     } catch (error) {
       console.error('Error demoting admin:', error);
@@ -672,7 +706,7 @@ const Squads: React.FC = () => {
       const updatedMembers = squad.members.filter(member => member.uid !== memberId);
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: updatedMembers
+        members: sanitizeForFirestore(updatedMembers)
       });
     } catch (error) {
       console.error('Error removing member:', error);
@@ -693,11 +727,17 @@ const Squads: React.FC = () => {
         return;
       }
 
-      const cleanedAbbreviation = abbreviation.trim().slice(0, 4) || null;
+      const cleanedAbbreviation = abbreviation.trim().slice(0, 4);
 
-      await updateDoc(doc(db, 'squads', squadId), {
-        abbreviation: cleanedAbbreviation || null
-      });
+      // Use deleteField if abbreviation is empty, otherwise set the value
+      const updateData: any = {};
+      if (cleanedAbbreviation) {
+        updateData.abbreviation = cleanedAbbreviation;
+      } else {
+        updateData.abbreviation = deleteField();
+      }
+
+      await updateDoc(doc(db, 'squads', squadId), updateData);
     } catch (error) {
       console.error('Error updating abbreviation:', error);
     }
@@ -1065,7 +1105,7 @@ const Squads: React.FC = () => {
       if (hasUpdates) {
         console.log('Squads: Updating squad with current member data');
         await updateDoc(doc(db, 'squads', squad.id), {
-          members: updatedMembers
+          members: sanitizeForFirestore(updatedMembers)
         });
       }
     } catch (error) {
