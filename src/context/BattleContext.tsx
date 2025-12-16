@@ -3975,6 +3975,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         setSuccess(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
         
+        // Track daily challenge: Use Health Potion
+        if (currentUser) {
+          updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch(err => 
+            console.error('Error updating daily challenge progress for health potion:', err)
+          );
+        }
+        
         // Call callback to signal that Health Potion was used (ends turn in battle)
         if (onArtifactUsed) {
           onArtifactUsed();

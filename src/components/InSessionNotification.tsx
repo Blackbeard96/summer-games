@@ -202,15 +202,19 @@ const InSessionNotification: React.FC = () => {
             
             setIsInSession(userInSession);
 
-            // PRIMARY RULE: If user is on the session page, ALWAYS hide the notification
+            // PRIMARY RULE: If user is on the session page OR actively viewing the session, ALWAYS hide the notification
             // This prevents the notification from flickering or reappearing when the user is already viewing the session
-            if (isOnSessionPage) {
-              console.log('[InSessionNotification] ❌ Hiding notification - user is on session page');
+            if (isOnSessionPage || userIsInActiveViewers) {
+              console.log('[InSessionNotification] ❌ Hiding notification - user is in session', {
+                isOnSessionPage,
+                userIsInActiveViewers,
+                currentPath: location.pathname
+              });
               setActiveSession(null);
               return; // Exit early - don't check anything else
             }
 
-            // SECONDARY RULES: Only show notification if user is NOT on the session page
+            // SECONDARY RULES: Only show notification if user is NOT on the session page and NOT actively viewing
             // Show notification if:
             // 1. User is NOT in the session players list (hasn't joined) - show "Join Session"
             // 2. User is in the session but NOT on the session page (left the session view) - show "Rejoin Session"

@@ -16,7 +16,7 @@ interface PlayerChallengeProgress {
  */
 export const updateDailyChallengeProgress = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
   amount: number = 1
 ) => {
   try {
@@ -121,7 +121,7 @@ export const updateChallengeProgressById = async (
  */
 export const updateChallengeProgressByType = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
   amount: number = 1
 ) => {
   try {
@@ -212,9 +212,10 @@ export const updateChallengeProgressByType = async (
       }
       
       if (normalizedStoredType === normalizedChallengeType && !challenge.completed) {
-        // If target is not set, default to a high number to allow progress tracking
-        const target = challengeTarget || 999999;
-        const newProgress = Math.min((challenge.progress || 0) + amount, target);
+        // Use stored target or fetch from details, but ensure we have a valid target
+        const target = challengeTarget || challengeDetails[challenge.challengeId]?.target || 999999;
+        const newProgress = (challenge.progress || 0) + amount;
+        // Only mark as completed if we've reached or exceeded the target
         const completed = newProgress >= target;
         
         hasUpdates = true;

@@ -42,19 +42,41 @@ const isFirestoreInternalError = (error: any): boolean => {
   const errorStack = error?.stack || '';
   const errorCode = error?.code || '';
   
+  // Check for nested errors in CONTEXT field
+  let contextString = '';
+  try {
+    if (error?.context) {
+      contextString = JSON.stringify(error.context);
+    }
+    if (error?.hc) {
+      contextString += String(error.hc);
+    }
+  } catch (e) {
+    // Ignore JSON stringify errors
+  }
+  
+  const allErrorStrings = [
+    errorString,
+    errorMessage,
+    errorStack,
+    contextString,
+    JSON.stringify(error)
+  ].join(' ');
+  
   return (
-    errorString.includes('INTERNAL ASSERTION FAILED') || 
-    errorMessage.includes('INTERNAL ASSERTION FAILED') ||
-    errorStack.includes('INTERNAL ASSERTION FAILED') ||
-    errorString.includes('ID: ca9') ||
-    errorString.includes('ID: b815') ||
-    errorMessage.includes('ID: ca9') ||
-    errorMessage.includes('ID: b815') ||
-    errorStack.includes('ID: ca9') ||
-    errorStack.includes('ID: b815') ||
-    (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
-    (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
-    (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
+    allErrorStrings.includes('INTERNAL ASSERTION FAILED') || 
+    allErrorStrings.includes('ID: ca9') ||
+    allErrorStrings.includes('ID: b815') ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('Unexpected state')) ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
+    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815'))) ||
+    // Check for specific Firestore internal patterns
+    allErrorStrings.includes('__PRIVATE__fail') ||
+    allErrorStrings.includes('__PRIVATE_hardAssert') ||
+    allErrorStrings.includes('__PRIVATE_WatchChangeAggregator') ||
+    allErrorStrings.includes('__PRIVATE_PersistentListenStream') ||
+    allErrorStrings.includes('BrowserConnectivityMonitor') ||
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)'))
   );
 };
 

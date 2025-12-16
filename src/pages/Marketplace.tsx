@@ -5,6 +5,7 @@ import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { activatePPBoost, getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 
 interface Artifact {
   id: string;
@@ -737,6 +738,11 @@ const Marketplace = () => {
         
         // Refresh artifact counts
         await updateAllArtifactCounts();
+        
+        // Track daily challenge: Use Health Potion
+        updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch(err => 
+          console.error('Error updating daily challenge progress for health potion:', err)
+        );
         
         alert(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
         return;

@@ -6,7 +6,7 @@ interface DailyChallenge {
   id: string;
   title: string;
   description: string;
-  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom';
+  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom';
   target: number; // Target count/amount
   rewardPP: number;
   rewardXP: number;
@@ -170,6 +170,7 @@ const DailyChallengesAdmin: React.FC = () => {
       win_battle: 'Win Battle',
       earn_pp: 'Earn PP',
       use_manifest_ability: 'Use Manifest Ability',
+      use_health_potion: 'Use Health Potion',
       custom: 'Custom'
     };
     return labels[type] || type;
@@ -287,6 +288,7 @@ const DailyChallengesAdmin: React.FC = () => {
                 <option value="win_battle">Win Battle</option>
                 <option value="earn_pp">Earn PP</option>
                 <option value="use_manifest_ability">Use Manifest Ability</option>
+                <option value="use_health_potion">Use Health Potion</option>
                 <option value="custom">Custom</option>
               </select>
             </div>

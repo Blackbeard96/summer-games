@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot, increment } from 'firebase/firestore';
 
 interface DailyChallenge {
   id: string;
   title: string;
   description: string;
-  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'custom';
+  type: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom';
   target: number;
   rewardPP: number;
   rewardXP: number;
@@ -38,15 +38,26 @@ const DailyChallenges: React.FC = () => {
       
       // Set up real-time listener for challenge progress updates
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
-      const unsubscribe = onSnapshot(playerChallengesRef, (doc) => {
+      const unsubscribe = onSnapshot(playerChallengesRef, async (doc) => {
         if (doc.exists()) {
           const data = doc.data();
           const today = getTodayDateString();
           
           if (data.assignedDate === today && data.challenges) {
             const progressMap: { [key: string]: PlayerChallengeProgress } = {};
+            const previousProgress = progress; // Store previous state for comparison
+            
             data.challenges.forEach((c: PlayerChallengeProgress) => {
               progressMap[c.challengeId] = c;
+              
+              // Check if challenge just completed (wasn't completed before, but is now)
+              const prevChallenge = previousProgress[c.challengeId];
+              if (!prevChallenge?.completed && c.completed && !c.claimed) {
+                // Challenge just completed - automatically grant rewards
+                autoGrantRewards(c.challengeId).catch(err => {
+                  console.error('Error auto-granting rewards:', err);
+                });
+              }
             });
             setProgress(progressMap);
           }
@@ -183,6 +194,48 @@ const DailyChallenges: React.FC = () => {
     return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   };
 
+  // Automatically grant rewards when a challenge completes
+  const autoGrantRewards = async (challengeId: string) => {
+    if (!currentUser) return;
+
+    try {
+      // Fetch challenge details
+      const challengeDoc = await getDoc(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId));
+      if (!challengeDoc.exists()) {
+        console.error('[Daily Challenges] Challenge not found:', challengeId);
+        return;
+      }
+      const challengeData = challengeDoc.data() as DailyChallenge;
+      
+      // Grant rewards using atomic updates
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const updateData: any = {
+        powerPoints: increment(challengeData.rewardPP),
+        xp: increment(challengeData.rewardXP)
+      };
+      if (challengeData.rewardTruthMetal) {
+        updateData.truthMetal = increment(challengeData.rewardTruthMetal);
+      }
+      await updateDoc(studentRef, updateData);
+
+      // Mark as claimed
+      const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
+      const currentData = (await getDoc(playerChallengesRef)).data();
+      if (currentData && currentData.challenges) {
+        const updatedChallenges = currentData.challenges.map((c: PlayerChallengeProgress) => 
+          c.challengeId === challengeId ? { ...c, claimed: true } : c
+        );
+        await updateDoc(playerChallengesRef, {
+          challenges: updatedChallenges
+        });
+      }
+      
+      console.log(`[Daily Challenges] ✅ Auto-granted rewards for challenge "${challengeData.title}": ${challengeData.rewardPP} PP, ${challengeData.rewardXP} XP${challengeData.rewardTruthMetal ? `, ${challengeData.rewardTruthMetal} Truth Metal` : ''}`);
+    } catch (error) {
+      console.error('[Daily Challenges] Error auto-granting rewards:', error);
+    }
+  };
+
   const loadDailyChallenges = async () => {
     if (!currentUser) return;
 
@@ -269,7 +322,9 @@ const DailyChallenges: React.FC = () => {
         progress: 0,
         completed: false,
         claimed: false,
-        assignedDate: getTodayDateString()
+        assignedDate: getTodayDateString(),
+        type: challenge.type, // Store type for efficient tracking
+        target: challenge.target // Store target for completion checking
       }));
 
       // Save to player's daily challenges
@@ -298,18 +353,13 @@ const DailyChallenges: React.FC = () => {
     try {
       setClaiming(challenge.id);
 
-      // Update player stats
+      // Update player stats using atomic updates
       const studentRef = doc(db, 'students', currentUser.uid);
-      const studentDoc = await getDoc(studentRef);
-      
-      if (studentDoc.exists()) {
-        const currentData = studentDoc.data();
-        await updateDoc(studentRef, {
-          powerPoints: (currentData.powerPoints || 0) + challenge.rewardPP,
-          xp: (currentData.xp || 0) + challenge.rewardXP,
-          truthMetal: (currentData.truthMetal || 0) + (challenge.rewardTruthMetal || 0)
-        });
-      }
+      await updateDoc(studentRef, {
+        powerPoints: increment(challenge.rewardPP),
+        xp: increment(challenge.rewardXP),
+        ...(challenge.rewardTruthMetal ? { truthMetal: increment(challenge.rewardTruthMetal) } : {})
+      });
 
       // Mark as claimed
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
@@ -396,6 +446,7 @@ const DailyChallenges: React.FC = () => {
       win_battle: '🏆',
       earn_pp: '🪙',
       use_manifest_ability: '✨',
+      use_health_potion: '🧪',
       custom: '⭐'
     };
     return icons[type] || '⭐';

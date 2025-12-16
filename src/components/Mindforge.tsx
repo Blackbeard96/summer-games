@@ -217,6 +217,30 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
     };
   }>({});
 
+  // Helper function to check if error is a Firestore internal assertion error
+  const isFirestoreInternalError = (error: any): boolean => {
+    if (!error) return false;
+    const errorString = String(error);
+    const errorMessage = error?.message || '';
+    const errorStack = error?.stack || '';
+    const errorCode = error?.code || '';
+    
+    return (
+      errorString.includes('INTERNAL ASSERTION FAILED') || 
+      errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+      errorStack.includes('INTERNAL ASSERTION FAILED') ||
+      errorString.includes('ID: ca9') ||
+      errorString.includes('ID: b815') ||
+      errorMessage.includes('ID: ca9') ||
+      errorMessage.includes('ID: b815') ||
+      errorStack.includes('ID: ca9') ||
+      errorStack.includes('ID: b815') ||
+      (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state')) ||
+      (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state')) ||
+      (errorCode === 'failed-precondition' && (errorMessage.includes('ID: ca9') || errorMessage.includes('ID: b815')))
+    );
+  };
+
   // Load questions from Firestore
   useEffect(() => {
     const loadQuestions = async () => {
@@ -237,6 +261,13 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
         
         setQuestionBank(loadedQuestions);
       } catch (error) {
+        // Suppress Firestore internal assertion errors
+        if (isFirestoreInternalError(error)) {
+          // Silently ignore - fallback to sample questions
+          setQuestionBank(SAMPLE_QUESTIONS.filter(q => q.class === selectedClass));
+          setQuestionsLoading(false);
+          return;
+        }
         console.error('Error loading questions:', error);
         // Fallback to sample questions if Firestore fails
         setQuestionBank(SAMPLE_QUESTIONS.filter(q => q.class === selectedClass));
@@ -307,6 +338,10 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
           setCompletedTopics(new Set(topics));
         }
       } catch (error) {
+        // Suppress Firestore internal assertion errors
+        if (isFirestoreInternalError(error)) {
+          return; // Silently ignore
+        }
         console.error('Error loading Mindforge stats:', error);
       }
     };
@@ -795,6 +830,17 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
         setShowResultsModal(true);
       }
     } catch (error) {
+      // Suppress Firestore internal assertion errors
+      if (isFirestoreInternalError(error)) {
+        // Still show results modal even if save fails
+        setBattleResults({
+          result,
+          rewards,
+          stats: { ...stats }
+        });
+        setShowResultsModal(true);
+        return;
+      }
       console.error('Error recording Mindforge battle:', error);
     }
   };

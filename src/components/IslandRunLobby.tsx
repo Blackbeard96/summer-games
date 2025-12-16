@@ -15,6 +15,61 @@ const IslandRunLobbyView: React.FC = () => {
   const [isReady, setIsReady] = useState(false);
   const hasJoinedRef = useRef(false);
 
+  // Function to add player to lobby (extracted for reuse)
+  const addPlayerToLobby = async (lobbyRef: any, players: IslandRunPlayer[]) => {
+    if (!currentUser) return false;
+    
+    try {
+      // Fetch user data to get level and XP
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      let playerLevel = 1;
+      let playerXP = 0;
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        playerXP = studentData.xp || 0;
+        playerLevel = getLevelFromXP(playerXP);
+      }
+
+      const newPlayer: IslandRunPlayer = {
+        userId: currentUser.uid,
+        displayName: currentUser.displayName || 'Player',
+        photoURL: currentUser.photoURL || undefined,
+        level: playerLevel,
+        xp: playerXP,
+        health: 100,
+        maxHealth: 100,
+        shieldStrength: 0,
+        maxShieldStrength: 0,
+        equippedArtifacts: {},
+        moves: [],
+        actionCards: [],
+        isReady: false,
+        isLeader: false
+      };
+
+      // Check if lobby is full
+      if (players.length >= 4) {
+        console.warn('[IslandRunLobby] Lobby is full, cannot add player');
+        return false;
+      }
+
+      const updatedPlayers = [...players, newPlayer];
+      await updateDoc(lobbyRef, {
+        players: updatedPlayers as any, // Type assertion needed for Firestore nested objects
+        currentPlayers: updatedPlayers.length,
+        updatedAt: serverTimestamp()
+      });
+      
+      console.log('[IslandRunLobby] Successfully added player to lobby');
+      return true;
+    } catch (error) {
+      console.error('[IslandRunLobby] Error adding player to lobby:', error);
+      return false;
+    }
+  };
+
   useEffect(() => {
     if (!lobbyId || !currentUser) return;
 
@@ -26,62 +81,61 @@ const IslandRunLobbyView: React.FC = () => {
         const playerExists = players.some((p: IslandRunPlayer) => p.userId === currentUser.uid);
 
         // If player hasn't joined yet, add them to the lobby
-        if (!playerExists && !hasJoinedRef.current) {
-          hasJoinedRef.current = true;
-          try {
-            // Fetch user data to get level and XP
-            const studentRef = doc(db, 'students', currentUser.uid);
-            const studentDoc = await getDoc(studentRef);
-            
-            let playerLevel = 1;
-            let playerXP = 0;
-            if (studentDoc.exists()) {
-              const studentData = studentDoc.data();
-              playerXP = studentData.xp || 0;
-              playerLevel = getLevelFromXP(playerXP);
+        // Retry logic: if hasJoinedRef is false, try to join
+        if (!playerExists) {
+          if (!hasJoinedRef.current) {
+            hasJoinedRef.current = true;
+            const success = await addPlayerToLobby(lobbyRef, players);
+            if (!success) {
+              // If join failed, reset flag to allow retry
+              hasJoinedRef.current = false;
             }
+          } else {
+            // Player was supposed to join but doesn't exist - retry
+            console.log('[IslandRunLobby] Player should be in lobby but not found, retrying join...');
+            hasJoinedRef.current = false;
+            const success = await addPlayerToLobby(lobbyRef, players);
+            if (success) {
+              hasJoinedRef.current = true;
+            }
+          }
+        } else {
+          // Player exists - ensure flag is set
+          hasJoinedRef.current = true;
+        }
 
-            const newPlayer: IslandRunPlayer = {
-              userId: currentUser.uid,
-              displayName: currentUser.displayName || 'Player',
-              photoURL: currentUser.photoURL || undefined,
-              level: playerLevel,
-              xp: playerXP,
-              health: 100,
-              maxHealth: 100,
-              shieldStrength: 0,
-              maxShieldStrength: 0,
-              equippedArtifacts: {},
-              moves: [],
-              actionCards: [],
-              isReady: false,
-              isLeader: false
-            };
-
-            const updatedPlayers = [...players, newPlayer];
-            await updateDoc(lobbyRef, {
-              players: updatedPlayers,
-              currentPlayers: updatedPlayers.length,
-              updatedAt: serverTimestamp()
-            });
-          } catch (error) {
-            console.error('Error adding player to lobby:', error);
-            hasJoinedRef.current = false; // Reset so we can try again
+        // Get the latest player list (may have been updated by join attempt)
+        const currentData = docSnapshot.data();
+        let finalPlayers = currentData.players || [];
+        
+        // Final check: if player still doesn't exist and lobby is not full, try one more time
+        const finalPlayerExists = finalPlayers.some((p: IslandRunPlayer) => p.userId === currentUser.uid);
+        if (!finalPlayerExists && finalPlayers.length < 4 && !hasJoinedRef.current) {
+          console.log('[IslandRunLobby] Final attempt: Player still not in lobby, retrying join...');
+          const success = await addPlayerToLobby(lobbyRef, finalPlayers);
+          if (success) {
+            hasJoinedRef.current = true;
+            // Re-fetch to get updated player list
+            const updatedDoc = await getDoc(lobbyRef);
+            if (updatedDoc.exists()) {
+              const updatedData = updatedDoc.data();
+              finalPlayers = updatedData.players || [];
+            }
           }
         }
 
         const lobbyData = {
           id: docSnapshot.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          players: data.players || []
+          ...currentData,
+          createdAt: currentData.createdAt?.toDate() || new Date(),
+          players: finalPlayers
         } as IslandRunLobby;
 
         setLobby(lobbyData);
         setLoading(false);
 
         // Check if user is ready
-        const player = data.players?.find((p: IslandRunPlayer) => p.userId === currentUser.uid);
+        const player = finalPlayers.find((p: IslandRunPlayer) => p.userId === currentUser.uid);
         setIsReady(player?.isReady || false);
 
         // If game has started, redirect all players to the battle
@@ -116,7 +170,7 @@ const IslandRunLobbyView: React.FC = () => {
       
       if (lobbyDoc.exists()) {
         const data = lobbyDoc.data();
-        const players = [...(data.players || [])];
+        let players = [...(data.players || [])];
         const playerIndex = players.findIndex((p: IslandRunPlayer) => p.userId === currentUser.uid);
         
         if (playerIndex !== -1) {
@@ -127,16 +181,43 @@ const IslandRunLobbyView: React.FC = () => {
           };
           
           await updateDoc(lobbyRef, {
-            players,
+            players: players as any, // Type assertion needed for Firestore nested objects
             updatedAt: serverTimestamp()
           });
         } else {
-          console.error('Player not found in lobby');
-          alert('You are not in this lobby. Please refresh the page.');
+          // Player not found - try to add them automatically instead of showing error
+          console.log('[IslandRunLobby] Player not found in lobby, attempting to add automatically...');
+          const success = await addPlayerToLobby(lobbyRef, players);
+          
+          if (success) {
+            // Retry the ready toggle after adding player
+            const updatedDoc = await getDoc(lobbyRef);
+            if (updatedDoc.exists()) {
+              const updatedData = updatedDoc.data();
+              const updatedPlayers = [...(updatedData.players || [])];
+              const newPlayerIndex = updatedPlayers.findIndex((p: IslandRunPlayer) => p.userId === currentUser.uid);
+              
+              if (newPlayerIndex !== -1) {
+                updatedPlayers[newPlayerIndex] = {
+                  ...updatedPlayers[newPlayerIndex],
+                  isReady: true // Set to ready since they clicked ready
+                };
+                
+                await updateDoc(lobbyRef, {
+                  players: updatedPlayers as any, // Type assertion needed for Firestore nested objects
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+          } else {
+            // If auto-join failed, show error
+            console.error('[IslandRunLobby] Failed to add player to lobby');
+            alert('Unable to join lobby. Please refresh the page and try again.');
+          }
         }
       }
     } catch (error) {
-      console.error('Error updating ready status:', error);
+      console.error('[IslandRunLobby] Error updating ready status:', error);
       alert('Failed to update ready status. Please try again.');
     }
   };

@@ -513,16 +513,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         }
         
         // CRITICAL: Only set to true if explicitly confirmed - default is false
-        const finalIsAdmin = hasAdminRole === true;
-        const finalIsScorekeeper = isScorekeeperUser === true;
+        // Use strict boolean checks to ensure no truthy/falsy issues
+        const finalIsAdmin = Boolean(hasAdminRole === true);
+        const finalIsScorekeeper = Boolean(isScorekeeperUser === true);
         
+        // CRITICAL: Explicitly set to false if not confirmed
         setIsAdminUser(finalIsAdmin);
         setIsScorekeeper(finalIsScorekeeper);
         
         console.log('[InSessionBattle] Setting permission states:', {
           finalIsAdmin,
           finalIsScorekeeper,
-          willShowButton: finalIsAdmin || finalIsScorekeeper
+          willShowButton: finalIsAdmin || finalIsScorekeeper,
+          permissionsChecked: true
         });
         
         // Debug logging with explicit values
@@ -533,16 +536,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           isScorekeeperUser: isScorekeeperUser,
           roleDocExists: roleDoc.exists(),
           roleData: roleDoc.exists() ? roleDoc.data() : null,
-          settingIsAdminUser: hasAdminRole === true,
-          settingIsScorekeeper: isScorekeeperUser === true,
-          willShowButton: hasAdminRole === true || isScorekeeperUser === true
+          settingIsAdminUser: finalIsAdmin,
+          settingIsScorekeeper: finalIsScorekeeper,
+          willShowButton: finalIsAdmin || finalIsScorekeeper,
+          typeOfIsAdmin: typeof finalIsAdmin,
+          typeOfIsScorekeeper: typeof finalIsScorekeeper
         });
       } catch (error) {
         console.error('[InSessionBattle] Error checking user permissions:', error);
-        // On error, explicitly set to false
+        // On error, explicitly set to false - user is NOT admin or scorekeeper
         setIsAdminUser(false);
         setIsScorekeeper(false);
+        setPermissionsChecked(true); // Set checked to true so UI doesn't wait forever
+        console.log('[InSessionBattle] Error occurred - permissions denied, buttons will be hidden');
       } finally {
+        // Always set permissionsChecked to true after check completes (whether success or error)
+        // This ensures UI doesn't wait forever, but buttons will only show if isAdminUser or isScorekeeper is true
         setPermissionsChecked(true);
       }
     };
@@ -1232,7 +1241,32 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
         {/* Admin/Scorekeeper Controls - COMPLETELY HIDDEN for all non-admin and non-scorekeeper users */}
         {/* ALL PP controls (Participation, -10/+10, PP Tools) are REMOVED from DOM unless user is explicitly confirmed as admin OR scorekeeper */}
-        {permissionsChecked === true && (isAdminUser === true || isScorekeeper === true) ? (
+        {/* Only show buttons if permissions are checked AND user is explicitly admin OR scorekeeper */}
+        {/* For non-admin and non-scorekeeper users, these buttons should NEVER appear */}
+        {(() => {
+          // STRICT CHECK: Only show if permissions are checked AND user is explicitly admin OR scorekeeper
+          // Use strict boolean checks - no truthy/falsy coercion
+          const hasPermissions = permissionsChecked === true;
+          const isAuthorized = isAdminUser === true || isScorekeeper === true;
+          const shouldShowButtons = hasPermissions && isAuthorized;
+          
+          // Always log for debugging (not just in development) to help track down issues
+          console.log('[InSessionBattle] Button visibility check for student:', {
+            studentId: student.id,
+            studentName: student.displayName,
+            currentUserId: currentUser?.uid,
+            permissionsChecked,
+            isAdminUser,
+            isScorekeeper,
+            hasPermissions,
+            isAuthorized,
+            shouldShowButtons,
+            willRenderButtons: shouldShowButtons === true
+          });
+          
+          // CRITICAL: Only return true if BOTH conditions are explicitly true
+          return shouldShowButtons === true;
+        })() ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', marginTop: '0.375rem' }}>
             <button
               onClick={() => handleAddParticipation(student.id)}
@@ -1363,7 +1397,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               PP Tools
             </button>
           </div>
-        ) : null}
+        ) : (
+          // Explicitly render nothing for non-admin/non-scorekeeper users
+          // This ensures buttons are completely removed from DOM
+          null
+        )}
         
         {/* Show message if not in session or not present */}
         {!isActiveInSession && (

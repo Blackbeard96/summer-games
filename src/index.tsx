@@ -16,12 +16,26 @@ const isFirestoreInternalError = (error: any): boolean => {
   const errorCode = error?.code || '';
   const errorName = error?.name || '';
   
+  // Check for nested errors in CONTEXT field
+  let contextString = '';
+  try {
+    if (error?.context) {
+      contextString = JSON.stringify(error.context);
+    }
+    if (error?.hc) {
+      contextString += String(error.hc);
+    }
+  } catch (e) {
+    // Ignore JSON stringify errors
+  }
+  
   // Check all possible string representations
   const allErrorStrings = [
     errorString,
     errorMessage,
     errorStack,
     errorName,
+    contextString,
     JSON.stringify(error)
   ].join(' ');
   
@@ -35,6 +49,9 @@ const isFirestoreInternalError = (error: any): boolean => {
     // Check for the specific error pattern from the stack trace
     allErrorStrings.includes('__PRIVATE__fail') ||
     allErrorStrings.includes('__PRIVATE_hardAssert') ||
+    allErrorStrings.includes('__PRIVATE_WatchChangeAggregator') ||
+    allErrorStrings.includes('__PRIVATE_PersistentListenStream') ||
+    allErrorStrings.includes('BrowserConnectivityMonitor') ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)'))
   );
 };
@@ -87,22 +104,67 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // Suppress React error overlay for Firestore errors - multiple approaches for maximum coverage
 if (typeof window !== 'undefined') {
-  // Suppress React error overlay (the red screen in development)
-  if ((window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__) {
-    const originalOnError = (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError;
-    (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__.onError = function(...args: any[]) {
-      // Check all arguments for Firestore errors
-      for (const arg of args) {
-        if (isFirestoreInternalError(arg)) {
-          // Suppress React error overlay for Firestore errors
+  // Intercept React error overlay as early as possible
+  const setupReactErrorOverlaySuppression = () => {
+    // Method 1: Intercept __REACT_ERROR_OVERLAY_GLOBAL_HOOK__
+    if ((window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__) {
+      const hook = (window as any).__REACT_ERROR_OVERLAY_GLOBAL_HOOK__;
+      
+      // Intercept onError
+      if (hook.onError) {
+        const originalOnError = hook.onError;
+        hook.onError = function(...args: any[]) {
+          // Check all arguments for Firestore errors
+          for (const arg of args) {
+            if (isFirestoreInternalError(arg)) {
+              return;
+            }
+            const argString = String(arg);
+            if (isFirestoreInternalError(argString)) {
+              return;
+            }
+          }
+          // Check combined message
+          const combinedMessage = args.map(a => String(a)).join(' ');
+          if (isFirestoreInternalError(combinedMessage)) {
+            return;
+          }
+          return originalOnError.apply(this, args);
+        };
+      }
+      
+      // Intercept showErrorOverlay
+      if (hook.showErrorOverlay) {
+        const originalShowErrorOverlay = hook.showErrorOverlay;
+        hook.showErrorOverlay = function(...args: any[]) {
+          for (const arg of args) {
+            if (isFirestoreInternalError(arg) || isFirestoreInternalError(String(arg))) {
+              return;
+            }
+          }
+          return originalShowErrorOverlay.apply(this, args);
+        };
+      }
+    }
+    
+    // Method 2: Intercept console.error that triggers overlay (only if not already overridden)
+    // Note: originalConsoleError is defined at the top of the file
+    if (!console.error.toString().includes('isFirestoreInternalError')) {
+      const currentConsoleError = console.error;
+      console.error = function(...args: any[]) {
+        const errorMessage = args.join(' ');
+        if (isFirestoreInternalError(errorMessage) || args.some(arg => isFirestoreInternalError(arg))) {
           return;
         }
-      }
-      if (originalOnError) {
-        return originalOnError.apply(this, args);
-      }
-    };
-  }
+        currentConsoleError.apply(console, args);
+      };
+    }
+  };
+  
+  // Set up immediately and also after a short delay to catch late initialization
+  setupReactErrorOverlaySuppression();
+  setTimeout(setupReactErrorOverlaySuppression, 0);
+  setTimeout(setupReactErrorOverlaySuppression, 100);
   
   // Also intercept React DevTools error reporting
   if ((window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) {
@@ -122,15 +184,6 @@ if (typeof window !== 'undefined') {
     }
   }
   
-  // Intercept console.error calls that might trigger React error overlay
-  console.error = function(...args: any[]) {
-    const errorMessage = args.join(' ');
-    if (isFirestoreInternalError(errorMessage) || args.some(arg => isFirestoreInternalError(arg))) {
-      // Suppress Firestore internal errors - don't log them
-      return;
-    }
-    originalConsoleError.apply(console, args);
-  };
 }
 
 console.log('App starting...', {
