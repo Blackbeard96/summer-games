@@ -311,6 +311,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }
     }
     
+    // Special case: For Chapter 2, if it's the first challenge and Chapter 1 is completed, unlock it
+    // Chapter 2 is always available if Chapter 1 is completed (even if Chapter 2 isn't marked as active)
+    if (chapter.id === 2 && challengeIndex === 0) {
+      const chapter1Progress = userProgress.chapters?.['1'];
+      const chapter1Completed = chapter1Progress?.isCompleted === true;
+      
+      if (chapter1Completed) {
+        console.log(`ChapterDetail: Challenge ${challenge.id} is available - first challenge in Chapter 2, Chapter 1 completed`);
+        return 'available';
+      }
+    }
+    
     // If previous challenge is completed, the challenge is available (unlocked)
     // Requirements are checked separately for auto-completion, but don't block availability
     if (previousChallengeCompleted && chapterProgress.isActive) {

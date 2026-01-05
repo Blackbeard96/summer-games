@@ -849,7 +849,18 @@ const Profile = () => {
     }
   };
 
+  // Helper function to check if an artifact is a UXP credit artifact
+  // UXP credits require admin approval before being applied to assignments
+  const isUXPArtifact = (artifact: any): boolean => {
+    if (!artifact) return false;
+    const name = artifact.name || '';
+    const id = artifact.id || '';
+    // Check by name (contains "UXP") or by ID (starts with "uxp-credit")
+    return name.includes('UXP') || id.startsWith('uxp-credit');
+  };
+
   // Function to handle admin approval/rejection of UXP artifacts
+  // UXP credits are ONLY applied after admin approval - they are marked as "pending" when used
   const handleAdminResponse = async (artifactName: string, approved: boolean) => {
     if (!currentUser) return;
     
@@ -2230,9 +2241,11 @@ const Profile = () => {
                                       }
                                     }) : [];
                                     
-                                    // For UXP artifacts, mark as "pending" instead of "used"
-                                    const isUXPArtifact = enhancedArtifact.name.includes('UXP');
-                                    const artifactStatus = isUXPArtifact ? 'pending' : 'used';
+                                    // CRITICAL: For UXP artifacts, mark as "pending" instead of "used"
+                                    // UXP credits require admin approval before being applied to assignments
+                                    // They are NOT applied automatically - they must be approved by an admin first
+                                    const isUXPArtifactCheck = isUXPArtifact(enhancedArtifact);
+                                    const artifactStatus = isUXPArtifactCheck ? 'pending' : 'used';
                                     
                                     const finalUpdatedArtifacts = updatedArtifacts.map((artifact: any) => {
                                       // Handle both legacy artifacts (strings) and new artifacts (objects)
@@ -2274,7 +2287,8 @@ const Profile = () => {
                                     });
                                     
                                     // For UXP artifacts, don't remove from students inventory yet (wait for admin approval)
-                                    if (!isUXPArtifact) {
+                                    // UXP credits are only removed from inventory after admin approval
+                                    if (!isUXPArtifactCheck) {
                                       // Also update the students collection inventory for non-UXP artifacts
                                       const studentsRef = doc(db, 'students', currentUser.uid);
                                       const studentsSnap = await getDoc(studentsRef);
@@ -2292,9 +2306,14 @@ const Profile = () => {
                                     }
                                     
                                     console.log(`✅ Artifact marked as ${artifactStatus} for admin request:`, finalUpdatedArtifacts);
+                                    
+                                    // Show appropriate message based on artifact type
+                                    if (isUXPArtifactCheck) {
+                                      alert('Your UXP Credit request has been sent to the admin for approval. The credit will be applied to your assignment after approval.');
+                                    } else {
+                                      alert('Your request to use this artifact has been sent to the admin!');
+                                    }
                                   }
-                                  
-                                  alert('Your request to use this artifact has been sent to the admin!');
                                 }
                               }}
                             >
