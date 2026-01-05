@@ -464,38 +464,40 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     if (!currentUser) return;
 
     try {
-      const userRef = doc(db, 'users', currentUser.uid);
+      // Use canonical progression engine to mark challenge as completed and unlock next content
+      const { updateProgressOnChallengeComplete } = await import('../utils/chapterProgression');
       
-      // Check if already completed
-      const userDocCheck = await getDoc(userRef);
-      const userProgressCheck = userDocCheck.exists() ? userDocCheck.data() : {};
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        challenge.id
+      );
       
-      if (userProgressCheck.chapters?.[chapter.id]?.challenges?.[challenge.id]?.isCompleted) {
+      if (progressionResult.alreadyCompleted) {
         if (showModal) {
           alert('This challenge has already been completed!');
         }
         return;
       }
-
-      // Update user progress - mark challenge as completed
-      const updatedChapters = {
-        ...userProgressCheck.chapters,
-        [chapter.id]: {
-          ...userProgressCheck.chapters?.[chapter.id],
-          challenges: {
-            ...userProgressCheck.chapters?.[chapter.id]?.challenges,
-            [challenge.id]: {
-              isCompleted: true,
-              status: 'approved',
-              completedAt: serverTimestamp()
-            }
-          }
+      
+      if (!progressionResult.success) {
+        console.error('Failed to update progression:', progressionResult.error);
+        if (showModal) {
+          alert('Failed to save challenge completion. Please try again.');
         }
-      };
+        return;
+      }
+      
+      // Log progression results
+      if (progressionResult.challengeUnlocked) {
+        console.log(`✅ Next challenge unlocked: ${progressionResult.challengeUnlocked}`);
+      }
+      if (progressionResult.chapterUnlocked) {
+        console.log(`🎉 Next chapter unlocked: ${progressionResult.chapterUnlocked}`);
+      }
 
-      await updateDoc(userRef, {
-        chapters: updatedChapters
-      });
+      // Get userRef for reward granting and refresh
+      const userRef = doc(db, 'users', currentUser.uid);
 
       // SECURITY FIX: Use centralized idempotent reward granting service
       // This ensures rewards can only be granted once, even if challenge is reset and re-completed
@@ -541,12 +543,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         return;
       }
 
-      // Unlock the next challenge in the same chapter
-      const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
-      if (currentChallengeIndex >= 0 && currentChallengeIndex < chapter.challenges.length - 1) {
-        const nextChallenge = chapter.challenges[currentChallengeIndex + 1];
-        console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
-      }
+      // Progression engine already handled unlocking next challenge/chapter (see progressionResult above)
 
       // Show reward modal only if requested and challenge wasn't already completed
       // The check at the top of the function already returns early if completed,
