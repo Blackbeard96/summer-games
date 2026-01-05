@@ -243,6 +243,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     // Ensure chapter.id is used as a string key (Firestore uses string keys)
     const chapterKey = String(chapter.id);
     const chapterProgress = userProgress.chapters?.[chapterKey];
+    const challengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
+    
+    // Special case: For Chapter 2, if it's the first challenge, it should be available if Chapter 2 is accessible
+    // Chapter 2 is always available (per ChapterTracker logic), so Chapter 2-1 should always be available
+    // This check happens BEFORE the chapterProgress check so it works even if progress doesn't exist yet
+    if (chapter.id === 2 && challengeIndex === 0) {
+      console.log(`ChapterDetail: Challenge ${challenge.id} is available - first challenge in Chapter 2 (Chapter 2 is always available)`);
+      return 'available';
+    }
+    
     if (!chapterProgress) {
       console.log('ChapterDetail: getChallengeStatus - No chapter progress found:', {
         userId: currentUser.uid,
@@ -297,7 +307,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     
     // Check if previous challenge is completed (sequential unlocking)
     // This applies to ALL challenges except the first one
-    const challengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
     let previousChallengeCompleted = true; // First challenge has no previous challenge
     if (challengeIndex > 0) {
       // Not the first challenge - check if previous challenge is completed
@@ -308,18 +317,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       if (!previousChallengeCompleted) {
         console.log(`ChapterDetail: Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`);
         return 'locked';
-      }
-    }
-    
-    // Special case: For Chapter 2, if it's the first challenge and Chapter 1 is completed, unlock it
-    // Chapter 2 is always available if Chapter 1 is completed (even if Chapter 2 isn't marked as active)
-    if (chapter.id === 2 && challengeIndex === 0) {
-      const chapter1Progress = userProgress.chapters?.['1'];
-      const chapter1Completed = chapter1Progress?.isCompleted === true;
-      
-      if (chapter1Completed) {
-        console.log(`ChapterDetail: Challenge ${challenge.id} is available - first challenge in Chapter 2, Chapter 1 completed`);
-        return 'available';
       }
     }
     
