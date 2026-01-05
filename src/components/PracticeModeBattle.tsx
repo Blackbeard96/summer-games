@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot, query, where, getDocs, deleteDoc, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import BattleModeSelector from './BattleModeSelector';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { getLevelFromXP } from '../utils/leveling';
 import PracticeWaitingRoomModal from './PracticeWaitingRoomModal';
+import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 
 interface CPUOpponent {
   id: string;
@@ -566,6 +567,23 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
           timestamp: serverTimestamp()
         });
 
+        // Track daily challenges for Practice Mode battles
+        if (currentUser) {
+          if (result === 'victory') {
+            // Track: Defeat Enemies (1 enemy defeated)
+            updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err => 
+              console.error('[PracticeMode] Error tracking defeat_enemies:', err)
+            );
+            
+            // Track: Win Battle (1 battle won)
+            updateChallengeProgressByType(currentUser.uid, 'win_battle', 1).catch(err => 
+              console.error('[PracticeMode] Error tracking win_battle:', err)
+            );
+            
+            console.log('[PracticeMode] ✅ Tracked daily challenges: defeat_enemies (+1), win_battle (+1)');
+          }
+        }
+
         if (result === 'victory') {
           console.log('Practice Mode Victory:', {
             opponent: selectedOpponent.name,
@@ -603,10 +621,12 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                   console.error('Error applying PP boost to practice mode reward:', error);
                 }
                 
-                const newPP = currentPP + finalPP;
-                const newXP = currentXP + selectedOpponent.rewards.xp;
                 const tmShardsReward = selectedOpponent.rewards.tmShards || 0;
-                const newTruthMetal = currentTruthMetal + tmShardsReward;
+                
+                // Calculate expected values for verification
+                const expectedNewPP = currentPP + finalPP;
+                const expectedNewXP = currentXP + selectedOpponent.rewards.xp;
+                const expectedNewTruthMetal = currentTruthMetal + tmShardsReward;
                 
                 console.log('[PracticeMode] Updating user stats:', {
                   currentPP,
@@ -615,9 +635,10 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                   rewardPP: selectedOpponent.rewards.pp,
                   rewardXP: selectedOpponent.rewards.xp,
                   rewardTMShards: tmShardsReward,
-                  newPP,
-                  newXP,
-                  newTruthMetal
+                  finalPP,
+                  expectedNewPP,
+                  expectedNewXP,
+                  expectedNewTruthMetal
                 });
                 
                 // Mark this opponent's rewards as collected
@@ -630,17 +651,17 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                   }
                 };
                 
-                // Update Firestore with new stats and practice rewards
+                // Update Firestore with new stats and practice rewards using atomic increments
                 const updateData: any = {
-                  powerPoints: newPP,
-                  xp: newXP,
+                  powerPoints: increment(finalPP),
+                  xp: increment(selectedOpponent.rewards.xp),
                   practiceModeRewards: updatedPracticeRewards,
                   lastUpdated: serverTimestamp()
                 };
                 
                 // Only update truthMetal if there are shards to add
                 if (tmShardsReward > 0) {
-                  updateData.truthMetal = newTruthMetal;
+                  updateData.truthMetal = increment(tmShardsReward);
                 }
                 
                 await updateDoc(userRef, updateData);
@@ -649,14 +670,14 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                 const verifyDoc = await getDoc(userRef);
                 if (verifyDoc.exists()) {
                   const verifyData = verifyDoc.data();
-                  console.log('[PracticeMode] ✅ Verification - PP in DB:', verifyData.powerPoints, '(expected:', newPP, ')');
-                  console.log('[PracticeMode] ✅ Verification - XP in DB:', verifyData.xp, '(expected:', newXP, ')');
+                  console.log('[PracticeMode] ✅ Verification - PP in DB:', verifyData.powerPoints, '(expected:', expectedNewPP, ')');
+                  console.log('[PracticeMode] ✅ Verification - XP in DB:', verifyData.xp, '(expected:', expectedNewXP, ')');
                   
-                  if (verifyData.powerPoints === newPP && verifyData.xp === newXP) {
+                  if (verifyData.powerPoints === expectedNewPP && verifyData.xp === expectedNewXP) {
                     console.log('[PracticeMode] ✅ Stats successfully updated in Firestore!');
                   } else {
-                    console.error('[PracticeMode] ❌ Stats mismatch! Expected PP:', newPP, 'Got:', verifyData.powerPoints);
-                    console.error('[PracticeMode] ❌ Stats mismatch! Expected XP:', newXP, 'Got:', verifyData.xp);
+                    console.error('[PracticeMode] ❌ Stats mismatch! Expected PP:', expectedNewPP, 'Got:', verifyData.powerPoints);
+                    console.error('[PracticeMode] ❌ Stats mismatch! Expected XP:', expectedNewXP, 'Got:', verifyData.xp);
                   }
                 }
                 
@@ -1010,7 +1031,8 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
         </div>
       )}
 
-      {/* CPU Opponents */}
+      {/* CPU Opponents - Only show in single player mode */}
+      {battleMode === 'single' && !showBattleEngine && (
       <div>
         <h3 style={{
           fontSize: '1.5rem',
@@ -1409,6 +1431,7 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
           })}
         </div>
       </div>
+      )}
 
       {/* Battle Results Modal */}
       {showResultsModal && battleResults && (

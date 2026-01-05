@@ -15,7 +15,8 @@ import { loadMoveOverrides } from '../utils/moveOverrides';
 import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
-import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
+import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import { formatOpponentName } from '../utils/opponentNameFormatter';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move | null) => void;
@@ -26,6 +27,7 @@ interface BattleArenaProps {
   availableMoves: Move[];
   availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number; maxPP?: number; maxShieldStrength?: number; level?: number }>;
   isPlayerTurn: boolean;
+  isInSession?: boolean; // Hide RUN button in session mode
   battleLog: string[];
   customBackground?: string; // Custom background image for special modes like Mindforge
   hideCenterPrompt?: boolean; // Hide the center battle log prompt (for Mindforge mode)
@@ -41,6 +43,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   onEscape,
   selectedMove,
   selectedTarget,
+  isInSession = false,
   isTerraAwakened = false,
   availableMoves,
   availableTargets,
@@ -749,7 +752,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             zIndex: 2
           }}>
             <div style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>
-              {availableTargets[0]?.name || 'OPPONENT'}
+              {formatOpponentName(availableTargets[0]?.name || 'OPPONENT')}
             </div>
             <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>
               Lv.{availableTargets[0]?.level || Math.floor((availableTargets[0]?.currentPP || 0) / 100) + 1}
@@ -1005,7 +1008,48 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                     // Calculate range based on the actual damage and effective mastery level
                     let damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
                     
+                    // Store base damage range before artifact multipliers
+                    const baseDamageRange = { ...damageRange };
+                    
+                    // Apply artifact damage multipliers
+                    let artifactMultiplier = 1.0;
+                    let manifestBoost = 1.0;
+                    
+                    // Apply manifest damage boost for manifest moves (Captain's Helmet)
+                    if (move.category === 'manifest' && equippedArtifacts) {
+                      manifestBoost = getManifestDamageBoost(equippedArtifacts);
+                      if (manifestBoost > 1.0) {
+                        damageRange = {
+                          min: Math.floor(damageRange.min * manifestBoost),
+                          max: Math.floor(damageRange.max * manifestBoost),
+                          average: Math.floor(damageRange.average * manifestBoost)
+                        };
+                      }
+                    }
+                    
+                    // Apply Elemental Ring damage multiplier for elemental moves
+                    if (move.category === 'elemental' && equippedArtifacts) {
+                      const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+                      for (const slot of ringSlots) {
+                        const ring = equippedArtifacts[slot];
+                        if (ring && 
+                            (ring.id === 'elemental-ring-level-1' || 
+                             (ring.name && ring.name.includes('Elemental Ring')))) {
+                          const ringLevel = ring.level || 1;
+                          artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+                          damageRange = {
+                            min: Math.floor(damageRange.min * artifactMultiplier),
+                            max: Math.floor(damageRange.max * artifactMultiplier),
+                            average: Math.floor(damageRange.average * artifactMultiplier)
+                          };
+                          break;
+                        }
+                      }
+                    }
+                    
                     const rangeString = formatDamageRange(damageRange);
+                    const baseRangeString = formatDamageRange(baseDamageRange);
+                    const hasArtifactBoost = artifactMultiplier > 1.0 || manifestBoost > 1.0;
                     console.log('BattleArena: Rendering damage range for', move.name, ':', rangeString, '(from override:', moveOverrides[move.name] ? 'YES' : 'NO', ')');
                     return (
                       <div style={{ 
@@ -1017,7 +1061,24 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         borderRadius: '4px',
                         marginTop: '2px'
                       }}>
-                        Damage: {rangeString}
+                        <div>
+                          Damage: {rangeString}
+                          {hasArtifactBoost && (
+                            <div style={{ fontSize: '0.5rem', color: '#6b7280', fontWeight: 'normal', marginTop: '1px' }}>
+                              Base: {baseRangeString}
+                            </div>
+                          )}
+                        </div>
+                        {manifestBoost > 1.0 && move.category === 'manifest' && (
+                          <span style={{ color: '#8b5cf6', marginLeft: '4px', fontSize: '0.55rem' }} title="Captain's Helmet boost">
+                            🪖 +{Math.round((manifestBoost - 1) * 100)}%
+                          </span>
+                        )}
+                        {artifactMultiplier > 1.0 && move.category === 'elemental' && (
+                          <span style={{ color: '#f59e0b', marginLeft: '4px', fontSize: '0.55rem' }} title="Elemental Ring boost">
+                            💍 +{Math.round((artifactMultiplier - 1) * 100)}%
+                          </span>
+                        )}
                         {moveOverrides[move.name] && (
                           <span style={{ color: '#10B981', marginLeft: '4px' }}>⭐</span>
                         )}
@@ -1027,8 +1088,28 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   
                   // Show shield boost range for defensive moves
                   if (move.shieldBoost && move.shieldBoost > 0) {
-                    const shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, move.masteryLevel);
+                    let shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, move.masteryLevel);
+                    
+                    // Store base shield range before artifact multipliers
+                    const baseShieldRange = { ...shieldRange };
+                    let manifestBoost = 1.0;
+                    
+                    // Apply manifest damage boost for manifest moves (Captain's Helmet)
+                    // This also boosts shield values for manifest defensive moves
+                    if (move.category === 'manifest' && equippedArtifacts) {
+                      manifestBoost = getManifestDamageBoost(equippedArtifacts);
+                      if (manifestBoost > 1.0) {
+                        shieldRange = {
+                          min: Math.floor(shieldRange.min * manifestBoost),
+                          max: Math.floor(shieldRange.max * manifestBoost),
+                          average: Math.floor(shieldRange.average * manifestBoost)
+                        };
+                      }
+                    }
+                    
                     const rangeString = formatDamageRange(shieldRange);
+                    const baseRangeString = formatDamageRange(baseShieldRange);
+                    const hasArtifactBoost = manifestBoost > 1.0;
                     console.log('BattleArena: Rendering shield boost range for', move.name, ':', rangeString);
                     return (
                       <div style={{ 
@@ -1040,7 +1121,19 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                         borderRadius: '4px',
                         marginTop: '2px'
                       }}>
-                        Shield: +{rangeString}
+                        <div>
+                          Shield: +{rangeString}
+                          {hasArtifactBoost && (
+                            <div style={{ fontSize: '0.5rem', color: '#6b7280', fontWeight: 'normal', marginTop: '1px' }}>
+                              Base: +{baseRangeString}
+                            </div>
+                          )}
+                        </div>
+                        {manifestBoost > 1.0 && move.category === 'manifest' && (
+                          <span style={{ color: '#8b5cf6', marginLeft: '4px', fontSize: '0.55rem' }} title="Captain's Helmet boost">
+                            🪖 +{Math.round((manifestBoost - 1) * 100)}%
+                          </span>
+                        )}
                       </div>
                     );
                   }
@@ -1290,8 +1383,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             🏦 VAULT
           </button>
         )}
-        {/* RUN button - ALWAYS visible when onEscape is provided */}
-        {onEscape && (
+        {/* RUN button - Hidden in In Session mode */}
+        {onEscape && !isInSession && (
           <button
             type="button"
             onClick={(e) => {

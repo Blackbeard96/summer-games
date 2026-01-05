@@ -134,8 +134,8 @@ const InSessionRoomView: React.FC = () => {
           borderRadius: '1rem',
           padding: '1.5rem'
         }}>
-          <h2 style={{ marginBottom: '1rem' }}>Active Laws ({room.activeLaws.length})</h2>
-          {room.activeLaws.length === 0 ? (
+          <h2 style={{ marginBottom: '1rem' }}>Active Laws ({(room.activeLaws || []).length})</h2>
+          {!room.activeLaws || room.activeLaws.length === 0 ? (
             <div style={{ color: '#6b7280', textAlign: 'center', padding: '2rem' }}>
               No active laws. Create one using your Power Card moves!
             </div>

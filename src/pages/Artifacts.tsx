@@ -3,7 +3,7 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { calculateUpgradeCost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import { calculateUpgradeCost, getArtifactDamageMultiplier, getManifestDamageBoost } from '../utils/artifactUtils';
 
 // Artifact price definitions for refund calculations
 const artifactPrices: { [key: string]: number } = {
@@ -63,6 +63,22 @@ const Artifacts: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
+
+    // Helper to check for Firestore internal errors
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      const errorStack = error?.stack || '';
+      return (
+        errorString.includes('INTERNAL ASSERTION FAILED') ||
+        errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+        errorStack.includes('INTERNAL ASSERTION FAILED') ||
+        errorString.includes('ID: ca9') ||
+        errorString.includes('ID: b815') ||
+        (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state'))
+      );
+    };
 
     const checkArtifactsUnlocked = async () => {
       try {
@@ -239,6 +255,52 @@ const Artifacts: React.FC = () => {
             }
           }
           
+          // Check for Captain's Helmet (can be equipped to head slot)
+          // Check both hyphen and underscore formats for compatibility
+          const hasCaptainsHelmet = studentData.artifacts?.['captains-helmet'] === true || 
+                                     studentData.artifacts?.captains_helmet === true ||
+                                     studentData.artifacts?.['captain-helmet'] === true ||
+                                     studentData.artifacts?.captain_helmet === true ||
+                                     studentData.artifacts?.['captains-helmet_purchase'] ||
+                                     studentData.artifacts?.captains_helmet_purchase ||
+                                     studentData.artifacts?.['captain-helmet_purchase'] ||
+                                     studentData.artifacts?.captain_helmet_purchase;
+          
+          if (hasCaptainsHelmet) {
+            const purchaseData = studentData.artifacts?.['captains-helmet_purchase'] || 
+                                studentData.artifacts?.captains_helmet_purchase ||
+                                studentData.artifacts?.['captain-helmet_purchase'] ||
+                                studentData.artifacts?.captain_helmet_purchase;
+            // Check if it's already equipped
+            const isEquipped = Object.values(loadedEquipped).some(
+              (eq) => {
+                if (!eq || typeof eq !== 'object') return false;
+                const artifact = eq as Artifact;
+                if (artifact.id && (artifact.id === 'captains-helmet' || artifact.id === 'captain-helmet')) {
+                  return true;
+                }
+                if (artifact.name && typeof artifact.name === 'string') {
+                  const nameLower = artifact.name.toLowerCase();
+                  return nameLower.includes('captain') && nameLower.includes('helmet');
+                }
+                return false;
+              }
+            );
+            
+            if (!isEquipped) {
+              const captainsHelmet: Artifact = {
+                id: 'captains-helmet',
+                name: purchaseData?.name || "Captain's Helmet",
+                slot: 'head',
+                level: 1,
+                image: purchaseData?.image || '/images/Captains Helmet.png',
+                stats: {},
+                price: purchaseData?.price || 0
+              };
+              available.push(captainsHelmet);
+            }
+          }
+          
           // Check for other wearable artifacts that might be purchased
           // Add more wearable artifacts here as they're added to the marketplace
           
@@ -257,6 +319,12 @@ const Artifacts: React.FC = () => {
           }
         }
       } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('Artifacts: Firestore internal assertion error when checking artifacts - ignoring');
+          // Still set loading to false so UI doesn't hang
+          setLoading(false);
+          return;
+        }
         console.error('Error checking artifacts unlock status:', error);
       } finally {
         setLoading(false);
@@ -1732,6 +1800,48 @@ const Artifacts: React.FC = () => {
                             ))}
                           </div>
                         )}
+                        {/* Show manifest damage boost for Captain's Helmet */}
+                        {(equipped.id === 'captains-helmet' || equipped.id === 'captain-helmet' || 
+                          (equipped.name && equipped.name.toLowerCase().includes('captain') && equipped.name.toLowerCase().includes('helmet'))) && (() => {
+                            const manifestBoost = getManifestDamageBoost({ head: equipped });
+                            const damagePercent = Math.round((manifestBoost - 1) * 100);
+                            
+                            return (
+                              <div style={{
+                                marginTop: '0.75rem',
+                                paddingTop: '0.75rem',
+                                borderTop: '1px solid #e5e7eb'
+                              }}>
+                                <div style={{
+                                  background: 'linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)',
+                                  border: '1px solid #6366f1',
+                                  borderRadius: '0.5rem',
+                                  padding: '0.5rem',
+                                  marginTop: '0.5rem'
+                                }}>
+                                  <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 'bold',
+                                    color: '#4338ca'
+                                  }}>
+                                    <span style={{ fontSize: '1rem' }}>🪖</span>
+                                    <span>Manifest Damage Boost: +{damagePercent}%</span>
+                                  </div>
+                                  <div style={{
+                                    fontSize: '0.75rem',
+                                    color: '#4f46e5',
+                                    marginTop: '0.25rem',
+                                    fontStyle: 'italic'
+                                  }}>
+                                    All manifest moves deal {damagePercent}% more damage
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         {/* Show perk for Elemental Ring */}
                         {equipped.id === 'elemental-ring-level-1' && (
                           <div style={{

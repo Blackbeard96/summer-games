@@ -14,6 +14,8 @@ export interface Vault {
   generatorLevel: number; // Generator level (starts at 1)
   generatorPendingPP: number; // PP generated but not yet collected
   generatorLastReset: Date; // When generator last reset (8am EST daily)
+  generatorLastClaimedAt?: Date | any; // When player last claimed passive earnings (for daily modal) - can be Date or Firestore Timestamp
+  generatorLastModalShownAt?: Date | any; // When daily earnings modal was last shown (prevents duplicate modals) - can be Date or Firestore Timestamp
   lastUpgrade: Date;
   debtStatus: boolean;
   debtAmount: number;

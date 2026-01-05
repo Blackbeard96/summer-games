@@ -15,7 +15,7 @@ import {
   deleteUser,
   getAuth
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { initializeChapterProgress, migrateExistingUserToChapters } from '../utils/chapterInit';
 
 interface UserProfile {
@@ -101,6 +101,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const userData = userDoc.data() as UserProfile;
         setUserProfile(userData);
         
+        // Update lastLoginAt
+        await updateDoc(doc(db, 'users', user.uid), {
+          lastLoginAt: serverTimestamp()
+        });
+        
         // Migrate existing user to chapter system if needed
         await migrateExistingUserToChapters(user.uid);
       } else {
@@ -116,7 +121,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             notifications: true
           }
         };
-        await setDoc(doc(db, 'users', user.uid), newProfile);
+        await setDoc(doc(db, 'users', user.uid), {
+          ...newProfile,
+          lastLoginAt: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
         setUserProfile(newProfile);
         
         // Initialize chapter progress for new user

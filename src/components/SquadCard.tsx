@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import PlayerCard from './PlayerCard';
+import PlayerPowerCard from './PlayerPowerCard';
+import { NormalizedPlayerData } from '../utils/playerData';
 
 interface SquadMember {
   uid: string;
@@ -220,7 +222,92 @@ const SquadCard: React.FC<SquadCardProps> = ({
         justifyContent: 'center'
       }}>
         {squad.members.map((member) => {
-          // Extract manifest information
+          // Use normalized data if available (from Squads.tsx enrichment)
+          const normalizedData = (member as any)._normalizedData;
+          
+          // If normalized data exists, use PlayerPowerCard for consistency with Profile
+          if (normalizedData) {
+            return (
+              <div key={member.uid} style={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center'
+              }}>
+                {/* Role Badges */}
+                {member.isLeader && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    backgroundColor: '#f59e0b',
+                    color: 'white',
+                    borderRadius: '50%',
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    zIndex: 10,
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                  }}>
+                    👑
+                  </div>
+                )}
+                {member.isAdmin && !member.isLeader && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    borderRadius: '50%',
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    zIndex: 10,
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                  }}>
+                    ⭐
+                  </div>
+                )}
+                
+                {/* Player Power Card - matches Profile page exactly */}
+                <div style={{
+                  transform: 'scale(0.8)',
+                  transformOrigin: 'center top',
+                  marginBottom: '1rem'
+                }}>
+                  <PlayerPowerCard
+                    playerData={normalizedData}
+                    showSquadAbbreviation={true}
+                    showPPBoost={false}
+                    scale={1}
+                    ordinaryWorld={normalizedData.ordinaryWorld}
+                  />
+                </div>
+                
+                {/* Role Label */}
+                <div style={{
+                  fontSize: '0.875rem',
+                  color: member.isLeader ? '#f59e0b' : member.isAdmin ? '#3b82f6' : '#6b7280',
+                  fontWeight: '600',
+                  textAlign: 'center',
+                  marginTop: '-0.5rem'
+                }}>
+                  {member.isLeader ? 'Leader' : member.isAdmin ? 'Admin' : 'Member'}
+                </div>
+              </div>
+            );
+          }
+          
+          // Fallback to PlayerCard if normalized data not available (shouldn't happen, but safety)
           const getManifestInfo = () => {
             if (!member.manifest) return { manifest: 'Unknown', style: 'Fire' };
             
@@ -294,7 +381,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
                 </div>
               )}
               
-              {/* Player Card */}
+              {/* Player Card - fallback */}
               <div style={{
                 transform: 'scale(0.8)',
                 transformOrigin: 'center top',
@@ -325,8 +412,6 @@ const SquadCard: React.FC<SquadCardProps> = ({
               }}>
                 {member.isLeader ? 'Leader' : member.isAdmin ? 'Admin' : 'Member'}
               </div>
-
-
             </div>
           );
         })}

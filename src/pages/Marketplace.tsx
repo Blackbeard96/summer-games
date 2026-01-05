@@ -878,19 +878,8 @@ const Marketplace = () => {
         });
         alert(`📝 Work Extension activated! You can now complete assignments that were past due. Contact your teacher for details.`);
       } else {
-        // Create admin notification for other artifacts
-        await createAdminNotification({
-          type: 'artifact_usage',
-          title: 'Artifact Used',
-          message: `${currentUser.displayName || currentUser.email} used ${artifactName}`,
-          data: {
-            userId: currentUser.uid,
-            userName: currentUser.displayName || currentUser.email,
-            artifactName: artifactName,
-            usageTime: new Date(),
-            location: 'Marketplace'
-          }
-        });
+        // For other artifacts, use immediately without admin approval
+        alert(`✨ ${artifactName} used!`);
       }
       
       // Update user's inventory in students collection

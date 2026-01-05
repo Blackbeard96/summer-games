@@ -28,9 +28,11 @@ import BannerManager from '../components/BannerManager';
 import MindforgeQuestionManager from '../components/MindforgeQuestionManager';
 import CPUOpponentMovesAdmin from '../components/CPUOpponentMovesAdmin';
 import ActionCardsAdmin from '../components/ActionCardsAdmin';
+import ArtifactCompensation from '../components/ArtifactCompensation';
 import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
 import ArtifactsAdmin from '../components/ArtifactsAdmin';
 import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
+import AssessmentGoalsAdmin from '../components/AssessmentGoalsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -88,7 +90,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'daily-challenges'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -2602,9 +2604,26 @@ const AdminPanel: React.FC = () => {
             cursor: 'pointer',
             fontSize: '0.875rem',
             flexShrink: 0,
+            marginRight: '0.5rem'
           }}
         >
           🔮 Artifacts
+        </button>
+        <button
+          onClick={() => setActiveTab('artifact-compensation')}
+          style={{
+            backgroundColor: activeTab === 'artifact-compensation' ? '#10b981' : '#e5e7eb',
+            color: activeTab === 'artifact-compensation' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          🎁 Compensate
         </button>
         <button
           onClick={() => setActiveTab('daily-challenges')}
@@ -2621,6 +2640,22 @@ const AdminPanel: React.FC = () => {
           }}
         >
           📅 Daily Challenges
+        </button>
+        <button
+          onClick={() => setActiveTab('assessment-goals')}
+          style={{
+            backgroundColor: activeTab === 'assessment-goals' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'assessment-goals' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+          }}
+        >
+          🎯 Assessment Goals
         </button>
       </div>
 
@@ -2669,8 +2704,12 @@ const AdminPanel: React.FC = () => {
           isOpen={true}
           onClose={() => setActiveTab('students')}
         />
+      ) : activeTab === 'artifact-compensation' ? (
+        <ArtifactCompensation />
       ) : activeTab === 'daily-challenges' ? (
         <DailyChallengesAdmin />
+      ) : activeTab === 'assessment-goals' ? (
+        <AssessmentGoalsAdmin />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',

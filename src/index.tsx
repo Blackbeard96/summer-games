@@ -59,6 +59,14 @@ const isFirestoreInternalError = (error: any): boolean => {
 // Override console.error to catch Firestore errors before they're displayed
 // This will be set up before React renders to catch all errors
 const originalConsoleError = console.error;
+console.error = function(...args: any[]) {
+  // Check all arguments for Firestore errors
+  const errorMessage = args.map(a => String(a)).join(' ');
+  if (isFirestoreInternalError(errorMessage) || args.some(arg => isFirestoreInternalError(arg))) {
+    return; // Completely suppress Firestore errors
+  }
+  originalConsoleError.apply(console, args);
+};
 
 // Add error handling for debugging Firefox issues - multiple layers for maximum coverage
 window.addEventListener('error', (event) => {
@@ -161,10 +169,14 @@ if (typeof window !== 'undefined') {
     }
   };
   
-  // Set up immediately and also after a short delay to catch late initialization
+  // Set up immediately and also after multiple delays to catch late initialization
   setupReactErrorOverlaySuppression();
   setTimeout(setupReactErrorOverlaySuppression, 0);
+  setTimeout(setupReactErrorOverlaySuppression, 50);
   setTimeout(setupReactErrorOverlaySuppression, 100);
+  setTimeout(setupReactErrorOverlaySuppression, 200);
+  setTimeout(setupReactErrorOverlaySuppression, 500);
+  setTimeout(setupReactErrorOverlaySuppression, 1000); // Even later initialization
   
   // Also intercept React DevTools error reporting
   if ((window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) {
@@ -184,6 +196,17 @@ if (typeof window !== 'undefined') {
     }
   }
   
+  // Method 3: Intercept window.onerror more aggressively
+  const originalWindowOnError = window.onerror;
+  window.onerror = function(message, source, lineno, colno, error) {
+    if (isFirestoreInternalError(message) || isFirestoreInternalError(error) || isFirestoreInternalError(String(message))) {
+      return true; // Suppress the error
+    }
+    if (originalWindowOnError) {
+      return originalWindowOnError.call(this, message, source, lineno, colno, error);
+    }
+    return false;
+  };
 }
 
 console.log('App starting...', {

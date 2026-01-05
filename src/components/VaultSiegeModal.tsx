@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
@@ -37,7 +37,6 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const { vault, moves, actionCards, executeVaultSiegeAttack, syncVaultPP, syncStudentPP, refreshVaultData, getRemainingOfflineMoves, offlineMoves, attackHistory } = useBattle();
   
   const [players, setPlayers] = useState<Player[]>([]);
-  const [filteredPlayers, setFilteredPlayers] = useState<Player[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('none'); // 'none', 'most-vulnerable', 'lowest-shield', 'highest-pp'
   const [selectedTarget, setSelectedTarget] = useState<string>('');
@@ -233,8 +232,8 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     prevIsOpenRef.current = isOpen;
   }, [isOpen]);
 
-  // Filter and sort players based on search query and filter type
-  useEffect(() => {
+  // Filter and sort players based on search query and filter type - memoized for performance
+  const filteredPlayers = useMemo(() => {
     let filtered = [...players];
     
     // Apply search query filter
@@ -277,7 +276,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         break;
     }
     
-    setFilteredPlayers(filtered);
+    return filtered;
   }, [players, searchQuery, filterType]);
 
   // Load available players (excluding current user)
@@ -351,7 +350,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         
         console.log('VaultSiegeModal: Final players list:', availablePlayers);
         setPlayers(availablePlayers);
-        setFilteredPlayers(availablePlayers);
+        // filteredPlayers will automatically update via useMemo when players changes
       } catch (error) {
         console.error('Error loading players:', error);
       } finally {
@@ -629,16 +628,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               return player;
             }));
             
-            // Also update filtered players
-            setFilteredPlayers(prevFiltered => prevFiltered.map(player => {
-              if (player.uid === selectedTarget) {
-                return {
-                  ...player,
-                  powerPoints: studentData.powerPoints || studentData.currentPP || 0,
-                };
-              }
-              return player;
-            }));
+            // filteredPlayers will automatically update via useMemo when players changes
           }
           
           // Reload vault data for the target player in the list
@@ -666,20 +656,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               return player;
             }));
             
-            setFilteredPlayers(prevFiltered => prevFiltered.map(player => {
-              if (player.uid === selectedTarget) {
-                return {
-                  ...player,
-                  shieldStrength: vaultDataForList.shieldStrength || 0,
-                  maxShieldStrength: vaultDataForList.maxShieldStrength || 50,
-                  overshield: vaultDataForList.overshield || 0,
-                  capacity: capacity,
-                  vaultHealth: currentVaultHealth,
-                  maxVaultHealth: maxVaultHealth,
-                };
-              }
-              return player;
-            }));
+            // filteredPlayers will automatically update via useMemo when players changes
           }
         } catch (error) {
           console.error('Error refreshing target data:', error);

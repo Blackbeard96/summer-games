@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { debug } from '../utils/debug';
 import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -10,11 +11,27 @@ interface ChapterTrackerProps {
 }
 
 const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const [userProgress, setUserProgress] = useState<any>(null);
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Helper to check for Firestore internal errors
+  const isFirestoreInternalError = (error: any): boolean => {
+    if (!error) return false;
+    const errorString = String(error);
+    const errorMessage = error?.message || '';
+    const errorStack = error?.stack || '';
+    return (
+      errorString.includes('INTERNAL ASSERTION FAILED') ||
+      errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+      errorStack.includes('INTERNAL ASSERTION FAILED') ||
+      errorString.includes('ID: ca9') ||
+      errorString.includes('ID: b815') ||
+      (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state'))
+    );
+  };
 
   useEffect(() => {
     if (!currentUser) return;
@@ -26,8 +43,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         const userDoc = await getDoc(userRef);
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          console.log('ChapterTracker: User progress data loaded:', userData);
-          console.log('ChapterTracker: Chapters data:', userData.chapters);
+          debug.group('ChapterTracker', 'Loading User Data');
+          debug.log('ChapterTracker', 'User progress data loaded', userData);
+          debug.log('ChapterTracker', 'Chapters data', userData.chapters);
+          debug.groupEnd();
           setUserProgress(userData);
         }
 
@@ -36,11 +55,18 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
-          console.log('ChapterTracker: Student data loaded:', studentData);
+          debug.log('ChapterTracker', 'Student data loaded', studentData);
           setStudentData(studentData);
         }
       } catch (error) {
-        console.error('ChapterTracker: Error fetching data:', error);
+        // Suppress Firestore internal assertion errors
+        if (isFirestoreInternalError(error)) {
+          debug.warn('ChapterTracker', 'Firestore internal assertion error - ignoring');
+          // Still set loading to false so UI doesn't hang
+          setLoading(false);
+          return;
+        }
+        debug.error('ChapterTracker', 'Error fetching data', error);
       } finally {
         setLoading(false);
       }
@@ -50,18 +76,20 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   }, [currentUser, refreshKey]);
 
   const getRequirementStatus = (requirement: any) => {
-    console.log('ChapterTracker: Checking requirement:', requirement.type, {
-      studentData,
-      userProgress,
-      requirement
-    });
+    debug.throttle(
+      `requirement-check-${requirement.type}`,
+      1000,
+      'ChapterTracker',
+      `Checking requirement: ${requirement.type}`,
+      { requirement }
+    );
     
     switch (requirement.type) {
       case 'level':
         // Check if user has reached the required level
         const userLevel = studentData?.level || userProgress?.level || 1;
         const requiredLevel = requirement.value || 1;
-        console.log(`ChapterTracker: Level check - user: ${userLevel}, required: ${requiredLevel}`);
+        debug.log('ChapterTracker', `Level check - user: ${userLevel}, required: ${requiredLevel}`);
         return userLevel >= requiredLevel;
       case 'manifest':
         // Use standardized manifest detection utility
@@ -93,30 +121,24 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         const prevChapterProgress = userProgress?.chapters?.[prevChapterId];
         return prevChapterProgress?.isCompleted || false;
       default:
-        console.warn(`ChapterTracker: Unknown requirement type: ${requirement.type}`);
+        debug.warn('ChapterTracker', `Unknown requirement type: ${requirement.type}`);
         return false;
     }
   };
 
   const getChapterStatus = (chapter: Chapter) => {
     if (!userProgress) {
-      // Chapter 1 is always available, even without userProgress
-      if (chapter.id === 1) return 'available';
+      // Chapter 1 and 2 are always available, even without userProgress
+      if (chapter.id === 1 || chapter.id === 2) return 'available';
       return 'locked';
     }
     
-    // Chapter 1 is always available to all players - no requirements
-    if (chapter.id === 1) {
-      const chapterProgress = userProgress.chapters?.[1];
+    // Chapter 1 and 2 are always available to all players - no requirements
+    if (chapter.id === 1 || chapter.id === 2) {
+      const chapterProgress = userProgress.chapters?.[chapter.id];
       if (chapterProgress?.isCompleted) return 'completed';
       if (chapterProgress?.isActive) return 'active';
       return 'available'; // Always available, even if not active yet
-    }
-    
-    // Check if Chapter 2 should show "Coming Soon" (if Chapter 1 is completed)
-    if (chapter.id === 2) {
-      const chapter1Completed = userProgress.chapters?.[1]?.isCompleted;
-      return chapter1Completed ? 'coming_soon' : 'locked';
     }
     
     const chapterProgress = userProgress.chapters?.[chapter.id];
@@ -124,13 +146,14 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     if (chapterProgress?.isActive) return 'active';
     
     // Check if chapter requirements are met
+    debug.groupCollapsed('ChapterTracker', `Chapter ${chapter.id} Requirements Check`);
     const requirementsMet = chapter.requirements.every(req => {
       const requirementStatus = getRequirementStatus(req);
-      console.log(`ChapterTracker: Chapter ${chapter.id} requirement ${req.type}:`, requirementStatus);
+      debug.log('ChapterTracker', `Requirement ${req.type}`, requirementStatus);
       return requirementStatus;
     });
-    
-    console.log(`ChapterTracker: Chapter ${chapter.id} requirements met:`, requirementsMet);
+    debug.log('ChapterTracker', `All requirements met`, requirementsMet);
+    debug.groupEnd();
     
     return requirementsMet ? 'available' : 'locked';
   };
@@ -218,34 +241,36 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
           >
             🔄 Refresh Progress
           </button>
-          <button
-            onClick={async () => {
-              if (!currentUser) {
-                alert('No current user found');
-                return;
-              }
-              if (!window.confirm('Reset your chapter progress? This will clear all completions.')) {
-                return;
-              }
-              try {
-                console.log('Resetting progress for user:', currentUser.uid);
-                await updateDoc(doc(db, 'users', currentUser.uid), {
-                  chapters: {},
-                  storyChapter: 1,
-                  resetAt: new Date(),
-                  resetBy: 'self'
-                });
-                console.log('Progress reset successfully');
-                alert('Progress reset! Click Refresh to see changes.');
-              } catch (error) {
-                console.error('Error resetting progress:', error);
-                alert('Failed to reset progress');
-              }
-            }}
-            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-          >
-            🗑️ Reset My Progress
-          </button>
+          {isAdmin() && (
+            <button
+              onClick={async () => {
+                if (!currentUser) {
+                  alert('No current user found');
+                  return;
+                }
+                if (!window.confirm('Reset your chapter progress? This will clear all completions.')) {
+                  return;
+                }
+                try {
+                  console.log('Resetting progress for user:', currentUser.uid);
+                  await updateDoc(doc(db, 'users', currentUser.uid), {
+                    chapters: {},
+                    storyChapter: 1,
+                    resetAt: new Date(),
+                    resetBy: 'self'
+                  });
+                  console.log('Progress reset successfully');
+                  alert('Progress reset! Click Refresh to see changes.');
+                } catch (error) {
+                  console.error('Error resetting progress:', error);
+                  alert('Failed to reset progress');
+                }
+              }}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+            >
+              🗑️ Reset My Progress
+            </button>
+          )}
         </div>
       </div>
 
@@ -420,16 +445,13 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   fontWeight: '600',
                   backgroundColor: status === 'completed' ? '#dcfce7' : 
                                 status === 'active' ? '#dbeafe' : 
-                                status === 'available' ? '#fef3c7' : 
-                                status === 'coming_soon' ? '#fef3c7' : '#f3f4f6',
+                                status === 'available' ? '#fef3c7' : '#f3f4f6',
                   color: status === 'completed' ? '#166534' : 
                         status === 'active' ? '#1e40af' : 
-                        status === 'available' ? '#92400e' : 
-                        status === 'coming_soon' ? '#92400e' : '#374151',
+                        status === 'available' ? '#92400e' : '#374151',
                   border: `1px solid ${status === 'completed' ? '#86efac' : 
                                     status === 'active' ? '#93c5fd' : 
-                                    status === 'available' ? '#fde047' : 
-                                    status === 'coming_soon' ? '#fde047' : '#d1d5db'}`
+                                    status === 'available' ? '#fde047' : '#d1d5db'}`
                 }}>
                   {getStatusText(status)}
                 </span>

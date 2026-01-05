@@ -17,7 +17,10 @@ interface IslandRaidVictoryModalProps {
       name: string;
       image: string;
     };
+    captainHelmet?: boolean; // Captain Helmet reward
   };
+  customTitle?: string; // Optional custom title
+  customSubtitle?: string; // Optional custom subtitle
 }
 
 const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
@@ -25,7 +28,9 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
   onClose,
   waveNumber,
   difficulty,
-  rewards
+  rewards,
+  customTitle,
+  customSubtitle
 }) => {
   const { currentUser } = useAuth();
   const [claimed, setClaimed] = useState(false);
@@ -44,72 +49,81 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
     setClaiming(true);
 
     try {
+      // Note: Rewards are already granted to all players when battle completes
+      // This function just marks them as "claimed" for UI purposes
+      // Verify rewards were granted by checking student data
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
 
       if (studentDoc.exists()) {
         const studentData = studentDoc.data();
-        const currentPP = studentData.powerPoints || 0;
-        const currentTruthMetal = studentData.truthMetal || 0;
-
-        // Update PP, XP, and Truth Metal
-        const updates: any = {
-          powerPoints: increment(rewards.pp),
-          xp: increment(rewards.xp || 0),
-          truthMetal: increment(rewards.truthMetal)
-        };
-
-        // Grant elemental ring if provided
+        
+        // Check if Captain Helmet was granted (if it was in rewards)
+        if (rewards.captainHelmet) {
+          const hasHelmet = studentData.artifacts?.['captains-helmet'] === true;
+          if (!hasHelmet) {
+            // If helmet wasn't granted yet, grant it now (fallback)
+            const currentArtifacts = studentData.artifacts || {};
+            const updatedArtifacts = {
+              ...currentArtifacts,
+              'captains-helmet': true,
+              'captains-helmet_purchase': {
+                id: 'captains-helmet',
+                name: 'Captain\'s Helmet',
+                image: '/images/Captains Helmet.png',
+                slot: 'head',
+                category: 'armor',
+                rarity: 'rare',
+                stats: {
+                  manifestDamageBoost: 0.05 // 5% boost
+                },
+                obtainedAt: new Date(),
+                fromIslandRaid: true
+              }
+            };
+            
+            await updateDoc(studentRef, {
+              artifacts: updatedArtifacts
+            });
+            console.log('✅ Captain Helmet granted (fallback)');
+          }
+        }
+        
+        // Check if elemental ring was granted (if it was in rewards)
         if (rewards.elementalRing) {
-          const currentArtifacts = studentData.artifacts || {};
-          const updatedArtifacts = {
-            ...currentArtifacts,
-            [rewards.elementalRing.id]: true,
-            [`${rewards.elementalRing.id}_purchase`]: {
-              id: rewards.elementalRing.id,
-              name: rewards.elementalRing.name,
-              image: rewards.elementalRing.image,
-              category: 'ring',
-              rarity: 'rare',
-              purchasedAt: new Date(),
-              used: false,
-              fromIslandRaid: true
-            }
-          };
-          updates.artifacts = updatedArtifacts;
-        }
-
-        // Mark Island Raid as completed for this difficulty
-        const islandRaidCompletions = studentData.islandRaidCompletions || {};
-        const difficultyKey = difficulty.toLowerCase();
-        if (!islandRaidCompletions[difficultyKey]) {
-          islandRaidCompletions[difficultyKey] = {
-            completed: true,
-            completedAt: new Date(),
-            firstCompletion: true
-          };
-          updates.islandRaidCompletions = islandRaidCompletions;
-        }
-
-        await updateDoc(studentRef, updates);
-
-        // Also update users collection
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
-        if (userDoc.exists()) {
-          await updateDoc(userRef, {
-            powerPoints: increment(rewards.pp),
-            xp: increment(rewards.xp || 0),
-            truthMetal: increment(rewards.truthMetal)
-          });
+          const hasRing = studentData.artifacts?.[rewards.elementalRing.id] === true;
+          if (!hasRing) {
+            // If ring wasn't granted yet, grant it now (fallback)
+            const currentArtifacts = studentData.artifacts || {};
+            const updatedArtifacts = {
+              ...currentArtifacts,
+              [rewards.elementalRing.id]: true,
+              [`${rewards.elementalRing.id}_purchase`]: {
+                id: rewards.elementalRing.id,
+                name: rewards.elementalRing.name,
+                image: rewards.elementalRing.image,
+                category: 'ring',
+                rarity: 'rare',
+                purchasedAt: new Date(),
+                used: false,
+                fromIslandRaid: true
+              }
+            };
+            
+            await updateDoc(studentRef, {
+              artifacts: updatedArtifacts
+            });
+            console.log('✅ Elemental Ring granted (fallback)');
+          }
         }
 
         setClaimed(true);
-        console.log('✅ Island Raid rewards claimed:', rewards);
+        console.log('✅ Island Raid rewards displayed. Rewards were already granted when battle completed.');
       }
     } catch (error) {
-      console.error('Error claiming Island Raid rewards:', error);
-      alert('Failed to claim rewards. Please try again.');
+      console.error('Error verifying Island Raid rewards:', error);
+      // Don't show error to user - rewards were already granted
+      setClaimed(true);
     } finally {
       setClaiming(false);
     }
@@ -159,14 +173,14 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
                 textShadow: '0 2px 10px rgba(251, 191, 36, 0.5)',
                 marginBottom: '0.5rem'
               }}>
-                🏝️ ISLAND RAID COMPLETE!
+                {customTitle || '🏝️ ISLAND RAID COMPLETE!'}
               </h2>
               <p style={{
                 fontSize: '1.25rem',
                 color: '#cbd5e1',
                 margin: 0
               }}>
-                All {waveNumber} waves cleared on {difficulty.toUpperCase()} difficulty!
+                {customSubtitle || `All ${waveNumber} waves cleared on ${difficulty.toUpperCase()} difficulty!`}
               </p>
             </div>
 
@@ -209,7 +223,7 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
                       {rewards.pp} Power Points
                     </div>
                     <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                      Added to your account
+                      Already added to your account
                     </div>
                   </div>
                 </div>
@@ -294,6 +308,41 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Captain Helmet Reward */}
+                {rewards.captainHelmet && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    background: 'rgba(251, 191, 36, 0.1)',
+                    padding: '1rem 1.5rem',
+                    borderRadius: '0.75rem',
+                    width: '100%',
+                    maxWidth: '400px',
+                    border: '2px solid rgba(251, 191, 36, 0.3)'
+                  }}>
+                    <div style={{ fontSize: '2.5rem' }}>
+                      <img 
+                        src="/images/Captains Helmet.png" 
+                        alt="Captain's Helmet"
+                        style={{ width: '48px', height: '48px', objectFit: 'contain' }}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                          (e.target as HTMLImageElement).parentElement!.innerHTML = '🪖';
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1, textAlign: 'left' }}>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#fbbf24' }}>
+                        Captain's Helmet
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                        +5% damage boost to all Manifest moves
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -324,7 +373,7 @@ const IslandRaidVictoryModal: React.FC<IslandRaidVictoryModalProps> = ({
                 e.currentTarget.style.transform = 'scale(1)';
               }}
             >
-              {claiming ? 'Claiming...' : 'Claim Rewards'}
+              {claiming ? 'Verifying...' : 'Continue'}
             </button>
           </>
         ) : (

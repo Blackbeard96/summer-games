@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 
 interface PlayerCardProps {
@@ -22,6 +23,10 @@ interface PlayerCardProps {
   onManifestReselect?: () => void;
   ordinaryWorld?: string;
   squadAbbreviation?: string | null;
+  hasSkillTreeAccess?: boolean;
+  candyType?: 'on-off' | 'up-down' | 'config'; // RR Candy type the player has
+  onSkillTreeToggle?: (isShowing: boolean) => void; // Callback when skill tree visibility changes
+  initialSkillTreeMode?: 'in-game' | 'irl'; // Initial mode for skill tree
 }
 
 const styleIcons: Record<string, string> = {
@@ -80,9 +85,16 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   onManifestReselect,
   ordinaryWorld,
   squadAbbreviation,
+  hasSkillTreeAccess = false,
+  candyType = 'on-off', // Default to on-off for now
+  onSkillTreeToggle,
+  initialSkillTreeMode = 'in-game',
 }) => {
+  const navigate = useNavigate();
   const [flipped, setFlipped] = useState(false);
   const [showBadges, setShowBadges] = useState(false);
+  const [showSkillTree, setShowSkillTree] = useState(false);
+  const [skillTreeMode, setSkillTreeMode] = useState<'in-game' | 'irl'>(initialSkillTreeMode);
   const [selectedJourneyStage, setSelectedJourneyStage] = useState<string | null>(null);
   const [ppBoostStatus, setPPBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
     isActive: false,
@@ -110,6 +122,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     const interval = setInterval(checkPPBoost, 60000);
     return () => clearInterval(interval);
   }, [userId]);
+
+  // Notify parent when skill tree visibility changes
+  useEffect(() => {
+    if (onSkillTreeToggle) {
+      onSkillTreeToggle(showSkillTree);
+    }
+  }, [showSkillTree, onSkillTreeToggle]);
 
   const background = useMemo(() => {
     return cardBgColor.startsWith('linear') ? cardBgColor : `linear-gradient(135deg, ${cardBgColor} 0%, #fbbf24 100%)`;
@@ -158,14 +177,27 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     if (showBadges) {
       setShowBadges(false);
       setFlipped(false);
+    } else if (showSkillTree) {
+      setShowSkillTree(false);
+      setSkillTreeMode('in-game'); // Reset to in-game mode when closing
+      setFlipped(false);
     } else {
       setFlipped(f => !f);
     }
-  }, [showBadges]);
+  }, [showBadges, showSkillTree]);
 
   const handleBadgeClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setShowBadges(true);
+    setShowSkillTree(false);
+    setFlipped(true);
+  }, []);
+
+  const handleSkillTreeClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowSkillTree(true);
+    setShowBadges(false);
+    setSkillTreeMode('in-game'); // Reset to in-game mode when opening
     setFlipped(true);
   }, []);
 
@@ -497,6 +529,44 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 Badges ({badges.length})
               </button>
             </div>
+
+            {/* Skill Tree Button - Only show if Chapter 2-4 is completed */}
+            {hasSkillTreeAccess && (
+              <div style={{ margin: '12px 0', textAlign: 'center' }}>
+                <button
+                  onClick={handleSkillTreeClick}
+                  style={{
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 12,
+                    padding: '12px 20px',
+                    fontWeight: 'bold',
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    width: '100%',
+                    margin: '0 auto'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.4)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.3)';
+                  }}
+                >
+                  <span>🌳</span>
+                  Skill Tree
+                </button>
+              </div>
+            )}
             
             {/* Flip hint */}
             <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
@@ -781,6 +851,338 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                  Click to return to front
+                </div>
+              </>
+            ) : showSkillTree ? (
+              <>
+                <div style={{ 
+                  fontSize: 24, 
+                  fontWeight: 'bold', 
+                  color: '#1f2937', 
+                  marginBottom: 20,
+                  textAlign: 'center',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%'
+                }}>
+                  <span>🌳 Skill Tree</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSkillTree(false);
+                      setSkillTreeMode('in-game'); // Reset to in-game mode when closing
+                      setFlipped(false);
+                    }}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.2)',
+                      border: 'none',
+                      borderRadius: '50%',
+                      width: '36px',
+                      height: '36px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '20px',
+                      color: '#1f2937',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Skill Tree Mode Tabs */}
+                <div style={{
+                  display: 'flex',
+                  gap: '8px',
+                  marginBottom: 16,
+                  background: '#f3f4f6',
+                  padding: '4px',
+                  borderRadius: 8
+                }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSkillTreeMode('in-game');
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 16px',
+                      background: skillTreeMode === 'in-game' 
+                        ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' 
+                        : 'transparent',
+                      color: skillTreeMode === 'in-game' ? 'white' : '#6b7280',
+                      border: 'none',
+                      borderRadius: 6,
+                      fontWeight: 'bold',
+                      fontSize: 14,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    🎮 In Game
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSkillTreeMode('irl');
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 16px',
+                      background: skillTreeMode === 'irl' 
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' 
+                        : 'transparent',
+                      color: skillTreeMode === 'irl' ? 'white' : '#6b7280',
+                      border: 'none',
+                      borderRadius: 6,
+                      fontWeight: 'bold',
+                      fontSize: 14,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    🌍 IRL
+                  </button>
+                </div>
+
+                <div style={{
+                  background: '#fff',
+                  borderRadius: 12,
+                  padding: 16,
+                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+                  width: '100%',
+                  maxHeight: 400,
+                  overflowY: 'auto',
+                  marginBottom: 16,
+                  flex: '1 1 auto',
+                }}>
+                  {candyType === 'on-off' ? (
+                    <div>
+                      <div style={{
+                        fontSize: 18,
+                        fontWeight: 'bold',
+                        color: '#1f2937',
+                        marginBottom: 16,
+                        textAlign: 'center'
+                      }}>
+                        Off/On Power Skill Tree - {skillTreeMode === 'in-game' ? 'In Game' : 'IRL'}
+                      </div>
+                      
+                      {skillTreeMode === 'in-game' ? (
+                        <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 16
+                      }}>
+                        {/* Root Node */}
+                        <div style={{
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          borderRadius: 8,
+                          border: '2px solid #047857',
+                          textAlign: 'center',
+                          color: 'white',
+                          fontWeight: 'bold'
+                        }}>
+                          <div style={{ fontSize: 20, marginBottom: 4 }}>⚡</div>
+                          <div>Off/On Power</div>
+                          <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Unlocked</div>
+                        </div>
+
+                        {/* Branch 1 - Shield Toggle (Unlocked) */}
+                        <div style={{
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          borderRadius: 8,
+                          border: '2px solid #047857',
+                          textAlign: 'center',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.transform = 'scale(1.02)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.transform = 'scale(1)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                        >
+                          <div style={{ fontSize: 18, marginBottom: 4 }}>🛡️</div>
+                          <div>Turn Shields On/Off</div>
+                          <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Level 1 - Remove 25% of opponent's shields</div>
+                          <div style={{ fontSize: 10, opacity: 0.8, marginTop: 4, fontStyle: 'italic' }}>Unlocked • Can be leveled up</div>
+                        </div>
+
+                        {/* Branch 2 - Turn Shields On (Unlocked) */}
+                        <div style={{
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          borderRadius: 8,
+                          border: '2px solid #047857',
+                          textAlign: 'center',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.transform = 'scale(1.02)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.transform = 'scale(1)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                        >
+                          <div style={{ fontSize: 18, marginBottom: 4 }}>🔋</div>
+                          <div>Turn Shields On</div>
+                          <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Restore 50% of max shields</div>
+                          <div style={{ fontSize: 10, opacity: 0.8, marginTop: 4, fontStyle: 'italic' }}>Unlocked</div>
+                        </div>
+
+                        {/* Branch 3 */}
+                        <div style={{
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                          borderRadius: 8,
+                          border: '2px solid #cbd5e1',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ fontSize: 18, marginBottom: 4 }}>⚙️</div>
+                          <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Enhanced Control</div>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 2 - Improved power management</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Power Toggle</div>
+                        </div>
+
+                        {/* Branch 3 */}
+                        <div style={{
+                          padding: '12px',
+                          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                          borderRadius: 8,
+                          border: '2px solid #cbd5e1',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ fontSize: 18, marginBottom: 4 }}>🌟</div>
+                          <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Master Switch</div>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 3 - Ultimate power control</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Enhanced Control</div>
+                        </div>
+                      </div>
+                      ) : (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 16
+                        }}>
+                          {/* Root Node */}
+                          <div style={{
+                            padding: '12px',
+                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                            borderRadius: 8,
+                            border: '2px solid #047857',
+                            textAlign: 'center',
+                            color: 'white',
+                            fontWeight: 'bold'
+                          }}>
+                            <div style={{ fontSize: 20, marginBottom: 4 }}>🧠</div>
+                            <div>Off/On Power (IRL)</div>
+                            <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Unlocked</div>
+                          </div>
+
+                          {/* Branch 1 - IRL - Turn on Focus (Unlocked) */}
+                          <div style={{
+                            padding: '12px',
+                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                            borderRadius: 8,
+                            border: '2px solid #047857',
+                            textAlign: 'center',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.transform = 'scale(1.02)';
+                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.transform = 'scale(1)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }}
+                          >
+                            <div style={{ fontSize: 18, marginBottom: 4 }}>🎯</div>
+                            <div>Turn on Focus</div>
+                            <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Doubles your PP when activated</div>
+                            <div style={{ fontSize: 10, opacity: 0.8, marginTop: 4, fontStyle: 'italic' }}>Unlocked</div>
+                          </div>
+
+                          {/* Branch 2 - IRL */}
+                          <div style={{
+                            padding: '12px',
+                            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                            borderRadius: 8,
+                            border: '2px solid #cbd5e1',
+                            textAlign: 'center'
+                          }}>
+                            <div style={{ fontSize: 18, marginBottom: 4 }}>🧠</div>
+                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Mindful Control</div>
+                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 2 - Improved real-world awareness management</div>
+                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Awareness Toggle</div>
+                          </div>
+
+                          {/* Branch 3 - IRL */}
+                          <div style={{
+                            padding: '12px',
+                            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                            borderRadius: 8,
+                            border: '2px solid #cbd5e1',
+                            textAlign: 'center'
+                          }}>
+                            <div style={{ fontSize: 18, marginBottom: 4 }}>✨</div>
+                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>Reality Master</div>
+                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Level 3 - Ultimate real-world power control</div>
+                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, fontStyle: 'italic' }}>Requires: Mindful Control</div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : candyType === 'up-down' ? (
+                    <div style={{ textAlign: 'center', color: '#6b7280', padding: '2rem' }}>
+                      <div style={{ fontSize: 48, marginBottom: '1rem' }}>📈</div>
+                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                        Up/Down Power Skill Tree
+                      </h3>
+                      <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
+                        Coming soon! The Up/Down power skill tree will be available here.
+                      </p>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', color: '#6b7280', padding: '2rem' }}>
+                      <div style={{ fontSize: 48, marginBottom: '1rem' }}>⚙️</div>
+                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                        Config Power Skill Tree
+                      </h3>
+                      <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
+                        Coming soon! The Config power skill tree will be available here.
+                      </p>
                     </div>
                   )}
                 </div>

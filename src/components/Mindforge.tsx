@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs, query, where, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { trackMoveUsage } from '../utils/manifestTracking';
@@ -759,13 +759,9 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
       
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        const currentPP = userData.powerPoints || 0;
-        const currentXP = userData.xp || 0;
-        const currentTruthMetal = Math.floor(userData.truthMetal || 0);
         
         // Convert TM Shards to Truth Metal (1 TM Shard = 1 Truth Metal)
         const truthMetalEarned = rewards.tmShards;
-        const newTruthMetal = currentTruthMetal + truthMetalEarned;
         
         // Update level completion count if victory (class-specific)
         const newLevelCompletions = { ...levelCompletions };
@@ -783,11 +779,11 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
           setLevelCompletions(newLevelCompletions);
         }
         
-        // Update PP, XP, and Truth Metal
+        // Update PP, XP, and Truth Metal using atomic increments
         await updateDoc(userRef, {
-          powerPoints: currentPP + rewards.pp,
-          xp: currentXP + rewards.xp,
-          truthMetal: newTruthMetal, // Add TM Shards to Truth Metal currency
+          powerPoints: increment(rewards.pp),
+          xp: increment(rewards.xp),
+          truthMetal: increment(truthMetalEarned), // Add TM Shards to Truth Metal currency
           mindforgeStats: {
             lastPlayedDate: new Date().toDateString(),
             dailyPPEarned: newDailyPP,

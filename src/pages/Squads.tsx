@@ -7,6 +7,9 @@ import SquadCard from '../components/SquadCard';
 import InviteModal from '../components/InviteModal';
 import InvitationManager from '../components/InvitationManager';
 import { MANIFESTS } from '../types/manifest';
+import { normalizePlayerData, fetchAndNormalizePlayerData, NormalizedPlayerData } from '../utils/playerData';
+import { getUserSquadAbbreviation } from '../utils/squadUtils';
+import AlliesManager from '../components/AlliesManager';
 
 interface SquadMember {
   uid: string;
@@ -67,6 +70,7 @@ const Squads: React.FC = () => {
   const [newSquadDescription, setNewSquadDescription] = useState('');
   const [newSquadAbbreviation, setNewSquadAbbreviation] = useState('');
   const [loading, setLoading] = useState(true);
+  const [mainView, setMainView] = useState<'squad' | 'allies'>('squad');
   const [activeTab, setActiveTab] = useState<'my-squad' | 'all-squads' | 'available-players'>('my-squad');
 
   // Fetch all squads and available players
@@ -81,20 +85,111 @@ const Squads: React.FC = () => {
         // Fetch all squads
         console.log('Squads: Fetching squads...');
         const squadsSnapshot = await getDocs(collection(db, 'squads'));
-        const squadsData: Squad[] = squadsSnapshot.docs.map(doc => {
+        
+        // First, fetch all users and students data to enrich member info
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const studentsSnapshot = await getDocs(collection(db, 'students'));
+        
+        // Create maps for quick lookup
+        const userDataMap = new Map();
+        const studentDataMap = new Map();
+        
+        usersSnapshot.docs.forEach(doc => {
+          userDataMap.set(doc.id, doc.data());
+        });
+        
+        studentsSnapshot.docs.forEach(doc => {
+          studentDataMap.set(doc.id, doc.data());
+        });
+        
+        const squadsDataPromises = squadsSnapshot.docs.map(async (doc) => {
           const data = doc.data();
           console.log('Squads: Squad data:', { id: doc.id, ...data });
+          
+          // Enrich member data using normalizePlayerData helper for consistency with Profile
+          const enrichedMembersPromises = (data.members || []).map(async (member: SquadMember) => {
+            const userData = userDataMap.get(member.uid);
+            const studentData = studentDataMap.get(member.uid);
+            
+            // Extract playerManifest from studentData if present
+            let playerManifest = undefined;
+            if (studentData?.manifest && studentData.manifest.manifestId) {
+              playerManifest = {
+                manifestId: studentData.manifest.manifestId,
+                currentLevel: studentData.manifest.currentLevel || 1,
+                lastAscension: studentData.manifest.lastAscension?.toDate ? 
+                  studentData.manifest.lastAscension.toDate() : 
+                  (studentData.manifest.lastAscension ? new Date(studentData.manifest.lastAscension) : undefined)
+              };
+            }
+            
+            // Get squad abbreviation for this member
+            const squadAbbrev = await getUserSquadAbbreviation(member.uid);
+            
+            // Normalize using the shared helper (matches Profile.tsx logic)
+            const normalized = normalizePlayerData(
+              member.uid,
+              userData,
+              studentData,
+              undefined, // currentUser not needed here
+              playerManifest,
+              squadAbbrev
+            );
+            
+            // Calculate total XP from normalized data
+            // normalized.xpCurrent is XP in current level, we need total XP
+            let totalXP = normalized.xpCurrent;
+            if (normalized.level > 1) {
+              let total = 0;
+              let required = 100;
+              for (let i = 1; i < normalized.level; i++) {
+                total += required;
+                required = required * 1.25;
+              }
+              totalXP = total + normalized.xpCurrent;
+            }
+            
+            // Return normalized data merged with squad-specific fields
+            return {
+              ...member,
+              // Use normalized values (these match Profile page exactly)
+              photoURL: normalized.avatarUrl,
+              displayName: normalized.displayName,
+              level: normalized.level,
+              xp: totalXP, // Total XP (not just current level XP)
+              powerPoints: normalized.pp,
+              truthMetal: normalized.tm,
+              manifest: normalized.manifest,
+              rarity: normalized.rarity,
+              style: normalized.element,
+              description: normalized.description || `${member.role || 'Member'} of ${data.name}`,
+              cardBgColor: normalized.cardBgColor,
+              cardFrameShape: normalized.cardFrameShape,
+              cardBorderColor: normalized.cardBorderColor,
+              cardImageBorderColor: normalized.cardImageBorderColor,
+              moves: normalized.moves,
+              badges: normalized.badges,
+              // Store normalized data for SquadCard to use
+              _normalizedData: normalized
+            };
+          });
+          
+          const enrichedMembers = await Promise.all(enrichedMembersPromises);
+          
           return {
             id: doc.id,
-            ...data
+            ...data,
+            members: enrichedMembers
           } as Squad;
         });
+        
+        const squadsData: Squad[] = await Promise.all(squadsDataPromises);
 
         console.log('Squads: Total squads found:', squadsData.length);
 
         // Find current user's squad
-        const userSquad = squadsData.find(squad => 
-          squad.members.some(member => member.uid === currentUser.uid)
+        const userSquad = squadsData.find((squad: Squad) => 
+          squad.members.some((member: SquadMember) => member.uid === currentUser.uid)
         );
 
         console.log('Squads: User squad found:', userSquad ? userSquad.name : 'None');
@@ -104,16 +199,8 @@ const Squads: React.FC = () => {
 
         // Fetch all available players (not in any squad)
         console.log('Squads: Fetching users...');
-        // Try to get users from both collections to find manifest data
-        const usersSnapshot = await getDocs(collection(db, 'users'));
-        const studentsSnapshot = await getDocs(collection(db, 'students'));
-        
-        // Create a map of student data by UID
-        const studentDataMap = new Map();
-        studentsSnapshot.docs.forEach(doc => {
-          const data = doc.data();
-          studentDataMap.set(doc.id, data);
-        });
+        // Note: usersSnapshot and studentsSnapshot are already fetched above, reuse them
+        // studentDataMap is already created above
         
         const allUsers: SquadMember[] = usersSnapshot.docs.map(doc => {
           const data = doc.data();
@@ -220,9 +307,9 @@ const Squads: React.FC = () => {
           
           return {
             uid: doc.id,
-            displayName: data.displayName || data.email?.split('@')[0] || 'Unknown',
+            displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
             email: data.email || '',
-            photoURL: data.photoURL,
+            photoURL: data.photoURL || studentData?.photoURL || null,
             level: data.level || studentData?.level || 1,
             xp: data.xp || studentData?.xp || 0,
             powerPoints: data.powerPoints || studentData?.powerPoints || 0,
@@ -238,8 +325,8 @@ const Squads: React.FC = () => {
         console.log('Squads: Total users found:', allUsers.length);
 
         // Filter out players already in squads
-        const squadMemberIds = squadsData.flatMap(squad => 
-          squad.members.map(member => member.uid)
+        const squadMemberIds = squadsData.flatMap((squad: Squad) => 
+          squad.members.map((member: SquadMember) => member.uid)
         );
         console.log('Squads: Squad member IDs:', squadMemberIds);
         
@@ -262,10 +349,102 @@ const Squads: React.FC = () => {
 
     // Set up real-time listener for squads
     const unsubscribe = onSnapshot(collection(db, 'squads'), async (snapshot) => {
-      const squadsData: Squad[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Squad));
+      // Fetch current user/student data for enrichment
+      const usersSnapshot = await getDocs(collection(db, 'users'));
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      
+      const userDataMap = new Map();
+      const studentDataMap = new Map();
+      
+      usersSnapshot.docs.forEach(doc => {
+        userDataMap.set(doc.id, doc.data());
+      });
+      
+      studentsSnapshot.docs.forEach(doc => {
+        studentDataMap.set(doc.id, doc.data());
+      });
+      
+      const squadsDataPromises = snapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        
+        // Enrich member data using normalizePlayerData helper for consistency with Profile
+        const enrichedMembersPromises = (data.members || []).map(async (member: SquadMember) => {
+          const userData = userDataMap.get(member.uid);
+          const studentData = studentDataMap.get(member.uid);
+          
+          // Extract playerManifest from studentData if present
+          let playerManifest = undefined;
+          if (studentData?.manifest && studentData.manifest.manifestId) {
+            playerManifest = {
+              manifestId: studentData.manifest.manifestId,
+              currentLevel: studentData.manifest.currentLevel || 1,
+              lastAscension: studentData.manifest.lastAscension?.toDate ? 
+                studentData.manifest.lastAscension.toDate() : 
+                (studentData.manifest.lastAscension ? new Date(studentData.manifest.lastAscension) : undefined)
+            };
+          }
+          
+          // Get squad abbreviation for this member
+          const squadAbbrev = await getUserSquadAbbreviation(member.uid);
+          
+          // Normalize using the shared helper (matches Profile.tsx logic)
+          const normalized = normalizePlayerData(
+            member.uid,
+            userData,
+            studentData,
+            undefined, // currentUser not needed here
+            playerManifest,
+            squadAbbrev
+          );
+          
+          // Calculate total XP from normalized data
+          let totalXP = normalized.xpCurrent;
+          if (normalized.level > 1) {
+            let total = 0;
+            let required = 100;
+            for (let i = 1; i < normalized.level; i++) {
+              total += required;
+              required = required * 1.25;
+            }
+            totalXP = total + normalized.xpCurrent;
+          }
+          
+          // Return normalized data merged with squad-specific fields
+          return {
+            ...member,
+            // Use normalized values (these match Profile page exactly)
+            photoURL: normalized.avatarUrl,
+            displayName: normalized.displayName,
+            level: normalized.level,
+            xp: totalXP, // Total XP (not just current level XP)
+            powerPoints: normalized.pp,
+            truthMetal: normalized.tm,
+            manifest: normalized.manifest,
+            rarity: normalized.rarity,
+            style: normalized.element,
+            description: normalized.description || `${member.role || 'Member'} of ${data.name}`,
+            cardBgColor: normalized.cardBgColor,
+            cardFrameShape: normalized.cardFrameShape,
+            cardBorderColor: normalized.cardBorderColor,
+            cardImageBorderColor: normalized.cardImageBorderColor,
+            moves: normalized.moves,
+            badges: normalized.badges,
+            // Store normalized data for SquadCard to use
+            _normalizedData: normalized
+          };
+        });
+        
+        const enrichedMembers = await Promise.all(enrichedMembersPromises);
+        
+        return {
+          id: doc.id,
+          ...data,
+          members: enrichedMembers
+        } as Squad;
+      });
+      
+      const squadsData = await Promise.all(squadsDataPromises);
+      
       setSquads(squadsData);
       
       const userSquad = squadsData.find(squad => 
@@ -945,8 +1124,8 @@ const Squads: React.FC = () => {
             console.log('Squads: Total users found:', allUsers.length);
 
             // Filter out players already in squads
-            const squadMemberIds = squadsData.flatMap(squad => 
-              squad.members.map(member => member.uid)
+            const squadMemberIds = squadsData.flatMap((squad: Squad) => 
+              squad.members.map((member: SquadMember) => member.uid)
             );
             console.log('Squads: Squad member IDs:', squadMemberIds);
             
@@ -1281,59 +1460,104 @@ const Squads: React.FC = () => {
         </div>
       )}
 
-      {/* Tab Navigation */}
+      {/* Main View Toggle: Squad (Real Life) vs Allies (In Game) */}
       <div style={{
         display: 'flex',
         gap: '0.5rem',
         marginBottom: '2rem',
-        borderBottom: '1px solid #e5e7eb'
+        borderBottom: '2px solid #e5e7eb',
+        paddingBottom: '0.5rem'
       }}>
         <button
-          onClick={() => setActiveTab('my-squad')}
+          onClick={() => setMainView('squad')}
           style={{
-            backgroundColor: activeTab === 'my-squad' ? '#4f46e5' : 'transparent',
-            color: activeTab === 'my-squad' ? 'white' : '#6b7280',
+            backgroundColor: mainView === 'squad' ? '#4f46e5' : 'transparent',
+            color: mainView === 'squad' ? 'white' : '#6b7280',
             border: 'none',
             padding: '0.75rem 1.5rem',
-            borderRadius: '0.375rem 0.375rem 0 0',
+            borderRadius: '0.375rem',
             cursor: 'pointer',
-            fontWeight: '500'
+            fontWeight: '600',
+            fontSize: '1rem'
           }}
         >
-          My Squad
+          Squad (Real Life)
         </button>
         <button
-          onClick={() => setActiveTab('all-squads')}
+          onClick={() => setMainView('allies')}
           style={{
-            backgroundColor: activeTab === 'all-squads' ? '#4f46e5' : 'transparent',
-            color: activeTab === 'all-squads' ? 'white' : '#6b7280',
+            backgroundColor: mainView === 'allies' ? '#4f46e5' : 'transparent',
+            color: mainView === 'allies' ? 'white' : '#6b7280',
             border: 'none',
             padding: '0.75rem 1.5rem',
-            borderRadius: '0.375rem 0.375rem 0 0',
+            borderRadius: '0.375rem',
             cursor: 'pointer',
-            fontWeight: '500'
+            fontWeight: '600',
+            fontSize: '1rem'
           }}
         >
-          All Squads ({squads.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('available-players')}
-          style={{
-            backgroundColor: activeTab === 'available-players' ? '#4f46e5' : 'transparent',
-            color: activeTab === 'available-players' ? 'white' : '#6b7280',
-            border: 'none',
-            padding: '0.75rem 1.5rem',
-            borderRadius: '0.375rem 0.375rem 0 0',
-            cursor: 'pointer',
-            fontWeight: '500'
-          }}
-        >
-          Available Players ({availablePlayers.length})
+          Allies (In Game)
         </button>
       </div>
 
-      {/* Tab Content */}
-      {activeTab === 'my-squad' && (
+      {/* Main Content */}
+      {mainView === 'allies' ? (
+        <AlliesManager />
+      ) : (
+        <>
+          {/* Squad Tab Navigation */}
+          <div style={{
+            display: 'flex',
+            gap: '0.5rem',
+            marginBottom: '2rem',
+            borderBottom: '1px solid #e5e7eb'
+          }}>
+            <button
+              onClick={() => setActiveTab('my-squad')}
+              style={{
+                backgroundColor: activeTab === 'my-squad' ? '#4f46e5' : 'transparent',
+                color: activeTab === 'my-squad' ? 'white' : '#6b7280',
+                border: 'none',
+                padding: '0.75rem 1.5rem',
+                borderRadius: '0.375rem 0.375rem 0 0',
+                cursor: 'pointer',
+                fontWeight: '500'
+              }}
+            >
+              My Squad
+            </button>
+            <button
+              onClick={() => setActiveTab('all-squads')}
+              style={{
+                backgroundColor: activeTab === 'all-squads' ? '#4f46e5' : 'transparent',
+                color: activeTab === 'all-squads' ? 'white' : '#6b7280',
+                border: 'none',
+                padding: '0.75rem 1.5rem',
+                borderRadius: '0.375rem 0.375rem 0 0',
+                cursor: 'pointer',
+                fontWeight: '500'
+              }}
+            >
+              All Squads ({squads.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('available-players')}
+              style={{
+                backgroundColor: activeTab === 'available-players' ? '#4f46e5' : 'transparent',
+                color: activeTab === 'available-players' ? 'white' : '#6b7280',
+                border: 'none',
+                padding: '0.75rem 1.5rem',
+                borderRadius: '0.375rem 0.375rem 0 0',
+                cursor: 'pointer',
+                fontWeight: '500'
+              }}
+            >
+              Available Players ({availablePlayers.length})
+            </button>
+          </div>
+
+          {/* Squad Tab Content */}
+          {activeTab === 'my-squad' && (
         <div>
           {currentSquad ? (
             <SquadCard
@@ -1485,9 +1709,11 @@ const Squads: React.FC = () => {
           </div>
         </div>
       )}
+        </>
+      )}
 
       {/* Invite Modal */}
-      {currentSquad && (
+      {currentSquad && mainView === 'squad' && (
         <InviteModal
           isOpen={isInviteModalOpen}
           onClose={() => setIsInviteModalOpen(false)}

@@ -1,0 +1,798 @@
+import React, { useMemo, useState, useCallback } from 'react';
+import { NormalizedPlayerData } from '../utils/playerData';
+import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+
+interface PlayerPowerCardProps {
+  playerData: NormalizedPlayerData;
+  showSquadAbbreviation?: boolean;
+  showPPBoost?: boolean;
+  userId?: string;
+  scale?: number; // For scaling the card (e.g., 0.8 for squad cards)
+  ordinaryWorld?: string; // Journey stage content
+}
+
+const styleIcons: Record<string, string> = {
+  Fire: '🔥',
+  Water: '💧',
+  Earth: '🪨',
+  Air: '💨',
+};
+
+const manifestIcons: Record<string, string> = {
+  Reading: '📖',
+  Writing: '✍️',
+  Drawing: '🎨',
+  Athletics: '🏃',
+  Music: '🎵',
+  Math: '🔢',
+  Science: '🔬',
+  History: '📚',
+  Language: '🗣️',
+  Art: '🎭',
+};
+
+// Function to get manifest color
+const getManifestColor = (manifestName: string) => {
+  const manifestColors: { [key: string]: string } = {
+    'Reading': '#3B82F6',
+    'Writing': '#10B981',
+    'Drawing': '#F59E0B',
+    'Athletics': '#EF4444',
+    'Music': '#8B5CF6',
+    'Math': '#06B6D4',
+    'Science': '#84CC16',
+    'History': '#F97316',
+    'Language': '#EC4899',
+    'Art': '#6366F1',
+  };
+  return manifestColors[manifestName] || '#6b7280';
+};
+
+// Function to get element color
+const getElementColor = (elementName: string) => {
+  const elementColors: { [key: string]: string } = {
+    'Fire': '#EF4444',
+    'Water': '#3B82F6', 
+    'Air': '#10B981',
+    'Earth': '#6B7280',
+  };
+  return elementColors[elementName] || '#6b7280';
+};
+
+const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
+  playerData,
+  showSquadAbbreviation = true,
+  showPPBoost = false,
+  userId,
+  scale = 1,
+  ordinaryWorld
+}) => {
+  const [flipped, setFlipped] = useState(false);
+  const [showBadges, setShowBadges] = useState(false);
+  const [selectedJourneyStage, setSelectedJourneyStage] = useState<string | null>(null);
+  const [ppBoostStatus, setPPBoostStatus] = React.useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
+    isActive: false,
+    timeRemaining: '',
+    multiplier: 1
+  });
+  
+  const handleFlip = useCallback(() => {
+    setFlipped(!flipped);
+  }, [flipped]);
+  
+  const handleBadgeClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowBadges(true);
+    setSelectedJourneyStage(null);
+    setFlipped(true);
+  }, []);
+  
+  const handleJourneyStageClick = useCallback((stage: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedJourneyStage(stage);
+    setShowBadges(false);
+    setFlipped(true);
+  }, []);
+  
+  const handleReturnToJourneyList = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedJourneyStage(null);
+  }, []);
+  
+  // Journey stage data
+  const journeyStages = {
+    'ordinary-world': {
+      title: 'Ordinary World',
+      icon: '🌍',
+      description: ordinaryWorld || 'You haven\'t written your Ordinary World reflection yet. Complete the Chapter 1 challenge to add your personal story!',
+      content: 'This is your personal reflection for the Ordinary World stage of your hero\'s journey. Here you describe your life before the call to adventure - your familiar routines, your world as you knew it, and the place where your transformation began.'
+    },
+    'call-to-adventure': {
+      title: 'Call to Adventure',
+      icon: '📢',
+      description: 'You haven\'t written your Call to Adventure reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Call to Adventure stage. Here you describe the moment when everything changed - the call that pulled you from your ordinary world into something extraordinary.'
+    },
+    'meeting-mentor': {
+      title: 'Meeting the Mentor',
+      icon: '🧙',
+      description: 'You haven\'t written your Meeting the Mentor reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Meeting the Mentor stage. Here you describe the wise guide who helped you understand your new world and prepared you for the challenges ahead.'
+    },
+    'tests-allies-enemies': {
+      title: 'Tests, Allies, Enemies',
+      icon: '⚔️',
+      description: 'You haven\'t written your Tests, Allies, Enemies reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Tests, Allies, Enemies stage. Here you describe the trials that tested your resolve, the allies who joined your cause, and the enemies who stood in your way.'
+    },
+    'approaching-cave': {
+      title: 'Approaching the Cave',
+      icon: '🏰',
+      description: 'You haven\'t written your Approaching the Cave reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Approaching the Cave stage. Here you describe the approach to your greatest challenge - the moment when you stepped into the unknown.'
+    },
+    'ordeal': {
+      title: 'The Ordeal',
+      icon: '🔥',
+      description: 'You haven\'t written your Ordeal reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Ordeal stage. Here you describe your greatest trial - the moment when you faced your deepest fears and emerged transformed.'
+    },
+    'road-back': {
+      title: 'The Road Back',
+      icon: '🏃',
+      description: 'You haven\'t written your Road Back reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Road Back stage. Here you describe the journey home - carrying your new wisdom and power back to your ordinary world.'
+    },
+    'resurrection': {
+      title: 'Resurrection',
+      icon: '⚡',
+      description: 'You haven\'t written your Resurrection reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Resurrection stage. Here you describe your final transformation - the moment when you became truly who you were meant to be.'
+    },
+    'return-elixir': {
+      title: 'Return with Elixir',
+      icon: '🏆',
+      description: 'You haven\'t written your Return with Elixir reflection yet. Complete more challenges to unlock this stage!',
+      content: 'This is your personal reflection for the Return with Elixir stage. Here you describe how you brought your transformation back to help others - sharing the gift of your journey.'
+    }
+  };
+
+  // Check for active PP boost if enabled
+  React.useEffect(() => {
+    if (!showPPBoost || !userId) return;
+    
+    const checkPPBoost = async () => {
+      try {
+        const activeBoost = await getActivePPBoost(userId);
+        const status = getPPBoostStatus(activeBoost);
+        setPPBoostStatus(status);
+      } catch (error) {
+        console.error('Error checking PP boost:', error);
+      }
+    };
+    
+    checkPPBoost();
+    const interval = setInterval(checkPPBoost, 60000);
+    return () => clearInterval(interval);
+  }, [showPPBoost, userId]);
+
+  const background = useMemo(() => {
+    const bgColor = playerData.cardBgColor || '#e0e7ff';
+    return bgColor.startsWith('linear') ? bgColor : `linear-gradient(135deg, ${bgColor} 0%, #fbbf24 100%)`;
+  }, [playerData.cardBgColor]);
+
+  const cardStyle: React.CSSProperties = {
+    transform: scale !== 1 ? `scale(${scale})` : undefined,
+    transformOrigin: 'center top',
+    width: '100%',
+    height: '100%'
+  };
+
+  return (
+    <>
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+          }
+        `}
+      </style>
+      <div style={cardStyle}>
+        <div
+          style={{
+            perspective: 1200,
+            width: 320,
+            height: 480,
+            margin: '0 auto',
+            cursor: 'pointer',
+          }}
+          onClick={handleFlip}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleFlip();
+            }
+          }}
+          tabIndex={0}
+          role="button"
+          aria-label={`Player card for ${playerData.displayName}. Press Enter or Space to flip and view ${flipped ? 'front' : 'back'}.`}
+          aria-pressed={flipped}
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              transition: 'transform 0.7s cubic-bezier(.4,2,.6,1)',
+              transformStyle: 'preserve-3d',
+              transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+            }}
+          >
+            {/* Front */}
+            <div
+              style={{
+                position: 'absolute',
+                width: '100%',
+                height: '100%',
+                backfaceVisibility: 'hidden',
+                background: background,
+                border: `4px solid ${playerData.cardBorderColor || '#a78bfa'}`,
+                borderRadius: 24,
+                boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: 24,
+                zIndex: 2,
+                transform: 'rotateY(0deg)',
+              }}
+            >
+        {/* Top Row: Name, PP, TM, Level all aligned */}
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: 4 }}>
+          {/* First row: Name, PP, TM, Level all on same line */}
+          <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
+            {/* Player Name */}
+            <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {playerData.displayName}
+              </span>
+              {showSquadAbbreviation && playerData.squadAbbreviation && (
+                <span style={{
+                  fontSize: '16px',
+                  color: '#4f46e5',
+                  fontWeight: '600',
+                  marginLeft: '4px',
+                  flexShrink: 0
+                }}>
+                  [{playerData.squadAbbreviation}]
+                </span>
+              )}
+              {showPPBoost && ppBoostStatus.isActive && (
+                <span 
+                  style={{ 
+                    fontSize: '16px',
+                    color: '#f59e0b',
+                    fontWeight: 'bold',
+                    textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                    animation: 'pulse 2s infinite',
+                    flexShrink: 0
+                  }}
+                  title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                >
+                  ⚡
+                </span>
+              )}
+            </div>
+            {/* PP and TM badges */}
+            <span 
+              style={{ 
+                background: '#fbbf24', 
+                color: '#1f2937', 
+                borderRadius: 8, 
+                padding: '2px 10px', 
+                fontWeight: 'bold', 
+                fontSize: 14, 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '4px',
+                flexShrink: 0
+              }} 
+              title="Power Points"
+            >
+              PP: {playerData.pp}
+              {showPPBoost && ppBoostStatus.isActive && (
+                <span 
+                  style={{ 
+                    fontSize: '12px',
+                    color: '#f59e0b',
+                    fontWeight: 'bold',
+                    textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                    animation: 'pulse 2s infinite'
+                  }}
+                  title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                >
+                  ×2
+                </span>
+              )}
+            </span>
+            <span 
+              style={{ 
+                background: '#9ca3af', 
+                color: '#ffffff', 
+                borderRadius: 8, 
+                padding: '2px 10px', 
+                fontWeight: 'bold', 
+                fontSize: 14, 
+                border: '1px solid #6b7280', 
+                boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                flexShrink: 0
+              }}
+              title="Truth Metal Shards"
+            >
+              TM: {playerData.tm}
+            </span>
+            {/* Level badge */}
+            <span style={{ 
+              background: '#4f46e5', 
+              color: 'white', 
+              borderRadius: 8, 
+              padding: '2px 10px', 
+              fontWeight: 'bold', 
+              fontSize: 14, 
+              marginLeft: 'auto',
+              flexShrink: 0
+            }}>
+              Lv. {playerData.level}
+            </span>
+          </div>
+          {/* Second row: Rarity stars under name */}
+          <div style={{ display: 'flex', alignItems: 'center', marginTop: -4 }}>
+            {Array.from({ length: playerData.rarity }).map((_, i) => (
+              <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Level Progress Bar */}
+        <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>
+            Level Progress: {playerData.xpCurrent} / {playerData.xpRequired} XP
+          </div>
+          <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
+            <div 
+              style={{ 
+                width: `${playerData.levelProgressPercent}%`, 
+                background: '#4f46e5', 
+                height: '100%', 
+                borderRadius: 8, 
+                transition: 'width 0.3s' 
+              }} 
+            />
+          </div>
+        </div>
+
+        {/* Profile Image */}
+        <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+          {playerData.avatarUrl && playerData.avatarUrl.trim() !== '' ? (
+            <img
+              key={playerData.avatarUrl}
+              src={playerData.avatarUrl}
+              alt={`Profile picture of ${playerData.displayName}`}
+              style={{
+                width: 120,
+                height: 120,
+                borderRadius: playerData.cardFrameShape === 'circular' ? '50%' : '0.75rem',
+                objectFit: 'cover',
+                border: `4px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
+                marginBottom: 16,
+                background: '#fff',
+              }}
+              onError={(e) => {
+                // Hide the broken image and show fallback
+                e.currentTarget.style.display = 'none';
+                const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                if (fallback) fallback.style.display = 'flex';
+              }}
+            />
+          ) : null}
+          {/* Fallback profile picture */}
+          <div
+            key={`fallback-${playerData.displayName}`}
+            style={{
+              width: 120,
+              height: 120,
+              borderRadius: playerData.cardFrameShape === 'circular' ? '50%' : '0.75rem',
+              border: `4px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
+              marginBottom: 16,
+              background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+              display: (playerData.avatarUrl && playerData.avatarUrl.trim() !== '') ? 'none' : 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 48,
+              color: 'white',
+              fontWeight: 'bold',
+            }}
+          >
+            {playerData.displayName.charAt(0).toUpperCase()}
+          </div>
+        </div>
+
+        {/* Manifest and Element */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 20 }}>{manifestIcons[playerData.manifest] || '✨'}</span>
+            <span style={{ fontWeight: 'bold', color: getManifestColor(playerData.manifest), fontSize: 14 }}>
+              Manifest: {playerData.manifest}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 20 }}>{styleIcons[playerData.element] || '🔮'}</span>
+            <span style={{ fontWeight: 'bold', color: getElementColor(playerData.element), fontSize: 14 }}>
+              Element: {playerData.element}
+            </span>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
+
+        {/* Moves Section */}
+        {playerData.moves && playerData.moves.length > 0 && (
+          <div style={{ margin: '12px 0', textAlign: 'center' }}>
+            <div style={{ fontWeight: 'bold', color: '#4f46e5', marginBottom: 4 }}>Moves</div>
+            {playerData.moves.map((move, idx) => (
+              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 18 }}>{move.icon}</span>
+                <span style={{ fontWeight: 'bold' }}>{move.name}</span>
+                <span style={{ color: '#6b7280', fontSize: 14 }}>{move.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {/* Badges Button */}
+        <div style={{ margin: '12px 0', textAlign: 'center' }}>
+          <button
+            onClick={handleBadgeClick}
+            style={{
+              background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 12,
+              padding: '12px 20px',
+              fontWeight: 'bold',
+              fontSize: 14,
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              width: '100%',
+              margin: '0 auto'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 6px 16px rgba(139, 92, 246, 0.4)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(139, 92, 246, 0.3)';
+            }}
+          >
+            <span>🏆</span>
+            Badges ({playerData.badgesCount})
+          </button>
+        </div>
+        
+        {/* Flip hint */}
+        <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+          Click to view journey details
+        </div>
+      </div>
+
+            {/* Back */}
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                backfaceVisibility: 'hidden',
+                background: 'linear-gradient(135deg, #fbbf24 0%, #a78bfa 100%)',
+                border: `4px solid ${playerData.cardBorderColor || '#a78bfa'}`,
+                borderRadius: 24,
+                boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                padding: 24,
+                transform: 'rotateY(180deg)',
+                zIndex: 1,
+                overflowY: 'auto',
+              }}
+            >
+        {/* Journey Stage Detail View */}
+        {selectedJourneyStage ? (
+          <>
+            <div style={{ 
+              fontSize: 24, 
+              fontWeight: 'bold', 
+              color: '#1f2937', 
+              marginBottom: 20,
+              textAlign: 'center',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%'
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>{journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.icon}</span>
+                {journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.title}
+              </span>
+              <button
+                onClick={handleReturnToJourneyList}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '36px',
+                  height: '36px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '20px',
+                  color: '#1f2937',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                }}
+              >
+                ←
+              </button>
+            </div>
+            
+            <div style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+              width: '100%',
+              maxHeight: 300,
+              overflowY: 'auto',
+              marginBottom: 16,
+              flex: '1 1 auto',
+            }}>
+              <div style={{
+                fontSize: 16,
+                color: '#1f2937',
+                lineHeight: '1.6',
+                marginBottom: 16,
+                fontStyle: 'italic'
+              }}>
+                "{journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.description}"
+              </div>
+              
+              <div style={{
+                fontSize: 14,
+                color: '#6b7280',
+                lineHeight: '1.5'
+              }}>
+                {journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.content}
+              </div>
+            </div>
+            
+            <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+              Click to return to journey list
+            </div>
+          </>
+        ) : showBadges ? (
+          <>
+            <div style={{ 
+              fontSize: 24, 
+              fontWeight: 'bold', 
+              color: '#1f2937', 
+              marginBottom: 20,
+              textAlign: 'center',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%'
+            }}>
+              <span>🏆 Your Badges</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowBadges(false);
+                  setFlipped(false);
+                }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '36px',
+                  height: '36px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '20px',
+                  color: '#1f2937',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                }}
+              >
+                ←
+              </button>
+            </div>
+            
+            <div style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: 12,
+              boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+              width: '100%',
+              maxHeight: 320,
+              overflowY: 'auto',
+              marginBottom: 16,
+              flex: '1 1 auto',
+            }}>
+              {(!playerData.badges || playerData.badges.length === 0) ? (
+                <div style={{
+                  textAlign: 'center',
+                  padding: '2rem 1rem',
+                  color: '#6b7280'
+                }}>
+                  <div style={{ fontSize: '48px', marginBottom: '1rem' }}>🏆</div>
+                  <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#374151' }}>
+                    No Badges Yet
+                  </h3>
+                  <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
+                    Complete challenges and achievements to earn your first badges!
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {playerData.badges.map((badge: any) => (
+                    <div
+                      key={badge.id || badge.name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '12px',
+                        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+                        borderRadius: 12,
+                        border: '2px solid #cbd5e1',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.background = 'linear-gradient(135deg, #f1f5f9 0%, #cbd5e1 100%)';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.background = 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      <div style={{
+                        width: '48px',
+                        height: '48px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '24px',
+                        marginRight: '12px',
+                        flexShrink: 0
+                      }}>
+                        {badge.imageUrl ? (
+                          <img 
+                            src={badge.imageUrl} 
+                            alt={badge.name}
+                            style={{
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              objectFit: 'cover'
+                            }}
+                          />
+                        ) : (
+                          '🏆'
+                        )}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 'bold', color: '#1f2937', marginBottom: 4 }}>
+                          {badge.name || 'Unnamed Badge'}
+                        </div>
+                        <div style={{ fontSize: 14, color: '#6b7280' }}>
+                          {badge.description || 'No description available'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ 
+              fontSize: 24, 
+              fontWeight: 'bold', 
+              color: '#1f2937', 
+              marginBottom: 20,
+              textAlign: 'center'
+            }}>
+              🌟 Your Journey
+            </div>
+            
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 12,
+              width: '100%',
+              marginBottom: 16
+            }}>
+              {Object.entries(journeyStages).map(([key, stage]) => (
+                <button
+                  key={key}
+                  onClick={(e) => handleJourneyStageClick(key, e)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.2)',
+                    border: '2px solid rgba(255, 255, 255, 0.3)',
+                    borderRadius: 12,
+                    padding: 16,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 8
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  <span style={{ fontSize: 32 }}>{stage.icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 'bold', color: '#1f2937', textAlign: 'center' }}>
+                    {stage.title}
+                  </span>
+                </button>
+              ))}
+            </div>
+            
+            <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+              Click to return to front
+            </div>
+          </>
+        )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default PlayerPowerCard;
+

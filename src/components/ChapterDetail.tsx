@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField, onSnapshot, increment } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
@@ -20,6 +20,10 @@ import HelaBattle from './HelaBattle';
 import IcyDeathCutscene from './IcyDeathCutscene';
 import ZekeEndsBattleCutscene from './ZekeEndsBattleCutscene';
 import ChallengeRewardModal from './ChallengeRewardModal';
+import PortalIntroModal from './PortalIntroModal';
+import TimuIslandStoryModal from './TimuIslandStoryModal';
+import SquadUpStoryModal from './SquadUpStoryModal';
+import SonidoTransmissionModal from './SonidoTransmissionModal';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterDetailProps {
@@ -36,7 +40,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'challenges' | 'team' | 'ethics' | 'story'>('challenges');
+  const [activeTab, setActiveTab] = useState<'challenges' | 'ethics'>('challenges');
   const [selectedEpisode, setSelectedEpisode] = useState<StoryEpisode | null>(null);
   const [showRivalSelectionModal, setShowRivalSelectionModal] = useState(false);
   const [showCPUBattleModal, setShowCPUBattleModal] = useState(false);
@@ -60,6 +64,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     xpReward: number;
     ppReward: number;
   } | null>(null);
+  const [showPortalIntroModal, setShowPortalIntroModal] = useState(false);
+  const [showTimuIslandStoryModal, setShowTimuIslandStoryModal] = useState(false);
+  const [showSquadUpStoryModal, setShowSquadUpStoryModal] = useState(false);
+  const [showSonidoTransmissionModal, setShowSonidoTransmissionModal] = useState(false);
+  const [expandedChallenges, setExpandedChallenges] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!currentUser) return;
@@ -137,6 +146,54 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     };
   }, [currentUser, chapter.id]);
 
+  // Check for battle join request from invitation acceptance
+  // This runs when ChapterDetail is rendered (after chapter is selected)
+  useEffect(() => {
+    const joinBattleData = sessionStorage.getItem('joinBattle');
+    if (joinBattleData) {
+      try {
+        const battleData = JSON.parse(joinBattleData);
+        const { gameId, challengeId, chapterId } = battleData;
+        
+        // Only auto-open if this is the correct chapter
+        if (chapterId === chapter.id) {
+          console.log('ChapterDetail: Auto-opening battle for invited player:', battleData);
+          
+          // Small delay to ensure modal state is ready
+          setTimeout(() => {
+            // Determine which modal to open based on challengeId
+            if (challengeId === 'ch2-rival-selection') {
+              // Chapter 2-2: Timu Island Story Modal
+              console.log('ChapterDetail: Opening TimuIslandStoryModal for battle:', gameId);
+              setShowTimuIslandStoryModal(true);
+              // The modal will detect the gameId and show the battle
+              sessionStorage.setItem('timuIslandBattleGameId', gameId);
+            } else if (challengeId === 'ch2-team-trial') {
+              // Chapter 2-3: Squad Up Story Modal
+              console.log('ChapterDetail: Opening SquadUpStoryModal for battle:', gameId);
+              setShowSquadUpStoryModal(true);
+              // The modal will detect the gameId and show the battle
+              sessionStorage.setItem('squadUpBattleGameId', gameId);
+            }
+            
+            // Clear the joinBattle flag after opening modal
+            sessionStorage.removeItem('joinBattle');
+          }, 100); // Small delay to ensure state is ready
+        } else {
+          console.warn('ChapterDetail: Battle join request for different chapter, ignoring:', {
+            requestedChapter: chapterId,
+            currentChapter: chapter.id
+          });
+          // Clear invalid joinBattle flag
+          sessionStorage.removeItem('joinBattle');
+        }
+      } catch (error) {
+        console.error('ChapterDetail: Error parsing joinBattle data:', error);
+        sessionStorage.removeItem('joinBattle');
+      }
+    }
+  }, [chapter.id]);
+
   const getRequirementStatus = (requirement: any) => {
     console.log('ChapterDetail: Checking requirement:', requirement.type, {
       studentData,
@@ -177,11 +234,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const getChallengeStatus = (challenge: ChapterChallenge) => {
     if (!userProgress) return 'locked';
     
+    // CRITICAL: Verify we're checking the correct user's progress
+    if (!currentUser) {
+      console.warn('ChapterDetail: getChallengeStatus - No current user, returning locked');
+      return 'locked';
+    }
+    
     // Ensure chapter.id is used as a string key (Firestore uses string keys)
     const chapterKey = String(chapter.id);
     const chapterProgress = userProgress.chapters?.[chapterKey];
     if (!chapterProgress) {
       console.log('ChapterDetail: getChallengeStatus - No chapter progress found:', {
+        userId: currentUser.uid,
         chapterId: chapter.id,
         chapterKey: chapterKey,
         availableKeys: userProgress.chapters ? Object.keys(userProgress.chapters) : 'no chapters'
@@ -191,6 +255,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     
     const challengeProgress = chapterProgress.challenges?.[challenge.id];
     console.log('ChapterDetail: getChallengeStatus - Challenge progress:', {
+      userId: currentUser.uid,
       challengeId: challenge.id,
       challengeProgress: challengeProgress,
       allChallenges: chapterProgress.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges'
@@ -208,20 +273,58 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                                  challengeProgress?.helaDefeated === true ||
                                  (challengeProgress?.isCompleted === true && challengeProgress?.autoCompleted !== true);
       if (wasBattleCompleted && (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted)) {
+        console.log('ChapterDetail: getChallengeStatus - Challenge completed (battle):', {
+          userId: currentUser.uid,
+          challengeId: challenge.id,
+          completedBy: challengeProgress?.completedBy
+        });
         return 'completed';
       }
     } else {
       // For other challenges, use standard completion check
-      if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted) return 'completed';
+      // CRITICAL: Verify completion is for the current user
+      if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted === true) {
+        // Log completion details for debugging
+        console.log('ChapterDetail: getChallengeStatus - Challenge completed:', {
+          userId: currentUser.uid,
+          challengeId: challenge.id,
+          completedBy: challengeProgress?.completedBy,
+          completedAt: challengeProgress?.completedAt
+        });
+        return 'completed';
+      }
     }
     
-    // If no requirements, challenge is available
+    // Check if previous challenge is completed (sequential unlocking)
+    // This applies to ALL challenges except the first one
+    const challengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
+    let previousChallengeCompleted = true; // First challenge has no previous challenge
+    if (challengeIndex > 0) {
+      // Not the first challenge - check if previous challenge is completed
+      const previousChallenge = chapter.challenges[challengeIndex - 1];
+      const previousChallengeProgress = chapterProgress.challenges?.[previousChallenge.id];
+      previousChallengeCompleted = previousChallengeProgress?.isCompleted || previousChallengeProgress?.status === 'approved';
+      
+      if (!previousChallengeCompleted) {
+        console.log(`ChapterDetail: Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`);
+        return 'locked';
+      }
+    }
+    
+    // If previous challenge is completed, the challenge is available (unlocked)
+    // Requirements are checked separately for auto-completion, but don't block availability
+    if (previousChallengeCompleted && chapterProgress.isActive) {
+      console.log(`ChapterDetail: Challenge ${challenge.id} is available - previous challenge completed`);
+      return 'available';
+    }
+    
+    // If no requirements and chapter is active, challenge is available
     if (!challenge.requirements || challenge.requirements.length === 0) {
       console.log(`ChapterDetail: Challenge ${challenge.id} has no requirements - available`);
       return chapterProgress.isActive ? 'available' : 'locked';
     }
     
-    // Check if challenge requirements are met
+    // Check if challenge requirements are met (for auto-completion purposes, but availability is already determined above)
     const requirementsMet = challenge.requirements.every(req => {
       console.log(`ChapterDetail: Checking requirement: ${req.type} = ${req.value}`);
       
@@ -314,6 +417,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             console.warn(`ChapterDetail: Unknown ability requirement: ${req.value}`);
             return false;
           }
+        case 'challenge':
+          // Check if a specific challenge is completed
+          // req.value should be the challenge ID (e.g., 'ch2-team-trial')
+          const requiredChallengeId = req.value;
+          const requiredChallenge = userProgress?.chapters?.[chapter.id]?.challenges?.[requiredChallengeId];
+          const isCompleted = requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
+          console.log(`ChapterDetail: Checking challenge requirement ${requiredChallengeId}:`, {
+            found: !!requiredChallenge,
+            isCompleted,
+            status: requiredChallenge?.status
+          });
+          return isCompleted;
         default:
           console.warn(`ChapterDetail: Unknown requirement type: ${req.type}`);
           return true;
@@ -338,7 +453,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
 
     try {
       const userRef = doc(db, 'users', currentUser.uid);
-      const studentRef = doc(db, 'students', currentUser.uid);
       
       // Check if already completed
       const userDocCheck = await getDoc(userRef);
@@ -351,7 +465,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         return;
       }
 
-      // Update user progress
+      // Update user progress - mark challenge as completed
       const updatedChapters = {
         ...userProgressCheck.chapters,
         [chapter.id]: {
@@ -367,62 +481,53 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         }
       };
 
-      // Apply rewards
-      const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-      const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
-      const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
-      const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
-
-      // Update user progress with rewards using increment for atomic updates
       await updateDoc(userRef, {
-        chapters: updatedChapters,
-        xp: increment(xpReward),
-        powerPoints: increment(ppReward),
-        truthMetal: increment(truthMetalReward)
+        chapters: updatedChapters
       });
 
-      // Update student data
-      const studentDoc = await getDoc(studentRef);
-      if (studentDoc.exists()) {
-        const studentData = studentDoc.data();
-        const updatedChallenges = {
-          ...studentData.challenges,
-          [challenge.id]: {
-            completed: true,
-            status: 'approved',
-            completedAt: serverTimestamp()
-          }
-        };
+      // SECURITY FIX: Use centralized idempotent reward granting service
+      // This ensures rewards can only be granted once, even if challenge is reset and re-completed
+      const { grantChallengeRewards } = await import('../utils/challengeRewards');
+      
+      const rewardResult = await grantChallengeRewards(
+        currentUser.uid,
+        challenge.id,
+        challenge.rewards,
+        challenge.title
+      );
+
+      if (rewardResult.success && !rewardResult.alreadyClaimed) {
+        console.log(`✅ handleAutoCompleteChallenge: Rewards granted successfully:`, rewardResult.rewardsGranted);
         
-        // Grant artifact rewards
-        const currentArtifacts = studentData.artifacts || {};
-        const updatedArtifacts = { ...currentArtifacts };
-        
-        artifactRewards.forEach(artifactReward => {
-          updatedArtifacts[artifactReward.value] = true;
+        // Parse rewards for notification and modal
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+
+        // Add notification
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`,
+          challengeId: challenge.id,
+          challengeName: challenge.title,
+          xpReward: xpReward,
+          ppReward: ppReward,
+          timestamp: serverTimestamp(),
+          read: false
         });
-        
-        // Use increment for atomic updates
-        await updateDoc(studentRef, {
-          challenges: updatedChallenges,
-          xp: increment(xpReward),
-          powerPoints: increment(ppReward),
-          truthMetal: increment(truthMetalReward),
-          artifacts: updatedArtifacts
-        });
+      } else if (rewardResult.alreadyClaimed) {
+        console.log(`🎁 handleAutoCompleteChallenge: Rewards were already claimed for challenge ${challenge.id}`);
+        if (showModal) {
+          alert('This challenge has already been completed and rewards were already claimed!');
+        }
+        return;
+      } else {
+        console.error(`❌ handleAutoCompleteChallenge: Failed to grant rewards:`, rewardResult.error);
+        if (showModal) {
+          alert('Failed to grant rewards. Please contact support if this persists.');
+        }
+        return;
       }
-
-      // Add notification
-      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-        type: 'challenge_completed',
-        message: `🎉 Challenge "${challenge.title}" completed! You earned ${xpReward} XP and ${ppReward} PP.`,
-        challengeId: challenge.id,
-        challengeName: challenge.title,
-        xpReward: xpReward,
-        ppReward: ppReward,
-        timestamp: serverTimestamp(),
-        read: false
-      });
 
       // Unlock the next challenge in the same chapter
       const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
@@ -431,9 +536,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
       }
 
-      // Show reward modal only if requested
-      if (showModal) {
+      // Show reward modal only if requested and challenge wasn't already completed
+      // The check at the top of the function already returns early if completed,
+      // so if we reach here, the challenge was just completed for the first time
+      if (showModal && rewardResult.success && !rewardResult.alreadyClaimed) {
         // Format rewards for the modal
+        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        
         const rewardModalRewards = [
           ...artifactRewards.map(r => ({
             type: r.type as 'artifact',
@@ -559,6 +671,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         continue;
       }
 
+      // Store whether challenge was already completed (before auto-completing)
+      const wasAlreadyCompleted = challengeProgress?.isCompleted || challengeProgress?.status === 'approved';
+
       // Check if challenge should be auto-completed
       let shouldAutoComplete = false;
       
@@ -604,10 +719,19 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }
 
       if (shouldAutoComplete) {
-        console.log(`Auto-completing challenge: ${challenge.id}`);
-        
-        // Update both collections
+        // Double-check that challenge wasn't already completed (race condition protection)
+        // Read from Firestore to get the latest state
         const userRef = doc(db, 'users', currentUser.uid);
+        const userDocCheck = await getDoc(userRef);
+        const userProgressCheck = userDocCheck.exists() ? userDocCheck.data() : {};
+        const challengeProgressCheck = userProgressCheck.chapters?.[chapter.id]?.challenges?.[challenge.id];
+        
+        if (challengeProgressCheck?.isCompleted || challengeProgressCheck?.status === 'approved') {
+          console.log(`ChapterDetail: Challenge ${challenge.id} was already completed in Firestore, skipping auto-complete`);
+          continue;
+        }
+        
+        console.log(`Auto-completing challenge: ${challenge.id}`);
         const studentRef = doc(db, 'students', currentUser.uid);
         
         // Update user progress
@@ -632,22 +756,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
         const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
 
-        // Get current user data to calculate new totals
-        const userDocBefore = await getDoc(userRef);
-        const userDataBefore = userDocBefore.exists() ? userDocBefore.data() : {};
-        const currentXP = userDataBefore.xp || 0;
-        const currentPP = userDataBefore.powerPoints || 0;
-        const currentTruthMetal = userDataBefore.truthMetal || 0;
-
-        // Update user progress with rewards
+        // Update user progress with rewards using atomic increments
         await updateDoc(userRef, {
           chapters: updatedChapters,
-          xp: currentXP + xpReward,
-          powerPoints: currentPP + ppReward,
-          truthMetal: currentTruthMetal + truthMetalReward
+          xp: increment(xpReward),
+          powerPoints: increment(ppReward),
+          truthMetal: increment(truthMetalReward)
         });
 
-        // Update student data (legacy system)
+        // Update student data (legacy system) using atomic increments
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
@@ -670,9 +787,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           
           await updateDoc(studentRef, {
             challenges: updatedChallenges,
-            xp: (studentData.xp || 0) + xpReward,
-            powerPoints: (studentData.powerPoints || 0) + ppReward,
-            truthMetal: (studentData.truthMetal || 0) + truthMetalReward,
+            xp: increment(xpReward),
+            powerPoints: increment(ppReward),
+            truthMetal: increment(truthMetalReward),
             artifacts: updatedArtifacts
           });
           
@@ -680,26 +797,38 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           // No need to unlock moves here - the modal on Artifacts page will handle element selection
         }
 
-        // Add notification
-        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-          type: 'challenge_completed',
-          message: `🎉 Challenge "${challenge.title}" completed automatically! You earned ${xpReward} XP and ${ppReward} PP.`,
-          challengeId: challenge.id,
-          challengeName: challenge.title,
-          xpReward: xpReward,
-          ppReward: ppReward,
-          timestamp: serverTimestamp(),
-          read: false
-        });
+        // Double-check that challenge wasn't already completed before showing modal
+        // This prevents the modal from showing if the challenge was already completed
+        const userDocAfterUpdate = await getDoc(userRef);
+        const userProgressAfterUpdate = userDocAfterUpdate.exists() ? userDocAfterUpdate.data() : {};
+        const challengeProgressAfterUpdate = userProgressAfterUpdate.chapters?.[chapter.id]?.challenges?.[challenge.id];
+        
+        // Only show reward modal if this was a new completion (not already completed)
+        const wasNewlyCompleted = !wasAlreadyCompleted && 
+                                  (challengeProgressAfterUpdate?.isCompleted || challengeProgressAfterUpdate?.status === 'approved');
+        
+        if (wasNewlyCompleted) {
+          // Add notification
+          await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+            type: 'challenge_completed',
+            message: `🎉 Challenge "${challenge.title}" completed automatically! You earned ${xpReward} XP and ${ppReward} PP.`,
+            challengeId: challenge.id,
+            challengeName: challenge.title,
+            xpReward: xpReward,
+            ppReward: ppReward,
+            timestamp: serverTimestamp(),
+            read: false
+          });
 
-        // Show reward modal
-        setRewardModalData({
-          challengeTitle: challenge.title,
-          rewards: challenge.rewards,
-          xpReward,
-          ppReward
-        });
-        setShowRewardModal(true);
+          // Show reward modal only on first completion
+          setRewardModalData({
+            challengeTitle: challenge.title,
+            rewards: challenge.rewards,
+            xpReward,
+            ppReward
+          });
+          setShowRewardModal(true);
+        }
 
         // Unlock the next challenge in the same chapter
         const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
@@ -1755,9 +1884,15 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
-  // Reset Challenge 7 for testing
+  // Reset Challenge 7 for testing (ADMIN ONLY)
   const resetChallenge7 = async () => {
     if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
     
     if (!window.confirm('Reset Challenge 7 "Hela Awakened" to incomplete for testing?')) {
       return;
@@ -1841,6 +1976,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const resetChallenge8 = async () => {
     if (!currentUser) return;
     
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
     if (!window.confirm('Reset Challenge 8 "Artifacts and Elements"?\n\nThis will allow you to redo the updated challenge. Your progress will be reset to incomplete.')) {
       return;
     }
@@ -1916,6 +2057,177 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       alert('✅ Challenge 8 has been reset! You can now redo the updated challenge.');
     } catch (error) {
       console.error('Error resetting Challenge 8:', error);
+      alert('Error resetting challenge. Please try again.');
+    }
+  };
+
+  // Reset Chapter 2-1 for current user (ADMIN ONLY)
+  const resetChapter2Challenge1 = async (autoReset: boolean = false) => {
+    if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!autoReset && !isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
+    if (!autoReset && !window.confirm('Reset Chapter 2-1 "Arrival on Timu Island" to incomplete?\n\nThis will clear your completion status for this challenge.')) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Completely remove the challenge progress to reset it to available
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [2]: {
+            ...(userData.chapters?.[2] || {}),
+            challenges: {
+              ...(userData.chapters?.[2]?.challenges || {}),
+              'ch2-team-formation': {
+                isCompleted: false
+              }
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          'chapters.2.challenges.ch2-team-formation.status': deleteField(),
+          'chapters.2.challenges.ch2-team-formation.completedAt': deleteField()
+        });
+      }
+      
+      // Refresh user progress immediately
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+      }
+      
+      if (!autoReset) {
+        alert('✅ Chapter 2-1 has been reset! The "Go through the Portal" button should now appear.');
+      }
+    } catch (error) {
+      console.error('Error resetting Chapter 2-1:', error);
+      if (!autoReset) {
+        alert('Error resetting challenge. Please try again.');
+      }
+    }
+  };
+
+  // REMOVED: Auto-reset mechanism that was causing Chapter 2-1 to reset every time
+  // This was causing the reward modal to appear repeatedly
+  // If Chapter 2-1 needs to be reset, it should be done manually by admins
+
+  const resetChapter2Challenge2 = async () => {
+    if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
+    if (!window.confirm('Reset Chapter 2-2 "Find a Home" to incomplete?\n\nThis will clear your completion status for this challenge.')) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Completely remove the challenge progress to reset it to available
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [2]: {
+            ...(userData.chapters?.[2] || {}),
+            challenges: {
+              ...(userData.chapters?.[2]?.challenges || {}),
+              'ch2-rival-selection': {
+                isCompleted: false
+              }
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          'chapters.2.challenges.ch2-rival-selection.status': deleteField(),
+          'chapters.2.challenges.ch2-rival-selection.completedAt': deleteField()
+        });
+      }
+      
+      // Refresh user progress immediately
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+      }
+      
+      alert('✅ Chapter 2-2 has been reset! The "Find a Home" button should now appear.');
+    } catch (error) {
+      console.error('Error resetting Chapter 2-2:', error);
+      alert('Error resetting challenge. Please try again.');
+    }
+  };
+
+  const resetChapter2Challenge3 = async () => {
+    if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
+    if (!window.confirm('Reset Chapter 2-3 "Squad Up" to incomplete?\n\nThis will clear your completion status for this challenge.')) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Completely remove the challenge progress to reset it to available
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [2]: {
+            ...(userData.chapters?.[2] || {}),
+            challenges: {
+              ...(userData.chapters?.[2]?.challenges || {}),
+              'ch2-team-trial': {
+                isCompleted: false
+              }
+            }
+          }
+        };
+        
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          'chapters.2.challenges.ch2-team-trial.status': deleteField(),
+          'chapters.2.challenges.ch2-team-trial.completedAt': deleteField()
+        });
+      }
+      
+      // Refresh user progress immediately
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+      }
+      
+      alert('✅ Chapter 2-3 has been reset! The "Squad Up" button should now appear.');
+    } catch (error) {
+      console.error('Error resetting Chapter 2-3:', error);
       alert('Error resetting challenge. Please try again.');
     }
   };
@@ -2267,6 +2579,627 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  const handlePortalIntroComplete = async () => {
+    if (!currentUser) {
+      console.error('ChapterDetail: handlePortalIntroComplete - No current user');
+      return;
+    }
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ch2-team-formation');
+      if (!challenge) {
+        console.error('ChapterDetail: handlePortalIntroComplete - Challenge not found: ch2-team-formation');
+        return;
+      }
+
+      // CRITICAL: Always use currentUser.uid to ensure user-specific updates
+      const userRef = doc(db, 'users', currentUser.uid);
+      console.log('ChapterDetail: handlePortalIntroComplete - User completed Chapter 2-1 by watching video:', {
+        userId: currentUser.uid,
+        userName: currentUser.displayName || currentUser.email,
+        challengeId: 'ch2-team-formation',
+        challengeTitle: challenge.title
+      });
+      
+      // Fetch fresh data from Firestore to ensure we have the latest state
+      const userDoc = await getDoc(userRef);
+      if (!userDoc.exists()) {
+        console.error('ChapterDetail: handlePortalIntroComplete - User document does not exist:', currentUser.uid);
+        alert('Error: User document not found. Please try again.');
+        return;
+      }
+      
+      const currentData = userDoc.data();
+      const chapterKey = String(chapter.id);
+      
+      // Check if challenge was already completed - use fresh data from Firestore
+      const challengeProgress = currentData.chapters?.[chapterKey]?.challenges?.['ch2-team-formation'];
+      const wasAlreadyCompleted = challengeProgress?.isCompleted === true || 
+                                   challengeProgress?.status === 'approved';
+      
+      if (wasAlreadyCompleted) {
+        console.log('ChapterDetail: handlePortalIntroComplete - Challenge already completed for user:', currentUser.uid);
+        // Don't show rewards again, just return
+        return;
+      }
+      
+      console.log('ChapterDetail: handlePortalIntroComplete - Marking challenge as complete for user:', currentUser.uid);
+      
+      // Build updated chapters object, preserving all existing data
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapterKey]: {
+          ...currentData.chapters?.[chapterKey],
+          challenges: {
+            ...currentData.chapters?.[chapterKey]?.challenges,
+            'ch2-team-formation': {
+              ...challengeProgress, // Preserve any existing challenge data
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              status: 'approved',
+              completedBy: currentUser.uid, // Track who completed it
+              completedByName: currentUser.displayName || currentUser.email || 'Unknown'
+            }
+          }
+        }
+      };
+
+      // Update Firestore with user-specific document
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+      
+      console.log('ChapterDetail: handlePortalIntroComplete - Successfully updated challenge completion for user:', currentUser.uid);
+
+      // Apply rewards (only if not already completed)
+      const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+      const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+
+      if (xpReward > 0 || ppReward > 0) {
+        // CRITICAL: Always use currentUser.uid for user-specific updates
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const userRefForRewards = doc(db, 'users', currentUser.uid);
+        
+        console.log('ChapterDetail: handlePortalIntroComplete - Granting rewards to user:', currentUser.uid, { xpReward, ppReward });
+        
+        // Update both collections with atomic increments
+        await updateDoc(studentRef, {
+          xp: increment(xpReward),
+          powerPoints: increment(ppReward)
+        });
+        
+        await updateDoc(userRefForRewards, {
+          xp: increment(xpReward),
+          powerPoints: increment(ppReward)
+        });
+        
+        console.log('ChapterDetail: handlePortalIntroComplete - Rewards granted successfully');
+      }
+
+      // Show reward modal only on first completion
+      setRewardModalData({
+        challengeTitle: challenge.title,
+        rewards: challenge.rewards,
+        xpReward: xpReward,
+        ppReward: ppReward
+      });
+      setShowRewardModal(true);
+
+      // Refresh user progress to trigger re-render and unlock next challenge
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+        
+        // Force a small delay to ensure Firestore has propagated the changes
+        setTimeout(() => {
+          // Re-check user progress to ensure next challenge unlocks
+          getDoc(userRef).then(doc => {
+            if (doc.exists()) {
+              setUserProgress(doc.data());
+            }
+          });
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error completing portal intro challenge:', error);
+      alert('Error completing challenge. Please try again.');
+    }
+  };
+
+  const handleSquadUpStoryComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ch2-team-trial');
+      if (!challenge) return;
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      
+      // Check if challenge was already completed
+      const wasAlreadyCompleted = currentData.chapters?.[chapter.id]?.challenges?.['ch2-team-trial']?.isCompleted || 
+                                   currentData.chapters?.[chapter.id]?.challenges?.['ch2-team-trial']?.status === 'approved';
+      
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapter.id]: {
+          ...currentData.chapters?.[chapter.id],
+          challenges: {
+            ...currentData.chapters?.[chapter.id]?.challenges,
+            'ch2-team-trial': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              status: 'approved'
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Only apply rewards and show modal if challenge wasn't already completed
+      if (!wasAlreadyCompleted) {
+        // Use centralized reward granting service
+        const { grantChallengeRewards } = await import('../utils/challengeRewards');
+        
+        console.log('🎁 ChapterDetail: Granting rewards for Squad Up challenge:', {
+          challengeId: 'ch2-team-trial',
+          rewards: challenge.rewards
+        });
+        
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          'ch2-team-trial',
+          challenge.rewards,
+          challenge.title
+        );
+
+        if (rewardResult.success) {
+          if (rewardResult.alreadyClaimed) {
+            console.log('🎁 ChapterDetail: Rewards were already claimed previously');
+            // Still show modal but indicate rewards were already granted
+            setRewardModalData({
+              challengeTitle: challenge.title,
+              rewards: challenge.rewards,
+              xpReward: rewardResult.rewardsGranted.xp,
+              ppReward: rewardResult.rewardsGranted.pp
+            });
+            setShowRewardModal(true);
+          } else {
+            console.log('✅ ChapterDetail: Rewards granted successfully:', rewardResult.rewardsGranted);
+            
+            // Show reward modal with granted rewards
+            setRewardModalData({
+              challengeTitle: challenge.title,
+              rewards: challenge.rewards,
+              xpReward: rewardResult.rewardsGranted.xp,
+              ppReward: rewardResult.rewardsGranted.pp
+            });
+            setShowRewardModal(true);
+          }
+        } else {
+          console.error('❌ ChapterDetail: Failed to grant rewards:', rewardResult.error);
+          alert(`Error granting rewards: ${rewardResult.error}. Please try again.`);
+        }
+      }
+
+      // Refresh user progress to trigger re-render and unlock next challenge
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+        
+        // Force a small delay to ensure Firestore has propagated the changes
+        setTimeout(() => {
+          // Re-check user progress to ensure next challenge unlocks
+          getDoc(userRef).then(doc => {
+            if (doc.exists()) {
+              setUserProgress(doc.data());
+            }
+          });
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error completing Squad Up story challenge:', error);
+      alert('Error completing challenge. Please try again.');
+    }
+  };
+
+  const handleSonidoTransmissionComplete = async () => {
+    if (!currentUser) {
+      console.error('❌ ChapterDetail: handleSonidoTransmissionComplete called but currentUser is null');
+      return;
+    }
+
+    console.log('🎯 ChapterDetail: handleSonidoTransmissionComplete called', {
+      userId: currentUser.uid,
+      chapterId: chapter.id,
+      challengeId: 'ep2-its-all-a-game'
+    });
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ep2-its-all-a-game');
+      if (!challenge) {
+        console.error('❌ ChapterDetail: Challenge ep2-its-all-a-game not found in chapter challenges');
+        return;
+      }
+
+      // Verify that a battle was actually won by checking for a recent victory battle room
+      // Look for battle rooms with challengeId 'ep2-its-all-a-game' and status 'victory'
+      console.log('🔍 ChapterDetail: Querying for battle victory...', {
+        challengeId: 'ep2-its-all-a-game',
+        userId: currentUser.uid
+      });
+      
+      const battleRoomsRef = collection(db, 'islandRaidBattleRooms');
+      const battleRoomsQuery = query(
+        battleRoomsRef,
+        where('challengeId', '==', 'ep2-its-all-a-game'),
+        where('players', 'array-contains', currentUser.uid),
+        where('status', '==', 'victory')
+      );
+      const battleRoomsSnapshot = await getDocs(battleRoomsQuery);
+      
+      console.log('📊 ChapterDetail: Found battle rooms:', battleRoomsSnapshot.docs.length);
+      
+      // Check if there's a recent victory (within last 24 hours) with all 4 waves completed
+      // AND all enemies in the final wave are actually defeated (final boss defeated)
+      const recentVictory = battleRoomsSnapshot.docs.find(doc => {
+        const data = doc.data();
+        const waveNumber = data.waveNumber || 0;
+        const maxWaves = data.maxWaves || 4;
+        const createdAt = data.createdAt?.toDate();
+        const isRecent = createdAt && (Date.now() - createdAt.getTime()) < 24 * 60 * 60 * 1000; // 24 hours
+        
+        console.log('🔍 ChapterDetail: Checking battle room:', {
+          docId: doc.id,
+          waveNumber,
+          maxWaves,
+          isRecent,
+          createdAt: createdAt?.toISOString()
+        });
+        
+        // Must be on or past the final wave
+        if (waveNumber < maxWaves || !isRecent) {
+          return false;
+        }
+        
+        // CRITICAL: Verify that all enemies in the final wave are actually defeated
+        // The final boss must be defeated, not just Wave 4 started
+        const enemies = data.enemies || [];
+        const allEnemiesDefeated = enemies.length === 0 || enemies.every((enemy: any) => {
+          // Check health (vaultHealth for Island Raid, or health/currentPP as fallback)
+          const health = enemy.vaultHealth !== undefined 
+            ? Math.max(0, Number(enemy.vaultHealth))
+            : (enemy.health !== undefined 
+              ? Math.max(0, Number(enemy.health))
+              : (enemy.currentPP !== undefined ? Math.max(0, Number(enemy.currentPP)) : 0));
+          // Check shield
+          const shield = enemy.shieldStrength !== undefined 
+            ? Math.max(0, Number(enemy.shieldStrength))
+            : 0;
+          // Enemy is defeated if both health and shield are 0
+          return health <= 0 && shield <= 0;
+        });
+        
+        console.log('🔍 ChapterDetail: Battle room check result:', {
+          docId: doc.id,
+          waveNumber,
+          maxWaves,
+          allEnemiesDefeated,
+          enemiesCount: enemies.length
+        });
+        
+        // Only return true if we're on the final wave AND all enemies are defeated
+        return waveNumber >= maxWaves && allEnemiesDefeated;
+      });
+
+      // Only complete if there's a verified victory
+      if (!recentVictory) {
+        console.warn('⚠️ ChapterDetail: No verified battle victory found for ep2-its-all-a-game. Challenge will not be marked as complete.', {
+          totalBattleRooms: battleRoomsSnapshot.docs.length,
+          checkedRooms: battleRoomsSnapshot.docs.map(d => ({
+            id: d.id,
+            waveNumber: d.data().waveNumber,
+            maxWaves: d.data().maxWaves,
+            status: d.data().status
+          }))
+        });
+        return; // Don't complete the challenge if battle wasn't actually won
+      }
+
+      console.log('✅ ChapterDetail: Verified battle victory found!', {
+        battleRoomId: recentVictory.id,
+        waveNumber: recentVictory.data().waveNumber,
+        maxWaves: recentVictory.data().maxWaves
+      });
+
+      // Get the candy choice from the battle room
+      const battleRoomData = recentVictory.data();
+      const candyChoice = battleRoomData.candyChoice || 'on-off'; // Default to on-off if not found
+
+      console.log('📝 ChapterDetail: Writing completion to Firestore...', {
+        userId: currentUser.uid,
+        chapterId: chapter.id,
+        challengeId: 'ep2-its-all-a-game',
+        candyChoice
+      });
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      
+      // Check if challenge was already completed
+      const wasAlreadyCompleted = currentData.chapters?.[chapter.id]?.challenges?.['ep2-its-all-a-game']?.isCompleted || 
+                                   currentData.chapters?.[chapter.id]?.challenges?.['ep2-its-all-a-game']?.status === 'approved';
+      
+      console.log('📊 ChapterDetail: Current completion status:', {
+        wasAlreadyCompleted,
+        currentChallengeData: currentData.chapters?.[chapter.id]?.challenges?.['ep2-its-all-a-game']
+      });
+      
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapter.id]: {
+          ...currentData.chapters?.[chapter.id],
+          challenges: {
+            ...currentData.chapters?.[chapter.id]?.challenges,
+            'ep2-its-all-a-game': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              status: 'approved',
+              candyChoice: candyChoice // Store the candy choice
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+      
+      // Verify the write succeeded
+      const verifyDoc = await getDoc(userRef);
+      if (verifyDoc.exists()) {
+        const verifyData = verifyDoc.data();
+        const verifyChallenge = verifyData.chapters?.[chapter.id]?.challenges?.['ep2-its-all-a-game'];
+        console.log('✅ ChapterDetail: Completion write verified!', {
+          isCompleted: verifyChallenge?.isCompleted,
+          status: verifyChallenge?.status,
+          candyChoice: verifyChallenge?.candyChoice
+        });
+      } else {
+        console.error('❌ ChapterDetail: User document not found after write!');
+      }
+
+      // Only apply rewards and show modal if challenge wasn't already completed
+      if (!wasAlreadyCompleted) {
+        // Use centralized reward granting service
+        const { grantChallengeRewards } = await import('../utils/challengeRewards');
+        
+        console.log('🎁 ChapterDetail: Granting rewards for Sonido Transmission challenge:', {
+          challengeId: 'ep2-its-all-a-game',
+          rewards: challenge.rewards
+        });
+        
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          'ep2-its-all-a-game',
+          challenge.rewards,
+          challenge.title
+        );
+
+        if (rewardResult.success) {
+          if (rewardResult.alreadyClaimed) {
+            console.log('🎁 ChapterDetail: Rewards were already claimed previously');
+            setRewardModalData({
+              challengeTitle: challenge.title,
+              rewards: challenge.rewards,
+              xpReward: rewardResult.rewardsGranted.xp,
+              ppReward: rewardResult.rewardsGranted.pp
+            });
+            setShowRewardModal(true);
+          } else {
+            console.log('✅ ChapterDetail: Rewards granted successfully:', rewardResult.rewardsGranted);
+            
+            // Handle ability rewards separately (not in centralized service yet)
+            const abilityRewards = challenge.rewards.filter(r => r.type === 'ability');
+            if (abilityRewards.length > 0) {
+              const userRefForRewards = doc(db, 'users', currentUser.uid);
+              const currentAbilities = currentData.abilities || {};
+              const updatedAbilities = { ...currentAbilities };
+              abilityRewards.forEach(abilityReward => {
+                const abilityId = abilityReward.value;
+                updatedAbilities[abilityId] = true;
+              });
+              
+              await updateDoc(userRefForRewards, {
+                abilities: updatedAbilities
+              });
+            }
+            
+            // Show reward modal with granted rewards
+            setRewardModalData({
+              challengeTitle: challenge.title,
+              rewards: challenge.rewards,
+              xpReward: rewardResult.rewardsGranted.xp,
+              ppReward: rewardResult.rewardsGranted.pp
+            });
+            setShowRewardModal(true);
+          }
+        } else {
+          console.error('❌ ChapterDetail: Failed to grant rewards:', rewardResult.error);
+          alert(`Error granting rewards: ${rewardResult.error}. Please try again.`);
+        }
+      }
+
+      // Refresh user progress to trigger re-render and unlock next challenge
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+        
+        // Force a small delay to ensure Firestore has propagated the changes
+        setTimeout(() => {
+          // Re-check user progress to ensure next challenge unlocks
+          getDoc(userRef).then(doc => {
+            if (doc.exists()) {
+              setUserProgress(doc.data());
+            }
+          });
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error completing Sonido transmission challenge:', error);
+      alert('Error completing challenge. Please try again.');
+    }
+  };
+
+  const handleResetChapter24 = async () => {
+    if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
+    if (!window.confirm('Are you sure you want to reset Chapter 2-4? This will mark it as incomplete.')) {
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        // Reset the challenge progress
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [chapter.id]: {
+            ...(userData.chapters?.[chapter.id] || {}),
+            challenges: {
+              ...(userData.chapters?.[chapter.id]?.challenges || {}),
+              'ep2-its-all-a-game': {
+                isCompleted: false
+              }
+            }
+          }
+        };
+
+        await updateDoc(userRef, {
+          chapters: updatedChapters,
+          // Use dot notation to delete specific fields
+          'chapters.2.challenges.ep2-its-all-a-game.status': deleteField(),
+          'chapters.2.challenges.ep2-its-all-a-game.completedAt': deleteField(),
+          'chapters.2.challenges.ep2-its-all-a-game.completedBy': deleteField()
+        });
+      }
+
+      // Refresh user progress immediately
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+      }
+
+      alert('✅ Chapter 2-4 has been reset! The challenge should now appear as incomplete.');
+    } catch (error) {
+      console.error('Error resetting Chapter 2-4:', error);
+      alert('Error resetting challenge. Please try again.');
+    }
+  };
+
+  const handleTimuIslandStoryComplete = async () => {
+    if (!currentUser) return;
+
+    try {
+      const challenge = chapter.challenges.find(c => c.id === 'ch2-rival-selection');
+      if (!challenge) return;
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const currentData = userProgress || {};
+      
+      // Check if challenge was already completed
+      const wasAlreadyCompleted = currentData.chapters?.[chapter.id]?.challenges?.['ch2-rival-selection']?.isCompleted || 
+                                   currentData.chapters?.[chapter.id]?.challenges?.['ch2-rival-selection']?.status === 'approved';
+      
+      const updatedChapters = {
+        ...currentData.chapters,
+        [chapter.id]: {
+          ...currentData.chapters?.[chapter.id],
+          challenges: {
+            ...currentData.chapters?.[chapter.id]?.challenges,
+            'ch2-rival-selection': {
+              isCompleted: true,
+              completedAt: serverTimestamp(),
+              status: 'approved'
+            }
+          }
+        }
+      };
+
+      await updateDoc(userRef, {
+        chapters: updatedChapters
+      });
+
+      // Only apply rewards and show modal if challenge wasn't already completed
+      if (!wasAlreadyCompleted) {
+        // Apply rewards
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+
+        if (xpReward > 0 || ppReward > 0) {
+          const studentRef = doc(db, 'students', currentUser.uid);
+          const userRefForRewards = doc(db, 'users', currentUser.uid);
+          
+          // Update both collections with atomic increments
+          await updateDoc(studentRef, {
+            xp: increment(xpReward),
+            powerPoints: increment(ppReward)
+          });
+          
+          await updateDoc(userRefForRewards, {
+            xp: increment(xpReward),
+            powerPoints: increment(ppReward)
+          });
+        }
+
+        // Show reward modal only on first completion
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward: xpReward,
+          ppReward: ppReward
+        });
+        setShowRewardModal(true);
+      }
+
+      // Refresh user progress to trigger re-render and unlock next challenge
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+        
+        // Force a small delay to ensure Firestore has propagated the changes
+        setTimeout(() => {
+          // Re-check user progress to ensure next challenge unlocks
+          getDoc(userRef).then(doc => {
+            if (doc.exists()) {
+              setUserProgress(doc.data());
+            }
+          });
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error completing Timu Island story challenge:', error);
+      alert('Error completing challenge. Please try again.');
+    }
+  };
+
   const handleChallengeComplete = async (challenge: ChapterChallenge) => {
     if (!currentUser) return;
 
@@ -2442,130 +3375,123 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  const toggleChallenge = (challengeId: string) => {
+    setExpandedChallenges(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(challengeId)) {
+        newSet.delete(challengeId);
+      } else {
+        newSet.add(challengeId);
+      }
+      return newSet;
+    });
+  };
 
-  const renderChallenges = () => (
-    <div className="space-y-6">
-      <h3 style={{ 
-        fontSize: '1.5rem', 
-        fontWeight: 'bold', 
-        color: '#374151',
-        marginBottom: '1.5rem',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.5rem'
-      }}>
-        <span style={{ fontSize: '1.75rem' }}>⚔️</span>
-        Chapter Challenges
-      </h3>
-      
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
-        {chapter.challenges.map((challenge, index) => {
-          const status = getChallengeStatus(challenge);
-          const challengeNumber = index + 1;
-          
-          const getStatusColor = () => {
-            switch (status) {
-              case 'completed': return { bg: '#dcfce7', border: '#22c55e', text: '#166534' };
-              case 'pending': return { bg: '#fef3c7', border: '#f59e0b', text: '#92400e' };
-              case 'available': return { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' };
-              default: return { bg: '#f3f4f6', border: '#d1d5db', text: '#6b7280' };
-            }
-          };
-          
-          const colors = getStatusColor();
-          
-          return (
-            <div
-              key={challenge.id}
-              style={{
-                background: colors.bg,
-                border: `2px solid ${colors.border}`,
-                borderRadius: '1rem',
-                padding: '1.5rem',
-                boxShadow: '0 4px 6px rgba(0,0,0,0.05)',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                <div style={{ flex: 1 }}>
-                  <h4 style={{ 
-                    fontSize: '1.125rem', 
-                    fontWeight: 'bold', 
-                    color: '#000000',
-                    marginBottom: '0.5rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}>
-                    <span style={{
-                      backgroundColor: colors.border,
-                      color: 'white',
-                      borderRadius: '50%',
-                      width: '24px',
-                      height: '24px',
+  const renderChallenges = () => {
+    return (
+      <div className="space-y-6">
+        <h2 style={{ 
+          fontSize: '2rem', 
+          fontWeight: 'bold', 
+          color: '#1f2937',
+          marginBottom: '1rem'
+        }}>
+          Chapter {chapter.id} Challenges
+        </h2>
+        
+        <div style={{
+          marginBottom: '2rem',
+          padding: '1rem',
+          backgroundColor: '#f9fafb',
+          borderRadius: '0.5rem',
+          border: '1px solid #e5e7eb'
+        }}>
+          <h3 style={{ 
+            fontSize: '1rem', 
+            fontWeight: '600',
+            color: '#6b7280',
+            marginBottom: '0.5rem'
+          }}>
+            Description
+          </h3>
+          <p style={{ 
+            fontSize: '0.875rem', 
+            color: '#374151',
+            lineHeight: '1.6'
+          }}>
+            {chapter.description}
+          </p>
+        </div>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {chapter.challenges.map((challenge, index) => {
+            const status = getChallengeStatus(challenge);
+            const challengeNumber = index + 1;
+            const isExpanded = expandedChallenges.has(challenge.id);
+            const isLocked = status === 'locked';
+            const isCompleted = status === 'completed';
+            
+            // Get XP and PP rewards
+            const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+            const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+            
+            return (
+              <div
+                key={challenge.id}
+                style={{
+                  background: isLocked ? '#f3f4f6' : isCompleted ? '#f0fdf4' : '#ffffff',
+                  border: `2px solid ${isLocked ? '#d1d5db' : isCompleted ? '#86efac' : '#e5e7eb'}`,
+                  borderRadius: '0.5rem',
+                  padding: '1rem',
+                  boxShadow: isCompleted ? '0 2px 8px rgba(16, 185, 129, 0.15)' : '0 2px 4px rgba(0,0,0,0.05)',
+                  transition: 'all 0.2s ease',
+                  cursor: isLocked ? 'not-allowed' : 'pointer',
+                  position: 'relative'
+                }}
+                onClick={() => !isLocked && toggleChallenge(challenge.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1 }}>
+                    <h4 style={{ 
+                      fontSize: '1.125rem', 
+                      fontWeight: 'bold', 
+                      color: isLocked ? '#9ca3af' : isCompleted ? '#047857' : '#1f2937',
+                      margin: 0,
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '0.875rem',
-                      fontWeight: 'bold'
+                      gap: '0.5rem'
                     }}>
-                      {challengeNumber}
-                    </span>
-                    {challenge.title}
-                  </h4>
-                  <p style={{ 
-                    fontSize: '0.875rem', 
-                    color: '#374151',
-                    lineHeight: '1.5'
-                  }}>
-                    {challenge.description}
-                  </p>
-                </div>
-                <span style={{
-                  fontSize: '0.75rem',
-                  padding: '0.25rem 0.75rem',
-                  borderRadius: '9999px',
-                  background: colors.border,
-                  color: 'white',
-                  fontWeight: 'bold',
-                  whiteSpace: 'nowrap'
-                }}>
-                  {status === 'completed' ? '✅ Completed' : 
-                   status === 'pending' ? '⏳ Pending' : 
-                   status === 'available' ? '🔓 Available' : '🔒 Locked'}
-                </span>
-              </div>
-
-              {/* Rewards Preview */}
-              {challenge.rewards && challenge.rewards.length > 0 && (
-                <div style={{
-                  marginTop: '1rem',
-                  padding: '0.75rem',
-                  backgroundColor: '#f0f9ff',
-                  border: '1px solid #0ea5e9',
-                  borderRadius: '0.5rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  flexWrap: 'wrap'
-                }}>
-                  <div style={{
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold',
-                    color: '#0c4a6e',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.25rem'
-                  }}>
-                    🎁 Rewards:
+                      {isCompleted && (
+                        <span style={{
+                          fontSize: '1rem',
+                          color: '#10b981'
+                        }}>
+                          ✓
+                        </span>
+                      )}
+                      Chapter {chapter.id}-{challengeNumber}: {challenge.title}
+                    </h4>
+                    {isLocked && (
+                      <span style={{
+                        fontSize: '0.875rem',
+                        color: '#9ca3af',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem'
+                      }}>
+                        🔒 Locked
+                      </span>
+                    )}
                   </div>
-                  {challenge.rewards.map((reward, rewardIndex) => {
-                    if (reward.type === 'xp') {
-                      return (
-                        <div key={rewardIndex} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
+                  {!isLocked && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '1rem'
+                    }}>
+                      {/* Rewards Preview */}
+                      {xpReward > 0 && (
+                        <div style={{
                           padding: '0.25rem 0.5rem',
                           backgroundColor: '#dbeafe',
                           borderRadius: '0.25rem',
@@ -2573,16 +3499,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                           fontWeight: '600',
                           color: '#1e40af'
                         }}>
-                          <span>⭐</span>
-                          <span>{reward.value} XP</span>
+                          {xpReward}XP
                         </div>
-                      );
-                    } else if (reward.type === 'pp') {
-                      return (
-                        <div key={rewardIndex} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
+                      )}
+                      {ppReward > 0 && (
+                        <div style={{
                           padding: '0.25rem 0.5rem',
                           backgroundColor: '#fef3c7',
                           borderRadius: '0.25rem',
@@ -2590,714 +3511,665 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                           fontWeight: '600',
                           color: '#92400e'
                         }}>
-                          <span>💰</span>
-                          <span>{reward.value} PP</span>
+                          {ppReward}PP
                         </div>
-                      );
-                    } else if (reward.type === 'truthMetal') {
-                      return (
-                        <div key={rewardIndex} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                          padding: '0.25rem 0.5rem',
-                          backgroundColor: '#fef2f2',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: '#991b1b'
-                        }}>
-                          <span>💎</span>
-                          <span>{reward.value} Truth Metal</span>
-                        </div>
-                      );
-                    } else if (reward.type === 'artifact') {
-                      // Display artifact rewards with a nice format
-                      const artifactName = reward.description || reward.value;
-                      return (
-                        <div key={rewardIndex} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                          padding: '0.25rem 0.5rem',
-                          backgroundColor: '#f3e8ff',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: '#7c3aed'
-                        }}>
-                          <span>💍</span>
-                          <span>{artifactName}</span>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-                </div>
-              )}
-
-                          {/* CPU Battle section for Test Awakened Abilities challenge */}
-                          {status === 'available' && challenge.id === 'ep1-manifest-test' && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                style={{ 
-                                  padding: '0.75rem 1.5rem', 
-                                  background: '#dc2626', 
-                                  color: 'white', 
-                                  border: 'none', 
-                                  borderRadius: '0.5rem', 
-                                  cursor: 'pointer',
-                                  fontWeight: 'bold',
-                                  fontSize: '0.875rem',
-                                  transition: 'all 0.2s ease'
-                                }}
-                                onClick={() => {
-                                  setCompletingChallenge('ep1-manifest-test');
-                                  setIsReplayMode(false);
-                                  setShowCPUBattleModal(true);
-                                }}
-                                onMouseOver={(e) => {
-                                  e.currentTarget.style.background = '#b91c1c';
-                                  e.currentTarget.style.transform = 'translateY(-2px)';
-                                }}
-                                onMouseOut={(e) => {
-                                  e.currentTarget.style.background = '#dc2626';
-                                  e.currentTarget.style.transform = 'translateY(0)';
-                                }}
-                              >
-                                ⚔️ Battle CPU Challenger
-                              </button>
-                              <div style={{
-                                padding: '0.75rem',
-                                backgroundColor: '#fef3c7',
-                                border: '1px solid #f59e0b',
-                                borderRadius: '0.25rem',
-                                fontSize: '0.8rem',
-                                color: '#92400e',
-                                maxWidth: '300px'
-                              }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                                  💡 Battle Instructions
-                                </div>
-                                <div>
-                                  Test your awakened abilities against a CPU challenger using your Power Card moves. Victory will complete this challenge!
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Special case for Get Letter challenge */}
-                          {status === 'available' && challenge.id === 'ep1-get-letter' && (
-                            <button
-                              onClick={() => setShowLetterModal(true)}
-                              style={{
-                                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-                                color: 'white',
-                                padding: '0.75rem 1.5rem',
-                                borderRadius: '0.5rem',
-                                border: 'none',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
-                                boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>📬</span>
-                              View Letter
-                            </button>
-                          )}
-
-                          {/* Truth Metal Choice special button */}
-                          {status === 'available' && challenge.id === 'ep1-truth-metal-choice' && (
-                            <button
-                              onClick={() => setShowTruthMetalModal(true)}
-                              style={{
-                                background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
-                                color: 'white',
-                                padding: '0.75rem 1.5rem',
-                                borderRadius: '0.5rem',
-                                border: 'none',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
-                                boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>⚡</span>
-                              Face the Truth Metal Choice
-                            </button>
-                          )}
-
-                          {/* Touch Truth Metal Challenge Button */}
-                          {status === 'available' && challenge.id === 'ep1-touch-truth-metal' && (
-                            <button
-                              onClick={() => setShowTruthMetalTouchModal(true)}
-                              style={{
-                                background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
-                                color: 'white',
-                                padding: '0.75rem 1.5rem',
-                                borderRadius: '0.5rem',
-                                border: 'none',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
-                                boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>⚡</span>
-                              Face Your Truth
-                            </button>
-                          )}
-
-                          {/* MST Interface Tutorial Challenge Button */}
-                          {status === 'available' && challenge.id === 'ep1-view-mst-ui' && (
-                            <button
-                              onClick={() => setShowMSTTutorial(true)}
-                              style={{
-                                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-                                color: 'white',
-                                padding: '0.75rem 1.5rem',
-                                borderRadius: '0.5rem',
-                                border: 'none',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
-                                boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>🎓</span>
-                              Start MST Tutorial
-                            </button>
-                          )}
-
-                          {/* Power Card Discovery Challenge Button */}
-                          {status === 'available' && challenge.id === 'ep1-power-card-intro' && (
-                            <button
-                              onClick={async (e) => {
-                                e.preventDefault();
-                                // Mark challenge as completed before navigating (without showing modal)
-                                try {
-                                  await handleAutoCompleteChallenge(challenge, false);
-                                  // Small delay to ensure Firestore update completes
-                                  await new Promise(resolve => setTimeout(resolve, 200));
-                                  // Navigate to profile page
-                                  navigate('/profile');
-                                } catch (error) {
-                                  console.error('Error completing Power Card challenge:', error);
-                                  // Still navigate even if there's an error
-                                  navigate('/profile');
-                                }
-                              }}
-                              style={{
-                                background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-                                color: 'white',
-                                border: '3px solid #d97706',
-                                borderRadius: '0.75rem',
-                                padding: '1rem',
-                                fontSize: '1rem',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(251, 191, 36, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(251, 191, 36, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>🎴</span>
-                              Update Your Power Card
-                            </button>
-                          )}
-
-                          {/* Portal Sequence Challenge Button */}
-                          {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
-                            <button
-                              onClick={() => setShowHelaBattle(true)}
-                              style={{
-                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                                color: 'white',
-                                border: '3px solid #5a67d8',
-                                borderRadius: '0.75rem',
-                                padding: '1rem',
-                                fontSize: '1rem',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(102, 126, 234, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(102, 126, 234, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>🚇</span>
-                              Journey to Xiotein
-                            </button>
-                          )}
-
-                          {/* Combat Drill Challenge Button */}
-                          {status === 'available' && challenge.id === 'ep1-combat-drill' && (
-                            <button
-                              onClick={() => {
-                                setCompletingChallenge('ep1-combat-drill');
-                                setIsReplayMode(false);
-                                setShowCPUBattleModal(true);
-                              }}
-                              style={{
-                                background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                                color: 'white',
-                                border: '3px solid #b91c1c',
-                                borderRadius: '0.75rem',
-                                padding: '1rem',
-                                fontSize: '1rem',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '100%'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(239, 68, 68, 0.4)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(239, 68, 68, 0.3)';
-                              }}
-                            >
-                              <span style={{ marginRight: '0.5rem' }}>⚔️</span>
-                              Start Combat Drill
-                            </button>
-                          )}
-
-                          {/* Hela Awakened Challenge Button */}
-                          {challenge.id === 'ep1-update-profile' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                              {status === 'available' && (
-                                <button
-                                  onClick={() => {
-                                    setCompletingChallenge('ep1-update-profile');
-                                    setShowHelaBattle(true);
-                                  }}
-                                  style={{
-                                    background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
-                                    color: 'white',
-                                    border: '3px solid #7f1d1d',
-                                    borderRadius: '0.75rem',
-                                    padding: '1rem',
-                                    fontSize: '1rem',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '100%'
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(220, 38, 38, 0.4)';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(220, 38, 38, 0.3)';
-                                  }}
-                                >
-                                  <span style={{ marginRight: '0.5rem' }}>❄️</span>
-                                  Face Hela Awakened
-                                </button>
-                              )}
-                              {/* Replay button (only show if completed) */}
-                              {status === 'completed' && (
-                                <button
-                                  onClick={() => {
-                                    setIsReplayMode(true);
-                                    setCompletingChallenge('ep1-update-profile');
-                                    setShowHelaBattle(true);
-                                  }}
-                                  style={{
-                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '0.5rem',
-                                    padding: '0.75rem 1.5rem',
-                                    fontSize: '0.875rem',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s ease',
-                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '100%'
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                                  }}
-                                >
-                                  <span style={{ marginRight: '0.5rem' }}>🔄</span>
-                                  Replay Challenge
-                                </button>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Challenge 8: Artifacts and Elements */}
-                          {challenge.id === 'ep1-view-power-card' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                              {status === 'available' && (
-                                <button
-                                  onClick={() => setShowIcyDeathCutscene(true)}
-                                  style={{
-                                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                                    color: 'white',
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '0.5rem',
-                                    border: 'none',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s ease',
-                                    boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '100%'
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.4)';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(59, 130, 246, 0.3)';
-                                  }}
-                                >
-                                  <span style={{ marginRight: '0.5rem' }}>➡️</span>
-                                  Next
-                                </button>
-                              )}
-                              {/* Replay and Reset buttons (only show if completed) */}
-                              {status === 'completed' && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setIsReplayMode(true);
-                                      setShowIcyDeathCutscene(true);
-                                    }}
-                                    style={{
-                                      background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
-                                      color: 'white',
-                                      border: 'none',
-                                      borderRadius: '0.5rem',
-                                      padding: '0.75rem 1.5rem',
-                                      fontSize: '0.875rem',
-                                      fontWeight: 'bold',
-                                      cursor: 'pointer',
-                                      transition: 'all 0.2s ease',
-                                      boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      width: '100%'
-                                    }}
-                                    onMouseOver={(e) => {
-                                      e.currentTarget.style.transform = 'translateY(-2px)';
-                                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                                    }}
-                                    onMouseOut={(e) => {
-                                      e.currentTarget.style.transform = 'translateY(0)';
-                                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                                    }}
-                                  >
-                                    <span style={{ marginRight: '0.5rem' }}>🔄</span>
-                                    Replay Challenge
-                                  </button>
-                                  <button
-                                    onClick={resetChallenge8}
-                                    style={{
-                                      background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                                      color: 'white',
-                                      border: 'none',
-                                      borderRadius: '0.5rem',
-                                      padding: '0.75rem 1.5rem',
-                                      fontSize: '0.875rem',
-                                      fontWeight: 'bold',
-                                      cursor: 'pointer',
-                                      transition: 'all 0.2s ease',
-                                      boxShadow: '0 2px 4px rgba(245, 158, 11, 0.3)',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      width: '100%'
-                                    }}
-                                    onMouseOver={(e) => {
-                                      e.currentTarget.style.transform = 'translateY(-2px)';
-                                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(245, 158, 11, 0.4)';
-                                    }}
-                                    onMouseOut={(e) => {
-                                      e.currentTarget.style.transform = 'translateY(0)';
-                                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(245, 158, 11, 0.3)';
-                                    }}
-                                  >
-                                    <span style={{ marginRight: '0.5rem' }}>🔄</span>
-                                    Reset Challenge (Redo Updated Version)
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Challenge 9: Where it all started */}
-                          {challenge.id === 'ep1-where-it-started' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                              {status === 'available' && (
-                                <button
-                                  onClick={() => setShowZekeEndsBattleCutscene(true)}
-                                  style={{
-                                    background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
-                                    color: 'white',
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '0.5rem',
-                                    border: 'none',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s ease',
-                                    boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '100%'
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(-2px)';
-                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                                  }}
-                                >
-                                  <span style={{ marginRight: '0.5rem' }}>🎬</span>
-                                  Begin Final Challenge
-                                </button>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Regular submit button for other challenges */}
-                          {status === 'available' && challenge.id !== 'ep1-portal-sequence' && challenge.id !== 'ep1-manifest-test' && challenge.id !== 'ep1-get-letter' && challenge.id !== 'ep1-truth-metal-choice' && challenge.id !== 'ep1-touch-truth-metal' && challenge.id !== 'ep1-view-mst-ui' && challenge.id !== 'ep1-power-card-intro' && challenge.id !== 'ep1-combat-drill' && challenge.id !== 'ep1-update-profile' && challenge.id !== 'ep1-view-power-card' && challenge.id !== 'ep1-where-it-started' && !(challenge.type === 'team' && challenge.requirements.length === 0) && (
-              <button
-                onClick={() => handleChallengeComplete(challenge)}
-                disabled={completingChallenge === challenge.id}
-                style={{
-                  background: completingChallenge === challenge.id 
-                    ? 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)'
-                    : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                  color: 'white',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  border: 'none',
-                  fontWeight: 'bold',
-                  cursor: completingChallenge === challenge.id ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s ease',
-                  boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
-                  opacity: completingChallenge === challenge.id ? 0.7 : 1
-                }}
-                onMouseOver={(e) => {
-                  if (completingChallenge !== challenge.id) {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.4)';
-                  }
-                }}
-                onMouseOut={(e) => {
-                  if (completingChallenge !== challenge.id) {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(59, 130, 246, 0.3)';
-                  }
-                }}
-              >
-                {completingChallenge === challenge.id ? (
-                  <>
-                    <span style={{ marginRight: '0.5rem' }}>⏳</span>
-                    Submitting...
-                  </>
-                ) : (
-                  <>
-                    <span style={{ marginRight: '0.5rem' }}>🎯</span>
-                    Submit for Approval
-                  </>
-                )}
-              </button>
-            )}
-
-            {status === 'available' && challenge.type === 'team' && challenge.requirements.length === 0 && (
-              <div style={{
-                background: 'rgba(59, 130, 246, 0.1)',
-                border: '1px solid #3b82f6',
-                borderRadius: '0.5rem',
-                padding: '0.75rem',
-                color: '#1e40af',
-                fontSize: '0.875rem',
-                fontWeight: 'bold'
-              }}>
-                🔄 This challenge will be completed automatically when you join a team.
-              </div>
-            )}
-
-            {status === 'pending' && (
-              <div style={{
-                background: 'rgba(245, 158, 11, 0.1)',
-                border: '1px solid #f59e0b',
-                borderRadius: '0.5rem',
-                padding: '0.75rem',
-                color: '#92400e',
-                fontSize: '0.875rem',
-                fontWeight: 'bold'
-              }}>
-                ⏳ Submitted for admin approval. You'll be notified when it's reviewed.
-              </div>
-            )}
-
-              {status === 'completed' && (
-                <div>
-                  <div style={{
-                    background: 'rgba(34, 197, 94, 0.1)',
-                    border: '1px solid #22c55e',
-                    borderRadius: '0.5rem',
-                    padding: '0.75rem',
-                    color: '#166534',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold',
-                    marginBottom: '0.5rem'
-                  }}>
-                    ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
-                  </div>
-                  
-                  {/* Replay Button for Battle Challenges */}
-                  {(challenge.id === 'ep1-touch-truth-metal' || challenge.id === 'ep1-manifest-test' || challenge.id === 'ep1-portal-sequence' || challenge.id === 'ep1-combat-drill') && (
-                    <button
-                      onClick={() => {
-                        setIsReplayMode(true);
-                        if (challenge.id === 'ep1-touch-truth-metal') {
-                          setShowTruthMetalTouchModal(true);
-                        } else if (challenge.id === 'ep1-manifest-test') {
-                          setShowCPUBattleModal(true);
-                        } else if (challenge.id === 'ep1-portal-sequence') {
-                          setShowHelaBattle(true);
-                        } else if (challenge.id === 'ep1-combat-drill') {
-                          setCompletingChallenge('ep1-combat-drill');
-                          setShowCPUBattleModal(true);
-                        }
-                      }}
-                      style={{
-                        background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
-                        color: 'white',
-                        padding: '0.5rem 1rem',
-                        borderRadius: '0.5rem',
-                        border: 'none',
-                        fontWeight: 'bold',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                        fontSize: '0.875rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.5rem',
-                        width: '100%'
-                      }}
-                      onMouseOver={(e) => {
-                        e.currentTarget.style.transform = 'translateY(-2px)';
-                        e.currentTarget.style.boxShadow = '0 4px 8px rgba(139, 92, 246, 0.4)';
-                      }}
-                      onMouseOut={(e) => {
-                        e.currentTarget.style.transform = 'translateY(0)';
-                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(139, 92, 246, 0.3)';
-                      }}
-                    >
-                      <span>🔄</span>
-                      Replay Battle
-                    </button>
+                      )}
+                      <span style={{
+                        fontSize: '1.25rem',
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.2s ease'
+                      }}>
+                        ▼
+                      </span>
+                    </div>
                   )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+                
+                {/* Completion Status Bar */}
+                {isCompleted && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    backgroundColor: '#d1fae5',
+                    borderRadius: '0.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    fontSize: '0.875rem',
+                    color: '#047857',
+                    fontWeight: '500'
+                  }}>
+                    <span style={{ fontSize: '1rem' }}>✓</span>
+                    <span>Completed</span>
+                    {(() => {
+                      const chapterProgress = userProgress?.chapters?.[chapter.id];
+                      const challengeProgress = chapterProgress?.challenges?.[challenge.id];
+                      const completedAt = challengeProgress?.completedAt;
+                      if (completedAt) {
+                        const date = completedAt.toDate ? completedAt.toDate() : new Date(completedAt);
+                        return (
+                          <span style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.8 }}>
+                            on {date.toLocaleDateString()}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
+                
+                {/* Expanded Content */}
+                {isExpanded && !isLocked && (
+                  <div style={{
+                    marginTop: '1rem',
+                    paddingTop: '1rem',
+                    borderTop: '1px solid #e5e7eb',
+                    display: 'flex',
+                    gap: '1.5rem'
+                  }}>
+                    {/* Challenge Details */}
+                    <div style={{ flex: 1 }}>
+                      <p style={{ 
+                        fontSize: '0.875rem', 
+                        color: '#374151',
+                        lineHeight: '1.6',
+                        marginBottom: '1rem'
+                      }}>
+                        {challenge.description}
+                      </p>
+                      
+                      {/* All Rewards */}
+                      {challenge.rewards && challenge.rewards.length > 0 && (
+                        <div style={{
+                          marginTop: '1rem',
+                          padding: '0.75rem',
+                          backgroundColor: '#f0f9ff',
+                          border: '1px solid #0ea5e9',
+                          borderRadius: '0.5rem'
+                        }}>
+                          <div style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            color: '#0c4a6e',
+                            marginBottom: '0.5rem'
+                          }}>
+                            Rewards:
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            {challenge.rewards.map((reward, rewardIndex) => {
+                              if (reward.type === 'xp') {
+                                return (
+                                  <div key={rewardIndex} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    backgroundColor: '#dbeafe',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    color: '#1e40af'
+                                  }}>
+                                    <span>⭐</span>
+                                    <span>{reward.value} XP</span>
+                                  </div>
+                                );
+                              } else if (reward.type === 'pp') {
+                                return (
+                                  <div key={rewardIndex} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    backgroundColor: '#fef3c7',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    color: '#92400e'
+                                  }}>
+                                    <span>💰</span>
+                                    <span>{reward.value} PP</span>
+                                  </div>
+                                );
+                              } else if (reward.type === 'truthMetal') {
+                                return (
+                                  <div key={rewardIndex} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    backgroundColor: '#fef2f2',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    color: '#991b1b'
+                                  }}>
+                                    <span>💎</span>
+                                    <span>{reward.value} Truth Metal</span>
+                                  </div>
+                                );
+                              } else if (reward.type === 'artifact') {
+                                const artifactName = reward.description || reward.value;
+                                const artifactId = String(reward.value || '').toLowerCase();
+                                const artifactNameLower = String(artifactName || '').toLowerCase();
+                                // Use hat icon for Captain's Helmet, ring icon for other artifacts
+                                const artifactIcon = (artifactId.includes('captain') || artifactId.includes('helmet') || 
+                                                     artifactNameLower.includes('captain') || artifactNameLower.includes('helmet')) 
+                                                     ? '🪖' : '💍';
+                                return (
+                                  <div key={rewardIndex} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0.25rem 0.5rem',
+                                    backgroundColor: '#f3e8ff',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    color: '#7c3aed'
+                                  }}>
+                                    <span>{artifactIcon}</span>
+                                    <span>{artifactName}</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Challenge Action Buttons */}
+                      <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {/* CPU Battle for manifest test */}
+                        {status === 'available' && challenge.id === 'ep1-manifest-test' && (
+                          <button
+                            type="button"
+                            style={{ 
+                              padding: '0.75rem 1.5rem', 
+                              background: '#dc2626', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: '0.5rem', 
+                              cursor: 'pointer',
+                              fontWeight: 'bold',
+                              fontSize: '0.875rem',
+                              transition: 'all 0.2s ease'
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCompletingChallenge('ep1-manifest-test');
+                              setIsReplayMode(false);
+                              setShowCPUBattleModal(true);
+                            }}
+                          >
+                            ⚔️ Battle CPU Challenger
+                          </button>
+                        )}
+                        
+                        {/* Get Letter challenge */}
+                        {status === 'available' && challenge.id === 'ep1-get-letter' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowLetterModal(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>📬</span>
+                            View Letter
+                          </button>
+                        )}
+                        
+                        {/* Timu Island Story for Chapter 2-2 */}
+                        {challenge.id === 'ch2-rival-selection' && (
+                          <>
+                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowTimuIslandStoryModal(true);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                  color: 'white',
+                                  padding: '0.75rem 1.5rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  marginBottom: status === 'completed' ? '0.5rem' : '0'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>👥</span>
+                                Find a Home
+                              </button>
+                            )}
+                            {isAdmin() && status === 'completed' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  resetChapter2Challenge2();
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                  color: 'white',
+                                  padding: '0.5rem 1rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  fontSize: '0.875rem'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                Reset Challenge (Admin)
+                              </button>
+                            )}
+                          </>
+                        )}
+
+                        {/* Squad Up Story for Chapter 2-3 */}
+                        {challenge.id === 'ch2-team-trial' && (
+                          <>
+                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowSquadUpStoryModal(true);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                  color: 'white',
+                                  padding: '0.75rem 1.5rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  marginBottom: status === 'completed' ? '0.5rem' : '0'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>👥</span>
+                                Squad Up
+                              </button>
+                            )}
+                            {isAdmin() && status === 'completed' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  resetChapter2Challenge3();
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                  color: 'white',
+                                  padding: '0.5rem 1rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  fontSize: '0.875rem'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                Reset Challenge (Admin)
+                              </button>
+                            )}
+                          </>
+                        )}
+
+                        {/* Portal Intro Video for Chapter 2-1 */}
+                        {challenge.id === 'ch2-team-formation' && (
+                          <>
+                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowPortalIntroModal(true);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                  color: 'white',
+                                  padding: '0.75rem 1.5rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  marginBottom: status === 'completed' ? '0.5rem' : '0'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>🌀</span>
+                                Go through the Portal
+                              </button>
+                            )}
+                            {/* Reset button for testing (admin only) */}
+                            {isAdmin() && status === 'completed' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  resetChapter2Challenge1(false);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                  color: 'white',
+                                  padding: '0.5rem 1rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  fontSize: '0.875rem'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                Reset Challenge (Admin)
+                              </button>
+                            )}
+                          </>
+                        )}
+                        
+                        {/* Zeke Ends Battle Cutscene for Chapter 1-9 */}
+                        {status === 'available' && challenge.id === 'ep1-where-it-started' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowZekeEndsBattleCutscene(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🚇</span>
+                            Escape the Abandoned Subway
+                          </button>
+                        )}
+                        
+                        {/* Special button for "It's All a Game" challenge */}
+                        {status === 'available' && challenge.id === 'ep2-its-all-a-game' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowSonidoTransmissionModal(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>📡</span>
+                            Listen to transmission
+                          </button>
+                        )}
+                        
+                        {/* Reset button for Chapter 2-4 (ADMIN ONLY) */}
+                        {status === 'completed' && challenge.id === 'ep2-its-all-a-game' && isAdmin() && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleResetChapter24();
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                              color: 'white',
+                              padding: '0.5rem 1rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                              width: '100%',
+                              marginTop: '0.5rem',
+                              fontSize: '0.875rem'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                            Reset Challenge (Testing)
+                          </button>
+                        )}
+
+                        {/* Regular submit button for other challenges */}
+                        {/* Exclude all Chapter 2 challenges from showing "Submit for Approval" */}
+                        {status === 'available' && 
+                         challenge.id !== 'ep1-manifest-test' && 
+                         challenge.id !== 'ep1-get-letter' && 
+                         challenge.id !== 'ep1-truth-metal-choice' && 
+                         challenge.id !== 'ep1-touch-truth-metal' && 
+                         challenge.id !== 'ep1-view-mst-ui' && 
+                         challenge.id !== 'ep1-power-card-intro' && 
+                         challenge.id !== 'ep1-combat-drill' && 
+                         challenge.id !== 'ep1-update-profile' && 
+                         challenge.id !== 'ep1-view-power-card' && 
+                         challenge.id !== 'ep1-where-it-started' && 
+                         challenge.id !== 'ep1-portal-sequence' &&
+                         challenge.id !== 'ch2-team-formation' &&
+                         challenge.id !== 'ch2-rival-selection' &&
+                         challenge.id !== 'ep2-its-all-a-game' &&
+                         !challenge.id.startsWith('ch2-') &&
+                         !(challenge.type === 'team' && challenge.requirements.length === 0) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleChallengeComplete(challenge);
+                            }}
+                            disabled={completingChallenge === challenge.id}
+                            style={{
+                              background: completingChallenge === challenge.id 
+                                ? 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)'
+                                : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: completingChallenge === challenge.id ? 'not-allowed' : 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
+                              opacity: completingChallenge === challenge.id ? 0.7 : 1,
+                              width: '100%'
+                            }}
+                          >
+                            {completingChallenge === challenge.id ? (
+                              <>
+                                <span style={{ marginRight: '0.5rem' }}>⏳</span>
+                                Submitting...
+                              </>
+                            ) : (
+                              <>
+                                <span style={{ marginRight: '0.5rem' }}>🎯</span>
+                                Submit for Approval
+                              </>
+                            )}
+                          </button>
+                        )}
+                        
+                        {/* Team challenge auto-complete message */}
+                        {status === 'available' && challenge.type === 'team' && challenge.requirements.length === 0 && (
+                          <div style={{
+                            background: 'rgba(59, 130, 246, 0.1)',
+                            border: '1px solid #3b82f6',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem',
+                            color: '#1e40af',
+                            fontSize: '0.875rem',
+                            fontWeight: 'bold'
+                          }}>
+                            🔄 This challenge will be completed automatically when you join a team.
+                          </div>
+                        )}
+                        
+                        {/* Pending status */}
+                        {status === 'pending' && (
+                          <div style={{
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            border: '1px solid #f59e0b',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem',
+                            color: '#92400e',
+                            fontSize: '0.875rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ⏳ Submitted for admin approval. You'll be notified when it's reviewed.
+                          </div>
+                        )}
+                        
+                        {/* Completed status */}
+                        {status === 'completed' && (
+                          <div style={{
+                            background: 'rgba(34, 197, 94, 0.1)',
+                            border: '1px solid #22c55e',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem',
+                            color: '#166534',
+                            fontSize: '0.875rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Image Preview */}
+                    <div style={{
+                      width: '200px',
+                      height: '150px',
+                      backgroundColor: '#f3f4f6',
+                      border: '2px dashed #d1d5db',
+                      borderRadius: '0.5rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      overflow: 'hidden'
+                    }}>
+                      {challenge.id === 'ch2-team-formation' ? (
+                        <img 
+                          src="/images/Ch2-1 _ Preview_Timu Island.png" 
+                          alt="Timu Island Preview"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
+                      ) : challenge.id === 'ch2-rival-selection' ? (
+                        <img 
+                          src="/images/Ch2-2_Preview_Home.png" 
+                          alt="Find a Home Preview"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
+                      ) : challenge.id === 'ch2-team-trial' ? (
+                        <img 
+                          src="/images/Ch2-3_Preview_SquadUp.png" 
+                          alt="Squad Up Preview"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
+                      ) : challenge.id === 'ep2-its-all-a-game' ? (
+                        <img 
+                          src="/images/Ch2-4_Preview_RRCandy.png" 
+                          alt="It's All a Game Preview"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
+                      ) : (
+                        <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
+                          Image Preview
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderTeamSection = () => (
     <div className="space-y-4">
@@ -3881,69 +4753,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     </div>
   );
 
-  // Block access to Chapter 2 - show "Coming Soon" if Chapter 1 is completed
-  if (chapter.id === 2) {
-    const chapter1Completed = userProgress?.chapters?.[1]?.isCompleted;
-    
-    return (
-      <div style={{
-        padding: '2rem',
-        textAlign: 'center',
-        background: chapter1Completed 
-          ? 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)'
-          : 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
-        borderRadius: '1rem',
-        border: chapter1Completed 
-          ? '2px solid #f59e0b'
-          : '2px solid #e5e7eb'
-      }}>
-        {chapter1Completed ? (
-          <>
-            <h2 style={{ color: '#92400e', marginBottom: '1rem', fontSize: '2rem' }}>🚀 Coming Soon</h2>
-            <p style={{ color: '#78350f', marginBottom: '1.5rem', fontSize: '1.1rem', fontWeight: '500' }}>
-              Congratulations on completing Chapter 1! Chapter 2 is currently in development and will be available soon.
-            </p>
-            <div style={{
-              background: 'white',
-              padding: '1rem',
-              borderRadius: '0.5rem',
-              marginBottom: '1.5rem',
-              border: '1px solid #fbbf24'
-            }}>
-              <p style={{ color: '#78350f', margin: 0 }}>
-                Stay tuned for the next chapter of your journey at Xiotein School!
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2 style={{ color: '#6b7280', marginBottom: '1rem' }}>🔒 Chapter 2 is Locked</h2>
-            <p style={{ color: '#9ca3af', marginBottom: '1.5rem' }}>
-              Complete Chapter 1 to unlock Chapter 2.
-            </p>
-          </>
-        )}
-        {onBack && (
-          <button
-            onClick={onBack}
-            style={{
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '0.5rem',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              cursor: 'pointer'
-            }}
-          >
-            ← Back to Chapters
-          </button>
-        )}
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="bg-white rounded-xl shadow-xl p-8">
@@ -4062,9 +4871,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
         <nav style={{ display: 'flex', gap: '0.5rem' }}>
           {[
             { id: 'challenges', label: 'Challenges', icon: '⚔️' },
-            ...(chapter.teamSize > 1 ? [{ id: 'team', label: 'Team', icon: '👥' }] : []),
-            ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : []),
-            { id: 'story', label: 'Story Episodes', icon: '📖' }
+            ...(chapter.id === 8 ? [{ id: 'ethics', label: 'Ethics', icon: '⚖️' }] : [])
           ].map((tab) => (
             <button
               key={tab.id}
@@ -4105,9 +4912,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       {/* Tab Content */}
       <div className="min-h-[400px]">
         {activeTab === 'challenges' && renderChallenges()}
-        {activeTab === 'team' && renderTeamSection()}
         {activeTab === 'ethics' && renderEthicsSection()}
-        {activeTab === 'story' && renderStoryEpisodes()}
       </div>
 
       {/* Rival Selection Modal */}
@@ -4204,13 +5009,50 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             onComplete={handleZekeEndsBattleCutsceneComplete}
           />
 
+          {/* Portal Intro Modal */}
+          <PortalIntroModal
+            isOpen={showPortalIntroModal}
+            onClose={() => setShowPortalIntroModal(false)}
+            onComplete={handlePortalIntroComplete}
+          />
+
+          {/* Timu Island Story Modal */}
+          <TimuIslandStoryModal
+            isOpen={showTimuIslandStoryModal}
+            onClose={() => setShowTimuIslandStoryModal(false)}
+            onComplete={handleTimuIslandStoryComplete}
+          />
+
+          {/* Squad Up Story Modal */}
+          <SquadUpStoryModal
+            isOpen={showSquadUpStoryModal}
+            onClose={() => setShowSquadUpStoryModal(false)}
+            onComplete={handleSquadUpStoryComplete}
+          />
+
+          {/* Sonido Transmission Modal */}
+          <SonidoTransmissionModal
+            isOpen={showSonidoTransmissionModal}
+            onClose={() => setShowSonidoTransmissionModal(false)}
+            onComplete={handleSonidoTransmissionComplete}
+          />
+
           {/* Challenge Reward Modal */}
           {rewardModalData && (
             <ChallengeRewardModal
               isOpen={showRewardModal}
-              onClose={() => {
+              onClose={async () => {
                 setShowRewardModal(false);
                 setRewardModalData(null);
+                
+                // Refresh user progress after modal closes to ensure next challenge unlocks
+                if (currentUser) {
+                  const userRef = doc(db, 'users', currentUser.uid);
+                  const refreshedUserDoc = await getDoc(userRef);
+                  if (refreshedUserDoc.exists()) {
+                    setUserProgress(refreshedUserDoc.data());
+                  }
+                }
               }}
               challengeTitle={rewardModalData.challengeTitle}
               rewards={rewardModalData.rewards}
@@ -4220,6 +5062,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
           )}
         </div>
       );
-    };
+};
 
 export default ChapterDetail; 

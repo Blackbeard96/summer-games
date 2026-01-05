@@ -14,7 +14,10 @@ import {
   where, 
   orderBy,
   serverTimestamp,
-  deleteField
+  deleteField,
+  increment,
+  runTransaction,
+  Timestamp
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
@@ -35,8 +38,16 @@ import {
 } from '../types/battle';
 import { getMoveDamage } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
-import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel } from '../utils/artifactUtils';
+import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
+import { getRRCandyMoves, hasRRCandyUnlocked } from '../utils/rrCandyMoves';
+import { getRRCandyStatus } from '../utils/rrCandyUtils';
+import { 
+  calculateDaysAway, 
+  calculateEarnings, 
+  shouldShowModalToday,
+  getCurrentUTCDayStart
+} from '../utils/generatorEarnings';
 
 interface BattleContextType {
   // Vault Management
@@ -47,6 +58,7 @@ interface BattleContextType {
   upgradeGenerator: () => Promise<void>;
   collectGeneratorPP: () => Promise<void>;
   getGeneratorRates: (level: number) => { ppPerDay: number; shieldsPerDay: number };
+  checkAndCreditGeneratorEarnings: () => Promise<{ daysAway: number; ppEarned: number; shieldsEarned: number } | null>;
   restoreVaultShields: (amount: number, cost: number) => Promise<void>;
   payDues: () => Promise<void>;
   syncVaultPP: () => Promise<void>;
@@ -284,15 +296,38 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // Always update vault PP to match player's current PP
           // Max vault health is always 10% of max PP (capacity is the max PP)
           // Current vault health is capped at current PP if PP < max health
+          // UNLESS health was just restored (within last 5 seconds) - then preserve restored health
           const maxPPForCorrectHealth = updatedVault.capacity || 1000;
-          const correctVaultHealth = calculateCurrentVaultHealth(maxPPForCorrectHealth, playerPP, updatedVault.vaultHealth);
+          const healthRestoredAt = (updatedVault as any).healthRestoredAt;
+          let wasRecentlyRestored = false;
+          
+          if (healthRestoredAt) {
+            try {
+              // Handle Firestore Timestamp
+              const restoredTime = healthRestoredAt.toDate ? healthRestoredAt.toDate() : new Date(healthRestoredAt);
+              const timeSinceRestore = new Date().getTime() - restoredTime.getTime();
+              wasRecentlyRestored = timeSinceRestore < 5000; // 5 seconds
+            } catch (e) {
+              // If timestamp parsing fails, assume not recently restored
+              wasRecentlyRestored = false;
+            }
+          }
+          
+          let correctVaultHealth = calculateCurrentVaultHealth(maxPPForCorrectHealth, playerPP, updatedVault.vaultHealth);
+          
+          // If health was recently restored, preserve the restored value instead of recalculating
+          if (wasRecentlyRestored && updatedVault.vaultHealth && updatedVault.vaultHealth > correctVaultHealth) {
+            correctVaultHealth = updatedVault.vaultHealth;
+            console.log('BattleContext: Preserving recently restored vault health:', correctVaultHealth);
+          }
+          
           if (existingVault.currentPP !== playerPP || updatedVault.vaultHealth !== correctVaultHealth ||
               updatedVault.movesRemaining !== existingVault.movesRemaining || 
               updatedVault.generatorPendingPP !== existingVault.generatorPendingPP || 
               updatedVault.shieldStrength !== existingVault.shieldStrength) {
             console.log('BattleContext: Syncing vault PP from', existingVault.currentPP, 'to', playerPP);
-            console.log(`BattleContext: Updating vault health to ${correctVaultHealth}/${updatedVault.maxVaultHealth} (capped at current PP: ${playerPP})`);
-            await updateDoc(vaultRef, { 
+            console.log(`BattleContext: Updating vault health to ${correctVaultHealth}/${updatedVault.maxVaultHealth}`);
+            const updatePayload: any = { 
               currentPP: playerPP,
               vaultHealth: correctVaultHealth,
               movesRemaining: updatedVault.movesRemaining,
@@ -301,7 +336,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               generatorLastReset: updatedVault.generatorLastReset,
               shieldStrength: updatedVault.shieldStrength,
               vaultHealthCooldown: updatedVault.vaultHealthCooldown // Persist cooldown if active
-            });
+            };
+            
+            // Remove healthRestoredAt timestamp after 5 seconds (cleanup)
+            if (wasRecentlyRestored) {
+              // Keep the timestamp for now, it will expire naturally
+            } else if (healthRestoredAt) {
+              // Remove old timestamp
+              updatePayload.healthRestoredAt = deleteField();
+            }
+            
+            await updateDoc(vaultRef, updatePayload);
             setVault({ 
               ...updatedVault, 
               currentPP: playerPP,
@@ -467,7 +512,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               } else if (move.category === 'manifest') {
                 // Only unlock if it matches user's manifest
                 const shouldUnlock = move.manifestType === userManifest;
-                console.log(`BattleContext: Move ${updatedMove.name} (${move.manifestType}) - should unlock: ${shouldUnlock}`);
+                console.log(`BattleContext: Move ${updatedMove.name} (${move.manifestType}) - should unlock: ${shouldUnlock}, userManifest: ${userManifest}`);
                 return { ...updatedMove, unlocked: shouldUnlock };
               }
               return updatedMove;
@@ -487,6 +532,154 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             
             setMoves(updatedMoves);
           }
+        }
+
+        // Add RR Candy moves if player has unlocked a candy
+        // Get the final moves array that was set above
+        let finalMoves: Move[] = [];
+        if (movesDoc.exists()) {
+          const movesDocData = await getDoc(movesRef);
+          if (movesDocData.exists()) {
+            finalMoves = movesDocData.data().moves || [];
+          }
+        }
+        
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const chapters = userData.chapters || {};
+          const chapter2 = chapters[2] || {};
+          const challenges = chapter2.challenges || {};
+          const challenge = challenges['ep2-its-all-a-game'] || {};
+          
+          // Sync Power Card moves to battleMoves collection
+          const powerCardMoves = userData.moves || [];
+          if (powerCardMoves.length > 0) {
+            const existingMoveIds = new Set(finalMoves.map((m: Move) => m.id));
+            const powerCardMoveIds = new Set(powerCardMoves.map((m: any) => `power-card-${m.name?.toLowerCase().replace(/\s+/g, '-')}`));
+            
+            // Convert Power Card moves to Move format
+            const convertedPowerCardMoves: Move[] = powerCardMoves
+              .filter((pcMove: any) => {
+                const moveId = `power-card-${pcMove.name?.toLowerCase().replace(/\s+/g, '-')}`;
+                return !existingMoveIds.has(moveId);
+              })
+              .map((pcMove: any) => {
+                const moveId = `power-card-${pcMove.name?.toLowerCase().replace(/\s+/g, '-')}`;
+                return {
+                  id: moveId,
+                  name: pcMove.name,
+                  description: pcMove.description || '',
+                  category: 'system' as const,
+                  type: 'utility' as const, // Use 'utility' as the type for Power Card moves
+                  level: 1,
+                  cost: 1,
+                  damage: 0, // Power Card moves are custom, no default damage
+                  cooldown: 0,
+                  currentCooldown: 0,
+                  unlocked: true,
+                  masteryLevel: 1,
+                  targetType: 'single' as const,
+                  priority: 0,
+                  // Store original Power Card data (these are additional properties not in Move type)
+                  powerCardIcon: pcMove.icon,
+                  powerCardData: pcMove
+                } as Move & { powerCardIcon?: string; powerCardData?: any };
+              });
+            
+            if (convertedPowerCardMoves.length > 0) {
+              finalMoves = [...finalMoves, ...convertedPowerCardMoves];
+              await updateDoc(movesRef, { moves: finalMoves });
+              console.log('BattleContext: Added Power Card moves:', convertedPowerCardMoves.map(m => m.name));
+            }
+            
+            // Update existing Power Card moves if they were modified
+            const updatedMoves = finalMoves.map((move: Move) => {
+              if (move.id?.startsWith('power-card-')) {
+                const pcMoveName = move.name;
+                const matchingPCMove = powerCardMoves.find((pc: any) => pc.name === pcMoveName);
+                if (matchingPCMove) {
+                  return {
+                    ...move,
+                    name: matchingPCMove.name,
+                    description: matchingPCMove.description || move.description,
+                    powerCardIcon: matchingPCMove.icon,
+                    powerCardData: matchingPCMove
+                  };
+                }
+              }
+              return move;
+            });
+            
+            // Remove Power Card moves that were deleted from userData.moves
+            const currentPowerCardMoveNames = new Set(powerCardMoves.map((m: any) => m.name));
+            const filteredMoves = updatedMoves.filter((move: Move) => {
+              if (move.id?.startsWith('power-card-')) {
+                return currentPowerCardMoveNames.has(move.name);
+              }
+              return true;
+            });
+            
+            if (filteredMoves.length !== finalMoves.length) {
+              finalMoves = filteredMoves;
+              await updateDoc(movesRef, { moves: finalMoves });
+              console.log('BattleContext: Updated Power Card moves');
+            } else if (updatedMoves.some((m, i) => m.name !== finalMoves[i]?.name || m.description !== finalMoves[i]?.description)) {
+              finalMoves = updatedMoves;
+              await updateDoc(movesRef, { moves: finalMoves });
+              console.log('BattleContext: Synced Power Card moves');
+            }
+          }
+          
+          // Use unified RR Candy status check (single source of truth)
+          const rrCandyStatus = getRRCandyStatus(userData);
+          
+          if (rrCandyStatus.unlocked && rrCandyStatus.candyType) {
+            const candyType = rrCandyStatus.candyType;
+            const rrCandyMoves = getRRCandyMoves(candyType);
+            
+            const existingMoveIds = new Set(finalMoves.map((m: Move) => m.id));
+            
+            // Only add moves that don't already exist
+            const newRRCandyMoves = rrCandyMoves.filter(move => !existingMoveIds.has(move.id));
+            
+            if (newRRCandyMoves.length > 0) {
+              const updatedMovesWithCandy = [...finalMoves, ...newRRCandyMoves];
+              await updateDoc(movesRef, { moves: updatedMovesWithCandy });
+              setMoves(updatedMovesWithCandy);
+              console.log('BattleContext: Added RR Candy moves:', newRRCandyMoves.map(m => m.name));
+            } else {
+              // Ensure RR Candy moves are unlocked even if they already exist
+              // This is critical: if RR Candy is unlocked, all RR Candy moves should be unlocked
+              const updatedMovesWithUnlocked = finalMoves.map((move: Move) => {
+                const isRRCandyMove = rrCandyMoves.some(rm => rm.id === move.id);
+                if (isRRCandyMove && !move.unlocked) {
+                  console.log('BattleContext: Unlocking RR Candy move:', move.id);
+                  return { ...move, unlocked: true };
+                }
+                return move;
+              });
+              
+              // Check if any moves were updated
+              const hasUnlockUpdates = updatedMovesWithUnlocked.some((move: Move, index: number) => {
+                const originalMove = finalMoves[index];
+                return originalMove && move.unlocked !== originalMove.unlocked;
+              });
+              
+              if (hasUnlockUpdates) {
+                await updateDoc(movesRef, { moves: updatedMovesWithUnlocked });
+                setMoves(updatedMovesWithUnlocked);
+                console.log('BattleContext: Unlocked existing RR Candy moves');
+              } else {
+                setMoves(finalMoves);
+              }
+            }
+          } else {
+            setMoves(finalMoves);
+          }
+        } else {
+          setMoves(finalMoves);
         }
 
         // Initialize or fetch action cards - use a simpler approach
@@ -613,6 +806,30 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Debounce timer for vault PP sync
     let vaultSyncTimeout: NodeJS.Timeout | null = null;
     
+    // Listen to battleMoves collection for real-time updates (including RR Candy moves)
+    const movesRef = doc(db, 'battleMoves', currentUser.uid);
+    const unsubscribeMoves = onSnapshot(movesRef, (movesDoc) => {
+      try {
+        if (movesDoc.exists()) {
+          const movesData = movesDoc.data().moves || [];
+          console.log('BattleContext: Moves updated from Firestore listener, count:', movesData.length);
+          setMoves(movesData);
+        }
+      } catch (error) {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: Firestore internal assertion error in moves listener callback - ignoring');
+          return;
+        }
+        console.error('BattleContext: Error processing moves snapshot:', error);
+      }
+    }, (error) => {
+      if (isFirestoreInternalError(error)) {
+        console.warn('BattleContext: Firestore internal assertion error in moves listener - ignoring');
+        return;
+      }
+      console.error('BattleContext: Error in moves listener:', error);
+    });
+    
     const unsubscribeVault = onSnapshot(vaultRef, (vaultDoc) => {
       try {
         if (vaultDoc.exists()) {
@@ -633,59 +850,96 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.error('BattleContext: Error in vault listener:', error);
     });
 
-    const unsubscribeStudent = onSnapshot(studentRef, async (studentDoc) => {
-      try {
-        if (studentDoc.exists()) {
-          const studentData = studentDoc.data();
-          const studentPP = studentData.powerPoints || 0;
-          
-          // Update inventory and artifacts in real-time
-          setInventory(studentData.inventory || []);
-          setArtifacts(studentData.artifacts || []);
-          
-          // Sync vault PP with student PP in real-time
-          // Use a debounce to prevent circular updates
-          // Clear any pending sync
-          if (vaultSyncTimeout) {
-            clearTimeout(vaultSyncTimeout);
-          }
-          
-          // Only sync if there's a difference
-          const vaultRef = doc(db, 'vaults', currentUser.uid);
-          const vaultDoc = await getDoc(vaultRef);
-          
-          if (vaultDoc.exists()) {
-            const vaultData = vaultDoc.data();
-            const currentVaultPP = vaultData.currentPP || 0;
+    const unsubscribeStudent = onSnapshot(studentRef, (studentDoc) => {
+      // Make callback synchronous, defer async work
+      setTimeout(async () => {
+        try {
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            const studentPP = studentData.powerPoints || 0;
+            const currentManifest = studentData.manifest?.manifestId || studentData.manifestationType || 'reading';
             
-            // Only update if they differ to avoid unnecessary writes
-            if (currentVaultPP !== studentPP) {
-              // Use setTimeout to debounce and prevent circular updates
-              vaultSyncTimeout = setTimeout(async () => {
-                try {
-                  await updateDoc(vaultRef, {
-                    currentPP: studentPP,
-                    lastUpdated: serverTimestamp()
-                  });
-                  console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
-                } catch (updateError) {
-                  if (isFirestoreInternalError(updateError)) {
-                    console.warn('[BattleContext] Firestore internal assertion error during vault sync - ignoring');
-                    return;
+            // Update inventory and artifacts in real-time
+            setInventory(studentData.inventory || []);
+            setArtifacts(studentData.artifacts || []);
+            
+            // Update moves when manifest changes
+            const movesRef = doc(db, 'battleMoves', currentUser.uid);
+            const movesDoc = await getDoc(movesRef);
+            
+            if (movesDoc.exists()) {
+              const movesData = movesDoc.data().moves || [];
+              
+              // Check if any manifest moves need to be updated
+              const updatedMoves = movesData.map((move: Move) => {
+                if (move.category === 'manifest') {
+                  const shouldUnlock = move.manifestType === currentManifest;
+                  // Only update if the unlock state has changed
+                  if (move.unlocked !== shouldUnlock) {
+                    console.log(`BattleContext: Manifest changed to ${currentManifest} - updating move ${move.name} (${move.manifestType}) - unlocking: ${shouldUnlock}`);
+                    return { ...move, unlocked: shouldUnlock };
                   }
-                  console.error('[BattleContext] Error syncing vault PP:', updateError);
                 }
-              }, 500); // Increased debounce time to 500ms
+                return move;
+              });
+              
+              // Check if any moves were actually updated
+              const hasUpdates = updatedMoves.some((move: Move, index: number) => {
+                const originalMove = movesData[index];
+                return originalMove && move.unlocked !== originalMove.unlocked;
+              });
+              
+              if (hasUpdates) {
+                console.log('BattleContext: Manifest changed - updating moves in database');
+                await updateDoc(movesRef, { moves: updatedMoves });
+                setMoves(updatedMoves);
+              }
+            }
+            
+            // Sync vault PP with student PP in real-time
+            // Use a debounce to prevent circular updates
+            // Clear any pending sync
+            if (vaultSyncTimeout) {
+              clearTimeout(vaultSyncTimeout);
+            }
+            
+            // Only sync if there's a difference
+            const vaultRef = doc(db, 'vaults', currentUser.uid);
+            const vaultDoc = await getDoc(vaultRef);
+            
+            if (vaultDoc.exists()) {
+              const vaultData = vaultDoc.data();
+              const currentVaultPP = vaultData.currentPP || 0;
+              
+              // Only update if they differ to avoid unnecessary writes
+              if (currentVaultPP !== studentPP) {
+                // Use setTimeout to debounce and prevent circular updates
+                vaultSyncTimeout = setTimeout(async () => {
+                  try {
+                    await updateDoc(vaultRef, {
+                      currentPP: studentPP,
+                      lastUpdated: serverTimestamp()
+                    });
+                    console.log('[BattleContext] Synced vault PP with student PP:', studentPP);
+                  } catch (updateError) {
+                    if (isFirestoreInternalError(updateError)) {
+                      console.warn('[BattleContext] Firestore internal assertion error during vault sync - ignoring');
+                      return;
+                    }
+                    console.error('[BattleContext] Error syncing vault PP:', updateError);
+                  }
+                }, 500); // Increased debounce time to 500ms
+              }
             }
           }
+        } catch (error) {
+          if (isFirestoreInternalError(error)) {
+            console.warn('[BattleContext] Firestore internal assertion error in student listener callback - ignoring');
+            return;
+          }
+          console.error('[BattleContext] Error processing student snapshot:', error);
         }
-      } catch (error) {
-        if (isFirestoreInternalError(error)) {
-          console.warn('[BattleContext] Firestore internal assertion error in student listener callback - ignoring');
-          return;
-        }
-        console.error('[BattleContext] Error processing student snapshot:', error);
-      }
+      }, 0); // Execute async work on next tick
     }, (error) => {
       if (isFirestoreInternalError(error)) {
         console.warn('BattleContext: Firestore internal assertion error in student listener - ignoring');
@@ -700,6 +954,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       unsubscribeVault();
       unsubscribeStudent();
+      unsubscribeMoves();
     };
   }, [currentUser]);
 
@@ -1095,17 +1350,27 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // Calculate generator production rates based on level
+  // Generous scaling: L1: 10, L2: 25, L3: 45, L4: 70, L5: 100, L6+: +100 per level
   const getGeneratorRates = (level: number) => {
-    // Level 1: 10 PP/day, 10 Shields/day
-    // Each level increases by 5 PP and 5 Shields
-    const basePP = 10;
-    const baseShields = 10;
-    const ppPerLevel = 5;
-    const shieldsPerLevel = 5;
-    
+    if (level <= 1) {
+      return { ppPerDay: 10, shieldsPerDay: 10 };
+    }
+    if (level === 2) {
+      return { ppPerDay: 25, shieldsPerDay: 25 };
+    }
+    if (level === 3) {
+      return { ppPerDay: 45, shieldsPerDay: 45 };
+    }
+    if (level === 4) {
+      return { ppPerDay: 70, shieldsPerDay: 70 };
+    }
+    if (level === 5) {
+      return { ppPerDay: 100, shieldsPerDay: 100 };
+    }
+    // Level 6+: 100 + (level - 5) * 100
     return {
-      ppPerDay: basePP + (level - 1) * ppPerLevel,
-      shieldsPerDay: baseShields + (level - 1) * shieldsPerLevel
+      ppPerDay: 100 + (level - 5) * 100,
+      shieldsPerDay: 100 + (level - 5) * 100
     };
   };
 
@@ -1195,6 +1460,140 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  // Check and credit generator passive earnings (for daily login modal)
+  // Returns earnings info if credits were applied, null otherwise
+  const checkAndCreditGeneratorEarnings = async (): Promise<{ daysAway: number; ppEarned: number; shieldsEarned: number } | null> => {
+    if (!currentUser || !vault) {
+      return null;
+    }
+
+    try {
+      const generatorLevel = vault.generatorLevel || 1;
+      const rates = getGeneratorRates(generatorLevel);
+      
+      // Get lastClaimedAt from vault (convert Firestore Timestamp to Date if needed)
+      let lastClaimedAt: Date | null = null;
+      if (vault.generatorLastClaimedAt) {
+        const claimedAt = vault.generatorLastClaimedAt;
+        if (claimedAt instanceof Date) {
+          lastClaimedAt = claimedAt;
+        } else if (claimedAt && typeof claimedAt === 'object' && 'toDate' in claimedAt && typeof claimedAt.toDate === 'function') {
+          // Firestore Timestamp
+          lastClaimedAt = claimedAt.toDate();
+        } else {
+          // Try to parse as Date
+          lastClaimedAt = new Date(claimedAt as any);
+        }
+      }
+
+      // Calculate days away
+      const daysAway = calculateDaysAway(lastClaimedAt);
+      
+      // If no days away, return null (no earnings to credit)
+      if (daysAway <= 0) {
+        return null;
+      }
+
+      // Calculate earnings
+      const { ppEarned, shieldsEarned } = calculateEarnings(daysAway, rates.ppPerDay, rates.shieldsPerDay);
+
+      // Use transaction to atomically credit earnings and update lastClaimedAt
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
+
+      await runTransaction(db, async (transaction) => {
+        // Read current state
+        const vaultDoc = await transaction.get(vaultRef);
+        const studentDoc = await transaction.get(studentRef);
+        
+        if (!vaultDoc.exists() || !studentDoc.exists()) {
+          throw new Error('Vault or student document not found');
+        }
+
+        const vaultData = vaultDoc.data();
+        const studentData = studentDoc.data();
+
+        // Re-check days away based on transaction-time state (idempotency check)
+        let txLastClaimedAt: Date | null = null;
+        if (vaultData.generatorLastClaimedAt) {
+          const claimedAt = vaultData.generatorLastClaimedAt;
+          if (claimedAt instanceof Date) {
+            txLastClaimedAt = claimedAt;
+          } else if (claimedAt && typeof claimedAt === 'object' && 'toDate' in claimedAt && typeof claimedAt.toDate === 'function') {
+            // Firestore Timestamp
+            txLastClaimedAt = claimedAt.toDate();
+          } else {
+            txLastClaimedAt = new Date(claimedAt as any);
+          }
+        }
+
+        const txDaysAway = calculateDaysAway(txLastClaimedAt);
+        
+        // Only credit if there are still days away (prevents double-crediting)
+        if (txDaysAway <= 0) {
+          return; // No earnings to credit
+        }
+
+        const { ppEarned: txPPEarned, shieldsEarned: txShieldsEarned } = calculateEarnings(txDaysAway, rates.ppPerDay, rates.shieldsPerDay);
+
+        // Get current values
+        const currentVaultPP = vaultData.currentPP || 0;
+        const currentStudentPP = studentData.powerPoints || 0;
+        const currentShieldStrength = vaultData.shieldStrength || 0;
+        const maxShieldStrength = vaultData.maxShieldStrength || 50;
+
+        // Calculate new values (cap PP at vault capacity, shields at max)
+        const newVaultPP = Math.min(vaultData.capacity || 1000, currentVaultPP + txPPEarned);
+        const newStudentPP = Math.min(vaultData.capacity || 1000, currentStudentPP + txPPEarned);
+        const newShieldStrength = Math.min(maxShieldStrength, currentShieldStrength + txShieldsEarned);
+
+        // Update timestamp to start of current UTC day
+        const now = getCurrentUTCDayStart();
+
+        // Update vault
+        transaction.update(vaultRef, {
+          currentPP: newVaultPP,
+          shieldStrength: newShieldStrength,
+          generatorLastClaimedAt: Timestamp.fromDate(now)
+        });
+
+        // Update student PP
+        transaction.update(studentRef, {
+          powerPoints: newStudentPP
+        });
+
+        // Update users collection PP if it exists
+        const usersDoc = await transaction.get(usersRef);
+        if (usersDoc.exists()) {
+          const currentUsersPP = usersDoc.data().powerPoints || 0;
+          transaction.update(usersRef, {
+            powerPoints: Math.min(vaultData.capacity || 1000, currentUsersPP + txPPEarned)
+          });
+        }
+      });
+
+      // Update local vault state
+      setVault(prevVault => {
+        if (!prevVault) return null;
+        const newPP = Math.min(prevVault.capacity, (prevVault.currentPP || 0) + ppEarned);
+        const newShields = Math.min(prevVault.maxShieldStrength, (prevVault.shieldStrength || 0) + shieldsEarned);
+        return {
+          ...prevVault,
+          currentPP: newPP,
+          shieldStrength: newShields,
+          generatorLastClaimedAt: getCurrentUTCDayStart()
+        };
+      });
+
+      return { daysAway, ppEarned, shieldsEarned };
+    } catch (error) {
+      console.error('Error checking and crediting generator earnings:', error);
+      // Don't set error state - this is a background operation
+      return null;
+    }
+  };
+
   const restoreVaultShields = async (amount: number, cost: number) => {
     if (!currentUser || !vault) return;
     
@@ -1271,9 +1670,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const maxPP = vault.capacity || 1000;
       const maxVaultHealth = vault.maxVaultHealth || calculateMaxVaultHealth(maxPP);
       
+      // Check if health was recently restored - if so, preserve it
+      const healthRestoredAt = (vault as any).healthRestoredAt;
+      let wasRecentlyRestored = false;
+      
+      if (healthRestoredAt) {
+        try {
+          const restoredTime = healthRestoredAt.toDate ? healthRestoredAt.toDate() : new Date(healthRestoredAt);
+          const timeSinceRestore = new Date().getTime() - restoredTime.getTime();
+          wasRecentlyRestored = timeSinceRestore < 10000; // 10 seconds grace period
+        } catch (e) {
+          wasRecentlyRestored = false;
+        }
+      }
+      
       // Current vault health is capped at current PP if PP < max health
-      // Otherwise, it can be up to max health
-      const correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, vault.vaultHealth);
+      // UNLESS health was recently restored - then preserve the restored value
+      let correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, vault.vaultHealth);
+      
+      // If health was recently restored, preserve the restored value instead of recalculating
+      if (wasRecentlyRestored && vault.vaultHealth && vault.vaultHealth > correctVaultHealth) {
+        correctVaultHealth = vault.vaultHealth;
+        console.log('🔄 syncVaultPP: Preserving recently restored vault health:', correctVaultHealth);
+      }
       
       if (playerPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth) {
         // Update vault PP to match player PP and adjust vault health
@@ -1361,8 +1780,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         
         // Current vault health is capped at current PP if PP < max health
-        const correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, processedVault.vaultHealth);
-        if (processedVault.vaultHealth !== correctVaultHealth) {
+        // UNLESS health was recently restored - then preserve the restored value
+        const healthRestoredAt = (processedVault as any).healthRestoredAt;
+        let wasRecentlyRestored = false;
+        
+        if (healthRestoredAt) {
+          try {
+            // Handle Firestore Timestamp
+            const restoredTime = healthRestoredAt.toDate ? healthRestoredAt.toDate() : new Date(healthRestoredAt);
+            const timeSinceRestore = new Date().getTime() - restoredTime.getTime();
+            wasRecentlyRestored = timeSinceRestore < 10000; // 10 seconds grace period
+          } catch (e) {
+            wasRecentlyRestored = false;
+          }
+        }
+        
+        let correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, processedVault.vaultHealth);
+        
+        // If health was recently restored, preserve the restored value instead of recalculating
+        if (wasRecentlyRestored && processedVault.vaultHealth && processedVault.vaultHealth > correctVaultHealth) {
+          correctVaultHealth = processedVault.vaultHealth;
+          console.log(`✅ Preserving recently restored vault health: ${correctVaultHealth}/${maxVaultHealth}`);
+        } else if (processedVault.vaultHealth !== correctVaultHealth) {
           processedVault.vaultHealth = correctVaultHealth;
           await updateDoc(vaultRef, {
             vaultHealth: correctVaultHealth
@@ -1830,9 +2269,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Calculate exponential upgrade cost based on current level
-      // Base price: 100 PP for Level 1 → Level 2
+      // RR Candy moves: 1000 PP for Level 1 → Level 2
+      // Regular moves: 100 PP for Level 1 → Level 2
       // Then multiplied by the respective multiplier for each level
-      const basePrice = 100;
+      const isRRCandyMove = moveId.startsWith('rr-candy-');
+      const basePrice = isRRCandyMove ? 1000 : 100; // 1000 PP for RR Candy moves, 100 PP for regular moves
       const nextLevel = move.masteryLevel + 1;
       let upgradeCost: number;
       if (nextLevel === 2) {
@@ -3039,15 +3480,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const damageResult = rollDamage(damageRange, playerLevel, selectedMove.level, effectiveMasteryLevel);
             totalDamage = damageResult.damage;
             
-            // Apply artifact damage multiplier for elemental moves
+            // Apply artifact damage multipliers
             let artifactMultiplier = 1.0;
+            
+            // Apply manifest damage boost for manifest moves (Captain's Helmet)
+            if (selectedMove.category === 'manifest' && equippedArtifacts) {
+              const manifestBoost = getManifestDamageBoost(equippedArtifacts);
+              if (manifestBoost > 1.0) {
+                artifactMultiplier *= manifestBoost;
+                console.log(`🪖 Captain's Helmet boosts ${selectedMove.name} damage by ${Math.round((manifestBoost - 1) * 100)}%`);
+              }
+            }
+            
+            // Apply elemental ring multiplier for elemental moves
             if (selectedMove.category === 'elemental' && equippedArtifacts) {
               const ringLevel = getElementalRingLevel(equippedArtifacts);
-              artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
-              if (artifactMultiplier > 1.0) {
+              const ringMultiplier = getArtifactDamageMultiplier(ringLevel);
+              if (ringMultiplier > 1.0) {
+                artifactMultiplier *= ringMultiplier;
                 totalDamage = Math.floor(totalDamage * artifactMultiplier);
-                console.log(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%`);
+                console.log(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((ringMultiplier - 1) * 100)}%`);
               }
+            } else if (artifactMultiplier > 1.0) {
+              totalDamage = Math.floor(totalDamage * artifactMultiplier);
             }
             
             // Log ring boost if applicable
@@ -4027,20 +4482,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return;
         }
       } else {
-        // For other artifacts, create admin notification
-        await addDoc(collection(db, 'adminNotifications'), {
-          type: 'artifact_usage',
-          title: 'Artifact Used in Battle',
-          message: `${currentUser.displayName || currentUser.email} used ${artifactName} during battle`,
-          data: {
-            userId: currentUser.uid,
-            userName: currentUser.displayName || currentUser.email,
-            artifactName: artifactName,
-            usageTime: new Date(),
-            location: 'Battle'
-          },
-          timestamp: serverTimestamp()
-        });
+        // For other artifacts, use immediately without admin approval
         setSuccess(`✨ ${artifactName} used!`);
       }
 
@@ -4103,6 +4545,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     upgradeGenerator,
     collectGeneratorPP,
     getGeneratorRates,
+    checkAndCreditGeneratorEarnings,
     restoreVaultShields,
     payDues,
     syncVaultPP,

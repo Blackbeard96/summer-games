@@ -26,11 +26,21 @@ const ChallengeRewardModal: React.FC<ChallengeRewardModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const getRewardIcon = (type: string) => {
+  const getRewardIcon = (type: string, reward?: ChallengeReward) => {
     switch (type) {
       case 'xp': return '⭐';
       case 'pp': return '💰';
-      case 'artifact': return '💍';
+      case 'artifact': 
+        // Check if this is Captain's Helmet
+        if (reward) {
+          const artifactId = String(reward.value || '').toLowerCase();
+          const artifactName = String(reward.name || '').toLowerCase();
+          if (artifactId.includes('captain') || artifactId.includes('helmet') || 
+              artifactName.includes('captain') || artifactName.includes('helmet')) {
+            return '🪖'; // Hat/helmet emoji
+          }
+        }
+        return '💍'; // Default ring emoji for other artifacts
       case 'truthMetal': return '💎';
       case 'move': return '⚡';
       case 'actionCard': return '🃏';
@@ -267,7 +277,7 @@ const ChallengeRewardModal: React.FC<ChallengeRewardModalProps> = ({
                       }}
                     >
                       <span style={{ fontSize: '1.5rem' }}>
-                        {getRewardIcon(reward.type)}
+                        {getRewardIcon(reward.type, reward)}
                       </span>
                       <span style={{ fontSize: '1rem', fontWeight: '500' }}>
                         {getRewardName(reward)}
@@ -308,7 +318,7 @@ const ChallengeRewardModal: React.FC<ChallengeRewardModalProps> = ({
                       }}
                     >
                       <span style={{ fontSize: '1.5rem' }}>
-                        {getRewardIcon(reward.type)}
+                        {getRewardIcon(reward.type, reward)}
                       </span>
                       <span style={{ fontSize: '1rem', fontWeight: '500' }}>
                         {getRewardName(reward)}

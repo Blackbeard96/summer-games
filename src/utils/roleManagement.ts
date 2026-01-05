@@ -74,6 +74,7 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
     }
     
     // Fallback: Check specific admin emails (exact matches only, not substring)
+    // REMOVED: Domain-based admin check - too broad, causes all users from these domains to be admins
     if (userEmail) {
       const adminEmails = [
         'eddymosley@compscihigh.org',
@@ -82,13 +83,8 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
         'eddymosley9@gmail.com'
       ];
       
-      // Check exact match
+      // Check exact match ONLY - no domain-based checks
       if (adminEmails.includes(userEmail)) {
-        return true;
-      }
-      
-      // Check domain-based admin (strict domain matching)
-      if (userEmail.endsWith('@mstgames.net') || userEmail.endsWith('@compscihigh.org')) {
         return true;
       }
     }
@@ -97,6 +93,7 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
   } catch (error) {
     console.error('Error checking admin status:', error);
     // On error, fall back to email check only
+    // REMOVED: Domain-based admin check - too broad, causes all users from these domains to be admins
     if (userEmail) {
       const adminEmails = [
         'eddymosley@compscihigh.org',
@@ -105,11 +102,8 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
         'eddymosley9@gmail.com'
       ];
       
+      // Check exact match ONLY - no domain-based checks
       if (adminEmails.includes(userEmail)) {
-        return true;
-      }
-      
-      if (userEmail.endsWith('@mstgames.net') || userEmail.endsWith('@compscihigh.org')) {
         return true;
       }
     }

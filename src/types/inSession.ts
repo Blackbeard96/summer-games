@@ -4,13 +4,18 @@ export interface InSessionRoom {
   id: string;
   classId: string;
   className: string;
-  teacherId: string;
-  status: 'open' | 'active' | 'closed';
+  teacherId: string; // Keep for backward compatibility
+  hostUid: string; // UID of the host (admin who started session)
+  status: 'open' | 'active' | 'closed' | 'live' | 'ended'; // 'live' and 'ended' are new
+  mode?: 'in_session'; // Session mode
   players: InSessionPlayer[];
-  activeLaws: InSessionLaw[];
-  createdAt: Date;
-  startedAt?: Date;
-  endedAt?: Date;
+  activeLaws?: InSessionLaw[]; // Optional for backward compatibility
+  battleLog?: string[]; // Battle log entries
+  activeViewers?: string[]; // Array of user IDs currently viewing
+  createdAt: Date | any; // Firestore Timestamp
+  startedAt?: Date | any; // Firestore Timestamp
+  endedAt?: Date | any; // Firestore Timestamp
+  updatedAt?: any; // Firestore Timestamp
 }
 
 export interface InSessionPlayer {
@@ -18,19 +23,23 @@ export interface InSessionPlayer {
   displayName: string;
   photoURL?: string;
   level: number;
-  health: number;
-  maxHealth: number;
-  shieldStrength: number;
-  maxShieldStrength: number;
+  health?: number; // Optional for backward compatibility
+  maxHealth?: number; // Optional for backward compatibility
+  shieldStrength?: number; // Optional for backward compatibility
+  maxShieldStrength?: number; // Optional for backward compatibility
   powerPoints: number;
-  isReady: boolean;
-  isTeacher: boolean;
-  equippedArtifacts: any;
-  moves: any[];
-  actionCards: any[];
-  lawsCreated: number;
-  battlesWon: number;
-  battlesLost: number;
+  participationCount: number; // Participation points earned
+  movesEarned: number; // Moves available from participation
+  eliminated?: boolean; // Whether player is eliminated
+  isReady?: boolean; // Optional for backward compatibility
+  isTeacher?: boolean; // Optional for backward compatibility
+  equippedArtifacts?: any; // Optional for backward compatibility
+  moves?: any[]; // Optional for backward compatibility
+  actionCards?: any[]; // Optional for backward compatibility
+  lawsCreated?: number; // Optional for backward compatibility
+  battlesWon?: number; // Optional for backward compatibility
+  battlesLost?: number; // Optional for backward compatibility
+  activeLoadout?: any; // Session loadout snapshot (from inSessionSkillsService)
 }
 
 export interface InSessionLaw {
@@ -91,6 +100,8 @@ export interface InSessionRewards {
   battlesWon: number;
   achievements?: string[];
 }
+
+
 
 
 

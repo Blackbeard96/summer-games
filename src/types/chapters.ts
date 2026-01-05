@@ -52,7 +52,7 @@ export interface GoogleClassroomAssignment {
 }
 
 export interface ChallengeRequirement {
-  type: 'artifact' | 'team' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'manifest' | 'leadership' | 'profile' | 'ability';
+  type: 'artifact' | 'team' | 'rival' | 'veil' | 'reflection' | 'wisdom' | 'ethics' | 'manifest' | 'leadership' | 'profile' | 'ability' | 'challenge';
   value: any;
   description: string;
 }
@@ -164,9 +164,8 @@ export const CHAPTERS: Chapter[] = [
       // Chapter 1 is automatically available to all players - no requirements
     ],
     rewards: [
-      { type: 'level', value: 1, description: 'Unlock Level 1' },
-      { type: 'artifact', value: 'personal', description: 'Personal Artifact' },
-      { type: 'artifact', value: 'starter_artifact', description: 'Starter Artifact' }
+      { type: 'artifact', value: 'artifacts_unlocked', description: 'Unlock Artifacts' },
+      { type: 'artifact', value: 'elemental_moves_unlocked', description: 'Unlock Elemental Moves' }
     ],
     challenges: [
       {
@@ -292,12 +291,11 @@ export const CHAPTERS: Chapter[] = [
   {
     id: 2,
     title: "Test, Allies, & Enemies",
-    subtitle: "The Team Forms",
+    subtitle: "Surviving Timu Island",
     description: "Form a 4-person team, choose a rival, and complete a team trial focusing on coordination and emotional synergy. Then arrive at Xiotein school and meet your rivals, completing orientation and sparring drills.",
     storyArc: "Meeting the Mentor + Story Mode - Episode 2",
     requirements: [
-      { type: 'level', value: 1, description: 'Must be Level 1' },
-      { type: 'previousChapter', value: 1, description: 'Must complete Chapter 1' }
+      // Chapter 2 is now available to all players - no requirements
     ],
     rewards: [
       { type: 'team', value: 'formed', description: 'Team formation' },
@@ -309,33 +307,33 @@ export const CHAPTERS: Chapter[] = [
     challenges: [
       {
         id: 'ch2-team-formation',
-        title: 'Form Your Team',
-        description: 'Assemble a 4-person team with complementary manifests',
+        title: 'Arrival on Timu Island',
+        description: 'You thought the portal you took with Zeke would lead to Xiotein, but Sonido changed the destination somehow. Now you\'ve ended up on Timu Island - a place filled with a dangerous jungle, animals, hostile rebels, and is loaded with Zombies.',
         type: 'team',
         requirements: [],
         rewards: [
-          { type: 'xp', value: 30, description: 'Team formation XP' },
-          { type: 'pp', value: 15, description: 'Team formation PP' },
+          { type: 'xp', value: 100, description: 'Arrival on Timu Island XP' },
+          { type: 'pp', value: 100, description: 'Arrival on Timu Island PP' },
           { type: 'team', value: 'formed', description: 'Team formed' }
         ],
         isCompleted: false
       },
       {
         id: 'ch2-rival-selection',
-        title: 'Choose Your Rival',
-        description: 'Identify an enemy or internalized foe to overcome',
+        title: 'Find a Home',
+        description: 'Players will be forming squads to have a better chance against the dangers of Timu Island',
         type: 'personal',
         requirements: [{ type: 'team', value: 'formed', description: 'Must have formed team' }],
         rewards: [
-          { type: 'xp', value: 20, description: 'Rival selection XP' },
-          { type: 'pp', value: 10, description: 'Rival selection PP' },
+          { type: 'xp', value: 50, description: 'Find a Home XP' },
+          { type: 'pp', value: 50, description: 'Find a Home PP' },
           { type: 'rival', value: 'chosen', description: 'Rival chosen' }
         ],
         isCompleted: false
       },
       {
         id: 'ch2-team-trial',
-        title: 'Complete Team Trial',
+        title: 'Squad Up',
         description: 'Face a challenge requiring coordination and emotional synergy',
         type: 'team',
         requirements: [
@@ -343,9 +341,29 @@ export const CHAPTERS: Chapter[] = [
           { type: 'rival', value: 'chosen', description: 'Must have chosen rival' }
         ],
         rewards: [
-          { type: 'xp', value: 150, description: 'Team trial completion XP' },
-          { type: 'pp', value: 50, description: 'Team trial completion PP' },
-          { type: 'wisdom', value: 1, description: 'Team wisdom gained' }
+          { type: 'xp', value: 100, description: 'Squad Up XP' },
+          { type: 'pp', value: 100, description: 'Squad Up PP' },
+          { type: 'artifact', value: 'captains-helmet', description: 'Captain\'s Helmet' }
+        ],
+        isCompleted: false
+      },
+      {
+        id: 'ep2-its-all-a-game',
+        title: 'It\'s All a Game',
+        description: 'Now that there is power in the Research Facility, Sonido\'s transmissions can come through. His first transmission is about to come through. Sonido reveals that life, power, and manifests operate like a game. Most people never see the UI, but some learn to listen to the system. He hints that Ascension isn\'t just Manifest mastery—what if you could change the settings?',
+        type: 'team',
+        requirements: [
+          { type: 'team', value: 'formed', description: 'Must have formed team' },
+          { type: 'rival', value: 'chosen', description: 'Must have chosen rival' },
+          { type: 'challenge', value: 'ch2-team-trial', description: 'Must complete Squad Up' }
+        ],
+        rewards: [
+          { type: 'xp', value: 300, description: 'It\'s All a Game XP' },
+          { type: 'pp', value: 300, description: 'It\'s All a Game PP' },
+          { type: 'ability', value: 'reality_layer_ui', description: 'Reality Layer UI Unlock' },
+          { type: 'artifact', value: 'rr_candy', description: 'RR Candy' },
+          { type: 'ability', value: 'manifest_configuration', description: 'Manifest Configuration Tab' },
+          { type: 'ability', value: 'candy_skill_tree', description: 'Candy Skill Tree Unlock' }
         ],
         isCompleted: false
       },
@@ -360,22 +378,10 @@ export const CHAPTERS: Chapter[] = [
           { type: 'pp', value: 15, description: 'Orientation PP' }
         ],
         isCompleted: false
-      },
-      {
-        id: 'ep2-sparring',
-        title: 'Participate in Sparring',
-        description: 'First combat with rivals',
-        type: 'personal',
-        requirements: [],
-        rewards: [
-          { type: 'xp', value: 45, description: 'Sparring XP' },
-          { type: 'pp', value: 35, description: 'Sparring PP' }
-        ],
-        isCompleted: false
       }
     ],
     teamSize: 4,
-    isActive: false,
+    isActive: true,
     isCompleted: false
   },
   {

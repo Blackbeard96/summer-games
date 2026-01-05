@@ -220,7 +220,7 @@ const DEFAULT_OPPONENTS: CPUOpponent[] = [
   },
   {
     id: 'zombie',
-    name: 'Zombie',
+    name: 'Unpowered Zombie',
     moves: [
       { 
         id: 'energy-strike', 
@@ -249,6 +249,90 @@ const DEFAULT_OPPONENTS: CPUOpponent[] = [
         baseDamage: 7, 
         type: 'attack',
         description: 'A bash attack that damages shields'
+      }
+    ]
+  },
+  {
+    id: 'unveiled_elite_luz',
+    name: 'Luz, Wielder of Light',
+    moves: [
+      { 
+        id: 'light-strike', 
+        name: 'Light Strike', 
+        damageRange: { min: 100, max: 150 }, 
+        type: 'attack',
+        description: 'A powerful light-based attack'
+      },
+      { 
+        id: 'radiant-burst', 
+        name: 'Radiant Burst', 
+        damageRange: { min: 150, max: 200 }, 
+        type: 'attack',
+        description: 'A devastating burst of radiant energy'
+      },
+      { 
+        id: 'light-shield', 
+        name: 'Light Shield', 
+        type: 'defense',
+        damageReduction: { percentage: 25 },
+        duration: 2,
+        description: 'Creates a protective shield of light'
+      }
+    ]
+  },
+  {
+    id: 'unveiled_elite_kon',
+    name: 'Kon, the Guardian for Config',
+    moves: [
+      { 
+        id: 'config-strike', 
+        name: 'Config Strike', 
+        damageRange: { min: 100, max: 150 }, 
+        type: 'attack',
+        description: 'A powerful configuration-based attack'
+      },
+      { 
+        id: 'system-overload', 
+        name: 'System Overload', 
+        damageRange: { min: 150, max: 200 }, 
+        type: 'attack',
+        description: 'Overloads the target system with configuration energy'
+      },
+      { 
+        id: 'config-shield', 
+        name: 'Config Shield', 
+        type: 'defense',
+        damageReduction: { percentage: 25 },
+        duration: 2,
+        description: 'Creates a protective shield of configuration energy'
+      }
+    ]
+  },
+  {
+    id: 'unveiled_elite_updown',
+    name: 'Up/Down Guardian',
+    moves: [
+      { 
+        id: 'updown-strike', 
+        name: 'Up/Down Strike', 
+        damageRange: { min: 100, max: 150 }, 
+        type: 'attack',
+        description: 'A powerful up/down-based attack'
+      },
+      { 
+        id: 'vertical-burst', 
+        name: 'Vertical Burst', 
+        damageRange: { min: 150, max: 200 }, 
+        type: 'attack',
+        description: 'A devastating vertical energy burst'
+      },
+      { 
+        id: 'updown-shield', 
+        name: 'Up/Down Shield', 
+        type: 'defense',
+        damageReduction: { percentage: 25 },
+        duration: 2,
+        description: 'Creates a protective shield of up/down energy'
       }
     ]
   }
@@ -281,14 +365,30 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
           // Merge with defaults to ensure new opponents are included
           const existingOpponentIds = new Set(data.opponents.map((opp: CPUOpponent) => opp.id));
           const newOpponents = DEFAULT_OPPONENTS.filter(opp => !existingOpponentIds.has(opp.id));
-          const mergedOpponents = [...data.opponents, ...newOpponents];
+          
+          // Update "Zombie" to "Unpowered Zombie" if it exists
+          let nameWasUpdated = false;
+          const updatedOpponents = data.opponents.map((opp: CPUOpponent) => {
+            if (opp.id === 'zombie' && opp.name === 'Zombie') {
+              console.log('🔄 Updating "Zombie" to "Unpowered Zombie" in Firestore');
+              nameWasUpdated = true;
+              return { ...opp, name: 'Unpowered Zombie' };
+            }
+            return opp;
+          });
+          
+          const mergedOpponents = [...updatedOpponents, ...newOpponents];
           setOpponents(mergedOpponents);
           
-          // If new opponents were added, save the merged list
-          if (newOpponents.length > 0) {
+          // If name was updated or new opponents were added, save the updated list
+          if (newOpponents.length > 0 || nameWasUpdated) {
             const cleanedOpponents = removeUndefined(mergedOpponents);
             await setDoc(cpuMovesRef, { opponents: cleanedOpponents });
-            setSaveMessage(`✅ Added ${newOpponents.length} new opponent(s) to the list!`);
+            if (nameWasUpdated) {
+              setSaveMessage(`✅ Updated "Zombie" to "Unpowered Zombie"!`);
+            } else {
+              setSaveMessage(`✅ Added ${newOpponents.length} new opponent(s) to the list!`);
+            }
             setTimeout(() => setSaveMessage(''), 3000);
           }
         } else {

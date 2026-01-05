@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange, 
@@ -8,9 +8,12 @@ import {
 } from '../utils/damageCalculator';
 import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
 import { useAuth } from '../context/AuthContext';
-import { getArtifactDamageMultiplier, getEffectiveMasteryLevel } from '../utils/artifactUtils';
-import { doc, getDoc } from 'firebase/firestore';
+import { getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
+import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { getRRCandyMoves } from '../utils/rrCandyMoves';
+import { getRRCandyStatus, getRRCandyStatusAsync } from '../utils/rrCandyUtils';
+import { getUserRRCandySkills, checkRRCandyUnlock } from '../utils/rrCandyService';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -104,9 +107,77 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     loadEquippedArtifacts();
   }, [currentUser]);
 
+  // Ensure RR Candy moves are loaded when component mounts
+  // This ensures they appear in Skills & Mastery even if they weren't loaded initially
+  // State to track RR Candy unlock status and skills
+  const [rrCandyStatus, setRRCandyStatus] = useState<{ unlocked: boolean; candyType: 'on-off' | 'up-down' | 'config' | null }>({ unlocked: false, candyType: null });
+  const [rrCandySkillsFromService, setRRCandySkillsFromService] = useState<Move[]>([]);
+
+  // Fetch RR Candy skills using the shared service (same as Profile)
+  useEffect(() => {
+    const fetchRRCandySkills = async () => {
+      if (!currentUser) {
+        console.log('MovesDisplay: No currentUser, skipping RR Candy fetch');
+        return;
+      }
+      
+      console.log('MovesDisplay: Starting RR Candy skills fetch for user:', currentUser.uid);
+      
+      try {
+        // Check unlock status
+        const unlockStatus = await checkRRCandyUnlock(currentUser.uid);
+        console.log('MovesDisplay: Unlock status check result:', unlockStatus);
+        setRRCandyStatus(unlockStatus);
+        
+        if (!unlockStatus.unlocked) {
+          console.warn('MovesDisplay: RR Candy not unlocked. Status:', unlockStatus);
+          setRRCandySkillsFromService([]);
+          return;
+        }
+
+        console.log('MovesDisplay: RR Candy is unlocked! Fetching skills...', {
+          candyType: unlockStatus.candyType,
+          movesArrayLength: moves.length
+        });
+
+        // Fetch RR Candy skills using shared service (passes moves array to avoid extra fetch)
+        // The service will generate and persist moves if they don't exist
+        const rrSkills = await getUserRRCandySkills(currentUser.uid, moves);
+        setRRCandySkillsFromService(rrSkills);
+        
+        console.log('MovesDisplay: RR Candy skills fetched from service:', {
+          count: rrSkills.length,
+          unlocked: unlockStatus.unlocked,
+          candyType: unlockStatus.candyType,
+          skills: rrSkills.map(s => ({ id: s.id, name: s.name, level: s.masteryLevel, unlocked: s.unlocked }))
+        });
+        
+        // If service generated new moves, they'll be picked up by BattleContext's listener
+        // But we can also trigger a refresh by checking if moves array needs updating
+        if (rrSkills.length > 0) {
+          const movesInArray = moves.filter(m => m.id?.startsWith('rr-candy-'));
+          if (movesInArray.length < rrSkills.length) {
+            console.log('MovesDisplay: Service returned more RR Candy skills than in moves array. BattleContext listener should pick them up.');
+          }
+        } else {
+          console.warn('MovesDisplay: Service returned 0 RR Candy skills even though unlocked!');
+        }
+      } catch (error) {
+        console.error('MovesDisplay: Error fetching RR Candy skills:', error);
+        setRRCandySkillsFromService([]);
+      }
+    };
+
+    fetchRRCandySkills();
+  }, [currentUser, moves]); // Re-fetch when moves array changes (from BattleContext listener)
+
   console.log('MovesDisplay: movesRemaining:', movesRemaining, 'offlineMovesRemaining:', offlineMovesRemaining);
   console.log('MovesDisplay: Total moves loaded:', moves.length);
   console.log('MovesDisplay: Move overrides loaded:', overridesLoaded, 'overrides:', moveOverrides);
+  
+  // Log RR Candy moves specifically for debugging
+  const allRRCandyMoves = moves.filter(move => move.id?.includes('rr-candy'));
+  console.log('MovesDisplay: All RR Candy moves in moves array:', allRRCandyMoves.length, allRRCandyMoves.map(m => ({ id: m.id, name: m.name, unlocked: m.unlocked, category: m.category })));
 
   // Helper function to get move data with overrides applied
   // Uses synchronous functions that access the global cache, which is updated when admin saves changes
@@ -143,34 +214,90 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     };
   };
 
-  // Filter moves by category and unlocked status
-  const manifestMoves = moves.filter(move => move.category === 'manifest' && move.unlocked);
-  // Filter elemental moves by player's chosen element
-  const elementalMoves = moves.filter(move => {
-    if (move.category !== 'elemental' || !move.unlocked) return false;
-    // If userElement is provided, ONLY show moves matching that element (strict filtering)
-    if (userElement) {
-      const moveElement = move.elementalAffinity?.toLowerCase();
-      const userElementLower = userElement.toLowerCase();
-      const matches = moveElement === userElementLower;
-      if (matches) {
-        console.log(`MovesDisplay: ✅ Move ${move.name} matches user element ${userElementLower}`);
-      }
-      return matches;
-    }
-    // If no userElement provided, don't show any elemental moves (user must choose element first)
-    console.log('MovesDisplay: ⚠️ No userElement provided - hiding all elemental moves');
-    return false;
-  });
-  const systemMoves = moves.filter(move => move.category === 'system' && move.unlocked);
+  // Filter moves by category and unlocked status - memoized for performance
+  const manifestMoves = useMemo(() => 
+    moves.filter(move => move.category === 'manifest' && move.unlocked),
+    [moves]
+  );
   
-  console.log('MovesDisplay: Filtered moves - Manifest:', manifestMoves.length, 'Elemental:', elementalMoves.length, 'System:', systemMoves.length);
+  // Filter elemental moves by player's chosen element - memoized for performance
+  const elementalMoves = useMemo(() => {
+    return moves.filter(move => {
+      if (move.category !== 'elemental' || !move.unlocked) return false;
+      // If userElement is provided, ONLY show moves matching that element (strict filtering)
+      if (userElement) {
+        const moveElement = move.elementalAffinity?.toLowerCase();
+        const userElementLower = userElement.toLowerCase();
+        return moveElement === userElementLower;
+      }
+      // If no userElement provided, don't show any elemental moves (user must choose element first)
+      return false;
+    });
+  }, [moves, userElement]);
+  
+  // Separate Power Card skills (custom moves from Profile)
+  const powerCardMoves = useMemo(() => {
+    const filtered = moves.filter(move => {
+      return move.id?.startsWith('power-card-') && move.unlocked;
+    });
+    console.log('MovesDisplay: Power Card moves filtered:', filtered.length, filtered.map(m => ({ id: m.id, name: m.name })));
+    return filtered;
+  }, [moves]);
+  
+  // Use RR Candy skills from shared service (same source as Profile)
+  // This ensures Skill Mastery shows the exact same skills as Profile → Skill Tree Settings
+  const rrCandyMoves = useMemo(() => {
+    // PRIORITY 1: If we have skills from the service, use those (they're the source of truth)
+    // The service fetches from Firestore and generates if needed, matching Profile logic exactly
+    if (rrCandySkillsFromService.length > 0) {
+      console.log('MovesDisplay: Using RR Candy skills from service (source of truth):', {
+        count: rrCandySkillsFromService.length,
+        skills: rrCandySkillsFromService.map(m => ({ id: m.id, name: m.name, level: m.masteryLevel, unlocked: m.unlocked }))
+      });
+      return rrCandySkillsFromService;
+    }
+    
+    // PRIORITY 2: Fallback to filtering from moves array if service hasn't loaded yet
+    // This ensures we show skills immediately if they're already in the moves array
+    const filtered = moves.filter(move => {
+      const isRRCandy = move.id?.includes('rr-candy') || move.id?.startsWith('rr-candy-');
+      if (!isRRCandy) return false;
+      
+      // If RR Candy is unlocked globally, show ALL RR Candy moves
+      if (rrCandyStatus.unlocked) {
+        return true;
+      }
+      
+      // If RR Candy is not unlocked, only show moves that are explicitly unlocked
+      return move.unlocked === true;
+    });
+    
+    console.log('MovesDisplay: RR Candy moves from fallback filter:', {
+      count: filtered.length,
+      rrCandyUnlocked: rrCandyStatus.unlocked,
+      candyType: rrCandyStatus.candyType,
+      serviceSkillsCount: rrCandySkillsFromService.length,
+      moves: filtered.map(m => ({ id: m.id, name: m.name, unlocked: m.unlocked }))
+    });
+    return filtered;
+  }, [rrCandySkillsFromService, moves, rrCandyStatus.unlocked, rrCandyStatus.candyType]);
+  
+  const systemMoves = useMemo(() => {
+    const filtered = moves.filter(move => {
+      const isRRCandy = move.id?.includes('rr-candy') || move.id?.startsWith('rr-candy-');
+      const isPowerCard = move.id?.startsWith('power-card-');
+      return move.category === 'system' && move.unlocked && !isRRCandy && !isPowerCard;
+    });
+    return filtered;
+  }, [moves]);
+  
+  console.log('MovesDisplay: Filtered skills - Manifest:', manifestMoves.length, 'Elemental:', elementalMoves.length, 'RR Candy:', rrCandyMoves.length, 'System:', systemMoves.length);
   console.log('MovesDisplay: userElement prop:', userElement);
   if (elementalMoves.length > 0) {
-    console.log('MovesDisplay: Elemental moves found:', elementalMoves.map(m => `${m.name} (${m.elementalAffinity})`));
+    console.log('MovesDisplay: Elemental moves found:', elementalMoves.map((m: Move) => `${m.name} (${m.elementalAffinity})`));
   } else {
     console.log('MovesDisplay: No elemental moves found for element:', userElement);
-    console.log('MovesDisplay: All unlocked elemental moves:', moves.filter(m => m.category === 'elemental' && m.unlocked).map(m => `${m.name} (${m.elementalAffinity})`));
+    console.log('MovesDisplay: All unlocked elemental moves:', moves.filter((m: Move) => m.category === 'elemental' && m.unlocked).map((m: Move) => `${m.name} (${m.elementalAffinity})`));
   }
 
   const getMasteryLabel = (level: number) => {
@@ -268,28 +395,34 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   };
 
   const renderMoveCard = (move: Move) => {
+    // Force unlock RR Candy moves if RR Candy is globally unlocked
+    // This ensures moves appear in Skill Mastery even if move.unlocked is false
+    const isRRCandyMove = move.id?.startsWith('rr-candy-') || move.id?.includes('rr-candy');
+    const effectiveUnlocked = isRRCandyMove && rrCandyStatus.unlocked ? true : move.unlocked;
+    
     // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
     const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
     
     // Check if move can be upgraded (up to level 10)
-    const canUpgrade = move.masteryLevel < 10;
-    const canAscend = move.masteryLevel === 5;
+    const canUpgrade = move.masteryLevel < 10 && effectiveUnlocked;
+    const canAscend = move.masteryLevel === 5 && effectiveUnlocked;
     
     // Calculate exponential upgrade cost based on current level
-    // Base price: 100 PP for Level 1 → Level 2
+    // RR Candy moves: 1000 PP for Level 1 → Level 2
+    // Regular moves: 100 PP for Level 1 → Level 2
     // Then multiplied by the respective multiplier for each level
+    const basePrice = isRRCandyMove ? 1000 : 100; // 1000 PP for RR Candy moves, 100 PP for regular moves
     const getUpgradeCost = () => {
-      const basePrice = 100;
       const nextLevel = move.masteryLevel + 1;
-      if (nextLevel === 2) return basePrice; // Level 1 → Level 2: 100 PP
-      if (nextLevel === 3) return basePrice * 2; // Level 2 → Level 3: 200 PP
-      if (nextLevel === 4) return basePrice * 4; // Level 3 → Level 4: 400 PP
-      if (nextLevel === 5) return basePrice * 8; // Level 4 → Level 5: 800 PP
-      if (nextLevel === 6) return basePrice * 16; // Level 5 → Level 6 (Ascend): 1600 PP
-      if (nextLevel === 7) return basePrice * 32; // Level 6 → Level 7: 3200 PP
-      if (nextLevel === 8) return basePrice * 64; // Level 7 → Level 8: 6400 PP
-      if (nextLevel === 9) return basePrice * 128; // Level 8 → Level 9: 12800 PP
-      if (nextLevel === 10) return basePrice * 256; // Level 9 → Level 10: 25600 PP
+      if (nextLevel === 2) return basePrice; // Level 1 → Level 2: base price
+      if (nextLevel === 3) return basePrice * 2; // Level 2 → Level 3: base * 2
+      if (nextLevel === 4) return basePrice * 4; // Level 3 → Level 4: base * 4
+      if (nextLevel === 5) return basePrice * 8; // Level 4 → Level 5: base * 8
+      if (nextLevel === 6) return basePrice * 16; // Level 5 → Level 6 (Ascend): base * 16
+      if (nextLevel === 7) return basePrice * 32; // Level 6 → Level 7: base * 32
+      if (nextLevel === 8) return basePrice * 64; // Level 7 → Level 8: base * 64
+      if (nextLevel === 9) return basePrice * 128; // Level 8 → Level 9: base * 128
+      if (nextLevel === 10) return basePrice * 256; // Level 9 → Level 10: base * 256
       return basePrice;
     };
     const upgradeCost = getUpgradeCost();
@@ -319,6 +452,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       if (move.category === 'elemental') {
         return getElementalIcon(move.elementalAffinity || '');
       }
+      // Use Power Card icon if available (for custom Power Card moves)
+      if ((move as any).powerCardIcon) {
+        return (move as any).powerCardIcon;
+      }
       return '⚙️';
     };
 
@@ -328,6 +465,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         return getManifestColor(move.manifestType || 'reading');
       } else if (move.category === 'elemental') {
         return getElementalColor(move.elementalAffinity || 'fire');
+      } else if (move.id?.startsWith('power-card-')) {
+        return '#f59e0b'; // Orange for Power Card moves
       } else if (move.category === 'system') {
         return '#3b82f6';
       }
@@ -449,7 +588,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           )}
         </div>
 
-        {/* Move Description */}
+        {/* Skill Description */}
         <div style={{ 
           background: 'rgba(255,255,255,0.95)',
           padding: '1rem',
@@ -517,7 +656,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           gap: '0.75rem',
           marginBottom: '1rem'
         }}>
-          {/* Move Cost */}
+          {/* Skill Cost */}
           <div style={{
             background: 'rgba(255,255,255,0.9)',
             padding: '0.75rem',
@@ -525,7 +664,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textAlign: 'center',
             backdropFilter: 'blur(10px)'
           }}>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>MOVE COST</div>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SKILL COST</div>
             <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.cost}</div>
           </div>
 
@@ -551,9 +690,14 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               // (effectiveMasteryLevel is already calculated at the top of renderMoveCard)
               let damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
               
-              // Apply Elemental Ring damage multiplier for elemental moves (apply to range, not base damage)
+              // Store base damage range before artifact multipliers
+              const baseDamageRange = { ...damageRange };
+              
+              // Apply artifact damage multipliers (apply to range, not base damage)
               let artifactMultiplier = 1.0;
               let ringLevel = 1;
+              let manifestBoost = 1.0;
+              
               if (move.category === 'elemental' && equippedArtifacts) {
                 // Check all ring slots for Elemental Ring
                 const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
@@ -575,7 +719,23 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }
               }
               
+              // Apply manifest damage boost for manifest moves (Captain's Helmet)
+              if (move.category === 'manifest' && equippedArtifacts) {
+                manifestBoost = getManifestDamageBoost(equippedArtifacts);
+                if (manifestBoost > 1.0) {
+                  // Apply multiplier to the damage range (not base damage)
+                  damageRange = {
+                    min: Math.floor(damageRange.min * manifestBoost),
+                    max: Math.floor(damageRange.max * manifestBoost),
+                    average: Math.floor(damageRange.average * manifestBoost)
+                  };
+                }
+              }
+              
               const rangeString = formatDamageRange(damageRange);
+              const baseRangeString = formatDamageRange(baseDamageRange);
+              const hasArtifactBoost = artifactMultiplier > 1.0 || manifestBoost > 1.0;
+              
               return (
                 <div style={{
                   background: 'rgba(255,255,255,0.9)',
@@ -586,10 +746,26 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                   gridColumn: 'span 2'
                 }}>
                   <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>DAMAGE RANGE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>{rangeString}</div>
-                  {artifactMultiplier > 1.0 && (
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#dc2626' }}>
+                    {hasArtifactBoost ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <div style={{ color: '#dc2626' }}>{rangeString}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'normal' }}>
+                          Base: {baseRangeString}
+                        </div>
+                      </div>
+                    ) : (
+                      rangeString
+                    )}
+                  </div>
+                  {artifactMultiplier > 1.0 && move.category === 'elemental' && (
                     <div style={{ fontSize: '0.7rem', color: '#f59e0b', marginTop: '0.25rem', fontWeight: 'bold' }}>
                       💍 Elemental Ring (Level {ringLevel}) +{Math.round((artifactMultiplier - 1) * 100)}%
+                    </div>
+                  )}
+                  {manifestBoost > 1.0 && move.category === 'manifest' && (
+                    <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      🪖 Captain's Helmet +{Math.round((manifestBoost - 1) * 100)}%
                     </div>
                   )}
                   {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
@@ -641,58 +817,262 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           })()}
 
           {/* Healing */}
-          {move.healing && (
+          {move.healing && (() => {
+            // Calculate healing range if we have mastery level
+            let healingDisplay: string | number = move.healing;
+            if (effectiveMasteryLevel > 1) {
+              const healingRange = calculateHealingRange(move.healing, move.level, effectiveMasteryLevel);
+              healingDisplay = `${healingRange.min}-${healingRange.max} (Avg: ${healingRange.average})`;
+            }
+            return (
+              <div style={{
+                background: 'rgba(255,255,255,0.9)',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                textAlign: 'center',
+                backdropFilter: 'blur(10px)',
+                gridColumn: 'span 2'
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>HEALING</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>{healingDisplay}</div>
+              </div>
+            );
+          })()}
+
+          {/* Shield Boost */}
+          {move.shieldBoost && (() => {
+            // Calculate shield boost range if we have mastery level
+            let shieldDisplay: string | number = move.shieldBoost;
+            let manifestBoost = 1.0;
+            
+            if (effectiveMasteryLevel > 1) {
+              let shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, effectiveMasteryLevel);
+              
+              // Store base shield range before artifact multipliers
+              const baseShieldRange = { ...shieldRange };
+              
+              // Apply manifest damage boost for manifest moves (Captain's Helmet)
+              // This also boosts shield values for manifest defensive moves
+              if (move.category === 'manifest' && equippedArtifacts) {
+                manifestBoost = getManifestDamageBoost(equippedArtifacts);
+                if (manifestBoost > 1.0) {
+                  // Apply multiplier to the shield range
+                  shieldRange = {
+                    min: Math.floor(shieldRange.min * manifestBoost),
+                    max: Math.floor(shieldRange.max * manifestBoost),
+                    average: Math.floor(shieldRange.average * manifestBoost)
+                  };
+                }
+              }
+              
+              const hasArtifactBoost = manifestBoost > 1.0;
+              const baseShieldString = `${baseShieldRange.min}-${baseShieldRange.max} (Avg: ${baseShieldRange.average})`;
+              shieldDisplay = `${shieldRange.min}-${shieldRange.max} (Avg: ${shieldRange.average})`;
+              
+              return (
+                <div style={{
+                  background: 'rgba(255,255,255,0.9)',
+                  padding: '0.75rem',
+                  borderRadius: '0.75rem',
+                  textAlign: 'center',
+                  backdropFilter: 'blur(10px)',
+                  gridColumn: 'span 2'
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD BOOST</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#3b82f6' }}>
+                    {hasArtifactBoost ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <div style={{ color: '#3b82f6' }}>{shieldDisplay}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'normal' }}>
+                          Base: {baseShieldString}
+                        </div>
+                      </div>
+                    ) : (
+                      shieldDisplay
+                    )}
+                  </div>
+                  {manifestBoost > 1.0 && move.category === 'manifest' && (
+                    <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      🪖 Captain's Helmet +{Math.round((manifestBoost - 1) * 100)}%
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            
+            return (
+              <div style={{
+                background: 'rgba(255,255,255,0.9)',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                textAlign: 'center',
+                backdropFilter: 'blur(10px)',
+                gridColumn: 'span 2'
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD BOOST</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#3b82f6' }}>{shieldDisplay}</div>
+              </div>
+            );
+          })()}
+
+          {/* PP Steal */}
+          {move.ppSteal && move.ppSteal > 0 && (
             <div style={{
               background: 'rgba(255,255,255,0.9)',
               padding: '0.75rem',
               borderRadius: '0.75rem',
               textAlign: 'center',
-              backdropFilter: 'blur(10px)',
-              gridColumn: 'span 2'
+              backdropFilter: 'blur(10px)'
             }}>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>HEALING</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>{move.healing}</div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>PP STEAL</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.ppSteal}</div>
             </div>
           )}
 
-          {/* Shield Boost */}
-          {move.shieldBoost && (
+          {/* Cooldown */}
+          {move.cooldown > 0 && (
             <div style={{
               background: 'rgba(255,255,255,0.9)',
               padding: '0.75rem',
               borderRadius: '0.75rem',
               textAlign: 'center',
-              backdropFilter: 'blur(10px)',
-              gridColumn: 'span 2'
+              backdropFilter: 'blur(10px)'
             }}>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SHIELD BOOST</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#3b82f6' }}>{move.shieldBoost}</div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>COOLDOWN</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+                {move.cooldown} {move.cooldown === 1 ? 'turn' : 'turns'}
+                {move.currentCooldown > 0 && (
+                  <div style={{ fontSize: '0.7rem', color: '#dc2626', marginTop: '0.25rem' }}>
+                    ({move.currentCooldown} remaining)
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Priority */}
+          {move.priority !== undefined && move.priority !== 0 && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              padding: '0.75rem',
+              borderRadius: '0.75rem',
+              textAlign: 'center',
+              backdropFilter: 'blur(10px)'
+            }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>PRIORITY</div>
+              <div style={{ 
+                fontSize: '1.25rem', 
+                fontWeight: 'bold', 
+                color: move.priority > 0 ? '#10b981' : '#dc2626' 
+              }}>
+                {move.priority > 0 ? '+' : ''}{move.priority}
+              </div>
+            </div>
+          )}
+
+          {/* Target Type */}
+          {move.targetType && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              padding: '0.75rem',
+              borderRadius: '0.75rem',
+              textAlign: 'center',
+              backdropFilter: 'blur(10px)'
+            }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>TARGET</div>
+              <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151', textTransform: 'capitalize' }}>
+                {move.targetType.replace('_', ' ')}
+              </div>
             </div>
           )}
         </div>
 
         {/* Effects Section */}
-        {(move.debuffType || move.buffType) && (
-          <div style={{ 
-            background: 'rgba(255,255,255,0.9)',
-            padding: '1rem',
-            borderRadius: '0.75rem',
-            marginBottom: '1rem',
-            backdropFilter: 'blur(10px)'
-          }}>
-            <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151', marginBottom: '0.5rem' }}>
-              Effects
+        {(() => {
+          // Check for statusEffects from moveOverrides
+          const moveOverride = moveOverrides[move.name];
+          const statusEffects = moveOverride?.statusEffects || (moveOverride?.statusEffect && moveOverride.statusEffect.type !== 'none' ? [moveOverride.statusEffect] : []);
+          
+          // Also check for legacy debuffType/buffType
+          const hasLegacyEffects = move.debuffType || move.buffType;
+          const hasStatusEffects = statusEffects && statusEffects.length > 0;
+          
+          if (!hasLegacyEffects && !hasStatusEffects) return null;
+          
+          return (
+            <div style={{ 
+              background: 'rgba(255,255,255,0.9)',
+              padding: '1rem',
+              borderRadius: '0.75rem',
+              marginBottom: '1rem',
+              backdropFilter: 'blur(10px)'
+            }}>
+              <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151', marginBottom: '0.5rem' }}>
+                Effects
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', lineHeight: '1.6' }}>
+                {/* Legacy buff/debuff display */}
+                {move.debuffType && (
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    • <strong>Debuff:</strong> {move.debuffType} ({move.debuffStrength || 0} strength, {move.duration || 1} turns)
+                  </div>
+                )}
+                {move.buffType && (
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    • <strong>Buff:</strong> {move.buffType} ({move.buffStrength || 0} strength, {move.duration || 1} turns)
+                  </div>
+                )}
+                
+                {/* Status Effects from overrides */}
+                {statusEffects.map((effect: any, index: number) => {
+                  if (!effect || effect.type === 'none') return null;
+                  
+                  const effectType = effect.type.charAt(0).toUpperCase() + effect.type.slice(1);
+                  const duration = effect.duration || 1;
+                  const successChance = effect.successChance ?? effect.chance ?? 100;
+                  
+                  return (
+                    <div key={index} style={{ 
+                      marginBottom: '0.5rem',
+                      padding: '0.5rem',
+                      background: 'rgba(251, 191, 36, 0.1)',
+                      borderRadius: '0.375rem',
+                      border: '1px solid rgba(251, 191, 36, 0.3)'
+                    }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                        Effect {index + 1}: {effectType}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', lineHeight: '1.5' }}>
+                        <div>• Duration: {duration} {duration === 1 ? 'turn' : 'turns'}</div>
+                        {successChance < 100 && (
+                          <div>• Success Chance: {successChance}%</div>
+                        )}
+                        {effect.damageReduction !== undefined && (
+                          <div>• Damage Reduction: {effect.damageReduction}%</div>
+                        )}
+                        {effect.damagePerTurn !== undefined && (
+                          <div>• Damage Per Turn: {effect.damagePerTurn}</div>
+                        )}
+                        {effect.ppLossPerTurn !== undefined && (
+                          <div>• PP Loss Per Turn: {effect.ppLossPerTurn}</div>
+                        )}
+                        {effect.ppStealPerTurn !== undefined && (
+                          <div>• PP Steal Per Turn: {effect.ppStealPerTurn}</div>
+                        )}
+                        {effect.healPerTurn !== undefined && (
+                          <div>• Heal Per Turn: {effect.healPerTurn}</div>
+                        )}
+                        {effect.intensity !== undefined && (
+                          <div>• Intensity: {effect.intensity}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280', lineHeight: '1.4' }}>
-              {move.debuffType && (
-                <div>• <strong>Debuff:</strong> {move.debuffType} ({move.debuffStrength || 0} strength, {move.duration || 1} turns)</div>
-              )}
-              {move.buffType && (
-                <div>• <strong>Buff:</strong> {move.buffType} ({move.buffStrength || 0} strength, {move.duration || 1} turns)</div>
-              )}
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Mastery Level */}
         <div style={{ 
@@ -998,69 +1378,120 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }
                 return null;
               })()}
-              {nextLevelStats && nextLevelStats.debuffStrength !== undefined && (
-                <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>
-              )}
-              {nextLevelStats && nextLevelStats.buffStrength !== undefined && (
-                <div>Buff: {move.buffStrength || 0} → {nextLevelStats.buffStrength}</div>
-              )}
+              {(() => {
+                // Special handling for RR Candy skills - show shield removal/boost preview
+                if (isRRCandyMove && move.debuffType === 'shield_break' && move.debuffStrength) {
+                  const nextLevel = move.masteryLevel + 1;
+                  let minBoost: number, maxBoost: number;
+                  
+                  switch (nextLevel) {
+                    case 2: minBoost = 2.0; maxBoost = 2.3; break;
+                    case 3: minBoost = 1.25; maxBoost = 1.5; break;
+                    case 4: minBoost = 1.3; maxBoost = 1.6; break;
+                    case 5: minBoost = 2.0; maxBoost = 2.5; break;
+                    default: minBoost = 1.0; maxBoost = 1.0;
+                  }
+                  
+                  const currentShieldRemoval = move.debuffStrength;
+                  const nextMinRemoval = Math.floor(currentShieldRemoval * minBoost);
+                  const nextMaxRemoval = Math.floor(currentShieldRemoval * maxBoost);
+                  
+                  return (
+                    <div>Shield Removal: {currentShieldRemoval}% → {nextMinRemoval}% - {nextMaxRemoval}%</div>
+                  );
+                }
+                
+                // Special handling for RR Candy skills - show shield boost preview
+                if (isRRCandyMove && move.shieldBoost) {
+                  const nextLevel = move.masteryLevel + 1;
+                  let minBoost: number, maxBoost: number;
+                  
+                  switch (nextLevel) {
+                    case 2: minBoost = 2.0; maxBoost = 2.3; break;
+                    case 3: minBoost = 1.25; maxBoost = 1.5; break;
+                    case 4: minBoost = 1.3; maxBoost = 1.6; break;
+                    case 5: minBoost = 2.0; maxBoost = 2.5; break;
+                    default: minBoost = 1.0; maxBoost = 1.0;
+                  }
+                  
+                  const currentShieldBoost = move.shieldBoost;
+                  const nextMinBoost = Math.floor(currentShieldBoost * minBoost);
+                  const nextMaxBoost = Math.floor(currentShieldBoost * maxBoost);
+                  
+                  return (
+                    <div>Shield Boost: {currentShieldBoost}% → {nextMinBoost}% - {nextMaxBoost}%</div>
+                  );
+                }
+                
+                // Regular debuff/buff preview
+                if (nextLevelStats && nextLevelStats.debuffStrength !== undefined) {
+                  return <div>Debuff: {move.debuffStrength || 0} → {nextLevelStats.debuffStrength}</div>;
+                }
+                if (nextLevelStats && nextLevelStats.buffStrength !== undefined) {
+                  return <div>Buff: {move.buffStrength || 0} → {nextLevelStats.buffStrength}</div>;
+                }
+                return null;
+              })()}
             </div>
           </div>
         )}
 
         {/* Ascend Button - Show if level is exactly 5 */}
-        {canAscend && onUpgradeMove && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              
-              console.log('🔄 Ascend button clicked!', {
-                moveId: move.id,
-                moveName: move.name,
-                masteryLevel: move.masteryLevel,
-                canAscend,
-                onUpgradeMove: !!onUpgradeMove,
-                timestamp: new Date().toISOString()
-              });
-              
-              // Show custom confirmation modal instead of window.confirm (works better in Firefox)
-              const moveName = getMoveDataWithOverrides(move.name).name;
-              setAscendConfirm({ moveId: move.id, moveName });
-            }}
-            style={{
-              background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
-              color: 'white',
-              border: '3px solid #f59e0b',
-              padding: '0.75rem',
-              borderRadius: '0.75rem',
-              cursor: 'pointer',
-              fontSize: '0.875rem',
-              fontWeight: 'bold',
-              width: '100%',
-              marginBottom: '0.5rem',
-              transition: 'all 0.2s',
-              backdropFilter: 'blur(10px)',
-              boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)',
-              position: 'relative',
-              zIndex: 10,
-              pointerEvents: 'auto'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
-              e.currentTarget.style.transform = 'scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 0 25px rgba(245, 158, 11, 0.8)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
-              e.currentTarget.style.transform = 'scale(1)';
-              e.currentTarget.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
-            }}
-          >
-            ⬆️ Ascend (1600 PP)
-          </button>
-        )}
+        {canAscend && onUpgradeMove && (() => {
+          const ascendCost = isRRCandyMove ? 16000 : 1600; // 16000 PP for RR Candy moves, 1600 PP for regular moves
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                console.log('🔄 Ascend button clicked!', {
+                  moveId: move.id,
+                  moveName: move.name,
+                  masteryLevel: move.masteryLevel,
+                  canAscend,
+                  onUpgradeMove: !!onUpgradeMove,
+                  timestamp: new Date().toISOString()
+                });
+                
+                // Show custom confirmation modal instead of window.confirm (works better in Firefox)
+                const moveName = getMoveDataWithOverrides(move.name).name;
+                setAscendConfirm({ moveId: move.id, moveName });
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+                color: 'white',
+                border: '3px solid #f59e0b',
+                padding: '0.75rem',
+                borderRadius: '0.75rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: 'bold',
+                width: '100%',
+                marginBottom: '0.5rem',
+                transition: 'all 0.2s',
+                backdropFilter: 'blur(10px)',
+                boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)',
+                position: 'relative',
+                zIndex: 10,
+                pointerEvents: 'auto'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
+                e.currentTarget.style.transform = 'scale(1.02)';
+                e.currentTarget.style.boxShadow = '0 0 25px rgba(245, 158, 11, 0.8)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
+              }}
+            >
+              ⬆️ Ascend ({ascendCost} PP)
+            </button>
+          );
+        })()}
 
         {/* Upgrade Button - Show for levels 1-4 and 6-9 */}
         {canUpgrade && move.masteryLevel !== 5 && (
@@ -1115,7 +1546,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     
     // Check if purchase is allowed
     const category = title.includes('Manifest') ? 'manifest' : 
-                    title.includes('Elemental') ? 'elemental' : 'system';
+                    (title.includes('Element') || title.includes('Elemental')) ? 'elemental' : 'system';
     
     let canPurchase = true;
     let nextMilestone = null;
@@ -1124,7 +1555,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       canPurchase = canPurchaseMove(category);
       nextMilestone = (getNextMilestone && manifestProgress) ? 
         getNextMilestone(manifestProgress.manifestType) : null;
-    } else if (title.includes('Elemental') && canPurchaseElementalMove && elementalProgress) {
+    } else if ((title.includes('Element') || title.includes('Elemental')) && canPurchaseElementalMove && elementalProgress) {
       // For Elemental moves, we need to check the specific element type
       const elementType = userElement?.toLowerCase();
       if (elementType) {
@@ -1344,7 +1775,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         color: '#1f2937',
         textAlign: 'center'
       }}>
-        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + systemMoves.length} Moves Unlocked)
+        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + systemMoves.length} Skills Unlocked)
       </h3>
 
       {/* Move Availability Summary */}
@@ -1355,7 +1786,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         padding: '1rem',
         marginBottom: '2rem'
       }}>
-        <h4 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: '#374151' }}>Move Availability</h4>
+        <h4 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: '#374151' }}>Skill Availability</h4>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <div style={{ 
             background: '#dbeafe',
@@ -1364,7 +1795,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             border: '1px solid #93c5fd'
           }}>
             <span style={{ fontSize: '0.875rem', color: '#1e40af', fontWeight: '500' }}>
-              ⚔️ Battle Moves: {offlineMovesRemaining} remaining
+              ⚔️ Battle Skills: {offlineMovesRemaining} remaining
             </span>
           </div>
           <div style={{ 
@@ -1374,26 +1805,116 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             border: '1px solid #fcd34d'
           }}>
             <span style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: '500' }}>
-              ⏰ Offline Moves: {offlineMovesRemaining}/{maxOfflineMoves}
+              ⏰ Offline Skills: {offlineMovesRemaining}/{maxOfflineMoves}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Manifest Moves Section */}
-      {renderMoveSection('Manifest Moves', manifestMoves, '🌟', '#8b5cf6')}
+      {/* Power Card Skills Section - Custom moves from Profile */}
+      {powerCardMoves.length > 0 && (
+        renderMoveSection('Power Card Skills', powerCardMoves, '🎴', '#f59e0b')
+      )}
 
-      {/* Elemental Moves Section */}
+      {/* RR Candy Skills Section - Same layout as Manifest/Elemental Skills */}
+      {/* Show skills if unlocked AND we have skills (prioritize service results, fallback to moves array) */}
+      {(() => {
+        // Determine which skills to display (service results take priority)
+        const skillsToDisplay = rrCandySkillsFromService.length > 0 
+          ? rrCandySkillsFromService 
+          : rrCandyMoves;
+        const skillsCount = skillsToDisplay.length;
+        
+        console.log('MovesDisplay: RR Candy display check:', {
+          unlocked: rrCandyStatus.unlocked,
+          serviceSkillsCount: rrCandySkillsFromService.length,
+          movesArrayCount: rrCandyMoves.length,
+          skillsToDisplayCount: skillsCount,
+          candyType: rrCandyStatus.candyType
+        });
+        
+        if (rrCandyStatus.unlocked && skillsCount > 0) {
+          return renderMoveSection(
+            `RR Candy Skills (${skillsCount} Available)`, 
+            skillsToDisplay, 
+            '🍬', 
+            '#ec4899'
+          );
+        } else if (rrCandyStatus.unlocked && skillsCount === 0) {
+          // RR Candy is unlocked but moves aren't loaded yet - show loading state
+          return (
+            <div style={{ marginBottom: '2rem' }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            marginBottom: '1rem',
+            padding: '0.75rem 1rem',
+            background: '#ec4899',
+            borderRadius: '0.5rem'
+          }}>
+            <span style={{ fontSize: '1.25rem', marginRight: '0.75rem' }}>🍬</span>
+            <h4 style={{ 
+              fontSize: '1.125rem', 
+              fontWeight: 'bold',
+              color: 'white',
+              margin: 0
+            }}>
+              RR Candy Skills (Loading...)
+            </h4>
+          </div>
+          <div style={{ 
+            background: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)',
+            border: '2px solid #ec4899',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            textAlign: 'center'
+          }}>
+            <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
+              Loading your RR Candy skills...
+            </p>
+          </div>
+        </div>
+          );
+        } else {
+          // Show message if no RR Candy skills are unlocked
+          return (
+            <div style={{ 
+          background: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)',
+          border: '2px solid #ec4899',
+          borderRadius: '0.75rem',
+          padding: '1.5rem',
+          marginBottom: '2rem',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🍬</div>
+          <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#ec4899' }}>
+            RR Candy Skills
+          </h4>
+          <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
+            Complete Chapter 2-4 to unlock your first RR Candy ability! These powerful reality-rewrite skills allow you to manipulate battle mechanics.
+          </p>
+          <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
+            Once unlocked, manage and upgrade your RR Candy skills here in Skill Mastery.
+          </p>
+        </div>
+          );
+        }
+      })()}
+
+      {/* Manifest Skills Section */}
+      {renderMoveSection('Manifest Skills', manifestMoves, '🌟', '#8b5cf6')}
+
+      {/* Element Skills Section */}
       {elementalMoves.length > 0 && userElement && (
         renderMoveSection(
-          `Elemental Moves (${elementalMoves.length} Available)`, 
+          `Element Skills (${elementalMoves.length} Available)`, 
           elementalMoves, 
           getElementalIcon(userElement), 
           getElementalColor(userElement)
         )
       )}
       
-      {/* Unlock Elemental Moves Button */}
+      {/* Unlock Element Skills Button */}
       {elementalMoves.length === 0 && onUnlockElementalMoves && userElement && (
         <div style={{ 
           background: getElementalBackgroundColor(userElement),
@@ -1405,10 +1926,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         }}>
           <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>{getElementalIcon(userElement)}</div>
           <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: getElementalColor(userElement) }}>
-            Unlock Your {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Elemental Moves
+            Unlock Your {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Element Skills
           </h4>
           <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
-            As a {userElement} element user, you can unlock powerful {userElement} moves to enhance your battle capabilities!
+            As a {userElement} element user, you can unlock powerful {userElement} skills to enhance your battle capabilities!
           </p>
           <button
             onClick={() => onUnlockElementalMoves(userElement)}
@@ -1432,24 +1953,26 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
-            {getElementalIcon(userElement)} Unlock {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Moves
+            {getElementalIcon(userElement)} Unlock {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Skills
           </button>
         </div>
       )}
 
-      {/* System Moves Section */}
-      {renderMoveSection('System Moves', systemMoves, '⚙️', '#059669')}
+      {/* System Moves Section (non-RR Candy system moves) */}
+      {systemMoves.length > 0 && (
+        renderMoveSection('System Skills', systemMoves, '⚙️', '#059669')
+      )}
 
-      {/* No Moves Message */}
-      {manifestMoves.length === 0 && elementalMoves.length === 0 && systemMoves.length === 0 && (
+      {/* No Skills Message */}
+      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && systemMoves.length === 0 && (
         <div style={{ 
           textAlign: 'center', 
           padding: '3rem',
           color: '#6b7280'
         }}>
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔒</div>
-          <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>No Moves Unlocked</h4>
-          <p>Complete challenges and level up to unlock powerful moves!</p>
+          <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>No Skills Unlocked</h4>
+          <p>Complete challenges and level up to unlock powerful skills!</p>
           
           {/* Debug button to force unlock all moves */}
           {onForceUnlockAllMoves && (

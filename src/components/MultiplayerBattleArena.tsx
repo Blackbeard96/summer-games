@@ -9,9 +9,10 @@ import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
-import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getManifestDamageBoost } from '../utils/artifactUtils';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
 import { getUserSquadAbbreviations } from '../utils/squadUtils';
+import { formatOpponentName } from '../utils/opponentNameFormatter';
 
 interface Participant {
   id: string;
@@ -34,6 +35,7 @@ interface MultiplayerBattleArenaProps {
   selectedMove: Move | null;
   selectedTarget: string | null;
   availableMoves: Move[];
+  isInSession?: boolean; // Hide RUN button in session mode
   allies: Participant[]; // Players on the left side (up to 4, including current player)
   enemies: Participant[]; // Opponents on the right side (up to 4)
   isPlayerTurn: boolean;
@@ -43,6 +45,10 @@ interface MultiplayerBattleArenaProps {
   playerEffects?: Array<{ type: string; duration: number }>;
   opponentEffects?: Array<{ type: string; duration: number }>;
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
+  gameId?: string; // Game ID for battle invitations
+  battleName?: string; // Battle name for invitations
+  onInviteClick?: () => void; // Callback when invite button is clicked
+  allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
 }
 
 const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
@@ -51,6 +57,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   onEscape,
   selectedMove,
   selectedTarget,
+  isInSession = false,
   availableMoves,
   allies,
   enemies,
@@ -58,6 +65,10 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   battleLog,
   customBackground,
   hideCenterPrompt = false,
+  gameId,
+  battleName,
+  onInviteClick,
+  allowInvites = false,
   playerEffects = [],
   opponentEffects = [],
   onArtifactUsed
@@ -310,7 +321,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               gap: '4px'
             }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {participant.name}
+                {formatOpponentName(participant.name)}
               </span>
               {squadAbbreviations.get(participant.id) && (
                 <span style={{
@@ -513,12 +524,45 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               border: '2px dashed #d1d5db',
               borderRadius: '0.5rem',
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
               color: '#9ca3af',
-              fontSize: '0.75rem'
+              fontSize: '0.75rem',
+              gap: '0.5rem',
+              padding: '0.5rem'
             }}>
-              Empty Slot
+              <div>Empty Slot</div>
+              {allowInvites && onInviteClick && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('Invite button clicked in MultiplayerBattleArena');
+                    onInviteClick();
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#2563eb';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#3b82f6';
+                  }}
+                >
+                  + Invite Player
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -624,7 +668,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               justifyContent: 'center'
             }}>
               <button
-                onClick={() => {
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (selectedMove) {
                     // If a move is selected, deselect it
                     onMoveSelect(null);
@@ -635,6 +681,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   }
                 }}
                 disabled={!isPlayerTurn}
+                type="button"
                 style={{
                   padding: '0.75rem 1.5rem',
                   fontSize: '1rem',
@@ -665,7 +712,12 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               </button>
 
               <button
-                onClick={() => setShowVaultModal(true)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowVaultModal(true);
+                }}
+                type="button"
                 style={{
                   padding: '0.75rem 1.5rem',
                   fontSize: '1rem',
@@ -716,9 +768,14 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 🎒 BAG
               </button>
 
-              {onEscape && (
+              {onEscape && !isInSession && (
                 <button
-                  onClick={onEscape}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onEscape();
+                  }}
+                  type="button"
                   style={{
                     padding: '0.75rem 1.5rem',
                     fontSize: '1rem',
@@ -956,6 +1013,17 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                                 💍 +{Math.round((artifactMultiplier - 1) * 100)}%
                               </span>
                             )}
+                            {move.category === 'manifest' && equippedArtifacts && (() => {
+                              const manifestBoost = getManifestDamageBoost(equippedArtifacts);
+                              if (manifestBoost > 1.0) {
+                                return (
+                                  <span style={{ color: '#8b5cf6', marginLeft: '0.25rem', fontSize: '0.65rem' }}>
+                                    🪖 +{Math.round((manifestBoost - 1) * 100)}%
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
                         )}
                         {shieldRange && (
@@ -971,6 +1039,26 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                         {move.ppSteal && move.ppSteal > 0 && (
                           <div style={{ color: '#f59e0b', fontWeight: 'bold' }}>
                             💰 PP Steal: {move.ppSteal}
+                          </div>
+                        )}
+                        {move.cooldown > 0 && (
+                          <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
+                            ⏱️ Cooldown: {move.cooldown} {move.cooldown === 1 ? 'turn' : 'turns'}
+                            {move.currentCooldown > 0 && ` (${move.currentCooldown} remaining)`}
+                          </div>
+                        )}
+                        {move.priority !== undefined && move.priority !== 0 && (
+                          <div style={{ 
+                            color: move.priority > 0 ? '#10b981' : '#dc2626', 
+                            fontWeight: 'bold',
+                            fontSize: '0.65rem'
+                          }}>
+                            ⚡ Priority: {move.priority > 0 ? '+' : ''}{move.priority}
+                          </div>
+                        )}
+                        {move.targetType && (
+                          <div style={{ color: '#6b7280', fontWeight: 'bold', fontSize: '0.65rem', textTransform: 'capitalize' }}>
+                            🎯 Target: {move.targetType.replace('_', ' ')}
                           </div>
                         )}
                         {effectiveMasteryLevel > move.masteryLevel && move.category === 'elemental' && equippedArtifacts && (() => {

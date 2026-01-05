@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db, storage } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -15,6 +15,10 @@ import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
+import { getRRCandyMoves } from '../utils/rrCandyMoves';
+import { normalizePlayerData } from '../utils/playerData';
+import EditRivalModal from '../components/EditRivalModal';
+import { getRivals } from '../utils/rivalService';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -63,11 +67,55 @@ const enhanceLegacyItem = (item: any) => {
   return item;
 };
 
+// Helper function to determine if an artifact is equippable (should be shown on Artifacts page, not Profile)
+const isEquippableArtifact = (artifact: any): boolean => {
+  if (!artifact) return false;
+  
+  const enhanced = enhanceLegacyItem(artifact);
+  const artifactId = enhanced.id || (typeof artifact === 'string' ? artifact : '');
+  const artifactName = (enhanced.name || '').toLowerCase();
+  const category = enhanced.category || '';
+  
+  // Check by category
+  if (category === 'armor' || category === 'accessory') {
+    return true;
+  }
+  
+  // Check by ID patterns (helmets, rings)
+  const equippablePatterns = [
+    'helmet',
+    'ring',
+    'captain',
+    'blaze-ring',
+    'terra-ring',
+    'aqua-ring',
+    'air-ring',
+    'elemental-ring'
+  ];
+  
+  if (equippablePatterns.some(pattern => artifactId.toLowerCase().includes(pattern))) {
+    return true;
+  }
+  
+  // Check by name patterns
+  if (equippablePatterns.some(pattern => artifactName.includes(pattern))) {
+    return true;
+  }
+  
+  // Check if description mentions "Equip"
+  const description = (enhanced.description || '').toLowerCase();
+  if (description.includes('equip') || description.includes('equip to')) {
+    return true;
+  }
+  
+  return false;
+};
+
 
 
 const Profile = () => {
   const { currentUser } = useAuth();
-  const { syncVaultPP, vault } = useBattle();
+  const { syncVaultPP, vault, moves: battleMoves, upgradeMove, refreshVaultData } = useBattle();
   const navigate = useNavigate();
   const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -92,6 +140,9 @@ const Profile = () => {
   const [nextChallenge, setNextChallenge] = useState<any>(null);
   const [showPPEarningModal, setShowPPEarningModal] = useState(false);
   const [squadAbbreviation, setSquadAbbreviation] = useState<string | null>(null);
+  const [isSkillTreeShowing, setIsSkillTreeShowing] = useState(false);
+  const [showEditRivalModal, setShowEditRivalModal] = useState(false);
+  const [rivals, setRivals] = useState<{ chosen?: any; inbound?: any }>({});
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -190,6 +241,25 @@ const Profile = () => {
           const prevChapter = userProgress?.chapters?.[requirement.value];
           requirementMet = prevChapter?.isCompleted;
           break;
+        case 'challenge':
+          // Check if a specific challenge is completed
+          // requirement.value should be the challenge ID (e.g., 'ch2-team-trial')
+          const requiredChallengeId = requirement.value;
+          // Find which chapter contains this challenge
+          let challengeFound = false;
+          for (const chapterId in userProgress?.chapters || {}) {
+            const chapterChallenges = userProgress?.chapters?.[chapterId]?.challenges || {};
+            if (chapterChallenges[requiredChallengeId]) {
+              const requiredChallenge = chapterChallenges[requiredChallengeId];
+              requirementMet = requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
+              challengeFound = true;
+              break;
+            }
+          }
+          if (!challengeFound) {
+            requirementMet = false;
+          }
+          break;
       }
       
       if (!requirementMet) {
@@ -235,6 +305,22 @@ const Profile = () => {
   const fetchUserData = async () => {
     if (!currentUser) return;
     
+    // Helper to check for Firestore internal errors
+    const isFirestoreInternalError = (error: any): boolean => {
+      if (!error) return false;
+      const errorString = String(error);
+      const errorMessage = error?.message || '';
+      const errorStack = error?.stack || '';
+      return (
+        errorString.includes('INTERNAL ASSERTION FAILED') ||
+        errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+        errorStack.includes('INTERNAL ASSERTION FAILED') ||
+        errorString.includes('ID: ca9') ||
+        errorString.includes('ID: b815') ||
+        (errorString.includes('FIRESTORE') && errorString.includes('Unexpected state'))
+      );
+    };
+    
     try {
       // Fetch from both collections
       const studentsRef = doc(db, 'students', currentUser.uid);
@@ -255,6 +341,10 @@ const Profile = () => {
           // Update the database with the new rarity value
           const userRef = doc(db, 'students', currentUser.uid);
           updateDoc(userRef, { rarity: 1 }).catch(error => {
+            if (isFirestoreInternalError(error)) {
+              console.warn('Profile: Firestore internal assertion error during rarity update - ignoring');
+              return;
+            }
             console.error('Error updating rarity:', error);
           });
         }
@@ -262,9 +352,19 @@ const Profile = () => {
         // Get artifacts from users collection
         let artifacts = [];
         if (usersSnap.exists()) {
-          const usersData = usersSnap.data();
-          artifacts = usersData.artifacts || [];
-          console.log('Profile: Loaded artifacts from users collection:', artifacts);
+          try {
+            const usersData = usersSnap.data();
+            artifacts = usersData.artifacts || [];
+            console.log('Profile: Loaded artifacts from users collection:', artifacts);
+          } catch (artifactError) {
+            if (isFirestoreInternalError(artifactError)) {
+              console.warn('Profile: Firestore internal assertion error when reading artifacts - using empty array');
+              artifacts = [];
+            } else {
+              console.error('Profile: Error reading artifacts:', artifactError);
+              artifacts = [];
+            }
+          }
         }
         
         // Merge students data with users artifacts and chapters
@@ -325,11 +425,21 @@ const Profile = () => {
         // Fetch squad abbreviation
         const abbreviation = await getUserSquadAbbreviation(currentUser.uid);
         setSquadAbbreviation(abbreviation);
+        
+        // Fetch rivals
+        const rivalsData = await getRivals(currentUser.uid);
+        setRivals(rivalsData);
       } else {
         // Create user document if it doesn't exist
         setUserData({ xp: 0, powerPoints: 0, truthMetal: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
       }
     } catch (error) {
+      if (isFirestoreInternalError(error)) {
+        console.warn('Profile: Firestore internal assertion error when fetching user data - ignoring');
+        // Still set loading to false so UI doesn't hang
+        setLoading(false);
+        return;
+      }
       console.error('Error fetching user data:', error);
     } finally {
       setLoading(false);
@@ -366,6 +476,7 @@ const Profile = () => {
       return;
     }
 
+    const userId = currentUser.uid; // Store in variable for TypeScript
     fetchUserData();
     
     // Helper to check for Firestore internal errors
@@ -384,8 +495,23 @@ const Profile = () => {
       );
     };
 
+      // Set up real-time listener for rivals in users collection
+      // Use getRivals to fetch latest displayNames
+      const usersRef = doc(db, 'users', userId);
+      const unsubscribeRivals = onSnapshot(usersRef, async (docSnapshot) => {
+        try {
+          if (docSnapshot.exists()) {
+            // Use getRivals to fetch latest displayNames from Firestore
+            const rivalsData = await getRivals(userId);
+            setRivals(rivalsData);
+          }
+        } catch (error) {
+          console.error('Error updating rivals from real-time listener:', error);
+        }
+      });
+
     // Set up real-time listener for manifest and element updates
-    const studentsRef = doc(db, 'students', currentUser.uid);
+    const studentsRef = doc(db, 'students', userId);
     const unsubscribe = onSnapshot(studentsRef, (docSnapshot) => {
       try {
         if (docSnapshot.exists()) {
@@ -426,8 +552,64 @@ const Profile = () => {
     
     return () => {
       unsubscribe();
+      unsubscribeRivals();
     };
   }, [currentUser, navigate]);
+
+  // Handle query parameters for skill tree view
+  const [searchParams] = useSearchParams();
+  const skillTreeView = searchParams.get('view');
+  const skillTreeModeParam = searchParams.get('mode');
+
+  useEffect(() => {
+    // If query params indicate skill tree view, show it
+    if (skillTreeView === 'skill-tree') {
+      setIsSkillTreeShowing(true);
+    }
+  }, [skillTreeView]);
+
+  // Ensure RR Candy moves are added to Firestore when skill tree is shown
+  useEffect(() => {
+    if (!isSkillTreeShowing || !currentUser || !userData) return;
+
+    const ensureRRCandyMoves = async () => {
+      try {
+        const chapter2 = userData?.chapters?.[2] || userData?.chapters?.['2'];
+        const challenge = chapter2?.challenges?.['ep2-its-all-a-game'];
+        const candyType = challenge?.candyChoice;
+        const isCompleted = challenge?.isCompleted || challenge?.status === 'approved';
+        
+        if (!isCompleted || !candyType) return;
+
+        // Check if moves are in Firestore
+        const movesRef = doc(db, 'battleMoves', currentUser.uid);
+        const movesDoc = await getDoc(movesRef);
+        const existingMoves = movesDoc.exists() ? (movesDoc.data().moves || []) : [];
+        const hasRRCandyMoves = existingMoves.some((m: any) => m.id?.startsWith('rr-candy-'));
+        
+        if (!hasRRCandyMoves) {
+          // Add RR Candy moves to Firestore
+          const rrCandyMoves = getRRCandyMoves(candyType);
+          const updatedMoves = [...existingMoves, ...rrCandyMoves];
+          
+          if (movesDoc.exists()) {
+            await updateDoc(movesRef, { moves: updatedMoves });
+          } else {
+            await setDoc(movesRef, { moves: updatedMoves });
+          }
+          
+          // Refresh moves from context
+          if (refreshVaultData) {
+            await refreshVaultData();
+          }
+        }
+      } catch (error) {
+        console.error('Error ensuring RR Candy moves:', error);
+      }
+    };
+
+    ensureRRCandyMoves();
+  }, [isSkillTreeShowing, currentUser, userData, refreshVaultData]);
 
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -806,13 +988,401 @@ const Profile = () => {
               onManifestReselect={() => setShowManifestSelection(true)}
               ordinaryWorld={userData?.ordinaryWorld}
               squadAbbreviation={squadAbbreviation}
+              hasSkillTreeAccess={!!userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.isCompleted}
+              candyType={userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.candyChoice || 'on-off'} // Get from challenge data or default to on-off
+              onSkillTreeToggle={setIsSkillTreeShowing}
+              initialSkillTreeMode={(skillTreeModeParam === 'irl' ? 'irl' : 'in-game') as 'in-game' | 'irl'}
             />
           </div>
         </div>
 
-        {/* Right Column - Profile Settings */}
+        {/* Right Column - Profile Settings or Skill Tree Settings */}
         <div>
-          {/* Profile Settings */}
+          {isSkillTreeShowing ? (
+            /* Skill Tree Settings */
+            <div className="skill-tree-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#10b981' }}>
+                🌳 Skill Tree Settings
+              </h2>
+              
+              {/* RR Candy Moves Management */}
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
+                  RR Candy Abilities
+                </h3>
+                
+                {/* Get RR Candy moves - generate if not in battleMoves */}
+                {(() => {
+                  // Check if user has completed Chapter 2-4 - try multiple paths
+                  const chapter2 = userData?.chapters?.[2] || userData?.chapters?.['2'];
+                  const challenge = chapter2?.challenges?.['ep2-its-all-a-game'];
+                  const candyType = challenge?.candyChoice || 'on-off'; // Default to 'on-off' if missing
+                  const isCompleted = challenge?.isCompleted || challenge?.status === 'approved';
+                  
+                  // Debug logging
+                  console.log('[Skill Tree Settings] Debug:', {
+                    hasUserData: !!userData,
+                    hasChapter2: !!chapter2,
+                    hasChallenge: !!challenge,
+                    challengeData: challenge,
+                    candyType,
+                    isCompleted,
+                    battleMovesCount: battleMoves?.length || 0
+                  });
+                  
+                  // Get RR Candy moves from battleMoves
+                  let rrCandyMoves = (battleMoves || []).filter((move: any) => move.id?.startsWith('rr-candy-'));
+                  console.log('[Skill Tree Settings] RR Candy moves found:', rrCandyMoves.length);
+                  
+                  // If no moves found but user has completed Chapter 2-4, generate them
+                  if (rrCandyMoves.length === 0 && isCompleted) {
+                    console.log('[Skill Tree Settings] Generating RR Candy moves for:', candyType);
+                    const generatedMoves = getRRCandyMoves(candyType as 'on-off' | 'up-down' | 'config');
+                    console.log('[Skill Tree Settings] Generated moves:', generatedMoves.length);
+                    // Try to find matching moves in battleMoves by name, merge with generated data
+                    rrCandyMoves = generatedMoves.map((genMove) => {
+                      const existingMove = (battleMoves || []).find((m: any) => 
+                        m.name === genMove.name || m.id === genMove.id
+                      );
+                      // If found, merge: use existing move data but ensure unlocked is true
+                      if (existingMove) {
+                        return { ...existingMove, unlocked: true };
+                      }
+                      // Otherwise use generated move
+                      return genMove;
+                    });
+                    console.log('[Skill Tree Settings] Final RR Candy moves after generation:', rrCandyMoves.length);
+                  }
+                  
+                  // If not completed, show unlock message
+                  if (!isCompleted) {
+                    return (
+                      <div style={{
+                        backgroundColor: '#f3f4f6',
+                        borderRadius: '0.5rem',
+                        padding: '2rem',
+                        textAlign: 'center',
+                        color: '#6b7280'
+                      }}>
+                        <p>No RR Candy abilities unlocked yet.</p>
+                        <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                          Complete Chapter 2-4 to unlock your first RR Candy ability!
+                        </p>
+                      </div>
+                    );
+                  }
+                  
+                  // Render moves
+                  return (
+                    <>
+                      {rrCandyMoves.map((move: any) => (
+                        <div
+                          key={move.id}
+                          style={{
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '0.5rem',
+                            padding: '1rem',
+                            marginBottom: '1rem',
+                            border: '1px solid #e5e7eb'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                            <div>
+                              <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.25rem' }}>
+                                {move.name}
+                              </h4>
+                              <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                                {move.description}
+                              </p>
+                            </div>
+                            <div style={{
+                              backgroundColor: move.unlocked ? '#10b981' : '#9ca3af',
+                              color: 'white',
+                              padding: '0.25rem 0.75rem',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.75rem',
+                              fontWeight: 'bold'
+                            }}>
+                              {move.unlocked ? 'Unlocked' : 'Locked'}
+                            </div>
+                          </div>
+                          
+                          {/* Move Stats */}
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.875rem' }}>
+                            <div>
+                              <span style={{ color: '#6b7280' }}>Level:</span>{' '}
+                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.level}</span>
+                            </div>
+                            <div>
+                              <span style={{ color: '#6b7280' }}>Mastery:</span>{' '}
+                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.masteryLevel}/5</span>
+                            </div>
+                            <div>
+                              <span style={{ color: '#6b7280' }}>Cost:</span>{' '}
+                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                                {move.id.startsWith('rr-candy-') ? '1 Move' : `${move.cost} PP`}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ color: '#6b7280' }}>Cooldown:</span>{' '}
+                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.cooldown} turns</span>
+                            </div>
+                          </div>
+                          
+                          {/* Level Up Button */}
+                          {move.unlocked && move.masteryLevel < 5 && (() => {
+                            // Calculate upgrade cost - 1000 PP for first skill level-up
+                            const nextLevel = move.masteryLevel + 1;
+                            let upgradeCost = 1000; // 1000 PP for first skill level-up
+                            if (nextLevel === 3) {
+                              upgradeCost = 200; // 200 PP
+                            } else if (nextLevel === 4) {
+                              upgradeCost = 400; // 400 PP
+                            } else if (nextLevel === 5) {
+                              upgradeCost = 800; // 800 PP
+                            }
+                            
+                            const hasEnoughPP = vault && vault.currentPP >= upgradeCost;
+                            
+                            return (
+                              <button
+                                onClick={async () => {
+                                  if (upgradeMove && hasEnoughPP) {
+                                    try {
+                                      await upgradeMove(move.id);
+                                      // Refresh user data to show updated moves
+                                      if (currentUser?.uid) {
+                                        const userRef = doc(db, 'users', currentUser.uid);
+                                        const userDoc = await getDoc(userRef);
+                                        if (userDoc.exists()) {
+                                          setUserData(userDoc.data());
+                                        }
+                                      }
+                                      // Refresh vault data to update PP
+                                      if (refreshVaultData) {
+                                        await refreshVaultData();
+                                      }
+                                    } catch (error) {
+                                      console.error('Error upgrading move:', error);
+                                      alert('Failed to upgrade ability. Please try again.');
+                                    }
+                                  } else if (!hasEnoughPP) {
+                                    alert(`Not enough PP. Need ${upgradeCost} PP to upgrade.`);
+                                  }
+                                }}
+                                disabled={!hasEnoughPP}
+                                style={{
+                                  backgroundColor: hasEnoughPP ? '#10b981' : '#9ca3af',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.375rem',
+                                  padding: '0.5rem 1rem',
+                                  fontSize: '0.875rem',
+                                  fontWeight: 'bold',
+                                  cursor: hasEnoughPP ? 'pointer' : 'not-allowed',
+                                  transition: 'all 0.2s ease',
+                                  width: '100%',
+                                  opacity: hasEnoughPP ? 1 : 0.7
+                                }}
+                                onMouseOver={(e) => {
+                                  if (hasEnoughPP) {
+                                    e.currentTarget.style.backgroundColor = '#059669';
+                                    e.currentTarget.style.transform = 'translateY(-1px)';
+                                  }
+                                }}
+                                onMouseOut={(e) => {
+                                  if (hasEnoughPP) {
+                                    e.currentTarget.style.backgroundColor = '#10b981';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                  }
+                                }}
+                              >
+                                ⬆️ Level Up (Cost: {upgradeCost} PP)
+                                {!hasEnoughPP && ` - Need ${upgradeCost - (vault?.currentPP || 0)} more PP`}
+                              </button>
+                            );
+                          })()}
+                          
+                          {/* Preview of next level stats */}
+                          {move.unlocked && move.masteryLevel < 5 && (() => {
+                            const nextLevel = move.masteryLevel + 1;
+                            
+                            // Calculate damage boost multiplier range based on next level
+                            let minMultiplier: number;
+                            let maxMultiplier: number;
+                            
+                            switch (nextLevel) {
+                              case 2:
+                                minMultiplier = 2.0;
+                                maxMultiplier = 2.3;
+                                break;
+                              case 3:
+                                minMultiplier = 1.25;
+                                maxMultiplier = 1.5;
+                                break;
+                              case 4:
+                                minMultiplier = 1.3;
+                                maxMultiplier = 1.6;
+                                break;
+                              case 5:
+                                minMultiplier = 2.0;
+                                maxMultiplier = 2.5;
+                                break;
+                              default:
+                                minMultiplier = 1.0;
+                                maxMultiplier = 1.0;
+                            }
+                            
+                            // Calculate preview stats
+                            const currentDebuffStrength = move.debuffStrength || 0;
+                            const currentShieldBoost = move.shieldBoost || 0;
+                            
+                            const minDebuffStrength = currentDebuffStrength > 0 ? Math.floor(currentDebuffStrength * minMultiplier) : 0;
+                            const maxDebuffStrength = currentDebuffStrength > 0 ? Math.floor(currentDebuffStrength * maxMultiplier) : 0;
+                            const minShieldBoost = currentShieldBoost > 0 ? Math.floor(currentShieldBoost * minMultiplier) : 0;
+                            const maxShieldBoost = currentShieldBoost > 0 ? Math.floor(currentShieldBoost * maxMultiplier) : 0;
+                            
+                            // Calculate cooldown reduction (typically -1 per level, minimum 1)
+                            const newCooldown = Math.max(1, (move.cooldown || 3) - 1);
+                            
+                            return (
+                              <div style={{
+                                backgroundColor: '#f0fdf4',
+                                borderRadius: '0.375rem',
+                                padding: '0.75rem',
+                                marginTop: '0.75rem',
+                                border: '1px solid #86efac'
+                              }}>
+                                <div style={{
+                                  fontSize: '0.75rem',
+                                  fontWeight: 'bold',
+                                  color: '#166534',
+                                  marginBottom: '0.5rem'
+                                }}>
+                                  📊 Preview: Level {nextLevel} Stats
+                                </div>
+                                
+                                <div style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                                  gap: '0.5rem',
+                                  fontSize: '0.75rem'
+                                }}>
+                                  <div>
+                                    <span style={{ color: '#6b7280' }}>Mastery:</span>{' '}
+                                    <span style={{ fontWeight: 'bold', color: '#166534' }}>{nextLevel}/5</span>
+                                  </div>
+                                  
+                                  {currentDebuffStrength > 0 && (
+                                    <div>
+                                      <span style={{ color: '#6b7280' }}>Shield Removal:</span>{' '}
+                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>
+                                        {minDebuffStrength}% - {maxDebuffStrength}%
+                                      </span>
+                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
+                                        (↑ {Math.floor((minMultiplier - 1) * 100)}% - {Math.floor((maxMultiplier - 1) * 100)}%)
+                                      </span>
+                                    </div>
+                                  )}
+                                  
+                                  {currentShieldBoost > 0 && (
+                                    <div>
+                                      <span style={{ color: '#6b7280' }}>Shield Restoration:</span>{' '}
+                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>
+                                        {minShieldBoost}% - {maxShieldBoost}%
+                                      </span>
+                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
+                                        (↑ {Math.floor((minMultiplier - 1) * 100)}% - {Math.floor((maxMultiplier - 1) * 100)}%)
+                                      </span>
+                                    </div>
+                                  )}
+                                  
+                                  {(move.cooldown || 3) > 1 && (
+                                    <div>
+                                      <span style={{ color: '#6b7280' }}>Cooldown:</span>{' '}
+                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>{newCooldown} turns</span>
+                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
+                                        (↓ -1)
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                <div style={{
+                                  fontSize: '0.7rem',
+                                  color: '#6b7280',
+                                  marginTop: '0.5rem',
+                                  fontStyle: 'italic'
+                                }}>
+                                  * Stats shown are ranges. Actual values will be randomly determined on upgrade.
+                                </div>
+                              </div>
+                            );
+                          })()}
+                          
+                          {move.masteryLevel >= 5 && (
+                            <div style={{
+                              backgroundColor: '#fef3c7',
+                              color: '#92400e',
+                              padding: '0.5rem',
+                              borderRadius: '0.375rem',
+                              textAlign: 'center',
+                              fontSize: '0.875rem',
+                              fontWeight: 'bold'
+                            }}>
+                              ⭐ Max Level Reached
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
+              </div>
+              
+              {/* Skill Tree Info */}
+              <div style={{
+                backgroundColor: '#eff6ff',
+                borderRadius: '0.5rem',
+                padding: '1rem',
+                border: '1px solid #bfdbfe',
+                marginBottom: '1rem'
+              }}>
+                <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1e40af' }}>
+                  💡 About Skill Trees
+                </h4>
+                <p style={{ fontSize: '0.875rem', color: '#1e40af', lineHeight: '1.5', marginBottom: '1rem' }}>
+                  Level up your RR Candy abilities to increase their power and effectiveness. Each level increases the ability's impact and reduces cooldown time. Master abilities reach their maximum potential at Level 5.
+                </p>
+                <button
+                  onClick={() => navigate('/battle#moves')}
+                  style={{
+                    backgroundColor: '#4f46e5',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    width: '100%'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#4338ca';
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#4f46e5';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  🎯 Manage / Upgrade RR Candy Skills in Skill Mastery
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Profile Settings */
           <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
               👤 Profile Settings
@@ -998,7 +1568,8 @@ const Profile = () => {
                         </button>
                       </div>
                     )}
-                    {userData?.rival && (
+                    {/* Rivals Section */}
+                    {(rivals.chosen || rivals.inbound) && (
                       <div style={{ 
                         margin: '0.5rem 0', 
                         padding: '0.75rem', 
@@ -1007,27 +1578,84 @@ const Profile = () => {
                         borderRadius: '0.5rem',
                         borderLeft: '4px solid #dc2626'
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                          <span style={{ fontSize: '1.25rem' }}>⚔️</span>
-                          <span style={{ fontWeight: 'bold', color: '#dc2626' }}>Rival:</span>
-                          <span style={{ fontWeight: 'bold' }}>{userData.rival.name}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '1.25rem' }}>⚔️</span>
+                            <span style={{ fontWeight: 'bold', color: '#dc2626' }}>Rivals</span>
+                          </div>
+                          <button
+                            onClick={() => setShowEditRivalModal(true)}
+                            style={{
+                              padding: '0.375rem 0.75rem',
+                              backgroundColor: '#dc2626',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.375rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: '500'
+                            }}
+                          >
+                            Edit Rival
+                          </button>
                         </div>
-                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                          {userData.rival.description}
-                        </div>
-                        {userData.rival.isDefeated && (
-                          <div style={{ 
-                            marginTop: '0.5rem', 
-                            padding: '0.25rem 0.5rem', 
-                            backgroundColor: '#dcfce7', 
-                            color: '#166534', 
-                            borderRadius: '0.25rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✅ Rival Defeated
+                        {rivals.chosen && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                              Chosen Rival:
+                            </div>
+                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                              {rivals.chosen.displayName}
+                            </div>
                           </div>
                         )}
+                        {rivals.inbound && (
+                          <div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                              Inbound Rival:
+                            </div>
+                            <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                              {rivals.inbound.displayName}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {!(rivals.chosen || rivals.inbound) && (
+                      <div style={{ 
+                        margin: '0.5rem 0', 
+                        padding: '0.75rem', 
+                        backgroundColor: '#fef2f2', 
+                        border: '1px solid #fecaca', 
+                        borderRadius: '0.5rem',
+                        borderLeft: '4px solid #dc2626'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                              <span style={{ fontSize: '1.25rem' }}>⚔️</span>
+                              <span style={{ fontWeight: 'bold', color: '#dc2626' }}>No Rivals Set</span>
+                            </div>
+                            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                              Set a rival to earn double rewards when you defeat them!
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => setShowEditRivalModal(true)}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              backgroundColor: '#dc2626',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.375rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem',
+                              fontWeight: '500'
+                            }}
+                          >
+                            Set Rival
+                          </button>
+                        </div>
                       </div>
                     )}
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
@@ -1109,6 +1737,7 @@ const Profile = () => {
             </div>
           </div>
         </div>
+          )}
         </div>
       </div>
 
@@ -1142,21 +1771,21 @@ const Profile = () => {
                   fontSize: '0.875rem',
                   color: '#6b7280'
                 }}>
-                  {userData.artifacts.filter((a: any) => !a.used && !a.pending).length} Available • {userData.artifacts.filter((a: any) => a.pending).length} In Use • {userData.artifacts.filter((a: any) => a.used).length} Used
+                  {userData.artifacts.filter((a: any) => !a.used && !a.pending && !isEquippableArtifact(a)).length} Available • {userData.artifacts.filter((a: any) => a.pending).length} In Use • {userData.artifacts.filter((a: any) => a.used).length} Used
                 </div>
               )}
             </div>
             
             {Array.isArray(userData?.artifacts) && userData.artifacts.length > 0 ? (
               <div>
-              {/* Available Artifacts - 2 columns with vertical scroll */}
-                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => !artifact.used).length > 0 && (
+              {/* Available Artifacts - 2 columns with vertical scroll (only consumable artifacts, equippable ones are on Artifacts page) */}
+                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => !artifact.used && !isEquippableArtifact(artifact)).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
-                      Available Artifacts ({userData.artifacts.filter((a: any) => !a.used).length})
+                      Available Artifacts ({userData.artifacts.filter((a: any) => !a.used && !isEquippableArtifact(a)).length})
                     </h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                      {userData.artifacts.filter((artifact: any) => !artifact.used).map((artifact: any, index: number) => {
+                      {userData.artifacts.filter((artifact: any) => !artifact.used && !isEquippableArtifact(artifact)).map((artifact: any, index: number) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
                           switch (rarity) {
@@ -1562,33 +2191,8 @@ const Profile = () => {
                                     alert('Error using Double PP Boost. Please try again.');
                                   }
                                 } else {
-                                  // Handle other artifacts (send to admin)
-                                  await addDoc(collection(db, 'usedItems'), {
-                                    userId: currentUser.uid,
-                                    userEmail: currentUser.email,
-                                    itemName: enhancedArtifact.name,
-                                    artifactId: enhancedArtifact.id,
-                                    timestamp: serverTimestamp()
-                                  });
-                                  
-                                  // Create admin notification for artifact usage
-                                  await addDoc(collection(db, 'adminNotifications'), {
-                                    type: 'artifact_usage',
-                                    title: 'Artifact Usage Request',
-                                    message: `${currentUser.displayName || currentUser.email} wants to use ${enhancedArtifact.name}`,
-                                    data: {
-                                      userId: currentUser.uid,
-                                      userName: currentUser.displayName || currentUser.email,
-                                      artifactName: enhancedArtifact.name,
-                                      artifactId: enhancedArtifact.id,
-                                      usageTime: new Date(),
-                                      location: 'Profile'
-                                    },
-                                    createdAt: new Date(),
-                                    read: false
-                                  });
-                                  
-                                  // Also update both collections to mark artifact as used
+                                  // Handle other artifacts - use immediately without admin approval
+                                  // Mark artifact as used directly
                                   const userRef = doc(db, 'users', currentUser.uid);
                                   const userSnap = await getDoc(userRef);
                                   if (userSnap.exists()) {
@@ -1893,7 +2497,7 @@ const Profile = () => {
                       Used Artifacts ({userData.artifacts.filter((a: any) => a.used).length})
                     </h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                      {userData.artifacts.filter((artifact: any) => artifact.used).map((artifact: any) => {
+                      {userData.artifacts.filter((artifact: any) => artifact.used).map((artifact: any, index: number) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
                           switch (rarity) {
@@ -1906,7 +2510,7 @@ const Profile = () => {
                         };
 
                         return (
-                          <div key={artifact.id} style={{ 
+                          <div key={`${enhancedArtifact.id || artifact.name || 'artifact'}-used-${index}`} style={{ 
                             background: '#f9fafb', 
                             borderRadius: '0.5rem', 
                             padding: '0.75rem', 
@@ -2080,8 +2684,8 @@ const Profile = () => {
             🔧 Admin Debug: Pending UXP Artifacts
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => artifact.pending).map((artifact: any) => (
-              <div key={artifact.name} style={{
+            {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => artifact.pending).map((artifact: any, index: number) => (
+              <div key={`${artifact.id || artifact.name || 'artifact'}-pending-${index}`} style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
@@ -2130,6 +2734,22 @@ const Profile = () => {
       )}
 
       {/* Manifest Selection Modal */}
+      {/* Edit Rival Modal */}
+      <EditRivalModal
+        isOpen={showEditRivalModal}
+        onClose={() => setShowEditRivalModal(false)}
+        onRivalUpdated={async () => {
+          if (currentUser) {
+            const userId = currentUser.uid;
+            // Refresh rivals data
+            const rivalsData = await getRivals(userId);
+            setRivals(rivalsData);
+            // Also refresh userData to ensure profile updates
+            await fetchUserData();
+          }
+        }}
+      />
+
       {showManifestSelection && (
         <ManifestSelection
           onManifestSelect={handleManifestSelect}

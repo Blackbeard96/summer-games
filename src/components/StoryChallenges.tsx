@@ -1441,6 +1441,30 @@ const ensureChaptersInitialized = async () => {
             requirementMet = false;
           }
           break;
+        case 'challenge':
+          // Check if a specific challenge is completed
+          // requirement.value should be the challenge ID (e.g., 'ch2-team-trial')
+          const requiredChallengeId = requirement.value;
+          // Find which chapter contains this challenge
+          let challengeFound = false;
+          for (const chapterId in userProgress?.chapters || {}) {
+            const chapterChallenges = userProgress?.chapters?.[chapterId]?.challenges || {};
+            if (chapterChallenges[requiredChallengeId]) {
+              const requiredChallenge = chapterChallenges[requiredChallengeId];
+              requirementMet = requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
+              challengeFound = true;
+              console.log(`✅ Challenge requirement ${requiredChallengeId} found in chapter ${chapterId}:`, {
+                isCompleted: requirementMet,
+                status: requiredChallenge?.status
+              });
+              break;
+            }
+          }
+          if (!challengeFound) {
+            console.warn(`❌ Challenge requirement ${requiredChallengeId} not found in any chapter`);
+            requirementMet = false;
+          }
+          break;
         default:
           console.warn(`❌ Unknown requirement type: ${requirement.type}`);
           requirementMet = false;

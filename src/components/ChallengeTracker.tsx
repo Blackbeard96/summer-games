@@ -1,7 +1,7 @@
  import ModelPreview from './ModelPreview';
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, getDocs, query, onSnapshot, increment } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
@@ -282,11 +282,31 @@ const ChallengeTracker = () => {
           chapters: updatedChapters
         });
 
-        // Apply rewards
-        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+        // Use centralized reward granting service
+        const { grantChallengeRewards } = await import('../utils/challengeRewards');
+        
+        console.log(`🎁 ChallengeTracker: Granting rewards for auto-completed challenge:`, {
+          challengeId: challenge.id,
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards
+        });
+        
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          challenge.id,
+          challenge.rewards,
+          challenge.title
+        );
 
-        // Update student data (legacy system)
+        if (rewardResult.success && !rewardResult.alreadyClaimed) {
+          console.log(`✅ ChallengeTracker: Rewards granted successfully:`, rewardResult.rewardsGranted);
+        } else if (rewardResult.alreadyClaimed) {
+          console.log(`🎁 ChallengeTracker: Rewards were already claimed for challenge ${challenge.id}`);
+        } else {
+          console.error(`❌ ChallengeTracker: Failed to grant rewards:`, rewardResult.error);
+        }
+
+        // Update student data (legacy system) - mark challenge as completed
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
@@ -300,11 +320,13 @@ const ChallengeTracker = () => {
           };
           
           await updateDoc(studentRef, {
-            challenges: updatedChallenges,
-            xp: (studentData.xp || 0) + xpReward,
-            powerPoints: (studentData.powerPoints || 0) + ppReward
+            challenges: updatedChallenges
           });
         }
+
+        // Extract rewards for notification (use granted values if available)
+        const xpReward = rewardResult.rewardsGranted?.xp || challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = rewardResult.rewardsGranted?.pp || challenge.rewards.find(r => r.type === 'pp')?.value || 0;
 
         // Add notification
         await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {

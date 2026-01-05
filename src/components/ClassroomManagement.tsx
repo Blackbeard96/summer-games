@@ -1040,7 +1040,18 @@ const ClassroomManagement: React.FC = () => {
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <button
                   onClick={async () => {
-                    if (!isAdmin) {
+                    if (!currentUser) return;
+                    
+                    // Check if user can host (admin or Yondaime)
+                      const { canHostSession, isGlobalHost } = await import('../utils/inSessionService');
+                      const canHost = await canHostSession(
+                        currentUser.uid, 
+                        classroom.id,
+                        currentUser.email || undefined,
+                        currentUser.displayName || undefined
+                      );
+                    
+                    if (!canHost) {
                       alert('Only administrators can start In Session battles.');
                       return;
                     }
@@ -1056,54 +1067,21 @@ const ClassroomManagement: React.FC = () => {
                         return;
                       }
                       
-                      // Helper function to remove undefined values (Firestore doesn't allow undefined)
-                      const removeUndefined = (obj: any): any => {
-                        if (obj === null || obj === undefined) {
-                          return null;
-                        }
-                        if (Array.isArray(obj)) {
-                          return obj.map(item => removeUndefined(item));
-                        }
-                        if (typeof obj === 'object' && obj.constructor === Object) {
-                          const cleaned: any = {};
-                          for (const key in obj) {
-                            if (obj.hasOwnProperty(key) && obj[key] !== undefined) {
-                              cleaned[key] = removeUndefined(obj[key]);
-                            }
-                          }
-                          return cleaned;
-                        }
-                        return obj;
-                      };
-
-                      // Create a new session room
-                      // Start with empty players array - students must join manually
-                      const sessionData = {
-                        classId: classroom.id,
-                        className: classroom.name,
-                        teacherId: currentUser?.uid || '',
-                        status: 'active',
-                        players: [], // Start empty - students join via notification button
-                        activeViewers: [currentUser?.uid || ''], // Initialize with teacher/admin who started the session
-                        createdAt: serverTimestamp(),
-                        startedAt: serverTimestamp(),
-                        battleLog: ['📚 In Session Battle Started!']
-                      };
+                      // Use session service to create session
+                      const { createSession } = await import('../utils/inSessionService');
+                      const sessionId = await createSession(
+                        classroom.id,
+                        classroom.name,
+                        currentUser.uid
+                      );
                       
-                      // Remove any undefined values before saving
-                      const cleanedSessionData = removeUndefined(sessionData);
-                      const sessionRef = await addDoc(collection(db, 'inSessionRooms'), cleanedSessionData);
+                      if (sessionId) {
                         // Navigate to the session view
-                        navigate(`/in-session/${sessionRef.id}`);
-                    } catch (error) {
-                      // Suppress Firestore internal assertion errors (known issue)
-                      if (error instanceof Error && 
-                          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-                           error.message?.includes('Unexpected state'))) {
-                        // Still try to navigate if we have a session ID
-                        console.warn('Firestore internal assertion error (suppressed):', error);
-                        return;
+                        navigate(`/in-session/${sessionId}`);
+                      } else {
+                        alert('Failed to start session. Please try again.');
                       }
+                    } catch (error) {
                       console.error('Error starting session:', error);
                       alert('Failed to start session. Please try again.');
                     }

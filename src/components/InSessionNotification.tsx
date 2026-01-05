@@ -3,6 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, query, where, doc, getDoc, updateDoc, arrayUnion, serverTimestamp, getDocs } from 'firebase/firestore';
+import { debug } from '../utils/debug';
+import { endSession } from '../utils/inSessionService';
 
 interface InSessionRoom {
   id: string;
@@ -24,12 +26,13 @@ interface InSessionRoom {
 }
 
 const InSessionNotification: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [activeSession, setActiveSession] = useState<InSessionRoom | null>(null);
   const [isJoining, setIsJoining] = useState(false);
   const [isInSession, setIsInSession] = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
 
   // Get user's classrooms and listen for active sessions
   useEffect(() => {
@@ -52,7 +55,7 @@ const InSessionNotification: React.FC = () => {
           })
           .map(doc => doc.id);
         
-        console.log('[InSessionNotification] User classrooms:', {
+        debug.once('user-classrooms-loaded', 'InSessionNotification', 'User classrooms loaded', {
           userId,
           classrooms: userClassrooms,
           count: userClassrooms.length
@@ -60,7 +63,7 @@ const InSessionNotification: React.FC = () => {
         
         return userClassrooms;
       } catch (error) {
-        console.error('[InSessionNotification] Error fetching user classrooms:', error);
+        debug.error('InSessionNotification', 'Error fetching user classrooms', error);
         return [];
       }
     };
@@ -74,10 +77,10 @@ const InSessionNotification: React.FC = () => {
           (Math.random() < 0.15); // 15% chance to refresh on each check
         
         if (shouldRefreshClassrooms) {
-          console.log('[InSessionNotification] Refreshing user classrooms cache...');
+          debug.throttle('refresh-classrooms', 5000, 'InSessionNotification', 'Refreshing user classrooms cache');
           try {
             userClassroomsCache = await getUserClassrooms(userId);
-            console.log('[InSessionNotification] User classrooms after refresh:', {
+            debug.throttle('classrooms-refreshed', 5000, 'InSessionNotification', 'User classrooms after refresh', {
               userId,
               classrooms: userClassroomsCache,
               count: userClassroomsCache.length
@@ -87,9 +90,9 @@ const InSessionNotification: React.FC = () => {
             if (classroomError instanceof Error && 
                 (classroomError.message?.includes('INTERNAL ASSERTION FAILED') || 
                  classroomError.message?.includes('Unexpected state'))) {
-              console.log('[InSessionNotification] Firestore error suppressed, using cached classrooms');
+              debug.once('firestore-error-classrooms', 'InSessionNotification', 'Firestore error suppressed, using cached classrooms');
             } else {
-              console.error('[InSessionNotification] Error refreshing classrooms:', classroomError);
+              debug.error('InSessionNotification', 'Error refreshing classrooms', classroomError);
             }
           }
         }
@@ -106,13 +109,13 @@ const InSessionNotification: React.FC = () => {
           if (queryError instanceof Error && 
               (queryError.message?.includes('INTERNAL ASSERTION FAILED') || 
                queryError.message?.includes('Unexpected state'))) {
-            console.log('[InSessionNotification] Firestore query error suppressed, skipping check');
+            debug.once('firestore-query-error', 'InSessionNotification', 'Firestore query error suppressed, skipping check');
             return; // Skip this check if there's a Firestore error
           }
           throw queryError; // Re-throw if it's a different error
         }
 
-        console.log('[InSessionNotification] Found active sessions:', sessionsSnapshot.size);
+        debug.throttle('active-sessions-count', 2000, 'InSessionNotification', 'Found active sessions', sessionsSnapshot.size);
 
         if (!sessionsSnapshot.empty) {
           // Get all active sessions
@@ -121,13 +124,15 @@ const InSessionNotification: React.FC = () => {
             ...doc.data()
           } as InSessionRoom));
 
-          console.log('[InSessionNotification] All active sessions:', allSessions.map(s => ({
+          debug.groupCollapsed('InSessionNotification', `All Active Sessions (${allSessions.length})`);
+          debug.log('InSessionNotification', 'Session details', allSessions.map(s => ({
             id: s.id,
             classId: s.classId,
             className: s.className,
             playersCount: s.players?.length || 0,
             playerIds: s.players?.map((p: any) => p.userId) || []
           })));
+          debug.groupEnd();
 
           // Filter to sessions in user's classrooms
           // If user has no classrooms in cache, check all sessions (fallback for data inconsistency)
@@ -137,7 +142,7 @@ const InSessionNotification: React.FC = () => {
           if (userClassroomsCache.length > 0) {
             // Filter by user's classrooms
             userSessions = allSessions.filter(session => userClassroomsCache.includes(session.classId));
-            console.log('[InSessionNotification] Filtered by classrooms:', {
+            debug.throttle('filtered-classrooms', 2000, 'InSessionNotification', 'Filtered by classrooms', {
               userClassrooms: userClassroomsCache,
               filteredCount: userSessions.length,
               allSessionsCount: allSessions.length
@@ -146,17 +151,18 @@ const InSessionNotification: React.FC = () => {
             // If no sessions found in user's classrooms, check all sessions as fallback
             // This handles cases where classroom data might be inconsistent
             if (userSessions.length === 0 && allSessions.length > 0) {
-              console.log('[InSessionNotification] No sessions in user classrooms, checking all sessions as fallback');
+              debug.log('InSessionNotification', 'No sessions in user classrooms, checking all sessions as fallback');
               userSessions = allSessions;
             }
           } else {
             // No classrooms found - check all sessions as fallback
             // This handles cases where classroom data might be inconsistent or not yet loaded
-            console.log('[InSessionNotification] No classrooms in cache, checking all active sessions as fallback');
+            debug.log('InSessionNotification', 'No classrooms in cache, checking all active sessions as fallback');
             userSessions = allSessions;
           }
 
-          console.log('[InSessionNotification] User sessions (filtered):', {
+          debug.groupCollapsed('InSessionNotification', `User Sessions (${userSessions.length})`);
+          debug.log('InSessionNotification', 'User sessions (filtered)', {
             userSessions: userSessions.map(s => ({
               id: s.id,
               classId: s.classId,
@@ -185,7 +191,8 @@ const InSessionNotification: React.FC = () => {
             const activeViewers = latestSession.activeViewers || [];
             const userIsInActiveViewers = activeViewers.includes(userId);
             
-            console.log('[InSessionNotification] Session check:', {
+            debug.group('InSessionNotification', 'Session Check');
+            debug.log('InSessionNotification', 'Session details', {
               sessionId: latestSession.id,
               className: latestSession.className,
               classId: latestSession.classId,
@@ -205,11 +212,12 @@ const InSessionNotification: React.FC = () => {
             // PRIMARY RULE: If user is on the session page OR actively viewing the session, ALWAYS hide the notification
             // This prevents the notification from flickering or reappearing when the user is already viewing the session
             if (isOnSessionPage || userIsInActiveViewers) {
-              console.log('[InSessionNotification] ❌ Hiding notification - user is in session', {
+              debug.log('InSessionNotification', '❌ Hiding notification - user is in session', {
                 isOnSessionPage,
                 userIsInActiveViewers,
                 currentPath: location.pathname
               });
+              debug.groupEnd();
               setActiveSession(null);
               return; // Exit early - don't check anything else
             }
@@ -220,24 +228,27 @@ const InSessionNotification: React.FC = () => {
             // 2. User is in the session but NOT on the session page (left the session view) - show "Rejoin Session"
             if (!userInSession) {
               // User hasn't joined the session - show notification to join
-              console.log('[InSessionNotification] ✅ Showing join notification - user not in session', {
+              debug.log('InSessionNotification', '✅ Showing join notification - user not in session', {
                 sessionId: latestSession.id,
                 userId,
                 playerIds: latestSession.players?.map((p: any) => p.userId) || []
               });
+              debug.groupEnd();
               setActiveSession(latestSession);
             } else {
               // User is in session but NOT on the session page - show notification to rejoin
-              console.log('[InSessionNotification] ✅ Showing rejoin notification - user not on session page');
+              debug.log('InSessionNotification', '✅ Showing rejoin notification - user not on session page');
+              debug.groupEnd();
               setActiveSession(latestSession);
             }
           } else {
-            console.log('[InSessionNotification] No sessions found for user classrooms');
+            debug.log('InSessionNotification', 'No sessions found for user classrooms');
+            debug.groupEnd();
             setActiveSession(null);
             setIsInSession(false);
           }
         } else {
-          console.log('[InSessionNotification] No active sessions found');
+          debug.throttle('no-active-sessions', 5000, 'InSessionNotification', 'No active sessions found');
           setActiveSession(null);
           setIsInSession(false);
         }
@@ -246,10 +257,10 @@ const InSessionNotification: React.FC = () => {
         if (error instanceof Error && 
             (error.message?.includes('INTERNAL ASSERTION FAILED') || 
              error.message?.includes('Unexpected state'))) {
-          console.log('[InSessionNotification] Firestore error suppressed in checkForActiveSessions');
+          debug.once('firestore-error-suppressed', 'InSessionNotification', 'Firestore error suppressed in checkForActiveSessions');
           return; // Skip this check if there's a Firestore error
         }
-        console.error('[InSessionNotification] Error checking for sessions:', error);
+        debug.error('InSessionNotification', 'Error checking for sessions', error);
         // Don't clear activeSession on error - keep showing if we had one
         // This ensures the notification persists even if there's a temporary error
       }
@@ -260,7 +271,7 @@ const InSessionNotification: React.FC = () => {
         // Get user's classrooms and cache them
         userClassroomsCache = await getUserClassrooms(currentUser.uid);
 
-        console.log('[InSessionNotification] Setup complete:', {
+        debug.once('setup-complete', 'InSessionNotification', 'Setup complete', {
           userId: currentUser.uid,
           userEmail: currentUser.email,
           classrooms: userClassroomsCache,
@@ -269,9 +280,9 @@ const InSessionNotification: React.FC = () => {
 
         // Even if user has no classrooms, still check for sessions (in case of data inconsistency)
         // Initial check immediately (don't await - fire and forget to avoid blocking)
-        console.log('[InSessionNotification] Performing initial session check...');
+        debug.once('initial-check', 'InSessionNotification', 'Performing initial session check...');
         checkForActiveSessions(currentUser.uid).catch(err => {
-          console.error('[InSessionNotification] Error in initial check:', err);
+          debug.error('InSessionNotification', 'Error in initial check', err);
         });
 
         // Set up polling as the ONLY mechanism (every 1.5 seconds for faster updates)
@@ -284,22 +295,22 @@ const InSessionNotification: React.FC = () => {
                  err.message?.includes('Unexpected state'))) {
               return;
             }
-            console.error('[InSessionNotification] Error in polling check:', err);
+            debug.error('InSessionNotification', 'Error in polling check', err);
           });
         }, 1500);
 
         // Real-time listener disabled to prevent Firestore internal assertion errors
         // Polling is more reliable and doesn't cause these errors
       } catch (error) {
-        console.error('[InSessionNotification] Error setting up session listener:', error);
+        debug.error('InSessionNotification', 'Error setting up session listener', error);
         // Still set up polling even if listener setup fails
         // Initial check immediately
         checkForActiveSessions(currentUser.uid).catch(err => {
-          console.error('[InSessionNotification] Error in initial check (fallback):', err);
+          debug.error('InSessionNotification', 'Error in initial check (fallback)', err);
         });
         pollInterval = setInterval(() => {
           checkForActiveSessions(currentUser.uid).catch(err => {
-            console.error('[InSessionNotification] Error in polling check (fallback):', err);
+            debug.error('InSessionNotification', 'Error in polling check (fallback)', err);
           });
         }, 1500);
       }
@@ -336,36 +347,19 @@ const InSessionNotification: React.FC = () => {
         movesEarned: 0
       };
 
-      // Add player to session and mark as active viewer
-      const sessionRef = doc(db, 'inSessionRooms', activeSession.id);
-      await updateDoc(sessionRef, {
-        players: arrayUnion(newPlayer),
-        activeViewers: arrayUnion(currentUser.uid), // Add to active viewers when joining
-        updatedAt: serverTimestamp()
-      });
-
-      // Update battle log
-      const sessionDoc = await getDoc(sessionRef);
-      if (sessionDoc.exists()) {
-        const data = sessionDoc.data();
-        const updatedLog = [...(data.battleLog || []), `👋 ${newPlayer.displayName} joined the session!`];
-        await updateDoc(sessionRef, {
-          battleLog: updatedLog
-        });
-      }
-
-      // Navigate to session battle view
-      navigate(`/in-session/${activeSession.id}`);
-    } catch (error) {
-      // Suppress Firestore internal assertion errors (known issue)
-      if (error instanceof Error && 
-          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-           error.message?.includes('Unexpected state'))) {
-        // Still navigate even if there's an internal assertion error
+      // Use session service to join (idempotent)
+      const { joinSession } = await import('../utils/inSessionService');
+      const joined = await joinSession(activeSession.id, newPlayer);
+      
+      if (joined) {
+        debug.log('InSessionNotification', `User ${currentUser.uid} joined session ${activeSession.id}`);
+        // Navigate to session battle view
         navigate(`/in-session/${activeSession.id}`);
-        return;
+      } else {
+        alert('Failed to join session. Please try again.');
       }
-      console.error('Error joining session:', error);
+    } catch (error) {
+      debug.error('InSessionNotification', 'Error joining session', error);
       alert('Failed to join session. Please try again.');
     } finally {
       setIsJoining(false);
@@ -377,13 +371,41 @@ const InSessionNotification: React.FC = () => {
     // This ensures students always see when their class is in session
   };
 
+  const handleEndSession = async () => {
+    if (!currentUser || !activeSession || isEnding) return;
+
+    // Confirm with admin before ending session
+    if (!window.confirm(`Are you sure you want to end the session "${activeSession.className}"? This will end the session for all ${activeSession.players.length} player(s).`)) {
+      return;
+    }
+
+    setIsEnding(true);
+    try {
+      const success = await endSession(activeSession.id, currentUser.uid, currentUser.email || undefined);
+      
+      if (success) {
+        debug.log('InSessionNotification', `Session ${activeSession.id} ended by admin ${currentUser.uid}`);
+        // The session will be marked as ended, and the notification will disappear on next poll
+        // Force immediate update by clearing active session
+        setActiveSession(null);
+      } else {
+        alert('Failed to end session. You may not have permission to end this session, or the session may have already ended.');
+      }
+    } catch (error) {
+      debug.error('InSessionNotification', 'Error ending session', error);
+      alert('Failed to end session. Please try again.');
+    } finally {
+      setIsEnding(false);
+    }
+  };
+
   if (!activeSession) {
     return null;
   }
 
   // Always render the notification if there's an active session
   // This ensures it's visible even if there are temporary state issues
-  console.log('[InSessionNotification] Rendering notification:', {
+  debug.throttle('rendering-notification', 2000, 'InSessionNotification', 'Rendering notification', {
     sessionId: activeSession.id,
     className: activeSession.className,
     isInSession,
@@ -443,6 +465,27 @@ const InSessionNotification: React.FC = () => {
           >
             {isJoining ? 'Joining...' : isInSession ? '🎮 Rejoin Session' : '🎮 Join Session'}
           </button>
+          {isAdmin() && (
+            <button
+              onClick={handleEndSession}
+              disabled={isEnding}
+              style={{
+                background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                padding: '0.75rem 1.5rem',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                cursor: isEnding ? 'not-allowed' : 'pointer',
+                opacity: isEnding ? 0.6 : 1,
+                transition: 'all 0.2s',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {isEnding ? 'Ending...' : '⏹️ End Session'}
+            </button>
+          )}
         </div>
       </div>
       <style>{`

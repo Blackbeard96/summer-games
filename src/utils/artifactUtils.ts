@@ -100,3 +100,23 @@ export const getEffectiveMasteryLevel = (move: { category: string; masteryLevel:
   return effectiveLevel;
 };
 
+/**
+ * Get the manifest damage boost from equipped artifacts (e.g., Captain's Helmet)
+ * @param equippedArtifacts The user's equipped artifacts
+ * @returns The damage multiplier (1.0 = no boost, 1.05 = 5% boost, etc.)
+ */
+export const getManifestDamageBoost = (equippedArtifacts: any): number => {
+  if (!equippedArtifacts) return 1.0;
+  
+  let boost = 0;
+  
+  // Check head slot for Captain's Helmet
+  const headArtifact = equippedArtifacts.head;
+  if (headArtifact && (headArtifact.id === 'captains-helmet' || headArtifact.name === 'Captain\'s Helmet')) {
+    const stats = headArtifact.stats || {};
+    boost += stats.manifestDamageBoost || 0.05; // Default 5% if not specified
+  }
+  
+  return 1.0 + boost;
+};
+

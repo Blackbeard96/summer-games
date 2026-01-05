@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot, increment } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot, increment, runTransaction } from 'firebase/firestore';
+import { getTodayDateStringEastern, getDayStartForDateEastern, getNextResetTimeEastern } from '../utils/dailyChallengeDateUtils';
 
 interface DailyChallenge {
   id: string;
@@ -41,7 +42,7 @@ const DailyChallenges: React.FC = () => {
       const unsubscribe = onSnapshot(playerChallengesRef, async (doc) => {
         if (doc.exists()) {
           const data = doc.data();
-          const today = getTodayDateString();
+          const today = getTodayDateStringEastern();
           
           if (data.assignedDate === today && data.challenges) {
             const progressMap: { [key: string]: PlayerChallengeProgress } = {};
@@ -70,99 +71,9 @@ const DailyChallenges: React.FC = () => {
     }
   }, [currentUser]);
 
-  // Helper to get "day" start time (8am Eastern Time) for a given date
-  // Properly handles EST (UTC-5) and EDT (UTC-4) automatically using America/New_York timezone
-  const getDayStartForDate = (date: Date): Date => {
-    // Get current date/time in Eastern Time
-    const easternNow = date.toLocaleString('en-US', { 
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
-    
-    // Parse the Eastern Time string
-    const parts = easternNow.split(', ');
-    const datePart = parts[0];
-    const timePart = parts[1];
-    const [month, day, year] = datePart.split('/');
-    const [hour] = timePart.split(':');
-    
-    const yearNum = parseInt(year);
-    const monthNum = parseInt(month) - 1; // JS months are 0-indexed
-    const dayNum = parseInt(day);
-    const currentHour = parseInt(hour);
-    
-    // Determine which day's 8am to use
-    let targetYear = yearNum;
-    let targetMonth = monthNum;
-    let targetDay = dayNum;
-    
-    // If current Eastern time is before 8am, use previous day's 8am
-    if (currentHour < 8) {
-      const prevDate = new Date(yearNum, monthNum, dayNum - 1);
-      targetYear = prevDate.getFullYear();
-      targetMonth = prevDate.getMonth();
-      targetDay = prevDate.getDate();
-    }
-    
-    // Find what UTC time corresponds to 8am Eastern on the target date
-    // Test both EST (13:00 UTC) and EDT (12:00 UTC) possibilities
-    // EST: 8am Eastern = 13:00 UTC (UTC-5)
-    // EDT: 8am Eastern = 12:00 UTC (UTC-4)
-    
-    // Try 13:00 UTC first (EST)
-    let testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 13, 0, 0));
-    let easternTimeStr = testUTC.toLocaleString('en-US', { 
-      timeZone: 'America/New_York',
-      hour: '2-digit',
-      hour12: false
-    });
-    let easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
-    
-    if (easternHour === 8) {
-      // EST: 8am Eastern = 13:00 UTC
-      return testUTC;
-    }
-    
-    // Try 12:00 UTC (EDT)
-    testUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 12, 0, 0));
-    easternTimeStr = testUTC.toLocaleString('en-US', { 
-      timeZone: 'America/New_York',
-      hour: '2-digit',
-      hour12: false
-    });
-    easternHour = parseInt(easternTimeStr.split(', ')[1]?.split(':')[0] || '0');
-    
-    if (easternHour === 8) {
-      // EDT: 8am Eastern = 12:00 UTC
-      return testUTC;
-    }
-    
-    // Fallback (shouldn't happen, but just in case)
-    return testUTC;
-  };
-
-  // Calculate next reset time (8am Eastern Time each day)
-  const getNextResetTime = (): Date => {
-    const now = new Date();
-    
-    // Get today's 8am Eastern Time
-    const today8amEastern = getDayStartForDate(now);
-    
-    // If current time is already past today's 8am Eastern, get tomorrow's 8am Eastern
-    if (now >= today8amEastern) {
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      return getDayStartForDate(tomorrow);
-    }
-    
-    return today8amEastern;
-  };
+  // Use Eastern Time date utilities (delegates to centralized utilities)
+  const getDayStartForDate = (date: Date): Date => getDayStartForDateEastern(date);
+  const getNextResetTime = (): Date => getNextResetTimeEastern();
 
   // Update reset timer every second
   useEffect(() => {
@@ -189,48 +100,63 @@ const DailyChallenges: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const getTodayDateString = () => {
-    const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  };
+  // Use Eastern Time date utility (deprecated local function)
+  const getTodayDateString = () => getTodayDateStringEastern();
 
-  // Automatically grant rewards when a challenge completes
+  // Automatically grant rewards when a challenge completes (IDEMPOTENT)
   const autoGrantRewards = async (challengeId: string) => {
     if (!currentUser) return;
 
     try {
-      // Fetch challenge details
-      const challengeDoc = await getDoc(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId));
-      if (!challengeDoc.exists()) {
-        console.error('[Daily Challenges] Challenge not found:', challengeId);
-        return;
-      }
-      const challengeData = challengeDoc.data() as DailyChallenge;
-      
-      // Grant rewards using atomic updates
-      const studentRef = doc(db, 'students', currentUser.uid);
-      const updateData: any = {
-        powerPoints: increment(challengeData.rewardPP),
-        xp: increment(challengeData.rewardXP)
-      };
-      if (challengeData.rewardTruthMetal) {
-        updateData.truthMetal = increment(challengeData.rewardTruthMetal);
-      }
-      await updateDoc(studentRef, updateData);
-
-      // Mark as claimed
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
-      const currentData = (await getDoc(playerChallengesRef)).data();
-      if (currentData && currentData.challenges) {
-        const updatedChallenges = currentData.challenges.map((c: PlayerChallengeProgress) => 
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Use transaction to ensure idempotency
+      await runTransaction(db, async (transaction) => {
+        // Re-read within transaction
+        const challengeDoc = await transaction.get(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId));
+        if (!challengeDoc.exists()) {
+          console.error('[Daily Challenges] Challenge not found:', challengeId);
+          return;
+        }
+        const challengeData = challengeDoc.data() as DailyChallenge;
+        
+        const progressDoc = await transaction.get(playerChallengesRef);
+        if (!progressDoc.exists()) {
+          console.warn('[Daily Challenges] Progress document not found');
+          return;
+        }
+        
+        const progressData = progressDoc.data();
+        const challenges: PlayerChallengeProgress[] = progressData.challenges || [];
+        const challengeProgress = challenges.find(c => c.challengeId === challengeId);
+        
+        // IDEMPOTENCY CHECK: If already claimed, do nothing
+        if (!challengeProgress || challengeProgress.claimed) {
+          console.log(`[Daily Challenges] Rewards already claimed for challenge ${challengeId}`);
+          return;
+        }
+        
+        // Grant rewards using atomic increments
+        const updateData: any = {
+          powerPoints: increment(challengeData.rewardPP),
+          xp: increment(challengeData.rewardXP)
+        };
+        if (challengeData.rewardTruthMetal) {
+          updateData.truthMetal = increment(challengeData.rewardTruthMetal);
+        }
+        transaction.update(studentRef, updateData);
+
+        // Mark as claimed atomically
+        const updatedChallenges = challenges.map((c: PlayerChallengeProgress) => 
           c.challengeId === challengeId ? { ...c, claimed: true } : c
         );
-        await updateDoc(playerChallengesRef, {
+        transaction.update(playerChallengesRef, {
           challenges: updatedChallenges
         });
-      }
-      
-      console.log(`[Daily Challenges] ✅ Auto-granted rewards for challenge "${challengeData.title}": ${challengeData.rewardPP} PP, ${challengeData.rewardXP} XP${challengeData.rewardTruthMetal ? `, ${challengeData.rewardTruthMetal} Truth Metal` : ''}`);
+        
+        console.log(`[Daily Challenges] ✅ Auto-granted rewards for challenge "${challengeData.title}": ${challengeData.rewardPP} PP, ${challengeData.rewardXP} XP${challengeData.rewardTruthMetal ? `, ${challengeData.rewardTruthMetal} Truth Metal` : ''}`);
+      });
     } catch (error) {
       console.error('[Daily Challenges] Error auto-granting rewards:', error);
     }
@@ -476,7 +402,7 @@ const DailyChallenges: React.FC = () => {
   }
 
   return (
-    <div style={{ padding: '1.5rem', maxWidth: '1000px', margin: '0 auto' }}>
+    <div id="daily-challenges" style={{ padding: '1.5rem', maxWidth: '1000px', margin: '0 auto' }}>
       <div style={{ marginBottom: '2rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
           <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 'bold' }}>

@@ -81,9 +81,22 @@ const InSessionBattleView: React.FC = () => {
 
         // Listen for session updates
         const unsubscribe = onSnapshot(sessionRef, (doc) => {
-          if (doc.exists()) {
-            setSession(doc.data());
+          if (!doc.exists()) {
+            navigate('/home');
+            return;
           }
+
+          const data = doc.data();
+
+          // If session was ended by admin, end it for everyone
+          if (data?.status === 'closed') {
+            // Avoid looping re-renders / double nav
+            console.log('[InSessionBattleView] Session closed by admin - returning to home', { sessionId });
+            navigate('/home', { replace: true });
+            return;
+          }
+
+          setSession(data);
         });
 
         setLoading(false);

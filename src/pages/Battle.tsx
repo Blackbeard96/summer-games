@@ -66,10 +66,17 @@ const Battle: React.FC = () => {
   const navigate = useNavigate();
   
   // Check URL hash to set initial tab
+  // Support both "moves" and "skills" routes for backward compatibility
   const getInitialTab = (): 'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle' => {
     const hash = window.location.hash.replace('#', '');
     if (hash === 'vault') return 'vault';
-    if (hash === 'moves') return 'moves';
+    if (hash === 'moves' || hash === 'skills' || hash === 'skillMastery') {
+      // Redirect old routes to moves tab (which will show Skill Mastery)
+      if (hash === 'skills' || hash === 'skillMastery') {
+        window.history.replaceState(null, '', '/battle#moves');
+      }
+      return 'moves';
+    }
     if (hash === 'cards') return 'cards';
     return 'battle';
   };
@@ -435,32 +442,60 @@ const Battle: React.FC = () => {
       <div style={{ 
         display: 'flex', 
         borderBottom: '2px solid #e5e7eb',
-        marginBottom: '2rem'
+        marginBottom: '2rem',
+        alignItems: 'center',
+        justifyContent: 'space-between'
       }}>
-        {[
-          { id: 'battle', label: 'Player Battle', icon: '⚔️' },
-          { id: 'vault', label: 'Vault Management', icon: '🏦' },
-          { id: 'moves', label: 'Moves & Mastery', icon: '🎯' },
-          { id: 'cards', label: 'Action Cards', icon: '🃏' },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            style={{
-              background: activeTab === tab.id ? '#4f46e5' : 'transparent',
-              color: activeTab === tab.id ? 'white' : '#6b7280',
-              border: 'none',
-              padding: '1rem 1.5rem',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              borderBottom: activeTab === tab.id ? '2px solid #4f46e5' : 'none',
-              transition: 'all 0.2s'
-            }}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
+        <div style={{ display: 'flex' }}>
+          {[
+            { id: 'battle', label: 'Player Battle', icon: '⚔️' },
+            { id: 'vault', label: 'Vault Management', icon: '🏦' },
+            { id: 'moves', label: 'Skills & Mastery', icon: '🎯' },
+            { id: 'cards', label: 'Action Cards', icon: '🃏' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              style={{
+                background: activeTab === tab.id ? '#4f46e5' : 'transparent',
+                color: activeTab === tab.id ? 'white' : '#6b7280',
+                border: 'none',
+                padding: '1rem 1.5rem',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                borderBottom: activeTab === tab.id ? '2px solid #4f46e5' : 'none',
+                transition: 'all 0.2s'
+              }}
+            >
+              {tab.icon} {tab.label}
+            </button>
+          ))}
+        </div>
+        
+        {/* PP Display - Always Visible */}
+        {vault && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+            borderRadius: '0.5rem',
+            border: '2px solid #f59e0b',
+            marginRight: '1rem'
+          }}>
+            <span style={{ fontSize: '1.5rem' }}>⚡</span>
+            <div>
+              <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>
+                POWER POINTS
+              </div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#78350f' }}>
+                {vault.currentPP?.toLocaleString() || 0} / {vault.capacity?.toLocaleString() || 0}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Battle Arena Instructions */}
@@ -482,7 +517,7 @@ const Battle: React.FC = () => {
         </h3>
         
         {activeTab === 'moves' ? (
-          // Moves & Mastery Instructions
+          // Skills & Mastery Instructions
           <div style={{ 
             background: 'rgba(255, 255, 255, 0.7)',
             padding: '1.5rem',
@@ -496,7 +531,7 @@ const Battle: React.FC = () => {
               marginBottom: '1rem'
             }}>
               <span style={{ fontSize: '1.5rem' }}>🎯</span>
-              <strong style={{ color: '#1e40af', fontSize: '1.1rem' }}>Moves & Mastery</strong>
+              <strong style={{ color: '#1e40af', fontSize: '1.1rem' }}>Skills & Mastery</strong>
             </div>
             <div style={{ 
               display: 'grid', 
@@ -517,7 +552,7 @@ const Battle: React.FC = () => {
                   marginBottom: '0.5rem'
                 }}>
                   <span style={{ fontSize: '1.2rem' }}>⚡</span>
-                  <strong style={{ color: '#1e40af' }}>Manage Moves</strong>
+                  <strong style={{ color: '#1e40af' }}>Manage Skills</strong>
                 </div>
                 <p style={{ 
                   fontSize: '0.875rem', 
@@ -633,7 +668,7 @@ const Battle: React.FC = () => {
                 margin: 0,
                 lineHeight: '1.4'
               }}>
-                Monitor your vault stats, battle history, and quick actions all in one place. Manage your Power Points, shields, and battle moves efficiently.
+                Monitor your vault stats, battle history, and quick actions all in one place. Manage your Power Points, shields, and battle skills efficiently.
               </p>
             </div>
           </div>
@@ -662,7 +697,7 @@ const Battle: React.FC = () => {
             lineHeight: '1.4'
           }}>
             {activeTab === 'moves' 
-              ? 'Focus on upgrading your most powerful moves first, then expand your move collection to have more strategic options in battle!'
+              ? 'Focus on upgrading your most powerful skills first, then expand your skill collection to have more strategic options in battle!'
               : 'Monitor your vault stats and battle history to track your progress. Use quick actions to enhance your abilities before engaging in player battles!'
             }
           </p>
@@ -1242,7 +1277,7 @@ const Battle: React.FC = () => {
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                 <button 
-                  onClick={() => handleRestoreShields(5, 15)}
+                  onClick={() => handleRestoreShields(5, 5)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1255,11 +1290,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+5 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 15 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 5 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(10, 24)}
+                  onClick={() => handleRestoreShields(10, 10)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1272,11 +1307,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+10 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 24 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 10 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(25, 45)}
+                  onClick={() => handleRestoreShields(25, 25)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1289,11 +1324,11 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+25 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 45 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 25 PP</div>
                 </button>
                 
                 <button 
-                  onClick={() => handleRestoreShields(50, 60)}
+                  onClick={() => handleRestoreShields(50, 50)}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
                   style={{
                     background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
@@ -1306,14 +1341,48 @@ const Battle: React.FC = () => {
                   }}
                 >
                   <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 60 PP</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 50 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => handleRestoreShields(100, 100)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+100 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 100 PP</div>
+                </button>
+                
+                <button 
+                  onClick={() => handleRestoreShields(1000, 1000)}
+                  disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
+                  style={{
+                    background: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    padding: '1rem',
+                    borderRadius: '0.5rem',
+                    cursor: (!vault || vault.shieldStrength >= vault.maxShieldStrength) ? 'not-allowed' : 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+1000 Shields</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 1000 PP</div>
                 </button>
                 
                 <button 
                   onClick={() => {
                     if (vault) {
                       const neededShields = vault.maxShieldStrength - vault.shieldStrength;
-                      handleRestoreShields(neededShields, 90);
+                      handleRestoreShields(neededShields, neededShields);
                     }
                   }}
                   disabled={!vault || vault.shieldStrength >= vault.maxShieldStrength}
@@ -1327,8 +1396,8 @@ const Battle: React.FC = () => {
                     fontWeight: 'bold'
                   }}
                 >
-                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>+50 Shields</div>
-                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: 90 PP</div>
+                  <div style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>Restore to Full</div>
+                  <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>Cost: Variable PP</div>
                 </button>
               </div>
             </div>
@@ -1337,13 +1406,13 @@ const Battle: React.FC = () => {
 
         {activeTab === 'moves' && (
           <>
-            {/* Battle Arsenal Section */}
+            {/* Skill Mastery Section */}
             <div style={{ marginBottom: '2rem' }}>
               <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#1f2937', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                ⚔️ Battle Arsenal
+                ⚔️ Skill Mastery
               </h3>
               <p style={{ color: '#6b7280', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
-                Manage your combat moves and abilities. Upgrade existing moves or unlock new ones to strengthen your battle capabilities.
+                Manage your combat skills and abilities. Upgrade existing skills or unlock new ones to strengthen your battle capabilities. Skills come from Manifest abilities, Elemental Affinity, and RR Candy powers.
               </p>
             </div>
 

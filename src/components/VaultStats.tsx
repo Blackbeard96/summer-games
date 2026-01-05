@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Vault, Move, ActionCard } from '../types/battle';
-import { doc, getDoc, onSnapshot, addDoc, collection, updateDoc, deleteField } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, addDoc, collection, updateDoc, deleteField, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
@@ -29,7 +29,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 }) => {
   console.log('VaultStats: Received remainingOfflineMoves:', remainingOfflineMoves, 'maxOfflineMoves:', maxOfflineMoves);
   const { currentUser } = useAuth();
-  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData, offlineMoves, collectGeneratorPP, getGeneratorRates } = useBattle();
+  const { getRemainingOfflineMoves, syncVaultPP, refreshVaultData, offlineMoves, collectGeneratorPP, getGeneratorRates, updateVault } = useBattle();
   const [userXP, setUserXP] = useState<number>(0);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreCost, setRestoreCost] = useState<number>(100);
@@ -283,11 +283,13 @@ const VaultStats: React.FC<VaultStatsProps> = ({
       // Calculate new PP (deduct health cost)
       const newPP = vault.currentPP - healthNeeded;
       
-      // Update vault in Firestore: restore health to max, deduct PP, and REMOVE cooldown
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      // Prepare update data
       const updateData: any = {
         vaultHealth: maxVaultHealth,
-        currentPP: newPP
+        currentPP: newPP,
+        // Add a timestamp to indicate health was just restored
+        // This prevents the listener from immediately recalculating and reducing it
+        healthRestoredAt: serverTimestamp()
       };
       
       // Remove cooldown if it exists (using deleteField() to remove it from Firestore)
@@ -295,19 +297,19 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         updateData.vaultHealthCooldown = deleteField();
       }
       
-      await updateDoc(vaultRef, updateData);
+      // Update vault in Firestore using updateVault from context
+      // This will also update student PP automatically
+      await updateVault(updateData);
       
-      // Also update student PP to match
+      // Also explicitly update student PP to ensure consistency
       const studentRef = doc(db, 'students', currentUser.uid);
       await updateDoc(studentRef, {
         powerPoints: newPP
       });
       
-      // Sync vault PP to ensure consistency
-      await syncVaultPP();
-      
-      // Force refresh of vault data
-      await refreshVaultData();
+      // Don't call syncVaultPP() here because it would recalculate and reduce the health
+      // The vault listener will automatically update the local state from Firestore
+      // The healthRestoredAt timestamp will prevent the listener from recalculating for 10 seconds
       
       const cooldownMessage = vault.vaultHealthCooldown 
         ? `Vault health restored to full! Cooldown removed - you can now be attacked again. Spent ${healthNeeded} PP.`
@@ -699,7 +701,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1f2937' }}>Quick Actions</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
           <button 
-            onClick={() => onRestoreShields(5, 15)}
+            onClick={() => onRestoreShields(5, 5)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -712,11 +714,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +5 Shields (15 PP)
+            +5 Shields (5 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(10, 24)}
+            onClick={() => onRestoreShields(10, 10)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -729,11 +731,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +10 Shields (24 PP)
+            +10 Shields (10 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(25, 45)}
+            onClick={() => onRestoreShields(25, 25)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -746,11 +748,11 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +25 Shields (45 PP)
+            +25 Shields (25 PP)
           </button>
           
           <button 
-            onClick={() => onRestoreShields(50, 90)}
+            onClick={() => onRestoreShields(50, 50)}
             disabled={vault.shieldStrength >= vault.maxShieldStrength}
             style={{
               background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
@@ -763,7 +765,41 @@ const VaultStats: React.FC<VaultStatsProps> = ({
               fontSize: '0.875rem'
             }}
           >
-            +50 Shields (90 PP)
+            +50 Shields (50 PP)
+          </button>
+          
+          <button 
+            onClick={() => onRestoreShields(100, 100)}
+            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            style={{
+              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem',
+              borderRadius: '0.5rem',
+              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold',
+              fontSize: '0.875rem'
+            }}
+          >
+            +100 Shields (100 PP)
+          </button>
+          
+          <button 
+            onClick={() => onRestoreShields(1000, 1000)}
+            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            style={{
+              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              color: 'white',
+              border: 'none',
+              padding: '0.75rem',
+              borderRadius: '0.5rem',
+              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold',
+              fontSize: '0.875rem'
+            }}
+          >
+            +1000 Shields (1000 PP)
           </button>
         </div>
       </div>

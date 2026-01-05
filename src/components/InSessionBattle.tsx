@@ -12,6 +12,36 @@ import { isUserScorekeeper, isUserAdmin } from '../utils/roleManagement';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { getMoveDamageSync } from '../utils/moveOverrides';
+// New service imports
+import { 
+  subscribeToSession, 
+  joinSession, 
+  endSession, 
+  getSession,
+  canHostSession,
+  isGlobalHost,
+  type SessionPlayer as ServiceSessionPlayer
+} from '../utils/inSessionService';
+import { 
+  startPresence, 
+  stopPresence, 
+  subscribeToPresence,
+  isPlayerOnline,
+  type PlayerPresence
+} from '../utils/inSessionPresenceService';
+import { 
+  getAvailableSkillsForSession,
+  validateSkillUsage,
+  createSessionLoadout
+} from '../utils/inSessionSkillsService';
+import { 
+  submitAction,
+  subscribeToActions,
+  generateClientNonce,
+  checkDuplicateAction,
+  type ActionType
+} from '../utils/inSessionActionsService';
+import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
 
 interface Student {
   id: string;
@@ -80,245 +110,124 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [userProfiles, setUserProfiles] = useState<Map<string, { displayName: string; photoURL?: string }>>(new Map());
   const isUpdatingViewersRef = useRef(false); // Prevent concurrent updates
 
-  // Track current user as active viewer
+  // Track player presence using presence service
   useEffect(() => {
     if (!sessionId || !currentUser) return;
 
-    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    debug('inSessionBattle', `Starting presence tracking for ${currentUser.uid}`);
     
-    // Add current user to active viewers in Firestore (shared with all players)
-    const addActiveViewer = async () => {
-      if (isUpdatingViewersRef.current) return; // Prevent concurrent updates
+    // Start presence tracking
+    const cleanupPresence = startPresence(sessionId, currentUser.uid);
+
+    // Subscribe to presence updates for all players
+    const unsubscribePresence = subscribeToPresence(sessionId, (presenceMap) => {
+      debugThrottle('presence-update', 2000, 'inSessionBattle', 
+        `Presence update: ${presenceMap.size} players`, 
+        Array.from(presenceMap.entries()).map(([uid, p]) => ({ uid, connected: p.connected }))
+      );
       
-      try {
-        isUpdatingViewersRef.current = true;
-        const sessionDoc = await getDoc(sessionRef);
-        if (sessionDoc.exists()) {
-          const data = sessionDoc.data();
-          const viewers = data.activeViewers || [];
-          if (!viewers.includes(currentUser.uid)) {
-            // Add current user to active viewers array in Firestore
-            await updateDoc(sessionRef, {
-              activeViewers: arrayUnion(currentUser.uid),
-              updatedAt: serverTimestamp()
-            });
-          }
-        }
-      } catch (error) {
-        // Suppress Firestore internal assertion errors (known issue)
-        if (error instanceof Error && 
-            (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-             error.message?.includes('Unexpected state'))) {
-          return;
-        }
-        console.error('Error adding active viewer:', error);
-        // Fallback: manually update if arrayUnion fails
-        try {
-          const sessionDoc = await getDoc(sessionRef);
-          if (sessionDoc.exists()) {
-            const data = sessionDoc.data();
-            const viewers = data.activeViewers || [];
-            if (!viewers.includes(currentUser.uid)) {
-              await updateDoc(sessionRef, {
-                activeViewers: [...viewers, currentUser.uid],
-                updatedAt: serverTimestamp()
-              });
-            }
-          }
-        } catch (fallbackError) {
-          // Suppress Firestore internal assertion errors
-          if (fallbackError instanceof Error && 
-              (fallbackError.message?.includes('INTERNAL ASSERTION FAILED') || 
-               fallbackError.message?.includes('Unexpected state'))) {
-            return;
-          }
-          console.error('Error in fallback add active viewer:', fallbackError);
-        }
-      } finally {
-        isUpdatingViewersRef.current = false;
-      }
-    };
-
-    // Remove current user from active viewers in Firestore (shared with all players)
-    const removeActiveViewer = async () => {
-      if (isUpdatingViewersRef.current) return; // Prevent concurrent updates
-      
-      try {
-        isUpdatingViewersRef.current = true;
-        const sessionDoc = await getDoc(sessionRef);
-        if (sessionDoc.exists()) {
-          const data = sessionDoc.data();
-          const viewers = data.activeViewers || [];
-          if (viewers.includes(currentUser.uid)) {
-            // Remove current user from active viewers array in Firestore
-            await updateDoc(sessionRef, {
-              activeViewers: arrayRemove(currentUser.uid),
-              updatedAt: serverTimestamp()
-            });
-          }
-        }
-      } catch (error) {
-        // Suppress Firestore internal assertion errors (known issue)
-        if (error instanceof Error && 
-            (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-             error.message?.includes('Unexpected state'))) {
-          return;
-        }
-        console.error('Error removing active viewer:', error);
-        // Fallback: manually update if arrayRemove fails
-        try {
-          const sessionDoc = await getDoc(sessionRef);
-          if (sessionDoc.exists()) {
-            const data = sessionDoc.data();
-            const viewers = data.activeViewers || [];
-            if (viewers.includes(currentUser.uid)) {
-              await updateDoc(sessionRef, {
-                activeViewers: viewers.filter((id: string) => id !== currentUser.uid),
-                updatedAt: serverTimestamp()
-              });
-            }
-          }
-        } catch (fallbackError) {
-          // Suppress Firestore internal assertion errors
-          if (fallbackError instanceof Error && 
-              (fallbackError.message?.includes('INTERNAL ASSERTION FAILED') || 
-               fallbackError.message?.includes('Unexpected state'))) {
-            return;
-          }
-          console.error('Error in fallback remove active viewer:', fallbackError);
-        }
-      } finally {
-        isUpdatingViewersRef.current = false;
-      }
-    };
-
-    // Add current user immediately and ensure they stay in activeViewers
-    addActiveViewer();
-
-    // Set up a heartbeat to keep presence active (every 30 seconds)
-    const heartbeatInterval = setInterval(() => {
-      addActiveViewer();
-    }, 30000);
-
-    // Handle page visibility changes
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        removeActiveViewer();
-      } else {
-        addActiveViewer();
-      }
-    };
-
-    // Handle page unload
-    const handleBeforeUnload = () => {
-      removeActiveViewer();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('beforeunload', handleBeforeUnload);
+      // Update session players with presence data
+      setSessionPlayers(prev => prev.map(player => {
+        const presence = presenceMap.get(player.userId);
+        return {
+          ...player,
+          // Presence data can be used to show online/offline status
+        };
+      }));
+    });
 
     return () => {
-      clearInterval(heartbeatInterval);
-      removeActiveViewer();
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      debug('inSessionBattle', `Stopping presence tracking for ${currentUser.uid}`);
+      cleanupPresence();
+      unsubscribePresence();
+      stopPresence(sessionId, currentUser.uid);
     };
   }, [sessionId, currentUser]);
 
-  // Load session data and listen for updates
+  // Load session data and listen for updates using session service
   useEffect(() => {
     if (!sessionId || !currentUser) return;
 
-    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    debug('inSessionBattle', `Setting up session subscription for ${sessionId}`);
     
-    // Auto-join the session if user is not already in it
-    // This ensures users who navigate directly to the session page are added
+    // Auto-join the session if user is not already in it (idempotent)
     const autoJoinSession = async () => {
       try {
-        const sessionDoc = await getDoc(sessionRef);
-        if (sessionDoc.exists()) {
-          const data = sessionDoc.data();
-          const players: SessionPlayer[] = data.players || [];
-          const isUserInSession = players.some(p => p.userId === currentUser.uid);
+        // Get user data for join
+        const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        const userData = userDoc.exists() ? userDoc.data() : {};
+        
+        const newPlayer: ServiceSessionPlayer = {
+          userId: currentUser.uid,
+          displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
+          photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
+          level: studentData.level || getLevelFromXP(studentData.xp || 0) || 1,
+          powerPoints: studentData.powerPoints || 0,
+          participationCount: 0,
+          movesEarned: 0
+        };
+        
+        // Join session (idempotent - safe to call multiple times)
+        const joined = await joinSession(sessionId, newPlayer);
+        if (joined) {
+          debug('inSessionBattle', `User ${currentUser.uid} joined session ${sessionId}`);
           
-          if (!isUserInSession) {
-            // User is not in session - add them automatically
-            // Always use the latest profile data from users collection
-            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
-            const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-            
-            const studentData = studentDoc.exists() ? studentDoc.data() : {};
-            const userData = userDoc.exists() ? userDoc.data() : {};
-            
-            // Prioritize users collection data for displayName and photoURL (source of truth)
-            const newPlayer: SessionPlayer = {
-              userId: currentUser.uid,
-              displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
-              photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
-              level: studentData.level || getLevelFromXP(studentData.xp || 0) || 1,
-              powerPoints: studentData.powerPoints || 0,
-              participationCount: 0,
-              movesEarned: 0
-            };
-            
-            // Add player to session
-            await updateDoc(sessionRef, {
-              players: arrayUnion(newPlayer),
-              updatedAt: serverTimestamp()
-            });
-            
-            // Update battle log
-            const updatedLog = [...(data.battleLog || []), `👋 ${newPlayer.displayName} joined the session!`];
-            await updateDoc(sessionRef, {
-              battleLog: updatedLog
-            });
-            
-            console.log('[InSessionBattle] Auto-joined user to session:', currentUser.uid);
-          }
+          // Create session loadout snapshot
+          const userElement = studentData.elementalAffinity;
+          await createSessionLoadout(sessionId, currentUser.uid, userElement);
         }
       } catch (error) {
-        // Suppress Firestore internal assertion errors (known issue)
-        if (error instanceof Error && 
-            (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-             error.message?.includes('Unexpected state'))) {
-          return;
-        }
-        console.error('[InSessionBattle] Error auto-joining session:', error);
+        debugError('inSessionBattle', `Error auto-joining session`, error);
       }
     };
     
     // Auto-join on mount
     autoJoinSession();
     
-    const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        const players: SessionPlayer[] = data.players || [];
-        setSessionPlayers(players);
-        
-        // Update active viewers list from Firestore (shared across all players)
-        // This is the source of truth for who is currently viewing the session
-        // NOTE: Do NOT update the document inside this listener to avoid feedback loops
-        const viewers = data.activeViewers || [];
-        setActiveViewers(viewers);
-
-        // Update battle log from session
-        if (data.battleLog && Array.isArray(data.battleLog)) {
-          setBattleLog(data.battleLog);
-        }
-      }
-    }, (error) => {
-      // Suppress Firestore internal assertion errors (known issue)
-      if (error instanceof Error && 
-          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-           error.message?.includes('Unexpected state'))) {
+    // Subscribe to session updates
+    const unsubscribe = subscribeToSession(sessionId, (session) => {
+      if (!session) {
+        debug('inSessionBattle', `Session ${sessionId} does not exist`);
         return;
       }
-      console.error('Error listening to session:', error);
+      
+      const players: SessionPlayer[] = session.players || [];
+      
+      // Update player names from userProfiles (source of truth)
+      const updatedPlayers = players.map((player) => {
+        const latestProfile = userProfiles.get(player.userId);
+        if (latestProfile && latestProfile.displayName !== player.displayName) {
+          return {
+            ...player,
+            displayName: latestProfile.displayName,
+            photoURL: latestProfile.photoURL || player.photoURL
+          };
+        }
+        return player;
+      });
+      
+      setSessionPlayers(updatedPlayers);
+      
+      // Update battle log
+      if (session.battleLog && Array.isArray(session.battleLog)) {
+        setBattleLog(session.battleLog);
+      }
+      
+      // Update active viewers (if still using array for backward compatibility)
+      // Note: activeViewers is optional and may not be in the type
+      const activeViewersArray = (session as any).activeViewers;
+      if (activeViewersArray && Array.isArray(activeViewersArray)) {
+        setActiveViewers(activeViewersArray);
+      }
     });
 
-    return () => unsubscribe();
-  }, [sessionId, currentUser]);
+    return () => {
+      unsubscribe();
+    };
+  }, [sessionId, currentUser, userProfiles]);
 
   // Load vault data for all players
   const [playerVaultData, setPlayerVaultData] = useState<Record<string, {
@@ -445,6 +354,31 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     };
   }, [students]);
 
+  // Keep sessionPlayers displayName/photoURL in sync with userProfiles (profile is source of truth)
+  // Important: do NOT write back to Firestore here (avoid feedback loops). We only normalize for UI/BattleEngine rendering.
+  useEffect(() => {
+    if (sessionPlayers.length === 0 || userProfiles.size === 0) return;
+
+    setSessionPlayers(prev => {
+      let changed = false;
+      const next = prev.map(p => {
+        const profile = userProfiles.get(p.userId);
+        if (!profile) return p;
+
+        const nextDisplayName = profile.displayName || p.displayName;
+        const nextPhotoURL = profile.photoURL || p.photoURL;
+
+        if (nextDisplayName !== p.displayName || nextPhotoURL !== p.photoURL) {
+          changed = true;
+          return { ...p, displayName: nextDisplayName, photoURL: nextPhotoURL };
+        }
+        return p;
+      });
+
+      return changed ? next : prev;
+    });
+  }, [userProfiles, sessionPlayers.length]);
+
   // Check if current user is admin or scorekeeper
   useEffect(() => {
     console.log('[InSessionBattle] Permission check useEffect triggered', { currentUserId: currentUser?.uid, currentUserEmail: currentUser?.email });
@@ -466,6 +400,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       try {
         // Check admin status - check userRoles collection first, then fallback to email
         const hasAdminRole = await isUserAdmin(currentUser.uid, currentUser.email);
+        
+        console.log('[InSessionBattle] Admin check result:', {
+          userId: currentUser.uid,
+          email: currentUser.email,
+          hasAdminRole,
+          note: 'Only exact email matches or userRoles collection grant admin status'
+        });
         
         // Check scorekeeper role - verify it's actually in the database
         const roleDoc = await getDoc(doc(db, 'userRoles', currentUser.uid));
@@ -564,6 +505,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     .filter(p => p.userId !== currentUser?.uid)
     .map(player => {
       const student = students.find(s => s.id === player.userId);
+      const profile = userProfiles.get(player.userId);
       const vaultData = playerVaultData[player.userId] || {
         vaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
         maxVaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
@@ -575,7 +517,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       
       return {
         id: player.userId,
-        name: player.displayName,
+        name: profile?.displayName || player.displayName,
         currentPP: vaultData.currentPP,
         maxPP: vaultData.maxPP,
         vaultHealth: vaultData.vaultHealth,
@@ -583,7 +525,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         shieldStrength: vaultData.shieldStrength,
         maxShieldStrength: vaultData.maxShieldStrength,
         level: player.level,
-        photoURL: player.photoURL,
+        photoURL: profile?.photoURL || player.photoURL,
         speed: 50
       };
     });
@@ -592,6 +534,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     .filter(p => p.userId === currentUser?.uid)
     .map(player => {
       const student = students.find(s => s.id === player.userId);
+      const profile = userProfiles.get(player.userId);
       const vaultData = playerVaultData[player.userId] || (vault ? {
         vaultHealth: Math.floor(vault.currentPP * 0.1),
         maxVaultHealth: Math.floor(vault.currentPP * 0.1),
@@ -610,7 +553,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       
       return {
         id: player.userId,
-        name: player.displayName,
+        name: profile?.displayName || player.displayName,
         currentPP: vaultData.currentPP,
         maxPP: vaultData.maxPP,
         vaultHealth: vaultData.vaultHealth,
@@ -618,7 +561,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         shieldStrength: vaultData.shieldStrength,
         maxShieldStrength: vaultData.maxShieldStrength,
         level: player.level,
-        photoURL: player.photoURL,
+        photoURL: profile?.photoURL || player.photoURL,
         isPlayer: true,
         speed: 50
       };
@@ -632,9 +575,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return;
     }
 
-    // Verify user has permission (defense in depth - button is already hidden, but prevent direct function calls)
-    if (!isAdminUser && !isScorekeeper) {
-      console.error('Unauthorized: Only admins and scorekeepers can add participation');
+    // Verify user has permission - only Yondaime can add participation
+    const isYondaime = currentUser?.email === 'edm21179@gmail.com' || 
+                       currentUser?.displayName === 'Yondaime' || 
+                       currentUser?.displayName?.toLowerCase() === 'yondaime';
+    
+    if (!isYondaime) {
+      console.error('[InSessionBattle] Unauthorized: Only Yondaime can add participation');
       return;
     }
 
@@ -646,8 +593,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
       const data = sessionDoc.data();
       const players: SessionPlayer[] = data.players || [];
-      
-      // Check if player is already in session
+
+      // Check if player is already in session (works for both in-session and not-in-session players)
       const existingPlayer = players.find(p => p.userId === userId);
       
       let updatedPlayers: SessionPlayer[];
@@ -717,9 +664,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return;
     }
 
-    // Verify user has permission (defense in depth)
-    if (!isAdminUser && !isScorekeeper) {
-      console.error('Unauthorized: Only admins and scorekeepers can add participation points');
+    // Verify user has permission - only Yondaime can add participation points
+    const isYondaime = currentUser?.email === 'edm21179@gmail.com' || 
+                       currentUser?.displayName === 'Yondaime' || 
+                       currentUser?.displayName?.toLowerCase() === 'yondaime';
+    
+    if (!isYondaime) {
+      console.error('[InSessionBattle] Unauthorized: Only Yondaime can add participation points');
       return;
     }
 
@@ -764,9 +715,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return;
     }
 
-    // Verify user has permission (defense in depth - button is already hidden, but prevent direct function calls)
-    if (!isAdminUser && !isScorekeeper) {
-      console.error('[InSessionBattle] Unauthorized: Only admins and scorekeepers can adjust PP');
+    // Verify user has permission - only Yondaime can adjust PP
+    const isYondaime = currentUser?.email === 'edm21179@gmail.com' || 
+                       currentUser?.displayName === 'Yondaime' || 
+                       currentUser?.displayName?.toLowerCase() === 'yondaime';
+    
+    if (!isYondaime) {
+      console.error('[InSessionBattle] Unauthorized: Only Yondaime can adjust PP');
       return;
     }
 
@@ -1202,35 +1157,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         </div>
 
-        {/* Participation Tracking - Only show for players in session, visible to all players */}
-        {isActiveInSession && player && (
-          <div style={{ marginBottom: '0.375rem' }}>
-            <div style={{ fontSize: '0.65rem', marginBottom: '0.125rem', color: '#8b5cf6', fontWeight: '600' }}>
-              PARTICIPATION
-            </div>
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.2rem',
-              background: '#f3f4f6',
-              borderRadius: '0.25rem',
-              padding: '0.25rem 0.5rem',
-              border: '1px solid #e5e7eb'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
-                  Points: <span style={{ color: '#8b5cf6', fontWeight: '600' }}>{player.participationCount || 0}</span>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
-                  Times: <span style={{ color: '#8b5cf6', fontWeight: '600' }}>{player.participationCount || 0}</span>
-                </div>
+        {/* Participation Tracking - Show for ALL players (in session or not) */}
+        <div style={{ marginBottom: '0.375rem' }}>
+          <div style={{ fontSize: '0.65rem', marginBottom: '0.125rem', color: '#8b5cf6', fontWeight: '600' }}>
+            PARTICIPATION
+          </div>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.2rem',
+            background: '#f3f4f6',
+            borderRadius: '0.25rem',
+            padding: '0.25rem 0.5rem',
+            border: '1px solid #e5e7eb'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
+                Points: <span style={{ color: '#8b5cf6', fontWeight: '600' }}>{player?.participationCount || 0}</span>
               </div>
               <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
-                Moves Available: <span style={{ color: '#10b981', fontWeight: '600' }}>{player.movesEarned || 0}</span>
+                Times: <span style={{ color: '#8b5cf6', fontWeight: '600' }}>{player?.participationCount || 0}</span>
               </div>
             </div>
+            <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
+              Moves Available: <span style={{ color: '#10b981', fontWeight: '600' }}>{player?.movesEarned || 0}</span>
+            </div>
           </div>
-        )}
+        </div>
 
         {/* PP Display */}
         <div style={{ marginBottom: '0.375rem' }}>
@@ -1244,10 +1197,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         {/* Only show buttons if permissions are checked AND user is explicitly admin OR scorekeeper */}
         {/* For non-admin and non-scorekeeper users, these buttons should NEVER appear */}
         {(() => {
-          // STRICT CHECK: Only show if permissions are checked AND user is explicitly admin OR scorekeeper
-          // Use strict boolean checks - no truthy/falsy coercion
+          // HARDCODED: Only Yondaime (the admin) can see buttons on ALL player cards
+          // Check if the current user (viewer) is Yondaime by email or displayName
+          // Yondaime's email is edm21179@gmail.com
+          const isYondaimeByEmail = currentUser?.email === 'edm21179@gmail.com';
+          const isYondaimeByDisplayName = currentUser?.displayName === 'Yondaime' || 
+                                         currentUser?.displayName?.toLowerCase() === 'yondaime';
+          const isYondaimeViewer = isYondaimeByEmail || isYondaimeByDisplayName;
+          
+          // STRICT CHECK: Only show buttons if permissions are checked AND current user is Yondaime
+          // Yondaime can see buttons on ALL player cards to manage participation and PP
           const hasPermissions = permissionsChecked === true;
-          const isAuthorized = isAdminUser === true || isScorekeeper === true;
+          const isAuthorized = isYondaimeViewer === true;
           const shouldShowButtons = hasPermissions && isAuthorized;
           
           // Always log for debugging (not just in development) to help track down issues
@@ -1255,16 +1216,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             studentId: student.id,
             studentName: student.displayName,
             currentUserId: currentUser?.uid,
+            currentUserEmail: currentUser?.email,
+            currentUserDisplayName: currentUser?.displayName,
+            isYondaimeByEmail,
+            isYondaimeByDisplayName,
+            isYondaimeViewer,
             permissionsChecked,
             isAdminUser,
             isScorekeeper,
             hasPermissions,
             isAuthorized,
             shouldShowButtons,
-            willRenderButtons: shouldShowButtons === true
+            willRenderButtons: shouldShowButtons === true,
+            note: 'Buttons only show when Yondaime is signed in - Yondaime can manage all players'
           });
           
-          // CRITICAL: Only return true if BOTH conditions are explicitly true
+          // CRITICAL: Only return true if current user is Yondaime (can see buttons on all cards)
           return shouldShowButtons === true;
         })() ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', marginTop: '0.375rem' }}>
@@ -1463,15 +1430,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
         <button
           onClick={async () => {
+            if (!currentUser) return;
             try {
-              const sessionRef = doc(db, 'inSessionRooms', sessionId);
-              await updateDoc(sessionRef, {
-                status: 'closed',
-                endedAt: serverTimestamp()
-              });
-              onEndSession();
+              const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
+              if (ended) {
+                debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
+                onEndSession();
+              } else {
+                debugError('inSessionBattle', `Failed to end session ${sessionId}`);
+                alert('Failed to end session. Only the host, admin, or global host can end the session.');
+              }
             } catch (error) {
-              console.error('Error ending session:', error);
+              debugError('inSessionBattle', `Error ending session`, error);
+              alert('Error ending session. Please try again.');
             }
           }}
           style={{

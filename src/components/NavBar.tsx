@@ -6,6 +6,11 @@ import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, g
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
 import { useAriaLive, ariaUtils, generateId } from '../utils/accessibility';
+import {
+  getClassesByStudent,
+  getAssessmentsByClass,
+  getAssessmentGoal
+} from '../utils/assessmentGoalsFirestore';
 
 const tooltipStyle: CSSProperties = {
   position: 'absolute',
@@ -78,6 +83,9 @@ const NavBar = memo(() => {
   const [userRole, setUserRole] = useState<UserRole>('student');
   const [showBattleDropdown, setShowBattleDropdown] = useState(false);
   const battleDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+  const profileDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [pendingAssessmentGoals, setPendingAssessmentGoals] = useState(0);
   
   // Accessibility features
   const { announce } = useAriaLive();
@@ -215,6 +223,49 @@ const NavBar = memo(() => {
     };
 
     fetchNotifications();
+  }, [currentUser]);
+
+  // Check for pending assessment goals
+  useEffect(() => {
+    const checkPendingAssessmentGoals = async () => {
+      if (!currentUser) {
+        setPendingAssessmentGoals(0);
+        return;
+      }
+
+      try {
+        // Get all classes the student is enrolled in
+        const classes = await getClassesByStudent(currentUser.uid);
+        
+        // Get all assessments for these classes
+        let pendingCount = 0;
+        for (const classItem of classes) {
+          const assessments = await getAssessmentsByClass(classItem.id);
+          
+          // Check each assessment
+          for (const assessment of assessments) {
+            // Only count assessments that are open and not locked
+            if (!assessment.isLocked && assessment.gradingStatus === 'open') {
+              const goal = await getAssessmentGoal(assessment.id, currentUser.uid);
+              if (!goal) {
+                pendingCount++;
+              }
+            }
+          }
+        }
+
+        setPendingAssessmentGoals(pendingCount);
+      } catch (error) {
+        console.error('Error checking pending assessment goals:', error);
+        setPendingAssessmentGoals(0);
+      }
+    };
+
+    checkPendingAssessmentGoals();
+    
+    // Recheck every 30 seconds
+    const interval = setInterval(checkPendingAssessmentGoals, 30000);
+    return () => clearInterval(interval);
   }, [currentUser]);
 
   // Check user role for scorekeeper navigation
@@ -469,7 +520,7 @@ const NavBar = memo(() => {
   // Battle Arena sub-menu items
   const battleSubItems = useMemo(() => [
     { to: '/battle#vault', label: 'Vault Management', icon: '🏦' },
-    { to: '/battle#moves', label: 'Move Mastery', icon: '🎯' },
+    { to: '/battle#moves', label: 'Skill Mastery', icon: '🎯' },
     { to: '/battle#cards', label: 'Action Cards', icon: '🃏' },
   ], []);
 
@@ -484,11 +535,18 @@ const NavBar = memo(() => {
   ], []);
 
   const userNavItems = useMemo(() => currentUser ? [
-    { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation' },
+    { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation', hasDropdown: true },
     { to: '/squads', label: 'Squads', tooltip: 'Team Management' },
     { to: '/marketplace', label: 'MST MKT', tooltip: 'Artifact Marketplace' },
+    { to: '/assessment-goals', label: '🎯 Goal Setting', tooltip: 'Set Assessment Goals', hasNotification: pendingAssessmentGoals > 0, notificationCount: pendingAssessmentGoals },
     { to: '#', label: '📚 Review Tutorials', tooltip: 'Review Tutorials', isButton: true, onClick: () => (window as any).tutorialTriggers?.showReviewModal?.() },
-  ] : [], [currentUser]);
+  ] : [], [currentUser, pendingAssessmentGoals]);
+
+  // Profile sub-menu items
+  const profileSubItems = useMemo(() => [
+    { to: '/profile?view=skill-tree&mode=in-game', label: 'In Game Abilities', icon: '🎮' },
+    { to: '/profile?view=skill-tree&mode=irl', label: 'In Real Life Abilities', icon: '🌍' },
+  ], []);
 
   // Scorekeeper navigation items (only for scorekeepers)
   // Temporary: Also show for Blackbeard for testing
@@ -717,16 +775,31 @@ const NavBar = memo(() => {
               return (
                 <div 
                   key={item.to} 
-                  style={getNavItemStyle(screenSize)} 
+                  style={{ ...getNavItemStyle(screenSize), position: 'relative' }} 
                   onMouseEnter={(e) => {
                     showTooltip(e);
                     e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
                     e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
+                    if (item.hasDropdown) {
+                      // Clear any pending timeout
+                      if (profileDropdownTimeoutRef.current) {
+                        clearTimeout(profileDropdownTimeoutRef.current);
+                        profileDropdownTimeoutRef.current = null;
+                      }
+                      setShowProfileDropdown(true);
+                    }
                   }} 
                   onMouseLeave={(e) => {
                     hideTooltip(e);
                     e.currentTarget.style.backgroundColor = 'transparent';
                     e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
+                    if (item.hasDropdown) {
+                      // Add delay before hiding dropdown (500ms gives time to move to dropdown)
+                      profileDropdownTimeoutRef.current = setTimeout(() => {
+                        setShowProfileDropdown(false);
+                        profileDropdownTimeoutRef.current = null;
+                      }, 500);
+                    }
                   }}
                 >
                   {item.isButton ? (
@@ -755,13 +828,96 @@ const NavBar = memo(() => {
                         textDecoration: 'none',
                         display: 'block',
                         width: '100%',
-                        height: '100%'
+                        height: '100%',
+                        position: 'relative'
                       }}
                     >
                       {screenSize === 'tablet' && item.label === 'MST MKT' ? 'MKT' : item.label}
+                      {/* Notification Badge */}
+                      {item.hasNotification && item.notificationCount && item.notificationCount > 0 && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: '-5px',
+                            right: '-5px',
+                            backgroundColor: '#ef4444',
+                            color: 'white',
+                            borderRadius: '50%',
+                            width: '20px',
+                            height: '20px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            border: '2px solid #1e293b'
+                          }}
+                        >
+                          {item.notificationCount > 9 ? '9+' : item.notificationCount}
+                        </span>
+                      )}
                     </Link>
                   )}
                   <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+                  
+                  {/* Profile Dropdown */}
+                  {item.hasDropdown && showProfileDropdown && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: '0',
+                      marginTop: '0.5rem',
+                      backgroundColor: '#1f2937',
+                      borderRadius: '0.5rem',
+                      boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+                      border: '1px solid #374151',
+                      zIndex: 1000,
+                      minWidth: '220px',
+                      padding: '0.5rem 0'
+                    }}
+                    onMouseEnter={() => {
+                      // Clear any pending timeout when mouse enters dropdown
+                      if (profileDropdownTimeoutRef.current) {
+                        clearTimeout(profileDropdownTimeoutRef.current);
+                        profileDropdownTimeoutRef.current = null;
+                      }
+                      setShowProfileDropdown(true);
+                    }}
+                    onMouseLeave={() => {
+                      // Add delay before hiding dropdown (500ms gives time to move back)
+                      profileDropdownTimeoutRef.current = setTimeout(() => {
+                        setShowProfileDropdown(false);
+                        profileDropdownTimeoutRef.current = null;
+                      }, 500);
+                    }}
+                    >
+                      {profileSubItems.map((subItem) => (
+                        <Link
+                          key={subItem.to}
+                          to={subItem.to}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.75rem',
+                            padding: '0.75rem 1rem',
+                            color: 'white',
+                            textDecoration: 'none',
+                            transition: 'background-color 0.2s ease',
+                            fontSize: '0.875rem'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                        >
+                          <span>{subItem.icon}</span>
+                          <span>{subItem.label}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

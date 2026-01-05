@@ -60,35 +60,26 @@ const BattleModeSelector: React.FC<BattleModeSelectorProps> = ({ onModeSelect, s
       </button>
 
       <button
-        onClick={() => onModeSelect('multiplayer')}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        disabled
+        title="Coming soon"
         style={{
           padding: '1rem 2rem',
           fontSize: '1.125rem',
           fontWeight: 'bold',
-          background: selectedMode === 'multiplayer'
-            ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-            : 'linear-gradient(135deg, #e5e7eb 0%, #d1d5db 100%)',
-          color: selectedMode === 'multiplayer' ? 'white' : '#374151',
-          border: selectedMode === 'multiplayer' ? '3px solid #059669' : '3px solid #9ca3af',
+          background: 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)',
+          color: '#ffffff',
+          border: '3px solid #6b7280',
           borderRadius: '0.75rem',
-          cursor: 'pointer',
+          cursor: 'not-allowed',
           transition: 'all 0.2s ease',
-          boxShadow: selectedMode === 'multiplayer' 
-            ? '0 4px 12px rgba(16, 185, 129, 0.4)' 
-            : '0 2px 8px rgba(0, 0, 0, 0.1)',
-          minWidth: '200px'
-        }}
-        onMouseEnter={(e) => {
-          if (selectedMode !== 'multiplayer') {
-            e.currentTarget.style.transform = 'translateY(-2px)';
-            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (selectedMode !== 'multiplayer') {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
-          }
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+          minWidth: '200px',
+          opacity: 0.6,
+          position: 'relative'
         }}
       >
         <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>👥</div>
