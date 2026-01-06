@@ -91,6 +91,8 @@ interface BattleState {
   isAnimating: boolean;
   turnOrder?: Array<{ participantId: string; orderScore: number }>; // Turn order for multiplayer battles
   currentTurnIndex?: number; // Current position in turn order
+  // Cooldown tracking: [userId][skillId] = turns remaining
+  cooldowns?: { [userId: string]: { [skillId: string]: number } };
 }
 
 
@@ -153,7 +155,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     currentAnimation: null,
     isAnimating: false,
     turnOrder: undefined,
-    currentTurnIndex: undefined
+    currentTurnIndex: undefined,
+    cooldowns: {} // Initialize cooldowns tracking
   });
 
   // Single opponent state (for single player mode)
@@ -1299,7 +1302,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           manifest: skills.filter(s => s.category === 'manifest').length,
           elemental: skills.filter(s => s.category === 'elemental').length,
           rrCandy: skills.filter(s => s.id?.startsWith('rr-candy-')).length,
-          system: skills.filter(s => s.category === 'system' && !s.id?.startsWith('rr-candy-') && !s.id?.startsWith('power-card-')).length,
           skillIds: skills.map(s => s.id)
         });
       } catch (error) {
@@ -3182,7 +3184,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // SPECIAL HANDLING FOR RR CANDY MOVES - Must happen BEFORE normal damage calculation
     // This ensures these moves work correctly and don't get overwritten by normal damage logic
     if (move.id === 'rr-candy-on-off-shields-on') {
-      // Turn Shields On - Restore 50% of max shields
+      // Shield ON - Restore 50% of max shields
       const maxShields = vault.maxShieldStrength || 100;
       const shieldRestoreAmount = Math.floor(maxShields * 0.5);
       const currentShields = vault.shieldStrength || 0;
@@ -3193,7 +3195,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       shieldDamage = 0; // No shield damage from this move
       wasAttacked = false;
       newLog.push(`🔋 ${playerName} used ${overriddenMoveName} to restore ${actualRestore} shields (50% of max)!`);
-      console.log('🔋 [Turn Shields On] Shield restore calculation:', {
+      console.log('🔋 [Shield ON] Shield restore calculation:', {
         maxShields,
         shieldRestoreAmount,
         currentShields,
@@ -3204,7 +3206,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       });
     } else if (move.id === 'rr-candy-on-off-shields-off') {
-      // Turn Shields Off - Remove 25% of opponent's MAX shields (not current shields)
+      // Shield OFF - Remove 25% of opponent's MAX shields (not current shields)
       // This is a percentage-based shield removal that bypasses normal damage calculation
       const opponentMaxShields = targetOpponent.maxShieldStrength || 100;
       const shieldRemoveAmount = Math.floor(opponentMaxShields * 0.25); // 25% of MAX shields
@@ -3216,7 +3218,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       wasShieldAttacked = true;
       wasAttacked = false; // This is shield-only damage, not a health attack
       newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
-      console.log('🛡️ [Turn Shields Off] Shield removal calculation:', {
+      console.log('🛡️ [Shield OFF] Shield removal calculation:', {
         opponentMaxShields,
         shieldRemoveAmount,
         currentOpponentShields,
@@ -3545,7 +3547,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Special handling for RR Candy moves
     // IMPORTANT: These must be handled BEFORE normal damage/shield calculations to ensure they work correctly
     if (move.id === 'rr-candy-on-off-shields-on') {
-      // Turn Shields On - Restore 50% of max shields
+      // Shield ON - Restore 50% of max shields
       const maxShields = vault.maxShieldStrength || 100;
       const shieldRestoreAmount = Math.floor(maxShields * 0.5);
       const currentShields = vault.shieldStrength || 0;
@@ -3556,7 +3558,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       shieldDamage = 0; // No shield damage from this move
       newLog.push(`🔋 ${playerName} used ${overriddenMoveName} to restore ${actualRestore} shields (50% of max)!`);
     } else if (move.id === 'rr-candy-on-off-shields-off') {
-      // Turn Shields Off - Remove 25% of opponent's MAX shields (not current shields)
+      // Shield OFF - Remove 25% of opponent's MAX shields (not current shields)
       // This is a percentage-based shield removal that bypasses normal damage calculation
       const opponentMaxShields = targetOpponent.maxShieldStrength || 100;
       const shieldRemoveAmount = Math.floor(opponentMaxShields * 0.25); // 25% of MAX shields
@@ -3568,7 +3570,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       wasShieldAttacked = true;
       wasAttacked = false; // This is shield-only damage, not a health attack
       newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
-      console.log('🛡️ [Turn Shields Off] Shield removal calculation:', {
+      console.log('🛡️ [Shield OFF] Shield removal calculation:', {
         opponentMaxShields,
         shieldRemoveAmount,
         currentOpponentShields,

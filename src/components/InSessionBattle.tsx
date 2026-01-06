@@ -2006,7 +2006,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   
                   const manifestMoves = availableMoves.filter(move => move.category === 'manifest');
                   const elementalMoves = availableMoves.filter(move => move.category === 'elemental');
-                  const systemMoves = availableMoves.filter(move => move.category === 'system');
+                  // RR Candy skills have category='system' but id starts with 'rr-candy-'
+                  const rrCandyMoves = availableMoves.filter(move => move.id?.startsWith('rr-candy-'));
                   
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -2303,13 +2304,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         </div>
                       )}
                       
-                      {systemMoves.length > 0 && (
+                      {rrCandyMoves.length > 0 && (
                         <div>
-                          <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#3b82f6' }}>
-                            ⚙️ System Moves
+                          <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#f59e0b' }}>
+                            🍬 RR Candy Skills
                           </h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            {systemMoves.map((move) => {
+                            {rrCandyMoves.map((move) => {
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
                               const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;

@@ -116,5 +116,8 @@ export interface BattleSession {
   
   // Custom waves (for multi-wave battles)
   customWaves?: { [waveNumber: string]: BattleCombatant[] };
+  
+  // Cooldown tracking: [participantId][skillId] = turns remaining
+  cooldowns?: { [participantId: string]: { [skillId: string]: number } };
 }
 

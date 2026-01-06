@@ -232,11 +232,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   };
 
   const getChallengeStatus = (challenge: ChapterChallenge) => {
-    if (!userProgress) return 'locked';
+    const DEBUG_CH1 = process.env.REACT_APP_DEBUG_CH1 === 'true';
+    
+    if (!userProgress) {
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): No userProgress, returning locked`);
+      return 'locked';
+    }
     
     // CRITICAL: Verify we're checking the correct user's progress
     if (!currentUser) {
-      console.warn('ChapterDetail: getChallengeStatus - No current user, returning locked');
+      if (DEBUG_CH1) console.warn(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): No current user, returning locked`);
       return 'locked';
     }
     
@@ -245,31 +250,49 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     const chapterProgress = userProgress.chapters?.[chapterKey];
     const challengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
     
-    // Special case: For Chapter 2, if it's the first challenge, it should be available if Chapter 2 is accessible
-    // Chapter 2 is always available (per ChapterTracker logic), so Chapter 2-1 should always be available
+    if (DEBUG_CH1) {
+      console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}):`, {
+        chapterId: chapter.id,
+        chapterKey,
+        challengeIndex,
+        hasChapterProgress: !!chapterProgress,
+        chapterProgressIsActive: chapterProgress?.isActive,
+        firestorePath: `users/${currentUser.uid}/chapters/${chapterKey}/challenges/${challenge.id}`
+      });
+    }
+    
+    // Special case: For Chapter 1 and Chapter 2, if it's the first challenge, it should be available
+    // Chapter 1 is always active (available to all players)
+    // Chapter 2 is always available (per ChapterTracker logic)
     // This check happens BEFORE the chapterProgress check so it works even if progress doesn't exist yet
-    if (chapter.id === 2 && challengeIndex === 0) {
-      console.log(`ChapterDetail: Challenge ${challenge.id} is available - first challenge in Chapter 2 (Chapter 2 is always available)`);
+    if ((chapter.id === 1 || chapter.id === 2) && challengeIndex === 0) {
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is available - first challenge in Chapter ${chapter.id} (always available)`);
       return 'available';
     }
     
     if (!chapterProgress) {
-      console.log('ChapterDetail: getChallengeStatus - No chapter progress found:', {
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): No chapter progress found:`, {
         userId: currentUser.uid,
         chapterId: chapter.id,
         chapterKey: chapterKey,
         availableKeys: userProgress.chapters ? Object.keys(userProgress.chapters) : 'no chapters'
       });
+      // For Chapter 1, if progress doesn't exist but it's not the first challenge, still return locked
+      // (first challenge is handled above)
       return 'locked';
     }
     
     const challengeProgress = chapterProgress.challenges?.[challenge.id];
-    console.log('ChapterDetail: getChallengeStatus - Challenge progress:', {
-      userId: currentUser.uid,
-      challengeId: challenge.id,
-      challengeProgress: challengeProgress,
-      allChallenges: chapterProgress.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges'
-    });
+    if (DEBUG_CH1) {
+      console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}) - Challenge progress:`, {
+        userId: currentUser.uid,
+        challengeId: challenge.id,
+        challengeProgress: challengeProgress,
+        allChallenges: chapterProgress.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges',
+        status: challengeProgress?.status,
+        isCompleted: challengeProgress?.isCompleted
+      });
+    }
     
     // Check if challenge is pending approval first
     if (pendingSubmissions[challenge.id]) return 'pending';
@@ -314,28 +337,43 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       const previousChallengeProgress = chapterProgress.challenges?.[previousChallenge.id];
       previousChallengeCompleted = previousChallengeProgress?.isCompleted || previousChallengeProgress?.status === 'approved';
       
+      if (DEBUG_CH1) {
+        console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): Previous challenge check:`, {
+          previousChallengeId: previousChallenge.id,
+          previousChallengeCompleted,
+          previousChallengeProgress: previousChallengeProgress
+        });
+      }
+      
       if (!previousChallengeCompleted) {
-        console.log(`ChapterDetail: Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`);
+        if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`);
         return 'locked';
       }
     }
     
-    // If previous challenge is completed, the challenge is available (unlocked)
+    // Ensure chapter is active before allowing challenge availability
+    if (!chapterProgress.isActive) {
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is locked - chapter ${chapter.id} is not active`);
+      return 'locked';
+    }
+    
+    // If previous challenge is completed (or this is the first challenge) and chapter is active,
+    // the challenge is available (unlocked)
     // Requirements are checked separately for auto-completion, but don't block availability
-    if (previousChallengeCompleted && chapterProgress.isActive) {
-      console.log(`ChapterDetail: Challenge ${challenge.id} is available - previous challenge completed`);
+    if (previousChallengeCompleted) {
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is available - previous challenge completed (or first challenge) and chapter is active`);
       return 'available';
     }
     
     // If no requirements and chapter is active, challenge is available
     if (!challenge.requirements || challenge.requirements.length === 0) {
-      console.log(`ChapterDetail: Challenge ${challenge.id} has no requirements - available`);
-      return chapterProgress.isActive ? 'available' : 'locked';
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} has no requirements - available`);
+      return 'available';
     }
     
     // Check if challenge requirements are met (for auto-completion purposes, but availability is already determined above)
     const requirementsMet = challenge.requirements.every(req => {
-      console.log(`ChapterDetail: Checking requirement: ${req.type} = ${req.value}`);
+      if (DEBUG_CH1) console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): Checking requirement: ${req.type} = ${req.value}`);
       
       switch (req.type) {
         case 'artifact':
@@ -444,12 +482,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
       }
     });
     
-    // Ensure chapter is active before allowing challenge completion
-    if (!chapterProgress.isActive) {
-      return 'locked';
-    }
-    
-    return requirementsMet ? 'available' : 'locked';
+    // If requirements are met, challenge is available
+    // (Note: We already checked chapterProgress.isActive above, so we don't need to check again)
+    const finalStatus = requirementsMet ? 'available' : 'locked';
+    if (DEBUG_CH1) console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): Final status = ${finalStatus} (requirementsMet: ${requirementsMet})`);
+    return finalStatus;
   };
 
   // Add state to track pending submissions
@@ -3382,12 +3419,17 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   };
 
   const toggleChallenge = (challengeId: string) => {
+    const DEBUG_CH1 = process.env.REACT_APP_DEBUG_CH1 === 'true';
+    if (DEBUG_CH1) console.log(`[DEBUG_CH1] toggleChallenge(${challengeId}) clicked`);
+    
     setExpandedChallenges(prev => {
       const newSet = new Set(prev);
       if (newSet.has(challengeId)) {
         newSet.delete(challengeId);
+        if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challengeId} collapsed`);
       } else {
         newSet.add(challengeId);
+        if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challengeId} expanded`);
       }
       return newSet;
     });

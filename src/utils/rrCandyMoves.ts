@@ -7,10 +7,10 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
   const moves: Move[] = [];
 
   if (candyType === 'on-off') {
-    // Turn Shields Off - Remove 25% of opponent's shields (Level 1)
+    // Shield OFF - Remove 25% of opponent's shields (Level 1)
     moves.push({
       id: 'rr-candy-on-off-shields-off',
-      name: 'Turn Shields Off',
+      name: 'Shield OFF',
       description: 'Remove 25% of opponent\'s shields. Can be leveled up for higher impact.',
       category: 'system',
       type: 'control',
@@ -26,10 +26,10 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
       priority: 0
     });
 
-    // Turn Shields On - Restore 50% of max shields
+    // Shield ON - Restore 50% of max shields
     moves.push({
       id: 'rr-candy-on-off-shields-on',
-      name: 'Turn Shields On',
+      name: 'Shield ON',
       description: 'Restore 50% of your maximum shields.',
       category: 'system',
       type: 'defense',

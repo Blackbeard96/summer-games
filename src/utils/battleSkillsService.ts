@@ -88,7 +88,9 @@ export async function getUserUnlockedSkillsForBattle(
       // Filter to only include skills for the user's candy type
       rrCandySkills = rrCandySkills.filter(skill => {
         // Extract candy type from skill ID (e.g., 'rr-candy-on-off-shields-off' -> 'on-off')
-        const skillCandyMatch = skill.id.match(/rr-candy-([^-]+)/);
+        // Pattern matches: rr-candy-{candyType}-{rest}
+        // For 'on-off' type: matches 'on-off' before the next part (e.g., 'shields-off')
+        const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
         const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
         // Normalize for comparison
         const normalizedSkillType = skillCandyType?.toLowerCase().replace(/_/g, '-');
@@ -97,23 +99,12 @@ export async function getUserUnlockedSkillsForBattle(
       });
     }
 
-    // Filter System Skills (basic/utility skills, but exclude RR Candy and Power Card)
-    const systemSkills = allMoves.filter(move => {
-      if (move.category !== 'system') return false;
-      if (!move.unlocked) return false;
-      // Exclude RR Candy skills (handled separately)
-      if (move.id?.startsWith('rr-candy-')) return false;
-      // Exclude Power Card skills (custom moves)
-      if (move.id?.startsWith('power-card-')) return false;
-      return true;
-    });
-
-    // Combine all eligible skills
+    // Combine all eligible skills (Manifest + Elemental + RR Candy only)
+    // System Skills have been removed - all skills are now one of these three categories
     const battleSkills: Move[] = [
       ...manifestSkills,
       ...elementalSkills,
-      ...rrCandySkills,
-      ...systemSkills
+      ...rrCandySkills
     ];
 
     // Deduplicate by ID (in case of duplicates)
@@ -126,15 +117,17 @@ export async function getUserUnlockedSkillsForBattle(
 
     const finalSkills = Array.from(uniqueSkills.values());
 
-    // Sort by category for consistent ordering: Manifest → Element → RR Candy → System
+    // Sort by category for consistent ordering: Manifest → Elemental → RR Candy
     finalSkills.sort((a, b) => {
       const categoryOrder: { [key: string]: number } = {
         'manifest': 1,
-        'elemental': 2,
-        'system': 3
+        'elemental': 2
       };
-      const aOrder = categoryOrder[a.category] || 4;
-      const bOrder = categoryOrder[b.category] || 4;
+      // RR Candy skills have category='system' but id starts with 'rr-candy-'
+      const aIsRRCandy = a.id?.startsWith('rr-candy-');
+      const bIsRRCandy = b.id?.startsWith('rr-candy-');
+      const aOrder = aIsRRCandy ? 3 : (categoryOrder[a.category] || 4);
+      const bOrder = bIsRRCandy ? 3 : (categoryOrder[b.category] || 4);
       if (aOrder !== bOrder) return aOrder - bOrder;
       
       // Within same category, sort by name
@@ -153,7 +146,6 @@ export async function getUserUnlockedSkillsForBattle(
           manifest: manifestSkills.length,
           elemental: elementalSkills.length,
           rrCandy: rrCandySkills.length,
-          system: systemSkills.length,
           total: finalSkills.length
         },
         skillIds: finalSkills.map(s => s.id),

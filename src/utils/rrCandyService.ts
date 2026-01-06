@@ -56,45 +56,76 @@ export async function getUserRRCandySkills(
     if (rrCandyMoves.length === 0 && rrCandyStatus.unlocked && rrCandyStatus.candyType) {
       const generatedMoves = getRRCandyMoves(rrCandyStatus.candyType);
       
-      // Try to find matching moves in existing moves by name/id, merge with generated data
+      // Try to find matching moves in existing moves by ID, merge with generated data
+      // Use ID matching (names may be outdated like "Vault Hack")
       rrCandyMoves = generatedMoves.map((genMove) => {
         const existingMove = moves.find((m: Move) => 
-          m.name === genMove.name || m.id === genMove.id
+          m.id === genMove.id
         );
-        // If found, merge: use existing move data but ensure unlocked is true
+        // If found, merge: use existing move data but update name to canonical name and ensure unlocked
         if (existingMove) {
-          return { ...existingMove, unlocked: true };
+          return { ...existingMove, name: genMove.name, unlocked: true };
         }
         // Otherwise use generated move
         return genMove;
       });
 
-      // Persist generated moves to Firestore if they don't exist
+      // Update existing moves with canonical names and persist to Firestore
       if (rrCandyMoves.length > 0) {
         const movesRef = doc(db, 'battleMoves', userId);
-        const updatedMoves = [...moves, ...rrCandyMoves];
+        // Update existing moves with canonical names, or add new moves
+        const updatedMoves = moves.map((move: Move) => {
+          const matchingGenMove = rrCandyMoves.find(rm => rm.id === move.id);
+          if (matchingGenMove) {
+            // Update existing RR Candy move with canonical name
+            return { ...move, name: matchingGenMove.name, unlocked: true };
+          }
+          return move;
+        });
+        
+        // Add any new RR Candy moves that don't exist yet
+        rrCandyMoves.forEach((rm: Move) => {
+          if (!updatedMoves.find((m: Move) => m.id === rm.id)) {
+            updatedMoves.push(rm);
+          }
+        });
         
         try {
           const movesDoc = await getDoc(movesRef);
           if (movesDoc.exists()) {
             await updateDoc(movesRef, { moves: updatedMoves });
-            console.log('rrCandyService: Added RR Candy moves to Firestore:', rrCandyMoves.map(m => m.name));
+            console.log('rrCandyService: Updated RR Candy moves in Firestore with canonical names:', rrCandyMoves.map(m => `${m.id}: ${m.name}`));
           } else {
             await setDoc(movesRef, { moves: updatedMoves });
             console.log('rrCandyService: Created battleMoves doc with RR Candy moves:', rrCandyMoves.map(m => m.name));
           }
         } catch (error) {
-          console.error('rrCandyService: Error persisting RR Candy moves to Firestore:', error);
+          console.error('rrCandyService: Error updating RR Candy moves in Firestore:', error);
           // Continue anyway - return the generated moves even if write fails
         }
       }
     } else if (rrCandyMoves.length > 0) {
-      // Ensure existing RR Candy moves are unlocked and persist if needed
-      const needsUpdate = rrCandyMoves.some(move => !move.unlocked);
+      // Update existing RR Candy moves with canonical names and ensure unlocked
+      const generatedMoves = rrCandyStatus.candyType ? getRRCandyMoves(rrCandyStatus.candyType) : [];
+      const nameMap = new Map(generatedMoves.map(m => [m.id, m.name]));
+      
+      const needsUpdate = moves.some((move: Move) => {
+        if (move.id?.startsWith('rr-candy-')) {
+          const canonicalName = nameMap.get(move.id);
+          return !move.unlocked || (canonicalName && move.name !== canonicalName);
+        }
+        return false;
+      });
+      
       if (needsUpdate) {
         const updatedMoves = moves.map((move: Move) => {
-          if (move.id?.startsWith('rr-candy-') && !move.unlocked) {
-            return { ...move, unlocked: true };
+          if (move.id?.startsWith('rr-candy-')) {
+            const canonicalName = nameMap.get(move.id);
+            return { 
+              ...move, 
+              unlocked: true,
+              name: canonicalName || move.name // Update to canonical name if available
+            };
           }
           return move;
         });
@@ -102,12 +133,23 @@ export async function getUserRRCandySkills(
         const movesRef = doc(db, 'battleMoves', userId);
         try {
           await updateDoc(movesRef, { moves: updatedMoves });
-          console.log('rrCandyService: Unlocked existing RR Candy moves in Firestore');
-          // Update local array
-          rrCandyMoves = updatedMoves.filter((move: Move) => move.id?.startsWith('rr-candy-'));
+          console.log('rrCandyService: Updated existing RR Candy moves with canonical names in Firestore');
+          // Update local array with canonical names
+          rrCandyMoves = updatedMoves
+            .filter((move: Move) => move.id?.startsWith('rr-candy-'))
+            .map((move: Move) => {
+              const canonicalName = nameMap.get(move.id);
+              return { ...move, name: canonicalName || move.name };
+            });
         } catch (error) {
-          console.error('rrCandyService: Error unlocking RR Candy moves:', error);
+          console.error('rrCandyService: Error updating RR Candy moves:', error);
         }
+      } else {
+        // Ensure names are canonical even if no update needed
+        rrCandyMoves = rrCandyMoves.map((move: Move) => {
+          const canonicalName = nameMap.get(move.id);
+          return canonicalName ? { ...move, name: canonicalName } : move;
+        });
       }
     }
 

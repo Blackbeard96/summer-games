@@ -61,6 +61,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
   const { currentUser } = useAuth();
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
+  const [truthMetal, setTruthMetal] = useState<number>(0);
 
   // Load move overrides when component mounts and periodically refresh
   useEffect(() => {
@@ -86,6 +87,33 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     
     return () => clearInterval(refreshInterval);
   }, []);
+
+  // Load user's Truth Metal for RR Candy upgrade requirements
+  useEffect(() => {
+    const loadTruthMetal = async () => {
+      if (!currentUser) {
+        setTruthMetal(0);
+        return;
+      }
+      
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setTruthMetal(userData.truthMetal || 0);
+        }
+      } catch (error) {
+        console.error('MovesDisplay: Error loading Truth Metal:', error);
+        setTruthMetal(0);
+      }
+    };
+    
+    loadTruthMetal();
+    // Refresh Truth Metal periodically
+    const interval = setInterval(loadTruthMetal, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   // Load equipped artifacts to check for Elemental Ring
   useEffect(() => {
@@ -282,16 +310,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     return filtered;
   }, [rrCandySkillsFromService, moves, rrCandyStatus.unlocked, rrCandyStatus.candyType]);
   
-  const systemMoves = useMemo(() => {
-    const filtered = moves.filter(move => {
-      const isRRCandy = move.id?.includes('rr-candy') || move.id?.startsWith('rr-candy-');
-      const isPowerCard = move.id?.startsWith('power-card-');
-      return move.category === 'system' && move.unlocked && !isRRCandy && !isPowerCard;
-    });
-    return filtered;
-  }, [moves]);
-  
-  console.log('MovesDisplay: Filtered skills - Manifest:', manifestMoves.length, 'Elemental:', elementalMoves.length, 'RR Candy:', rrCandyMoves.length, 'System:', systemMoves.length);
+  // System Skills removed - all skills are now Manifest, Elemental, or RR Candy
+  console.log('MovesDisplay: Filtered skills - Manifest:', manifestMoves.length, 'Elemental:', elementalMoves.length, 'RR Candy:', rrCandyMoves.length);
   console.log('MovesDisplay: userElement prop:', userElement);
   if (elementalMoves.length > 0) {
     console.log('MovesDisplay: Elemental moves found:', elementalMoves.map((m: Move) => `${m.name} (${m.elementalAffinity})`));
@@ -426,6 +446,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       return basePrice;
     };
     const upgradeCost = getUpgradeCost();
+
+    // For RR Candy moves, calculate Truth Metal Shard requirement (nextLevel - 1 shards)
+    const nextLevel = move.masteryLevel + 1;
+    const requiredShards = isRRCandyMove ? (nextLevel - 1) : 0;
 
     // Get current stats from upgrade template (only relevant for levels 1-5)
     const upgradeTemplate = MOVE_UPGRADE_TEMPLATES[move.name];
@@ -1524,7 +1548,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               }
             }}
           >
-            {canUpgrade ? `Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP)` : 'Cannot Upgrade'}
+            {canUpgrade ? `Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP${isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})` : 'Cannot Upgrade'}
           </button>
         )}
       </div>
@@ -1775,7 +1799,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         color: '#1f2937',
         textAlign: 'center'
       }}>
-        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + systemMoves.length} Skills Unlocked)
+        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length} Skills Unlocked)
       </h3>
 
       {/* Move Availability Summary */}
@@ -1958,13 +1982,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         </div>
       )}
 
-      {/* System Moves Section (non-RR Candy system moves) */}
-      {systemMoves.length > 0 && (
-        renderMoveSection('System Skills', systemMoves, '⚙️', '#059669')
-      )}
-
       {/* No Skills Message */}
-      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && systemMoves.length === 0 && (
+      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && (
         <div style={{ 
           textAlign: 'center', 
           padding: '3rem',

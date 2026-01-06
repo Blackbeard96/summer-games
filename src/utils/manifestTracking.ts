@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, increment, runTransaction } from 'firebase/firestore';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 
 /**
@@ -37,17 +37,58 @@ export const trackAbilityUsage = async (
       playerManifest.abilityUsage = {};
     }
     
-    // Increment the usage count for this level
-    const currentUsage = playerManifest.abilityUsage[level] || 0;
-    playerManifest.abilityUsage[level] = currentUsage + 1;
-    
-    // Update the document - use 'manifest' field name to match database structure
-    await updateDoc(userRef, {
-      manifest: playerManifest
-    });
-    
-    console.log(`Tracked ability usage: Level ${level} of ${manifestId} used ${playerManifest.abilityUsage[level]} times`);
-    return true;
+    // Use Firestore transaction with atomic increment to prevent race conditions
+    // This ensures accuracy when multiple battles happen simultaneously
+    try {
+      let newUsageCount = 0;
+      await runTransaction(db, async (transaction) => {
+        const currentDoc = await transaction.get(userRef);
+        if (!currentDoc.exists()) {
+          throw new Error('User document not found');
+        }
+        
+        const currentData = currentDoc.data();
+        const currentManifest = (currentData.manifest || currentData.playerManifest) as PlayerManifest;
+        
+        if (!currentManifest || currentManifest.manifestId !== manifestId) {
+          throw new Error('Player manifest not found or manifest ID mismatch');
+        }
+        
+        // Initialize abilityUsage if it doesn't exist
+        if (!currentManifest.abilityUsage) {
+          currentManifest.abilityUsage = {};
+        }
+        
+        // Increment the usage count atomically
+        const currentUsage = currentManifest.abilityUsage[level] || 0;
+        newUsageCount = currentUsage + 1;
+        currentManifest.abilityUsage[level] = newUsageCount;
+        
+        // Update within transaction
+        transaction.update(userRef, {
+          manifest: currentManifest
+        });
+      });
+      
+      console.log(`Tracked ability usage: Level ${level} of ${manifestId} used ${newUsageCount} times (atomic increment)`);
+      return true;
+    } catch (transactionError) {
+      // Fallback to regular update if transaction fails
+      console.warn('Transaction failed, using fallback update:', transactionError);
+      const currentUsage = playerManifest.abilityUsage?.[level] || 0;
+      const newUsageCount = currentUsage + 1;
+      if (!playerManifest.abilityUsage) {
+        playerManifest.abilityUsage = {};
+      }
+      playerManifest.abilityUsage[level] = newUsageCount;
+      
+      await updateDoc(userRef, {
+        manifest: playerManifest
+      });
+      
+      console.log(`Tracked ability usage: Level ${level} of ${manifestId} used ${newUsageCount} times (fallback)`);
+      return true;
+    }
   } catch (error) {
     console.error('Error tracking ability usage:', error);
     return false;

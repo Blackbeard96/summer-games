@@ -178,6 +178,8 @@ export async function setChosenRival(
     }
 
     await runTransaction(db, async (transaction) => {
+      // ALL READS MUST HAPPEN FIRST (before any writes)
+      
       // Read actor and target user docs
       const actorRef = doc(db, 'users', actorUid);
       const targetRef = doc(db, 'users', targetUid);
@@ -199,6 +201,19 @@ export async function setChosenRival(
       // Get old chosen rival to clean up request
       const oldChosenRival = actorData.rivals?.chosen;
       
+      // Read request documents BEFORE any writes
+      const requestRef = doc(db, 'rivalRequests', targetUid, 'requests', actorUid);
+      const requestDoc = await transaction.get(requestRef);
+      
+      // Read old request if changing rival (before any writes)
+      let oldRequestDoc = null;
+      if (oldChosenRival && oldChosenRival.uid !== targetUid) {
+        const oldRequestRef = doc(db, 'rivalRequests', oldChosenRival.uid, 'requests', actorUid);
+        oldRequestDoc = await transaction.get(oldRequestRef);
+      }
+      
+      // NOW ALL READS ARE DONE - CAN PERFORM WRITES
+      
       // Update actor's chosen rival (use actual displayName from Firestore)
       const newRivals = {
         ...actorData.rivals,
@@ -214,7 +229,7 @@ export async function setChosenRival(
       });
       
       // Create/update request in rivalRequests collection
-      const requestRef = doc(db, 'rivalRequests', targetUid, 'requests', actorUid);
+      // Use set() - it will create if doesn't exist, or overwrite if exists
       transaction.set(requestRef, {
         requesterUid: actorUid,
         requesterDisplayName: actualActorDisplayName,
@@ -237,15 +252,7 @@ export async function setChosenRival(
         });
       }
       
-      // Clean up old request if changing rival
-      if (oldChosenRival && oldChosenRival.uid !== targetUid) {
-        const oldRequestRef = doc(db, 'rivalRequests', oldChosenRival.uid, 'requests', actorUid);
-        const oldRequestDoc = await transaction.get(oldRequestRef);
-        if (oldRequestDoc.exists()) {
-          // Note: Can't delete in transaction, but we can mark it for cleanup
-          // Or handle cleanup outside transaction
-        }
-      }
+      // Note: Old request cleanup is handled outside transaction (after line 249)
     });
     
     // Clean up old request outside transaction (if changed)

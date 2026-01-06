@@ -2313,6 +2313,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
+      // For RR Candy moves, check Truth Metal Shard requirement (level - 1 shards)
+      let requiredShards = 0;
+      if (isRRCandyMove) {
+        requiredShards = nextLevel - 1; // Level 2 needs 1, Level 3 needs 2, etc.
+        
+        // Fetch user's Truth Metal from users collection
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        const userData = userDoc.exists() ? userDoc.data() : {};
+        const currentTruthMetal = userData.truthMetal || 0;
+        
+        if (currentTruthMetal < requiredShards) {
+          setError(`Not enough Truth Metal Shards. Need ${requiredShards} shards to upgrade to Level ${nextLevel}.`);
+          return;
+        }
+      }
+
       // Calculate random damage boost based on the new level (after upgrade)
       const newLevel = move.masteryLevel + 1;
       let damageBoostMultiplier: number;
@@ -2443,6 +2460,21 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Update vault state AFTER Firestore update
       setVault({ ...vault, currentPP: newPP });
+
+      // For RR Candy moves, deduct Truth Metal Shards
+      if (isRRCandyMove && requiredShards > 0) {
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
+        const userData = userDoc.exists() ? userDoc.data() : {};
+        const currentTruthMetal = userData.truthMetal || 0;
+        const newTruthMetal = currentTruthMetal - requiredShards;
+        
+        await updateDoc(userRef, {
+          truthMetal: newTruthMetal
+        });
+        
+        console.log(`Deducted ${requiredShards} Truth Metal Shards for RR Candy upgrade. Remaining: ${newTruthMetal}`);
+      }
       
       // Force a refresh of moves data to ensure UI is in sync
       // This helps catch any cases where the UI might not have updated
@@ -2492,7 +2524,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       const boostPercent = ((damageBoostMultiplier - 1) * 100).toFixed(1);
-      console.log(`Upgraded ${move.name} to level ${newLevel} for ${upgradeCost} PP with ${boostPercent}% boost`);
+      const shardInfo = isRRCandyMove && requiredShards > 0 ? ` and ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : '';
+      console.log(`Upgraded ${move.name} to level ${newLevel} for ${upgradeCost} PP${shardInfo} with ${boostPercent}% boost`);
       
       // Show success message with boost info for all properties
       const boostInfo = boostedProperties.length > 0 

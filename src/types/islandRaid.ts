@@ -98,9 +98,11 @@ export interface IslandRaidLobby {
   maxPlayers: number;
   currentPlayers: number;
   difficulty: 'easy' | 'normal' | 'hard' | 'nightmare';
-  status: 'waiting' | 'starting' | 'in_progress';
+  status: 'waiting' | 'starting' | 'in_progress' | 'expired';
   players: IslandRaidPlayer[];
   createdAt: Date;
+  updatedAt?: Date;
+  lastActivityAt?: Date;
   gameId?: string; // Reference to the active game
 }
 

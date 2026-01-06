@@ -13,7 +13,6 @@ export interface SessionLoadout {
   manifest: Move[];
   elemental: Move[];
   rrCandy: Move[];
-  system: Move[];
   snapshotAt: any; // Firestore Timestamp
 }
 
@@ -59,17 +58,15 @@ export async function createSessionLoadout(
     // Get all unlocked skills for this user
     const allSkills = await getUserUnlockedSkillsForBattle(userId, userElement);
     
-    // Categorize skills
+    // Categorize skills (System Skills removed - all skills are Manifest, Elemental, or RR Candy)
     const manifest = allSkills.filter(s => s.category === 'manifest');
     const elemental = allSkills.filter(s => s.category === 'elemental');
     const rrCandy = allSkills.filter(s => s.id?.startsWith('rr-candy-'));
-    const system = allSkills.filter(s => s.category === 'system' && !s.id?.startsWith('rr-candy-') && !s.id?.startsWith('power-card-'));
     
     const loadout: SessionLoadout = {
       manifest,
       elemental,
       rrCandy,
-      system,
       snapshotAt: serverTimestamp()
     };
     
@@ -94,8 +91,7 @@ export async function createSessionLoadout(
     debug('inSessionSkills', `Created loadout for ${userId}:`, {
       manifest: manifest.length,
       elemental: elemental.length,
-      rrCandy: rrCandy.length,
-      system: system.length
+      rrCandy: rrCandy.length
     });
     
     return loadout;
@@ -121,12 +117,11 @@ export async function getAvailableSkillsForSession(
     return await getUserUnlockedSkillsForBattle(userId, userElement);
   }
   
-  // Combine all categories
+  // Combine all categories (System Skills removed)
   return [
     ...loadout.manifest,
     ...loadout.elemental,
-    ...loadout.rrCandy,
-    ...loadout.system
+    ...loadout.rrCandy
   ];
 }
 

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { doc, collection, getDocs, query, where, onSnapshot, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, collection, getDocs, query, where, onSnapshot, addDoc, updateDoc, serverTimestamp, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { IslandRunLobby, IslandRunTeam } from '../types/islandRun';
+import { getLevelFromXP } from '../utils/leveling';
+import { cleanupExpiredRaidLobbiesClient } from '../utils/raidLobbyService';
 
 const IslandRun: React.FC = () => {
   const { currentUser } = useAuth();
@@ -34,21 +36,42 @@ const IslandRun: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    // Listen for active lobbies
+    // Run cleanup on mount (mark empty/inactive lobbies as expired)
+    cleanupExpiredRaidLobbiesClient().catch(err => 
+      console.error('Error cleaning up expired lobbies:', err)
+    );
+
+    // Listen for active lobbies (exclude expired)
     const lobbiesRef = collection(db, 'islandRunLobbies');
     const q = query(lobbiesRef, where('status', 'in', ['waiting', 'starting']));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      const now = Timestamp.now();
+      const tenMinutesAgo = Timestamp.fromMillis(now.toMillis() - 10 * 60 * 1000);
       const lobbyList: IslandRunLobby[] = [];
+      
       snapshot.forEach((doc) => {
         const data = doc.data();
+        const players = data.players || [];
+        const lastActivityAt = data.lastActivityAt as Timestamp | undefined;
+        
+        // Filter out lobbies that are empty and inactive for 10+ minutes
+        // (client-side filter in addition to server-side cleanup)
+        if (players.length === 0 && lastActivityAt) {
+          if (lastActivityAt.toMillis() < tenMinutesAgo.toMillis()) {
+            // Skip this lobby - it's expired/inactive
+            return;
+          }
+        }
+        
         lobbyList.push({
           id: doc.id,
           ...data,
           createdAt: data.createdAt?.toDate() || new Date(),
-          players: data.players || []
+          players: players
         } as IslandRunLobby);
       });
+      
       setLobbies(lobbyList);
       setLoading(false);
     }, (error) => {
@@ -60,7 +83,17 @@ const IslandRun: React.FC = () => {
       console.error('Error listening to lobbies:', error);
     });
 
-    return () => unsubscribe();
+    // Run cleanup periodically (every 2 minutes)
+    const cleanupInterval = setInterval(() => {
+      cleanupExpiredRaidLobbiesClient().catch(err => 
+        console.error('Error cleaning up expired lobbies:', err)
+      );
+    }, 2 * 60 * 1000); // 2 minutes
+
+    return () => {
+      unsubscribe();
+      clearInterval(cleanupInterval);
+    };
   }, [currentUser]);
 
   const handleCreateLobby = async () => {
@@ -73,6 +106,17 @@ const IslandRun: React.FC = () => {
     }
 
     try {
+      // Fetch user level and XP for host
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      let playerLevel = 1;
+      let playerXP = 0;
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        playerXP = studentData.xp || 0;
+        playerLevel = getLevelFromXP(playerXP);
+      }
+
       const lobbyData = {
         name: newLobbyName,
         hostId: currentUser.uid,
@@ -84,10 +128,21 @@ const IslandRun: React.FC = () => {
           userId: currentUser.uid,
           displayName: currentUser.displayName || 'Player',
           photoURL: currentUser.photoURL,
+          level: playerLevel,
+          xp: playerXP,
+          health: 100,
+          maxHealth: 100,
+          shieldStrength: 0,
+          maxShieldStrength: 0,
+          equippedArtifacts: {},
+          moves: [],
+          actionCards: [],
           isReady: false,
           isLeader: true
         }],
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastActivityAt: serverTimestamp()
       };
 
       const docRef = await addDoc(collection(db, 'islandRunLobbies'), lobbyData);

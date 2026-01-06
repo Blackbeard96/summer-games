@@ -495,6 +495,35 @@ const Profile = () => {
       );
     };
 
+      // Set up real-time listener for manifest data in students collection
+      // This ensures ability usage counts update automatically when moves are used in battles
+      const studentsRef = doc(db, 'students', userId);
+      const unsubscribeManifest = onSnapshot(studentsRef, (doc) => {
+        if (doc.exists()) {
+          const userData = doc.data();
+          const manifestData = userData.manifest;
+          if (manifestData) {
+            // Convert Firestore timestamp to Date if needed
+            const processedManifest = {
+              ...manifestData,
+              lastAscension: manifestData.lastAscension?.toDate ? 
+                manifestData.lastAscension.toDate() : 
+                (manifestData.lastAscension ? new Date(manifestData.lastAscension) : new Date())
+            };
+            setPlayerManifest(processedManifest);
+            console.log('[Profile] Manifest data updated via real-time listener:', {
+              abilityUsage: processedManifest.abilityUsage,
+              moveUsage: processedManifest.moveUsage
+            });
+          }
+        }
+      }, (error) => {
+        if (!error.message?.includes('INTERNAL ASSERTION FAILED') && 
+            !error.message?.includes('Unexpected state')) {
+          console.error('Profile: Error in manifest listener:', error);
+        }
+      });
+
       // Set up real-time listener for rivals in users collection
       // Use getRivals to fetch latest displayNames
       const usersRef = doc(db, 'users', userId);
@@ -510,49 +539,14 @@ const Profile = () => {
         }
       });
 
-    // Set up real-time listener for manifest and element updates
-    const studentsRef = doc(db, 'students', userId);
-    const unsubscribe = onSnapshot(studentsRef, (docSnapshot) => {
-      try {
-        if (docSnapshot.exists()) {
-          const userData = docSnapshot.data();
-          const manifestData = userData.manifest;
-          if (manifestData) {
-            // Convert Firestore timestamp to Date if needed
-            const processedManifest = {
-              ...manifestData,
-              lastAscension: manifestData.lastAscension?.toDate ? 
-                manifestData.lastAscension.toDate() : 
-                (manifestData.lastAscension ? new Date(manifestData.lastAscension) : new Date())
-            };
-            console.log('Profile: Manifest updated via real-time listener:', processedManifest);
-            setPlayerManifest(processedManifest);
-          }
-          
-          // Update element if it changed
-          const chosenElement = userData.artifacts?.chosen_element || 
-                                userData.elementalAffinity || 
-                                userData.manifestationType || 
-                                'Fire';
-          const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
-          setStyle(displayElement);
-        }
-      } catch (error) {
-        if (isFirestoreInternalError(error)) {
-          return; // Ignore Firestore internal errors
-        }
-        console.error('Profile: Error processing manifest snapshot:', error);
-      }
-    }, (error) => {
-      if (isFirestoreInternalError(error)) {
-        return; // Ignore Firestore internal errors
-      }
-      console.error('Profile: Error listening to manifest updates:', error);
-    });
-    
+    // Cleanup function for all listeners
     return () => {
-      unsubscribe();
-      unsubscribeRivals();
+      if (unsubscribeManifest) {
+        unsubscribeManifest();
+      }
+      if (unsubscribeRivals) {
+        unsubscribeRivals();
+      }
     };
   }, [currentUser, navigate]);
 
@@ -1045,19 +1039,32 @@ const Profile = () => {
                   let rrCandyMoves = (battleMoves || []).filter((move: any) => move.id?.startsWith('rr-candy-'));
                   console.log('[Skill Tree Settings] RR Candy moves found:', rrCandyMoves.length);
                   
+                  // Canonical name mapping for RR Candy skills (ensures correct names even if Firestore has old names)
+                  const canonicalNames: { [key: string]: string } = {
+                    'rr-candy-on-off-shields-off': 'Shield OFF',
+                    'rr-candy-on-off-shields-on': 'Shield ON'
+                  };
+                  
+                  // Apply canonical names to existing moves immediately
+                  rrCandyMoves = rrCandyMoves.map((move: any) => {
+                    const canonicalName = canonicalNames[move.id];
+                    return canonicalName ? { ...move, name: canonicalName } : move;
+                  });
+                  
                   // If no moves found but user has completed Chapter 2-4, generate them
                   if (rrCandyMoves.length === 0 && isCompleted) {
                     console.log('[Skill Tree Settings] Generating RR Candy moves for:', candyType);
                     const generatedMoves = getRRCandyMoves(candyType as 'on-off' | 'up-down' | 'config');
                     console.log('[Skill Tree Settings] Generated moves:', generatedMoves.length);
-                    // Try to find matching moves in battleMoves by name, merge with generated data
+                    // Try to find matching moves in battleMoves by ID, merge with generated data
+                    // Use ID matching to find existing moves (names may be outdated like "Vault Hack")
                     rrCandyMoves = generatedMoves.map((genMove) => {
                       const existingMove = (battleMoves || []).find((m: any) => 
-                        m.name === genMove.name || m.id === genMove.id
+                        m.id === genMove.id
                       );
-                      // If found, merge: use existing move data but ensure unlocked is true
+                      // If found, merge: use existing move data but update name to canonical name and ensure unlocked
                       if (existingMove) {
-                        return { ...existingMove, unlocked: true };
+                        return { ...existingMove, name: genMove.name, unlocked: true };
                       }
                       // Otherwise use generated move
                       return genMove;
@@ -1142,26 +1149,32 @@ const Profile = () => {
                           
                           {/* Level Up Button */}
                           {move.unlocked && move.masteryLevel < 5 && (() => {
-                            // Calculate upgrade cost - 1000 PP for first skill level-up
+                            // Calculate upgrade cost - exponential for RR Candy (1000, 2000, 4000, 8000)
                             const nextLevel = move.masteryLevel + 1;
-                            let upgradeCost = 1000; // 1000 PP for first skill level-up
+                            let upgradeCost = 1000; // 1000 PP for Level 1 → 2
                             if (nextLevel === 3) {
-                              upgradeCost = 200; // 200 PP
+                              upgradeCost = 2000; // 2000 PP for Level 2 → 3
                             } else if (nextLevel === 4) {
-                              upgradeCost = 400; // 400 PP
+                              upgradeCost = 4000; // 4000 PP for Level 3 → 4
                             } else if (nextLevel === 5) {
-                              upgradeCost = 800; // 800 PP
+                              upgradeCost = 8000; // 8000 PP for Level 4 → 5
                             }
                             
+                            // RR Candy moves require Truth Metal Shards (level - 1 shards)
+                            const isRRCandyMove = move.id?.startsWith('rr-candy-');
+                            const requiredShards = isRRCandyMove ? (nextLevel - 1) : 0;
+                            const currentTruthMetal = userData?.truthMetal || 0;
+                            const hasEnoughShards = !isRRCandyMove || currentTruthMetal >= requiredShards;
                             const hasEnoughPP = vault && vault.currentPP >= upgradeCost;
+                            const canUpgrade = hasEnoughPP && hasEnoughShards;
                             
                             return (
                               <button
                                 onClick={async () => {
-                                  if (upgradeMove && hasEnoughPP) {
+                                  if (upgradeMove && canUpgrade) {
                                     try {
                                       await upgradeMove(move.id);
-                                      // Refresh user data to show updated moves
+                                      // Refresh user data to show updated moves and truth metal
                                       if (currentUser?.uid) {
                                         const userRef = doc(db, 'users', currentUser.uid);
                                         const userDoc = await getDoc(userRef);
@@ -1179,37 +1192,40 @@ const Profile = () => {
                                     }
                                   } else if (!hasEnoughPP) {
                                     alert(`Not enough PP. Need ${upgradeCost} PP to upgrade.`);
+                                  } else if (!hasEnoughShards) {
+                                    alert(`Not enough Truth Metal Shards. Need ${requiredShards} shards to upgrade to Level ${nextLevel}.`);
                                   }
                                 }}
-                                disabled={!hasEnoughPP}
+                                disabled={!canUpgrade}
                                 style={{
-                                  backgroundColor: hasEnoughPP ? '#10b981' : '#9ca3af',
+                                  backgroundColor: canUpgrade ? '#10b981' : '#9ca3af',
                                   color: 'white',
                                   border: 'none',
                                   borderRadius: '0.375rem',
                                   padding: '0.5rem 1rem',
                                   fontSize: '0.875rem',
                                   fontWeight: 'bold',
-                                  cursor: hasEnoughPP ? 'pointer' : 'not-allowed',
+                                  cursor: canUpgrade ? 'pointer' : 'not-allowed',
                                   transition: 'all 0.2s ease',
                                   width: '100%',
-                                  opacity: hasEnoughPP ? 1 : 0.7
+                                  opacity: canUpgrade ? 1 : 0.7
                                 }}
                                 onMouseOver={(e) => {
-                                  if (hasEnoughPP) {
+                                  if (canUpgrade) {
                                     e.currentTarget.style.backgroundColor = '#059669';
                                     e.currentTarget.style.transform = 'translateY(-1px)';
                                   }
                                 }}
                                 onMouseOut={(e) => {
-                                  if (hasEnoughPP) {
+                                  if (canUpgrade) {
                                     e.currentTarget.style.backgroundColor = '#10b981';
                                     e.currentTarget.style.transform = 'translateY(0)';
                                   }
                                 }}
                               >
-                                ⬆️ Level Up (Cost: {upgradeCost} PP)
+                                ⬆️ Level Up (Cost: {upgradeCost} PP{isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})
                                 {!hasEnoughPP && ` - Need ${upgradeCost - (vault?.currentPP || 0)} more PP`}
+                                {hasEnoughPP && !hasEnoughShards && ` - Need ${requiredShards - currentTruthMetal} more Truth Metal Shard${requiredShards - currentTruthMetal > 1 ? 's' : ''}`}
                               </button>
                             );
                           })()}

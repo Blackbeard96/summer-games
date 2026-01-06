@@ -168,6 +168,8 @@ export interface BattleState {
   winner?: string;
   moves: BattleMove[];
   chat: BattleMessage[];
+  // Cooldown tracking: [userId][skillId] = turns remaining
+  cooldowns?: { [userId: string]: { [skillId: string]: number } };
 }
 
 export interface BattleParticipant {
