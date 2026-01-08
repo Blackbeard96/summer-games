@@ -10,7 +10,7 @@ interface InSessionRoom {
   id: string;
   classId: string;
   className: string;
-  status: 'open' | 'active' | 'closed';
+  status: 'open' | 'active' | 'closed' | 'live' | 'ended';
   players: Array<{
     userId: string;
     displayName: string;
@@ -100,9 +100,10 @@ const InSessionNotification: React.FC = () => {
         // Get all active sessions
         let sessionsSnapshot;
         try {
+          // Check for both 'active' (legacy) and 'live' (new) statuses
           sessionsSnapshot = await getDocs(query(
             collection(db, 'inSessionRooms'),
-            where('status', '==', 'active')
+            where('status', 'in', ['active', 'live'])
           ));
         } catch (queryError) {
           // Suppress Firestore internal assertion errors

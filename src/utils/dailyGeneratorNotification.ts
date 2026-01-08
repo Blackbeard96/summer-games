@@ -14,6 +14,10 @@ export interface DailyGeneratorResult {
   generatorLevel: number;
   ppPerDay: number;
   shieldsPerDay: number;
+  previousPP: number;
+  previousShields: number;
+  newPP: number;
+  newShields: number;
 }
 
 /**
@@ -139,7 +143,13 @@ export async function checkAndCreditDailyGenerator(
       // Calculate days away
       const daysAway = calculateDaysAway(lastClaimedAt);
 
-      // If no days away, still update lastLoginAt and modal date
+      // Get current values for display (even if no earnings)
+      const currentVaultPP = vaultData.currentPP || 0;
+      const currentStudentPP = studentData.powerPoints || 0;
+      const currentUsersPP = usersData.powerPoints || 0;
+      const currentShieldStrength = vaultData.shieldStrength || 0;
+
+      // If no days away, still show modal but with 0 earnings (first login of day)
       if (daysAway <= 0) {
         const updates: any = {
           lastLoginAt: serverTimestamp(),
@@ -150,19 +160,27 @@ export async function checkAndCreditDailyGenerator(
         } else {
           transaction.set(usersRef, updates);
         }
+        
+        // Return result with 0 earnings but current values for display
+        result = {
+          daysAway: 0,
+          ppEarned: 0,
+          shieldsEarned: 0,
+          generatorLevel,
+          ppPerDay,
+          shieldsPerDay,
+          previousPP: currentVaultPP,
+          previousShields: currentShieldStrength,
+          newPP: currentVaultPP,
+          newShields: currentShieldStrength
+        };
         return;
       }
 
       // Calculate earnings
       const { ppEarned, shieldsEarned } = calculateEarnings(daysAway, ppPerDay, shieldsPerDay);
 
-      // Get current values
-      const currentVaultPP = vaultData.currentPP || 0;
-      const currentStudentPP = studentData.powerPoints || 0;
-      const currentUsersPP = usersData.powerPoints || 0;
-      const currentShieldStrength = vaultData.shieldStrength || 0;
-
-      // Calculate new values (capped at max)
+      // Calculate new values (capped at max) - current values already retrieved above
       const newVaultPP = Math.min(vaultCapacity, currentVaultPP + ppEarned);
       const newStudentPP = Math.min(vaultCapacity, currentStudentPP + ppEarned);
       const newUsersPP = Math.min(vaultCapacity, currentUsersPP + ppEarned);
@@ -205,14 +223,18 @@ export async function checkAndCreditDailyGenerator(
         });
       }
 
-      // Set result for return
+      // Set result for return (include previous and new values for modal display)
       result = {
         daysAway,
         ppEarned,
         shieldsEarned,
         generatorLevel,
         ppPerDay,
-        shieldsPerDay
+        shieldsPerDay,
+        previousPP: currentVaultPP,
+        previousShields: currentShieldStrength,
+        newPP: newVaultPP,
+        newShields: newShieldStrength
       };
     });
 

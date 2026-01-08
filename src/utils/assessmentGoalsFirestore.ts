@@ -801,6 +801,7 @@ export async function applyAssessmentResults(assessmentId: string): Promise<{
           assessmentTitle: assessmentTitle,
           goalScore: goalScore,
           actualScore: result.actualScore,
+          maxScore: assessmentMaxScore,
           outcome: result.outcome,
           ppChange: result.ppChange,
           artifactsGranted: artifactsGranted,

@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
+import { initializePlayerStats, finalizeSessionStats } from './inSessionStatsService';
 
 export interface SessionPlayer {
   userId: string;
@@ -216,6 +217,9 @@ export async function joinSession(
         updatedAt: serverTimestamp()
       });
       
+      // Initialize stats for new player
+      await initializePlayerStats(sessionId, player.userId, player.displayName, player.powerPoints);
+      
       debug('inSessionService', `Player ${player.userId} joined session ${sessionId}`);
     }
     
@@ -268,6 +272,10 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
       return false;
     }
     
+    // Finalize session stats before ending
+    const playerIds = sessionData.players.map((p: SessionPlayer) => p.userId);
+    const summary = await finalizeSessionStats(sessionId, playerIds);
+    
     // Finalize session
     await updateDoc(sessionRef, {
       status: 'ended',
@@ -275,7 +283,10 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
       updatedAt: serverTimestamp()
     });
     
-    debug('inSessionService', `Session ${sessionId} ended by ${hostUid} (${isHost ? 'host' : isAdmin ? 'admin' : 'global host'})`);
+    debug('inSessionService', `Session ${sessionId} ended by ${hostUid} (${isHost ? 'host' : isAdmin ? 'admin' : 'global host'})`, {
+      summaryGenerated: !!summary,
+      players: playerIds.length
+    });
     
     return true;
   } catch (error) {

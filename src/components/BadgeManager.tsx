@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
-import { collection, addDoc, getDocs, doc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, doc, getDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface Badge {
@@ -13,6 +13,7 @@ interface Badge {
   category: 'challenge' | 'achievement' | 'special' | 'admin';
   xpReward?: number;
   ppReward?: number;
+  artifactRewards?: string[]; // Array of artifact IDs
 }
 
 interface Student {
@@ -34,6 +35,8 @@ const BadgeManager: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [issuing, setIssuing] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [editingBadgeId, setEditingBadgeId] = useState<string | null>(null);
+  const [availableArtifacts, setAvailableArtifacts] = useState<Array<{ id: string; name: string; icon: string }>>([]);
 
   // Form state for creating new badges
   const [newBadge, setNewBadge] = useState({
@@ -44,13 +47,63 @@ const BadgeManager: React.FC = () => {
     category: 'achievement' as const,
     imageFile: null as File | null,
     xpReward: 0,
-    ppReward: 0
+    ppReward: 0,
+    artifactRewards: [] as string[]
+  });
+
+  // Form state for editing badges
+  const [editBadge, setEditBadge] = useState<{
+    name: string;
+    description: string;
+    criteria: string;
+    rarity: 'common' | 'rare' | 'epic' | 'legendary';
+    category: 'challenge' | 'achievement' | 'special' | 'admin';
+    imageFile: File | null;
+    imageUrl: string;
+    xpReward: number;
+    ppReward: number;
+    artifactRewards: string[];
+  }>({
+    name: '',
+    description: '',
+    criteria: '',
+    rarity: 'common',
+    category: 'achievement',
+    imageFile: null,
+    imageUrl: '',
+    xpReward: 0,
+    ppReward: 0,
+    artifactRewards: []
   });
 
   useEffect(() => {
     fetchBadges();
     fetchStudents();
+    fetchArtifacts();
   }, []);
+
+  const fetchArtifacts = () => {
+    // Artifacts are defined in Marketplace.tsx - using the same list
+    const artifacts = [
+      { id: 'checkin-free', name: 'Get Out of Check-in Free', icon: '🎫' },
+      { id: 'shield', name: 'Shield', icon: '🛡️' },
+      { id: 'health-potion-25', name: 'Health Potion (25)', icon: '🧪' },
+      { id: 'lunch-mosley', name: 'Lunch on Mosley', icon: '🍽️' },
+      { id: 'forge-token', name: 'Forge Token', icon: '🛠️' },
+      { id: 'uxp-credit-1', name: '+1 UXP Credit', icon: '📕' },
+      { id: 'uxp-credit', name: '+2 UXP Credit', icon: '📚' },
+      { id: 'uxp-credit-4', name: '+4 UXP Credit', icon: '📖' },
+      { id: 'double-pp', name: 'Double PP Boost', icon: '⚡' },
+      { id: 'skip-the-line', name: 'Skip the Line', icon: '🚀' },
+      { id: 'work-extension', name: 'Work Extension', icon: '📝' },
+      { id: 'instant-a', name: 'Instant A', icon: '⭐' },
+      { id: 'blaze-ring', name: 'Blaze Ring', icon: '🔥' },
+      { id: 'terra-ring', name: 'Terra Ring', icon: '🌍' },
+      { id: 'aqua-ring', name: 'Aqua Ring', icon: '💧' },
+      { id: 'air-ring', name: 'Air Ring', icon: '💨' }
+    ];
+    setAvailableArtifacts(artifacts);
+  };
 
   const fetchBadges = async () => {
     try {
@@ -106,6 +159,7 @@ const BadgeManager: React.FC = () => {
         imageUrl,
         xpReward,
         ppReward,
+        artifactRewards: newBadge.artifactRewards || [],
         createdAt: new Date()
       };
 
@@ -120,7 +174,8 @@ const BadgeManager: React.FC = () => {
         category: 'achievement',
         imageFile: null,
         xpReward: 0,
-        ppReward: 0
+        ppReward: 0,
+        artifactRewards: []
       });
       setShowCreateForm(false);
       await fetchBadges();
@@ -226,17 +281,75 @@ const BadgeManager: React.FC = () => {
           const studentRef = doc(db, 'students', studentId);
           const userRef = doc(db, 'users', studentId);
 
+          // Get current artifacts
+          const studentDoc = await getDoc(studentRef);
+          const studentData = studentDoc.exists() ? studentDoc.data() : {};
+          const currentStudentArtifacts = studentData.artifacts || {};
+          const updatedStudentArtifacts = { ...currentStudentArtifacts };
+
+          // Grant artifact rewards if any
+          const artifactRewards = badge.artifactRewards || [];
+          if (artifactRewards.length > 0) {
+            artifactRewards.forEach((artifactId: string) => {
+              const artifact = availableArtifacts.find(a => a.id === artifactId);
+              if (artifact) {
+                updatedStudentArtifacts[artifactId] = true;
+                updatedStudentArtifacts[`${artifactId}_purchase`] = {
+                  id: artifactId,
+                  name: artifact.name,
+                  obtainedAt: serverTimestamp(),
+                  fromBadge: badge.id,
+                  quantity: 1
+                };
+              }
+            });
+          }
+
           await updateDoc(studentRef, {
             badges: [...currentBadges, newBadgeEntry],
             xp: increment(xpReward),
-            powerPoints: increment(ppReward)
+            powerPoints: increment(ppReward),
+            ...(artifactRewards.length > 0 && { artifacts: updatedStudentArtifacts })
           });
 
           try {
-            await updateDoc(userRef, {
+            const userDoc = await getDoc(userRef);
+            const userData = userDoc.exists() ? userDoc.data() : {};
+            const currentUserArtifacts = Array.isArray(userData.artifacts) ? userData.artifacts : [];
+            const newUserArtifacts: any[] = [];
+
+            // Add artifact rewards to users collection
+            if (artifactRewards.length > 0) {
+              artifactRewards.forEach((artifactId: string) => {
+                const artifact = availableArtifacts.find(a => a.id === artifactId);
+                if (artifact && !currentUserArtifacts.find((art: any) => 
+                  (typeof art === 'string' && art === artifactId) ||
+                  (typeof art === 'object' && (art.id === artifactId || art.name === artifact.name))
+                )) {
+                  newUserArtifacts.push({
+                    id: artifactId,
+                    name: artifact.name,
+                    icon: artifact.icon,
+                    category: 'special',
+                    rarity: 'common',
+                    purchasedAt: new Date(),
+                    used: false,
+                    fromBadge: badge.id
+                  });
+                }
+              });
+            }
+
+            const userUpdates: any = {
               xp: increment(xpReward),
               powerPoints: increment(ppReward)
-            });
+            };
+
+            if (newUserArtifacts.length > 0) {
+              userUpdates.artifacts = [...currentUserArtifacts, ...newUserArtifacts];
+            }
+
+            await updateDoc(userRef, userUpdates);
           } catch (userUpdateError) {
             console.warn(`BadgeManager: Unable to update user doc for ${studentId}`, userUpdateError);
           }
@@ -282,11 +395,13 @@ const BadgeManager: React.FC = () => {
       if (skippedCount > 0) {
         message += ` ${skippedCount} student${skippedCount > 1 ? 's' : ''} already had this badge.`;
       }
-      if (totalXpAwarded > 0 || totalPPAwarded > 0) {
+      const totalArtifactsAwarded = (badge.artifactRewards || []).length * successCount;
+      if (totalXpAwarded > 0 || totalPPAwarded > 0 || totalArtifactsAwarded > 0) {
         const rewardsParts = [] as string[];
         if (totalXpAwarded > 0) rewardsParts.push(`${totalXpAwarded} XP`);
         if (totalPPAwarded > 0) rewardsParts.push(`${totalPPAwarded} PP`);
-        message += ` Awarded ${rewardsParts.join(' and ')} in total.`;
+        if (totalArtifactsAwarded > 0) rewardsParts.push(`${totalArtifactsAwarded} artifact${totalArtifactsAwarded > 1 ? 's' : ''}`);
+        message += ` Awarded ${rewardsParts.join(', ')} in total.`;
       }
       if (errors.length > 0) {
         message += ` ${errors.length} error${errors.length > 1 ? 's' : ''} occurred.`;
@@ -305,6 +420,83 @@ const BadgeManager: React.FC = () => {
       alert('Failed to issue badge. Please try again.');
     } finally {
       setIssuing(false);
+    }
+  };
+
+  const handleEditBadge = (badge: Badge) => {
+    setEditingBadgeId(badge.id);
+    setEditBadge({
+      name: badge.name,
+      description: badge.description,
+      criteria: badge.criteria || '',
+      rarity: badge.rarity,
+      category: badge.category,
+      imageFile: null,
+      imageUrl: badge.imageUrl,
+      xpReward: badge.xpReward || 0,
+      ppReward: badge.ppReward || 0,
+      artifactRewards: badge.artifactRewards || []
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingBadgeId(null);
+    setEditBadge({
+      name: '',
+      description: '',
+      criteria: '',
+      rarity: 'common',
+      category: 'achievement',
+      imageFile: null,
+      imageUrl: '',
+      xpReward: 0,
+      ppReward: 0,
+      artifactRewards: []
+    });
+  };
+
+  const handleUpdateBadge = async () => {
+    if (!editingBadgeId || !editBadge.name || !editBadge.description) {
+      alert('Please fill in all required fields.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const badgeRef = doc(db, 'badges', editingBadgeId);
+      let imageUrl = editBadge.imageUrl;
+
+      // Upload new image if one was selected
+      if (editBadge.imageFile) {
+        const imageRef = ref(storage, `badges/${Date.now()}_${editBadge.imageFile.name}`);
+        await uploadBytes(imageRef, editBadge.imageFile);
+        imageUrl = await getDownloadURL(imageRef);
+      }
+
+      const xpReward = Number(editBadge.xpReward) || 0;
+      const ppReward = Number(editBadge.ppReward) || 0;
+
+      await updateDoc(badgeRef, {
+        name: editBadge.name,
+        description: editBadge.description,
+        criteria: editBadge.criteria,
+        rarity: editBadge.rarity,
+        category: editBadge.category,
+        imageUrl,
+        xpReward,
+        ppReward,
+        artifactRewards: editBadge.artifactRewards || [],
+        updatedAt: serverTimestamp()
+      });
+
+      handleCancelEdit();
+      await fetchBadges();
+      alert('Badge updated successfully!');
+    } catch (error) {
+      console.error('Error updating badge:', error);
+      alert('Failed to update badge. Please try again.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -435,6 +627,59 @@ const BadgeManager: React.FC = () => {
                 </div>
               </div>
               <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Artifact Rewards (Optional)</label>
+                <div style={{ 
+                  maxHeight: '150px', 
+                  overflowY: 'auto', 
+                  border: '1px solid #d1d5db', 
+                  borderRadius: '0.375rem', 
+                  padding: '0.5rem',
+                  backgroundColor: '#f9fafb'
+                }}>
+                  {availableArtifacts.map(artifact => (
+                    <label
+                      key={artifact.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '0.5rem',
+                        cursor: 'pointer',
+                        borderRadius: '0.25rem',
+                        marginBottom: '0.25rem'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={newBadge.artifactRewards.includes(artifact.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setNewBadge(prev => ({
+                              ...prev,
+                              artifactRewards: [...prev.artifactRewards, artifact.id]
+                            }));
+                          } else {
+                            setNewBadge(prev => ({
+                              ...prev,
+                              artifactRewards: prev.artifactRewards.filter(id => id !== artifact.id)
+                            }));
+                          }
+                        }}
+                        style={{ marginRight: '0.5rem', cursor: 'pointer' }}
+                      />
+                      <span style={{ fontSize: '1.25rem', marginRight: '0.5rem' }}>{artifact.icon}</span>
+                      <span style={{ fontSize: '0.875rem' }}>{artifact.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {newBadge.artifactRewards.length > 0 && (
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                    {newBadge.artifactRewards.length} artifact{newBadge.artifactRewards.length > 1 ? 's' : ''} selected
+                  </div>
+                )}
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Badge Image *</label>
                 <input
                   type="file"
@@ -492,9 +737,19 @@ const BadgeManager: React.FC = () => {
               color: '#312e81'
             }}>
               <strong>Rewards:</strong>{' '}
-              {((selectedBadgeDetails.xpReward ?? 0) > 0 || (selectedBadgeDetails.ppReward ?? 0) > 0)
-                ? `+${selectedBadgeDetails.xpReward ?? 0} XP • +${selectedBadgeDetails.ppReward ?? 0} PP`
-                : 'No XP or PP rewards'}
+              {(() => {
+                const rewards = [] as string[];
+                if ((selectedBadgeDetails.xpReward ?? 0) > 0) rewards.push(`+${selectedBadgeDetails.xpReward} XP`);
+                if ((selectedBadgeDetails.ppReward ?? 0) > 0) rewards.push(`+${selectedBadgeDetails.ppReward} PP`);
+                if (selectedBadgeDetails.artifactRewards && selectedBadgeDetails.artifactRewards.length > 0) {
+                  const artifactNames = selectedBadgeDetails.artifactRewards.map(artifactId => {
+                    const artifact = availableArtifacts.find(a => a.id === artifactId);
+                    return artifact ? `${artifact.icon} ${artifact.name}` : artifactId;
+                  }).join(', ');
+                  rewards.push(`${artifactNames}`);
+                }
+                return rewards.length > 0 ? rewards.join(' • ') : 'No rewards';
+              })()}
             </div>
           )}
         </div>
@@ -687,24 +942,288 @@ const BadgeManager: React.FC = () => {
                 </div>
               </div>
               <p style={{ color: '#6b7280', fontSize: '0.875rem', marginBottom: '0.5rem' }}>{badge.description}</p>
-              {(badge.xpReward ?? 0) > 0 || (badge.ppReward ?? 0) > 0 ? (
-                <p style={{ color: '#4b5563', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                  Rewards: +{badge.xpReward ?? 0} XP • +{badge.ppReward ?? 0} PP
-                </p>
-              ) : (
-                <p style={{ color: '#9ca3af', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
-                  Rewards: None
-                </p>
-              )}
+              <div style={{ marginBottom: '0.5rem' }}>
+                {(badge.xpReward ?? 0) > 0 || (badge.ppReward ?? 0) > 0 || (badge.artifactRewards && badge.artifactRewards.length > 0) ? (
+                  <div>
+                    {(badge.xpReward ?? 0) > 0 || (badge.ppReward ?? 0) > 0 ? (
+                      <p style={{ color: '#4b5563', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                        Rewards: +{badge.xpReward ?? 0} XP • +{badge.ppReward ?? 0} PP
+                      </p>
+                    ) : null}
+                    {badge.artifactRewards && badge.artifactRewards.length > 0 && (
+                      <p style={{ color: '#4b5563', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                        Artifacts: {badge.artifactRewards.map(artifactId => {
+                          const artifact = availableArtifacts.find(a => a.id === artifactId);
+                          return artifact ? `${artifact.icon} ${artifact.name}` : artifactId;
+                        }).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p style={{ color: '#9ca3af', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
+                    Rewards: None
+                  </p>
+                )}
+              </div>
               {badge.criteria && (
-                <p style={{ color: '#9ca3af', fontSize: '0.75rem', fontStyle: 'italic' }}>
+                <p style={{ color: '#9ca3af', fontSize: '0.75rem', fontStyle: 'italic', marginBottom: '0.5rem' }}>
                   Criteria: {badge.criteria}
                 </p>
               )}
+              <button
+                onClick={() => handleEditBadge(badge)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#4f46e5',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  padding: '0.5rem',
+                  fontSize: '0.875rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  marginTop: '0.5rem'
+                }}
+              >
+                ✏️ Edit Badge
+              </button>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Edit Badge Modal */}
+      {editingBadgeId && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem'
+          }}
+          onClick={handleCancelEdit}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '0.75rem',
+              padding: '2rem',
+              maxWidth: '800px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+              Edit Badge
+            </h2>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+              <div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Badge Name *</label>
+                  <input
+                    type="text"
+                    value={editBadge.name}
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, name: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                    placeholder="Enter badge name"
+                  />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Description *</label>
+                  <textarea
+                    value={editBadge.description}
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, description: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem', minHeight: '80px' }}
+                    placeholder="Enter badge description"
+                  />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Criteria (Optional)</label>
+                  <input
+                    type="text"
+                    value={editBadge.criteria}
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, criteria: e.target.value }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                    placeholder="e.g., Complete 5 challenges"
+                  />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Current Image</label>
+                  {editBadge.imageUrl && (
+                    <img
+                      src={editBadge.imageUrl}
+                      alt="Current badge"
+                      style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: '1px solid #d1d5db' }}
+                    />
+                  )}
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>New Image (Optional)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, imageFile: e.target.files?.[0] || null }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                  />
+                  <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                    Leave empty to keep current image
+                  </p>
+                </div>
+              </div>
+              <div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Rarity</label>
+                  <select
+                    value={editBadge.rarity}
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, rarity: e.target.value as any }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                  >
+                    <option value="common">Common</option>
+                    <option value="rare">Rare</option>
+                    <option value="epic">Epic</option>
+                    <option value="legendary">Legendary</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Category</label>
+                  <select
+                    value={editBadge.category}
+                    onChange={(e) => setEditBadge(prev => ({ ...prev, category: e.target.value as any }))}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                  >
+                    <option value="achievement">Achievement</option>
+                    <option value="challenge">Challenge</option>
+                    <option value="special">Special</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>XP Reward</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editBadge.xpReward}
+                      onChange={(e) => setEditBadge(prev => ({ ...prev, xpReward: Number(e.target.value) }))}
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>PP Reward</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editBadge.ppReward}
+                      onChange={(e) => setEditBadge(prev => ({ ...prev, ppReward: Number(e.target.value) }))}
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem' }}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Artifact Rewards (Optional)</label>
+                  <div style={{ 
+                    maxHeight: '150px', 
+                    overflowY: 'auto', 
+                    border: '1px solid #d1d5db', 
+                    borderRadius: '0.375rem', 
+                    padding: '0.5rem',
+                    backgroundColor: '#f9fafb'
+                  }}>
+                    {availableArtifacts.map(artifact => (
+                      <label
+                        key={artifact.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          cursor: 'pointer',
+                          borderRadius: '0.25rem',
+                          marginBottom: '0.25rem'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={editBadge.artifactRewards.includes(artifact.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditBadge(prev => ({
+                                ...prev,
+                                artifactRewards: [...prev.artifactRewards, artifact.id]
+                              }));
+                            } else {
+                              setEditBadge(prev => ({
+                                ...prev,
+                                artifactRewards: prev.artifactRewards.filter(id => id !== artifact.id)
+                              }));
+                            }
+                          }}
+                          style={{ marginRight: '0.5rem', cursor: 'pointer' }}
+                        />
+                        <span style={{ fontSize: '1.25rem', marginRight: '0.5rem' }}>{artifact.icon}</span>
+                        <span style={{ fontSize: '0.875rem' }}>{artifact.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {editBadge.artifactRewards.length > 0 && (
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                      {editBadge.artifactRewards.length} artifact{editBadge.artifactRewards.length > 1 ? 's' : ''} selected
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <button
+                    onClick={handleUpdateBadge}
+                    disabled={uploading}
+                    style={{
+                      flex: 1,
+                      backgroundColor: uploading ? '#9ca3af' : '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      padding: '0.75rem 1.5rem',
+                      fontWeight: 'bold',
+                      cursor: uploading ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    {uploading ? 'Updating...' : 'Update Badge'}
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    disabled={uploading}
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#6b7280',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      padding: '0.75rem 1.5rem',
+                      fontWeight: 'bold',
+                      cursor: uploading ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

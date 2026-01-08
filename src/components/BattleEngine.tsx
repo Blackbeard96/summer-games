@@ -70,6 +70,7 @@ interface BattleEngineProps {
   candyChoice?: string; // RR Candy choice for Ch2-4 battles ('on-off' | 'up-down' | 'config')
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
   isInSession?: boolean; // Whether this is an In Session battle (no CPU moves, no turn order)
+  sessionId?: string; // Session ID for In-Session mode (required if isInSession is true)
   battleName?: string; // Battle name for invitations
   onInviteClick?: () => void; // Callback when invite button is clicked
   allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
@@ -122,6 +123,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   candyChoice,
   onArtifactUsed,
   isInSession = false,
+  sessionId,
   battleName,
   onInviteClick,
   allowInvites = false,
@@ -702,12 +704,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Update parent component with battle log changes (for Mindforge mode and In Session)
+  // Update parent component with battle log changes (for Mindforge mode, In Session, and multiplayer)
   useEffect(() => {
-    if (onBattleLogUpdate && (mindforgeMode || isMultiplayer)) {
+    if (onBattleLogUpdate && (mindforgeMode || isMultiplayer || isInSession)) {
       onBattleLogUpdate(battleState.battleLog);
     }
-  }, [battleState.battleLog, mindforgeMode, isMultiplayer, onBattleLogUpdate]);
+  }, [battleState.battleLog, mindforgeMode, isMultiplayer, isInSession, onBattleLogUpdate]);
 
   // Notify parent of opponents updates via useEffect (prevents React error from setState during render)
   useEffect(() => {
@@ -3696,7 +3698,81 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // They should be handled separately and not converted to status effects
     }
     
+    // IN-SESSION MODE: Apply move via authoritative Firestore transaction
+    // This ensures all clients see the same state updates
+    if (isInSession && sessionId && currentUser) {
+      try {
+        // Calculate PP cost (if move has cost property)
+        const ppCost = (move.cost || 0);
+        
+        // Get the latest battle log message (should be the last one we added)
+        const battleLogMessage = newLog[newLog.length - 1] || `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}`;
+        
+        // Import and call the authoritative move service
+        const { applyInSessionMove } = await import('../utils/inSessionMoveService');
+        
+        // For In-Session, pass damage values as calculated
+        // damage = total damage, shieldDamage = amount that will be absorbed by shield
+        // The service will apply: shield first, then remaining damage to health
+        const moveResult = await applyInSessionMove({
+          sessionId,
+          actorUid: currentUser.uid,
+          actorName: playerName,
+          targetUid: targetOpponent.id,
+          targetName: targetOpponent.name,
+          move,
+          damage: damage, // Total damage
+          shieldDamage: shieldDamage, // Amount absorbed by shield (for special moves or normal calculation)
+          healing: playerHealing,
+          shieldBoost: playerShieldBoost,
+          ppStolen,
+          ppCost,
+          battleLogMessage
+        });
+        
+        if (moveResult.success) {
+          // Move applied successfully via Firestore transaction
+          // The session listener in InSessionBattle will update local state
+          // We just need to update the battle log state so it propagates
+          setBattleState(prev => ({
+            ...prev,
+            battleLog: newLog,
+            selectedMove: null,
+            selectedTarget: null,
+            currentAnimation: null,
+            isAnimating: false,
+            phase: 'selection'
+          }));
+          
+          // Update battle log via callback
+          if (onBattleLogUpdate) {
+            onBattleLogUpdate(newLog);
+          }
+          
+          // Set skill cooldown locally (will be synced via session state if needed)
+          if (move.cooldown && move.cooldown > 0) {
+            setSkillCooldowns(prev => {
+              const updated = new Map(prev);
+              updated.set(move.id, move.cooldown);
+              console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${move.cooldown} turns`);
+              return updated;
+            });
+          }
+          
+          console.log('✅ [In-Session Move] Move applied via Firestore transaction:', moveResult);
+          return; // Exit early - don't apply local updates
+        } else {
+          console.error('❌ [In-Session Move] Failed to apply move:', moveResult.message);
+          // Fall through to local updates as fallback (though this shouldn't happen)
+        }
+      } catch (error) {
+        console.error('❌ [In-Session Move] Error applying move:', error);
+        // Fall through to local updates as fallback
+      }
+    }
+    
     // Update target opponent stats IMMEDIATELY for real-time display
+    // (Skip this for In-Session mode - state comes from Firestore)
     const newTargetOpponent = { ...targetOpponent };
     newTargetOpponent.shieldStrength = Math.max(0, targetOpponent.shieldStrength - shieldDamage);
     

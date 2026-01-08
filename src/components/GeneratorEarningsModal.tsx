@@ -9,6 +9,10 @@ interface GeneratorEarningsModalProps {
   generatorLevel: number;
   ppPerDay: number;
   shieldsPerDay: number;
+  previousPP: number;
+  previousShields: number;
+  newPP: number;
+  newShields: number;
 }
 
 const GeneratorEarningsModal: React.FC<GeneratorEarningsModalProps> = ({
@@ -19,7 +23,11 @@ const GeneratorEarningsModal: React.FC<GeneratorEarningsModalProps> = ({
   shieldsEarned,
   generatorLevel,
   ppPerDay,
-  shieldsPerDay
+  shieldsPerDay,
+  previousPP,
+  previousShields,
+  newPP,
+  newShields
 }) => {
   if (!isOpen) return null;
 
@@ -93,17 +101,54 @@ const GeneratorEarningsModal: React.FC<GeneratorEarningsModalProps> = ({
           </div>
 
           <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem', marginTop: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Power Points Earned:</span>
-              <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
-                +{ppEarned} PP
-              </span>
+            {/* Power Points Section */}
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Power Points
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#9ca3af' }}>Before:</span>
+                <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#6b7280' }}>
+                  {previousPP} PP
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#10b981', fontWeight: '600' }}>Earned:</span>
+                <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#10b981' }}>
+                  +{ppEarned} PP
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
+                <span style={{ fontSize: '0.875rem', color: '#1f2937', fontWeight: 'bold' }}>New Total:</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
+                  {newPP} PP
+                </span>
+              </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Shields Earned:</span>
-              <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
-                +{shieldsEarned} Shields
-              </span>
+
+            {/* Shields Section */}
+            <div>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Shields
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#9ca3af' }}>Before:</span>
+                <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#6b7280' }}>
+                  {previousShields} Shields
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#10b981', fontWeight: '600' }}>Earned:</span>
+                <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#10b981' }}>
+                  +{shieldsEarned} Shields
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
+                <span style={{ fontSize: '0.875rem', color: '#1f2937', fontWeight: 'bold' }}>New Total:</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
+                  {newShields} Shields
+                </span>
+              </div>
             </div>
           </div>
         </div>

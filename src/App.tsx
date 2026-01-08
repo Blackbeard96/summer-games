@@ -16,6 +16,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
 import BadgeRewardNotifier from './components/BadgeRewardNotifier';
 import AssessmentGoalsNotifier from './components/AssessmentGoalsNotifier';
+import AssessmentGoalResultNotifier from './components/AssessmentGoalResultNotifier';
 import MilestoneModal from './components/MilestoneModal';
 import GeneratorEarningsModal from './components/GeneratorEarningsModal';
 import AnnouncementCarousel from './components/AnnouncementCarousel';
@@ -267,6 +268,10 @@ const AppContent = () => {
     generatorLevel: number;
     ppPerDay: number;
     shieldsPerDay: number;
+    previousPP: number;
+    previousShields: number;
+    newPP: number;
+    newShields: number;
   } | null>(null);
   const [showGeneratorModal, setShowGeneratorModal] = React.useState(false);
   
@@ -310,14 +315,19 @@ const AppContent = () => {
             vault.maxShieldStrength || 100
           );
           
-          if (dailyResult && (dailyResult.ppEarned > 0 || dailyResult.shieldsEarned > 0)) {
+          // Always show modal on first login of the day (even if no earnings)
+          if (dailyResult) {
             setGeneratorEarnings({
               daysAway: dailyResult.daysAway,
               ppEarned: dailyResult.ppEarned,
               shieldsEarned: dailyResult.shieldsEarned,
               generatorLevel: dailyResult.generatorLevel,
               ppPerDay: dailyResult.ppPerDay,
-              shieldsPerDay: dailyResult.shieldsPerDay
+              shieldsPerDay: dailyResult.shieldsPerDay,
+              previousPP: dailyResult.previousPP,
+              previousShields: dailyResult.previousShields,
+              newPP: dailyResult.newPP,
+              newShields: dailyResult.newShields
             });
             queue.push('dailyGenerator');
           }
@@ -628,6 +638,7 @@ const AppContent = () => {
       <BattleInvitationManager />
       <BadgeRewardNotifier />
       <AssessmentGoalsNotifier />
+      <AssessmentGoalResultNotifier />
       <InSessionNotification />
       <ToastContainer />
       
@@ -653,6 +664,10 @@ const AppContent = () => {
           generatorLevel={generatorEarnings.generatorLevel}
           ppPerDay={generatorEarnings.ppPerDay}
           shieldsPerDay={generatorEarnings.shieldsPerDay}
+          previousPP={generatorEarnings.previousPP}
+          previousShields={generatorEarnings.previousShields}
+          newPP={generatorEarnings.newPP}
+          newShields={generatorEarnings.newShields}
         />
       )}
       

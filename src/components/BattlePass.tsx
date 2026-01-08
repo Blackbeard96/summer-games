@@ -323,32 +323,35 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       justifyContent: 'center',
       alignItems: 'flex-start',
       zIndex: 10000,
-      padding: '2rem',
-      paddingTop: '6rem', // Add extra padding at top to account for nav bar
-      overflowY: 'auto'
+      padding: '1rem',
+      paddingTop: '5rem', // Reduced padding at top
+      overflowY: 'auto',
+      overflowX: 'hidden'
     }}>
       <div style={{
         background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
         color: 'white',
         borderRadius: '1.5rem',
-        padding: '2rem',
-        maxWidth: '1200px',
+        padding: '1.5rem',
+        maxWidth: '1400px',
         width: '100%',
-        maxHeight: 'calc(100vh - 8rem)', // Account for padding
-        overflowY: 'auto',
+        minHeight: 'calc(100vh - 6rem)',
         boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7)',
         border: '2px solid rgba(139, 92, 246, 0.5)',
         position: 'relative',
-        marginBottom: '2rem' // Add margin at bottom for scrolling
+        marginBottom: '2rem',
+        display: 'flex',
+        flexDirection: 'column'
       }}>
         {/* Header */}
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '2rem',
+          marginBottom: '1.5rem',
           borderBottom: '2px solid rgba(139, 92, 246, 0.3)',
-          paddingBottom: '1rem'
+          paddingBottom: '1rem',
+          flexShrink: 0
         }}>
           <div>
             <h2 style={{
@@ -432,10 +435,11 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
             border: '2px solid rgba(251, 191, 36, 0.5)',
             borderRadius: '1rem',
             padding: '1.5rem',
-            marginBottom: '2rem',
+            marginBottom: '1.5rem',
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            flexShrink: 0
           }}>
             <div>
               <h3 style={{
@@ -499,8 +503,9 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
             border: '2px solid rgba(251, 191, 36, 0.5)',
             borderRadius: '1rem',
             padding: '1rem',
-            marginBottom: '2rem',
-            textAlign: 'center'
+            marginBottom: '1.5rem',
+            textAlign: 'center',
+            flexShrink: 0
           }}>
             <div style={{
               fontSize: '1.5rem',
@@ -524,8 +529,9 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
           background: 'rgba(0, 0, 0, 0.3)',
           borderRadius: '1rem',
           padding: '1.5rem',
-          marginBottom: '2rem',
-          border: '2px solid rgba(139, 92, 246, 0.3)'
+          marginBottom: '1.5rem',
+          border: '2px solid rgba(139, 92, 246, 0.3)',
+          flexShrink: 0
         }}>
           <div style={{
             display: 'flex',
@@ -578,178 +584,357 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
           </div>
         </div>
 
-        {/* Tiers Grid */}
+        {/* Tiers Grid - Improved Layout */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '4rem', color: '#94a3b8' }}>
+          <div style={{ textAlign: 'center', padding: '4rem', color: '#94a3b8', flex: 1 }}>
             Loading Battle Pass...
           </div>
         ) : (
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-            gap: '1rem'
-          }}>
-            {season0Tiers.map((tier) => {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.25rem',
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            paddingRight: '0.75rem',
+            paddingBottom: '1rem',
+              // Custom scrollbar styling
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(139, 92, 246, 0.5) rgba(0, 0, 0, 0.3)'
+          }}
+          className="battle-pass-scroll"
+          >
+            {season0Tiers.map((tier, index) => {
               const isUnlocked = tier.tier <= currentTier;
               const freeClaimed = battlePassProgress?.claimedTiers?.includes(`tier${tier.tier}_free`);
               const premiumClaimed = battlePassProgress?.claimedTiers?.includes(`tier${tier.tier}_premium`);
+              const isCurrentTier = tier.tier === currentTier;
+              const isNextTier = tier.tier === currentTier + 1;
 
               return (
                 <div
                   key={tier.tier}
                   style={{
+                    display: 'flex',
+                    gap: '1rem',
                     background: isUnlocked 
-                      ? 'linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)'
+                      ? (isCurrentTier 
+                          ? 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(124, 58, 237, 0.3) 100%)'
+                          : 'linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)')
                       : 'rgba(0, 0, 0, 0.3)',
-                    border: `2px solid ${isUnlocked ? 'rgba(139, 92, 246, 0.5)' : 'rgba(100, 100, 100, 0.3)'}`,
+                    border: `2px solid ${isCurrentTier 
+                      ? 'rgba(139, 92, 246, 0.8)' 
+                      : isUnlocked 
+                        ? 'rgba(139, 92, 246, 0.5)' 
+                        : 'rgba(100, 100, 100, 0.3)'}`,
                     borderRadius: '1rem',
-                    padding: '1rem',
-                    opacity: isUnlocked ? 1 : 0.5,
-                    position: 'relative'
+                    padding: '1.25rem',
+                    opacity: isUnlocked ? 1 : 0.6,
+                    position: 'relative',
+                    boxShadow: isCurrentTier 
+                      ? '0 0 20px rgba(139, 92, 246, 0.4)' 
+                      : '0 2px 8px rgba(0, 0, 0, 0.2)',
+                    transition: 'all 0.3s ease'
                   }}
                 >
+                  {/* Tier Number Badge */}
                   <div style={{
-                    position: 'absolute',
-                    top: '0.5rem',
-                    right: '0.5rem',
-                    background: 'rgba(139, 92, 246, 0.3)',
-                    borderRadius: '0.5rem',
-                    padding: '0.25rem 0.5rem',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold'
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    minWidth: '80px',
+                    gap: '0.5rem'
                   }}>
-                    Tier {tier.tier}
+                    <div style={{
+                      background: isUnlocked 
+                        ? (isCurrentTier 
+                            ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
+                            : 'linear-gradient(135deg, rgba(139, 92, 246, 0.6) 0%, rgba(124, 58, 237, 0.6) 100%)')
+                        : 'rgba(100, 100, 100, 0.3)',
+                      borderRadius: '50%',
+                      width: '60px',
+                      height: '60px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '1.5rem',
+                      fontWeight: 'bold',
+                      color: 'white',
+                      border: `2px solid ${isCurrentTier ? '#a78bfa' : 'rgba(139, 92, 246, 0.5)'}`,
+                      boxShadow: isCurrentTier ? '0 0 15px rgba(139, 92, 246, 0.6)' : 'none'
+                    }}>
+                      {tier.tier}
+                    </div>
+                    {isCurrentTier && (
+                      <div style={{
+                        fontSize: '0.75rem',
+                        color: '#a78bfa',
+                        fontWeight: 'bold',
+                        textAlign: 'center'
+                      }}>
+                        Current
+                      </div>
+                    )}
+                    {isNextTier && (
+                      <div style={{
+                        fontSize: '0.75rem',
+                        color: '#94a3b8',
+                        textAlign: 'center'
+                      }}>
+                        Next
+                      </div>
+                    )}
+                    <div style={{
+                      fontSize: '0.7rem',
+                      color: '#64748b',
+                      textAlign: 'center',
+                      marginTop: '0.25rem'
+                    }}>
+                      {tier.requiredXP.toLocaleString()} XP
+                    </div>
                   </div>
 
-                  {/* Free Reward */}
-                  {tier.freeReward && (
-                    <div style={{
-                      marginBottom: '0.75rem',
-                      padding: '0.75rem',
-                      background: 'rgba(59, 130, 246, 0.1)',
-                      borderRadius: '0.5rem',
-                      border: '1px solid rgba(59, 130, 246, 0.3)'
-                    }}>
-                      {tier.freeReward.type === 'actionCard' && tier.freeReward.actionCardName ? (
-                        <>
-                          {tier.freeReward.imageUrl ? (
-                            <img 
-                              src={tier.freeReward.imageUrl} 
-                              alt={tier.freeReward.actionCardName}
-                              style={{
-                                width: '100%',
-                                maxHeight: '120px',
-                                objectFit: 'contain',
-                                borderRadius: '0.5rem',
-                                marginBottom: '0.5rem',
-                                border: '2px solid rgba(59, 130, 246, 0.5)'
-                              }}
-                            />
-                          ) : (
-                            <div style={{ fontSize: '2rem', marginBottom: '0.5rem', textAlign: 'center' }}>
-                              {getRewardIcon(tier.freeReward.type)}
-                            </div>
-                          )}
-                          <div style={{ fontSize: '0.875rem', color: '#60a5fa', fontWeight: 'bold', textAlign: 'center' }}>
-                            {tier.freeReward.actionCardName}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginTop: '0.25rem' }}>
-                            Action Card
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
-                            {getRewardIcon(tier.freeReward.type)}
-                          </div>
-                          <div style={{ fontSize: '0.875rem', color: '#60a5fa', fontWeight: 'bold' }}>
-                            {tier.freeReward.amount} {tier.freeReward.type === 'pp' ? 'PP' : tier.freeReward.type === 'xp' ? 'XP' : 'Shards'}
-                          </div>
-                        </>
-                      )}
-                      <button
-                        onClick={() => claimReward(tier.tier, false)}
-                        disabled={!isUnlocked || freeClaimed}
-                        style={{
-                          width: '100%',
-                          marginTop: '0.5rem',
-                          padding: '0.5rem',
-                          background: freeClaimed 
-                            ? 'rgba(34, 197, 94, 0.3)'
-                            : isUnlocked 
-                              ? 'rgba(59, 130, 246, 0.5)'
-                              : 'rgba(100, 100, 100, 0.3)',
-                          border: 'none',
-                          borderRadius: '0.5rem',
-                          color: 'white',
-                          cursor: isUnlocked && !freeClaimed ? 'pointer' : 'not-allowed',
-                          fontSize: '0.75rem',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        {freeClaimed ? '✓ Claimed' : isUnlocked ? 'Claim' : 'Locked'}
-                      </button>
-                    </div>
-                  )}
+                  {/* Rewards Section */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '1rem',
+                    flex: 1
+                  }}>
 
-                  {/* Premium Reward */}
-                  {tier.premiumReward && (
-                    <div style={{
-                      padding: '0.75rem',
-                      background: 'rgba(251, 191, 36, 0.1)',
-                      borderRadius: '0.5rem',
-                      border: '1px solid rgba(251, 191, 36, 0.3)',
-                      position: 'relative'
-                    }}>
+                    {/* Free Reward */}
+                    {tier.freeReward && (
                       <div style={{
-                        position: 'absolute',
-                        top: '-0.5rem',
-                        right: '-0.5rem',
-                        background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-                        borderRadius: '50%',
-                        width: '24px',
-                        height: '24px',
+                        padding: '1rem',
+                        background: freeClaimed 
+                          ? 'rgba(34, 197, 94, 0.15)'
+                          : 'rgba(59, 130, 246, 0.1)',
+                        borderRadius: '0.75rem',
+                        border: `2px solid ${freeClaimed 
+                          ? 'rgba(34, 197, 94, 0.5)' 
+                          : 'rgba(59, 130, 246, 0.3)'}`,
                         display: 'flex',
+                        flexDirection: 'column',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '0.75rem',
-                        fontWeight: 'bold',
-                        color: '#1e293b'
+                        minHeight: '140px',
+                        position: 'relative'
                       }}>
-                        ⭐
-                      </div>
-                      <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
-                        {getRewardIcon(tier.premiumReward.type)}
-                      </div>
-                      <div style={{ fontSize: '0.875rem', color: '#fbbf24', fontWeight: 'bold' }}>
-                        {tier.premiumReward.amount} {tier.premiumReward.type === 'pp' ? 'PP' : tier.premiumReward.type === 'xp' ? 'XP' : 'Shards'}
-                      </div>
-                      <button
-                        onClick={() => claimReward(tier.tier, true)}
-                        disabled={!isUnlocked || premiumClaimed || !battlePassProgress?.isPremium}
-                        style={{
-                          width: '100%',
-                          marginTop: '0.5rem',
-                          padding: '0.5rem',
-                          background: premiumClaimed 
-                            ? 'rgba(34, 197, 94, 0.3)'
-                            : !battlePassProgress?.isPremium
-                              ? 'rgba(100, 100, 100, 0.3)'
-                              : isUnlocked 
-                                ? 'rgba(251, 191, 36, 0.5)'
-                                : 'rgba(100, 100, 100, 0.3)',
-                          border: 'none',
-                          borderRadius: '0.5rem',
-                          color: 'white',
-                          cursor: isUnlocked && !premiumClaimed && battlePassProgress?.isPremium ? 'pointer' : 'not-allowed',
+                        {freeClaimed && (
+                          <div style={{
+                            position: 'absolute',
+                            top: '0.5rem',
+                            right: '0.5rem',
+                            background: 'rgba(34, 197, 94, 0.8)',
+                            borderRadius: '50%',
+                            width: '24px',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.875rem',
+                            color: 'white'
+                          }}>
+                            ✓
+                          </div>
+                        )}
+                        <div style={{
                           fontSize: '0.75rem',
+                          color: '#94a3b8',
+                          marginBottom: '0.5rem',
                           fontWeight: 'bold'
-                        }}
-                      >
-                        {premiumClaimed ? '✓ Claimed' : !battlePassProgress?.isPremium ? 'Premium Only' : isUnlocked ? 'Claim' : 'Locked'}
-                      </button>
-                    </div>
-                  )}
+                        }}>
+                          FREE
+                        </div>
+                        {tier.freeReward.type === 'actionCard' && tier.freeReward.actionCardName ? (
+                          <>
+                            {tier.freeReward.imageUrl ? (
+                              <img 
+                                src={tier.freeReward.imageUrl} 
+                                alt={tier.freeReward.actionCardName}
+                                style={{
+                                  width: '100%',
+                                  maxHeight: '80px',
+                                  objectFit: 'contain',
+                                  borderRadius: '0.5rem',
+                                  marginBottom: '0.5rem'
+                                }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
+                                {getRewardIcon(tier.freeReward.type)}
+                              </div>
+                            )}
+                            <div style={{ fontSize: '0.875rem', color: '#60a5fa', fontWeight: 'bold', textAlign: 'center' }}>
+                              {tier.freeReward.actionCardName}
+                            </div>
+                            <div style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'center', marginTop: '0.25rem' }}>
+                              Action Card
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
+                              {getRewardIcon(tier.freeReward.type)}
+                            </div>
+                            <div style={{ fontSize: '1rem', color: '#60a5fa', fontWeight: 'bold', textAlign: 'center' }}>
+                              {tier.freeReward.amount}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginTop: '0.25rem' }}>
+                              {tier.freeReward.type === 'pp' ? 'PP' : tier.freeReward.type === 'xp' ? 'XP' : 'Shards'}
+                            </div>
+                          </>
+                        )}
+                        <button
+                          onClick={() => claimReward(tier.tier, false)}
+                          disabled={!isUnlocked || freeClaimed}
+                          style={{
+                            width: '100%',
+                            marginTop: '0.75rem',
+                            padding: '0.5rem',
+                            background: freeClaimed 
+                              ? 'rgba(34, 197, 94, 0.4)'
+                              : isUnlocked 
+                                ? 'rgba(59, 130, 246, 0.6)'
+                                : 'rgba(100, 100, 100, 0.3)',
+                            border: 'none',
+                            borderRadius: '0.5rem',
+                            color: 'white',
+                            cursor: isUnlocked && !freeClaimed ? 'pointer' : 'not-allowed',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (isUnlocked && !freeClaimed) {
+                              e.currentTarget.style.background = 'rgba(59, 130, 246, 0.8)';
+                              e.currentTarget.style.transform = 'translateY(-2px)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (isUnlocked && !freeClaimed) {
+                              e.currentTarget.style.background = 'rgba(59, 130, 246, 0.6)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }
+                          }}
+                        >
+                          {freeClaimed ? '✓ Claimed' : isUnlocked ? 'Claim' : 'Locked'}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Premium Reward */}
+                    {tier.premiumReward && (
+                      <div style={{
+                        padding: '1rem',
+                        background: premiumClaimed 
+                          ? 'rgba(34, 197, 94, 0.15)'
+                          : 'rgba(251, 191, 36, 0.1)',
+                        borderRadius: '0.75rem',
+                        border: `2px solid ${premiumClaimed 
+                          ? 'rgba(34, 197, 94, 0.5)' 
+                          : 'rgba(251, 191, 36, 0.3)'}`,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minHeight: '140px',
+                        position: 'relative'
+                      }}>
+                        <div style={{
+                          position: 'absolute',
+                          top: '0.5rem',
+                          right: '0.5rem',
+                          background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                          borderRadius: '50%',
+                          width: '28px',
+                          height: '28px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.875rem',
+                          fontWeight: 'bold',
+                          color: '#1e293b',
+                          boxShadow: '0 2px 8px rgba(251, 191, 36, 0.4)'
+                        }}>
+                          ⭐
+                        </div>
+                        {premiumClaimed && (
+                          <div style={{
+                            position: 'absolute',
+                            top: '0.5rem',
+                            left: '0.5rem',
+                            background: 'rgba(34, 197, 94, 0.8)',
+                            borderRadius: '50%',
+                            width: '24px',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.875rem',
+                            color: 'white'
+                          }}>
+                            ✓
+                          </div>
+                        )}
+                        <div style={{
+                          fontSize: '0.75rem',
+                          color: '#fbbf24',
+                          marginBottom: '0.5rem',
+                          fontWeight: 'bold'
+                        }}>
+                          PREMIUM
+                        </div>
+                        <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
+                          {getRewardIcon(tier.premiumReward.type)}
+                        </div>
+                        <div style={{ fontSize: '1rem', color: '#fbbf24', fontWeight: 'bold', textAlign: 'center' }}>
+                          {tier.premiumReward.amount}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginTop: '0.25rem' }}>
+                          {tier.premiumReward.type === 'pp' ? 'PP' : tier.premiumReward.type === 'xp' ? 'XP' : 'Shards'}
+                        </div>
+                        <button
+                          onClick={() => claimReward(tier.tier, true)}
+                          disabled={!isUnlocked || premiumClaimed || !battlePassProgress?.isPremium}
+                          style={{
+                            width: '100%',
+                            marginTop: '0.75rem',
+                            padding: '0.5rem',
+                            background: premiumClaimed 
+                              ? 'rgba(34, 197, 94, 0.4)'
+                              : !battlePassProgress?.isPremium
+                                ? 'rgba(100, 100, 100, 0.3)'
+                                : isUnlocked 
+                                  ? 'rgba(251, 191, 36, 0.6)'
+                                  : 'rgba(100, 100, 100, 0.3)',
+                            border: 'none',
+                            borderRadius: '0.5rem',
+                            color: 'white',
+                            cursor: isUnlocked && !premiumClaimed && battlePassProgress?.isPremium ? 'pointer' : 'not-allowed',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (isUnlocked && !premiumClaimed && battlePassProgress?.isPremium) {
+                              e.currentTarget.style.background = 'rgba(251, 191, 36, 0.8)';
+                              e.currentTarget.style.transform = 'translateY(-2px)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (isUnlocked && !premiumClaimed && battlePassProgress?.isPremium) {
+                              e.currentTarget.style.background = 'rgba(251, 191, 36, 0.6)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }
+                          }}
+                        >
+                          {premiumClaimed ? '✓ Claimed' : !battlePassProgress?.isPremium ? 'Premium Only' : isUnlocked ? 'Claim' : 'Locked'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}

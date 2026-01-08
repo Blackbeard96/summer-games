@@ -29,9 +29,10 @@ import { detectManifest, logManifestDetection } from '../utils/manifestDetection
 interface ChapterDetailProps {
   chapter: Chapter;
   onBack: () => void;
+  focusChallengeId?: string; // Challenge ID to focus/scroll to
 }
 
-const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
+const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusChallengeId }) => {
   const { currentUser, isAdmin } = useAuth();
   const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
@@ -69,6 +70,36 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
   const [showSquadUpStoryModal, setShowSquadUpStoryModal] = useState(false);
   const [showSonidoTransmissionModal, setShowSonidoTransmissionModal] = useState(false);
   const [expandedChallenges, setExpandedChallenges] = useState<Set<string>>(new Set());
+
+  // Handle deep-linking: expand and scroll to focused challenge
+  useEffect(() => {
+    if (focusChallengeId) {
+      // Expand the challenge
+      setExpandedChallenges(prev => {
+        const newSet = new Set(prev);
+        newSet.add(focusChallengeId);
+        return newSet;
+      });
+      
+      // Scroll to the challenge after a short delay to ensure it's rendered
+      setTimeout(() => {
+        const challengeElement = document.getElementById(`challenge-${focusChallengeId}`);
+        if (challengeElement) {
+          challengeElement.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center' 
+          });
+          
+          // Briefly highlight the challenge
+          challengeElement.style.transition = 'box-shadow 0.3s ease';
+          challengeElement.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.6)';
+          setTimeout(() => {
+            challengeElement.style.boxShadow = '';
+          }, 2000);
+        }
+      }, 300);
+    }
+  }, [focusChallengeId]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -2221,6 +2252,115 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
     }
   };
 
+  // Generic reset function for any Chapter 1 challenge (ADMIN ONLY)
+  const resetChapter1Challenge = async (challengeId: string, challengeTitle: string) => {
+    if (!currentUser) return;
+    
+    // SECURITY: Only admins can reset challenges
+    if (!isAdmin()) {
+      alert('❌ Only administrators can reset challenges.');
+      return;
+    }
+    
+    if (!window.confirm(`Reset "${challengeTitle}" to incomplete?\n\nThis will clear the completion status for this challenge.`)) {
+      return;
+    }
+    
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              [challengeId]: cleanChallenge
+            }
+          }
+        };
+        
+        // Build update object with deleteField for specific challenge fields
+        const updateData: any = {
+          chapters: updatedChapters,
+          [`chapters.1.challenges.${challengeId}.status`]: deleteField(),
+          [`chapters.1.challenges.${challengeId}.completedAt`]: deleteField()
+        };
+        
+        // Special handling for Challenge 7 (Hela Awakened) - also remove battle completion flags
+        if (challengeId === 'ep1-update-profile') {
+          updateData[`chapters.1.challenges.${challengeId}.helaDefeated`] = deleteField();
+          updateData[`chapters.1.challenges.${challengeId}.iceGolemsDefeated`] = deleteField();
+        }
+        
+        await updateDoc(userRef, updateData);
+      }
+      
+      // Reset in students collection
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const cleanChallenge: any = {
+          isCompleted: false,
+          completedAt: null
+        };
+        
+        const updatedStudentChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              [challengeId]: cleanChallenge
+            }
+          }
+        };
+        
+        // Build update object with deleteField for specific challenge fields
+        const studentUpdateData: any = {
+          chapters: updatedStudentChapters,
+          [`chapters.1.challenges.${challengeId}.status`]: deleteField(),
+          [`chapters.1.challenges.${challengeId}.completedAt`]: deleteField()
+        };
+        
+        // Special handling for Challenge 7 (Hela Awakened) - also remove battle completion flags
+        if (challengeId === 'ep1-update-profile') {
+          studentUpdateData[`chapters.1.challenges.${challengeId}.helaDefeated`] = deleteField();
+          studentUpdateData[`chapters.1.challenges.${challengeId}.iceGolemsDefeated`] = deleteField();
+        }
+        
+        await updateDoc(studentRef, studentUpdateData);
+      }
+      
+      // Refresh user progress
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        setUserProgress(refreshedUserDoc.data());
+      }
+      
+      // Also refresh student data
+      const refreshedStudentDoc = await getDoc(studentRef);
+      if (refreshedStudentDoc.exists()) {
+        setStudentData(refreshedStudentDoc.data());
+      }
+      
+      alert(`✅ "${challengeTitle}" has been reset! You can now redo this challenge.`);
+    } catch (error) {
+      console.error(`Error resetting challenge ${challengeId}:`, error);
+      alert('Error resetting challenge. Please try again.');
+    }
+  };
+
   const resetChapter2Challenge3 = async () => {
     if (!currentUser) return;
     
@@ -3486,6 +3626,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
             return (
               <div
                 key={challenge.id}
+                id={`challenge-${challenge.id}`}
                 style={{
                   background: isLocked ? '#f3f4f6' : isCompleted ? '#f0fdf4' : '#ffffff',
                   border: `2px solid ${isLocked ? '#d1d5db' : isCompleted ? '#86efac' : '#e5e7eb'}`,
@@ -4131,17 +4272,49 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack }) => {
                         
                         {/* Completed status */}
                         {status === 'completed' && (
-                          <div style={{
-                            background: 'rgba(34, 197, 94, 0.1)',
-                            border: '1px solid #22c55e',
-                            borderRadius: '0.5rem',
-                            padding: '0.75rem',
-                            color: '#166534',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold'
-                          }}>
-                            ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
-                          </div>
+                          <>
+                            <div style={{
+                              background: 'rgba(34, 197, 94, 0.1)',
+                              border: '1px solid #22c55e',
+                              borderRadius: '0.5rem',
+                              padding: '0.75rem',
+                              color: '#166534',
+                              fontSize: '0.875rem',
+                              fontWeight: 'bold',
+                              marginBottom: chapter.id === 1 && isAdmin() ? '0.5rem' : '0'
+                            }}>
+                              ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
+                            </div>
+                            {/* Admin Reset Button for Chapter 1 Challenges */}
+                            {chapter.id === 1 && isAdmin() && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  resetChapter1Challenge(challenge.id, challenge.title);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                  color: 'white',
+                                  padding: '0.5rem 1rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  fontSize: '0.875rem',
+                                  marginTop: '0.5rem'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                                Reset Challenge (Admin)
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>

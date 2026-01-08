@@ -41,7 +41,16 @@ import {
   checkDuplicateAction,
   type ActionType
 } from '../utils/inSessionActionsService';
+import { 
+  trackSkillUsage,
+  trackDamage,
+  trackElimination,
+  trackParticipation,
+  getSessionSummary
+} from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
+import SessionSummaryModal from './SessionSummaryModal';
+import { SessionSummary } from '../types/inSessionStats';
 
 interface Student {
   id: string;
@@ -69,6 +78,11 @@ interface SessionPlayer {
   powerPoints: number;
   participationCount: number;
   movesEarned: number;
+  hp?: number;
+  maxHp?: number;
+  shield?: number;
+  maxShield?: number;
+  eliminated?: boolean;
 }
 
 const InSessionBattle: React.FC<InSessionBattleProps> = ({
@@ -97,6 +111,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [isScorekeeper, setIsScorekeeper] = useState<boolean>(false);
   const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
   const [permissionsChecked, setPermissionsChecked] = useState<boolean>(false);
+  const [isSessionHost, setIsSessionHost] = useState<boolean>(false);
   
   // Log initial state
   console.log('[InSessionBattle] Component initialized with permissions:', {
@@ -109,6 +124,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const [userProfiles, setUserProfiles] = useState<Map<string, { displayName: string; photoURL?: string }>>(new Map());
   const isUpdatingViewersRef = useRef(false); // Prevent concurrent updates
+  
+  // Session summary modal state
+  const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
 
   // Track player presence using presence service
   useEffect(() => {
@@ -160,14 +179,26 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         const studentData = studentDoc.exists() ? studentDoc.data() : {};
         const userData = userDoc.exists() ? userDoc.data() : {};
         
+        // Initialize hp/shield based on player stats
+        // HP = 10 * level (minimum 100)
+        const playerLevel = studentData.level || getLevelFromXP(studentData.xp || 0) || 1;
+        const maxHp = Math.max(100, playerLevel * 10);
+        const hp = maxHp; // Start at full HP
+        const maxShield = 100; // Default shield capacity
+        const shield = maxShield; // Start at full shield
+        
         const newPlayer: ServiceSessionPlayer = {
           userId: currentUser.uid,
           displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
           photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
-          level: studentData.level || getLevelFromXP(studentData.xp || 0) || 1,
+          level: playerLevel,
           powerPoints: studentData.powerPoints || 0,
           participationCount: 0,
-          movesEarned: 0
+          movesEarned: 0,
+          hp,
+          maxHp,
+          shield,
+          maxShield
         };
         
         // Join session (idempotent - safe to call multiple times)
@@ -221,6 +252,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       const activeViewersArray = (session as any).activeViewers;
       if (activeViewersArray && Array.isArray(activeViewersArray)) {
         setActiveViewers(activeViewersArray);
+      }
+      
+      // Check if current user is the session host
+      if (currentUser) {
+        const isHost = session.hostUid === currentUser.uid || 
+                       isGlobalHost(currentUser.uid, currentUser.email || undefined, currentUser.displayName || undefined);
+        setIsSessionHost(isHost);
+      }
+      
+      // Check if session ended and show summary modal
+      if (session.status === 'ended' && !showSessionSummary) {
+        debug('inSessionBattle', `Session ${sessionId} ended, fetching summary...`);
+        
+        // Try to get summary from session doc first
+        const summaryData = (session as any).sessionSummary;
+        if (summaryData) {
+          setSessionSummary(summaryData);
+          setShowSessionSummary(true);
+        } else {
+          // Fallback: try to get summary
+          getSessionSummary(sessionId).then(summary => {
+            if (summary) {
+              setSessionSummary(summary);
+              setShowSessionSummary(true);
+            }
+          });
+        }
       }
     });
 
@@ -506,24 +564,48 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     .map(player => {
       const student = students.find(s => s.id === player.userId);
       const profile = userProfiles.get(player.userId);
-      const vaultData = playerVaultData[player.userId] || {
-        vaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
-        maxVaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
-        shieldStrength: 100,
-        maxShieldStrength: 100,
-        currentPP: student?.powerPoints || player.powerPoints,
-        maxPP: student?.powerPoints || player.powerPoints
-      };
+      
+      // In-Session mode: Use hp/shield from session player if available
+      // Otherwise fall back to vault data
+      const useSessionHealth = (player.hp !== undefined || player.shield !== undefined);
+      
+      let health, maxHealth, shield, maxShield, pp, maxPP;
+      
+      if (useSessionHealth) {
+        // Use session player hp/shield (authoritative for In-Session mode)
+        health = player.hp ?? 100;
+        maxHealth = player.maxHp ?? 100;
+        shield = player.shield ?? 100;
+        maxShield = player.maxShield ?? 100;
+        pp = player.powerPoints ?? 0;
+        maxPP = student?.powerPoints || player.powerPoints || 1000;
+      } else {
+        // Fall back to vault data (for backwards compatibility)
+        const vaultData = playerVaultData[player.userId] || {
+          vaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
+          maxVaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
+          shieldStrength: 100,
+          maxShieldStrength: 100,
+          currentPP: student?.powerPoints || player.powerPoints,
+          maxPP: student?.powerPoints || player.powerPoints
+        };
+        health = vaultData.vaultHealth;
+        maxHealth = vaultData.maxVaultHealth;
+        shield = vaultData.shieldStrength;
+        maxShield = vaultData.maxShieldStrength;
+        pp = vaultData.currentPP;
+        maxPP = vaultData.maxPP;
+      }
       
       return {
         id: player.userId,
         name: profile?.displayName || player.displayName,
-        currentPP: vaultData.currentPP,
-        maxPP: vaultData.maxPP,
-        vaultHealth: vaultData.vaultHealth,
-        maxVaultHealth: vaultData.maxVaultHealth,
-        shieldStrength: vaultData.shieldStrength,
-        maxShieldStrength: vaultData.maxShieldStrength,
+        currentPP: pp, // Keep for compatibility, but In-Session uses hp
+        maxPP: maxPP,
+        vaultHealth: health, // Map hp to vaultHealth for BattleEngine
+        maxVaultHealth: maxHealth,
+        shieldStrength: shield,
+        maxShieldStrength: maxShield,
         level: player.level,
         photoURL: profile?.photoURL || player.photoURL,
         speed: 50
@@ -535,31 +617,55 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     .map(player => {
       const student = students.find(s => s.id === player.userId);
       const profile = userProfiles.get(player.userId);
-      const vaultData = playerVaultData[player.userId] || (vault ? {
-        vaultHealth: Math.floor(vault.currentPP * 0.1),
-        maxVaultHealth: Math.floor(vault.currentPP * 0.1),
-        shieldStrength: vault.shieldStrength || 100,
-        maxShieldStrength: vault.maxShieldStrength || 100,
-        currentPP: vault.currentPP,
-        maxPP: vault.capacity || 1000
-      } : {
-        vaultHealth: 100,
-        maxVaultHealth: 100,
-        shieldStrength: 100,
-        maxShieldStrength: 100,
-        currentPP: student?.powerPoints || player.powerPoints,
-        maxPP: student?.powerPoints || player.powerPoints
-      });
+      
+      // In-Session mode: Use hp/shield from session player if available
+      // Otherwise fall back to vault data
+      const useSessionHealth = (player.hp !== undefined || player.shield !== undefined);
+      
+      let health, maxHealth, shield, maxShield, pp, maxPP;
+      
+      if (useSessionHealth) {
+        // Use session player hp/shield (authoritative for In-Session mode)
+        health = player.hp ?? 100;
+        maxHealth = player.maxHp ?? 100;
+        shield = player.shield ?? 100;
+        maxShield = player.maxShield ?? 100;
+        pp = player.powerPoints ?? 0;
+        maxPP = vault?.capacity || student?.powerPoints || player.powerPoints || 1000;
+      } else {
+        // Fall back to vault data (for backwards compatibility)
+        const vaultData = playerVaultData[player.userId] || (vault ? {
+          vaultHealth: Math.floor(vault.currentPP * 0.1),
+          maxVaultHealth: Math.floor(vault.currentPP * 0.1),
+          shieldStrength: vault.shieldStrength || 100,
+          maxShieldStrength: vault.maxShieldStrength || 100,
+          currentPP: vault.currentPP,
+          maxPP: vault.capacity || 1000
+        } : {
+          vaultHealth: 100,
+          maxVaultHealth: 100,
+          shieldStrength: 100,
+          maxShieldStrength: 100,
+          currentPP: student?.powerPoints || player.powerPoints,
+          maxPP: student?.powerPoints || player.powerPoints
+        });
+        health = vaultData.vaultHealth;
+        maxHealth = vaultData.maxVaultHealth;
+        shield = vaultData.shieldStrength;
+        maxShield = vaultData.maxShieldStrength;
+        pp = vaultData.currentPP;
+        maxPP = vaultData.maxPP;
+      }
       
       return {
         id: player.userId,
         name: profile?.displayName || player.displayName,
-        currentPP: vaultData.currentPP,
-        maxPP: vaultData.maxPP,
-        vaultHealth: vaultData.vaultHealth,
-        maxVaultHealth: vaultData.maxVaultHealth,
-        shieldStrength: vaultData.shieldStrength,
-        maxShieldStrength: vaultData.maxShieldStrength,
+        currentPP: pp, // Keep for compatibility, but In-Session uses hp
+        maxPP: maxPP,
+        vaultHealth: health, // Map hp to vaultHealth for BattleEngine
+        maxVaultHealth: maxHealth,
+        shieldStrength: shield,
+        maxShieldStrength: maxShield,
         level: player.level,
         photoURL: profile?.photoURL || player.photoURL,
         isPlayer: true,
@@ -643,6 +749,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       // Update battle log
       const updatedPlayer = updatedPlayers.find(p => p.userId === userId);
       const playerName = updatedPlayer?.displayName || students.find(s => s.id === userId)?.displayName || 'Player';
+      
+      // Track participation in stats
+      await trackParticipation(sessionId, userId, 1);
+      
       const newLogEntry = `✨ ${playerName} participated! (+1 participation, ${updatedPlayer?.movesEarned || 0} moves earned)`;
       const updatedLog = [...(data.battleLog || []), newLogEntry];
 
@@ -833,12 +943,25 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const handleBattleLogUpdate = useCallback(async (newLog: string[]) => {
     try {
       const sessionRef = doc(db, 'inSessionRooms', sessionId);
-      await updateDoc(sessionRef, {
-        battleLog: newLog,
-        updatedAt: serverTimestamp()
-      });
+      const sessionDoc = await getDoc(sessionRef);
+      
+      if (!sessionDoc.exists()) return;
+      
+      const sessionData = sessionDoc.data();
+      const currentLog = sessionData.battleLog || [];
+      
+      // Only update if there are new log entries (prevent redundant updates)
+      if (newLog.length > currentLog.length) {
+        const newEntries = newLog.slice(currentLog.length);
+        debug('inSessionBattle', `Adding ${newEntries.length} new battle log entries`, newEntries);
+        
+        await updateDoc(sessionRef, {
+          battleLog: newLog,
+          updatedAt: serverTimestamp()
+        });
+      }
     } catch (error) {
-      console.error('Error updating battle log:', error);
+      debugError('inSessionBattle', 'Error updating battle log', error);
     }
   }, [sessionId]);
 
@@ -1428,36 +1551,39 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             {sessionPlayers.length} players • {currentPlayer ? `${currentPlayer.movesEarned} moves available` : 'Loading...'}
           </p>
         </div>
-        <button
-          onClick={async () => {
-            if (!currentUser) return;
-            try {
-              const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
-              if (ended) {
-                debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
-                onEndSession();
-              } else {
-                debugError('inSessionBattle', `Failed to end session ${sessionId}`);
-                alert('Failed to end session. Only the host, admin, or global host can end the session.');
+        {/* End Session Button - Only visible to admins/hosts */}
+        {(isAdminUser || isSessionHost) && (
+          <button
+            onClick={async () => {
+              if (!currentUser) return;
+              try {
+                const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
+                if (ended) {
+                  debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
+                  onEndSession();
+                } else {
+                  debugError('inSessionBattle', `Failed to end session ${sessionId}`);
+                  alert('Failed to end session. Only the host, admin, or global host can end the session.');
+                }
+              } catch (error) {
+                debugError('inSessionBattle', `Error ending session`, error);
+                alert('Error ending session. Please try again.');
               }
-            } catch (error) {
-              debugError('inSessionBattle', `Error ending session`, error);
-              alert('Error ending session. Please try again.');
-            }
-          }}
-          style={{
-            background: 'rgba(255, 255, 255, 0.2)',
-            color: 'white',
-            border: '2px solid white',
-            borderRadius: '0.5rem',
-            padding: '0.75rem 1.5rem',
-            fontSize: '1rem',
-            fontWeight: '600',
-            cursor: 'pointer'
-          }}
-        >
-          End Session
-        </button>
+            }}
+            style={{
+              background: 'rgba(255, 255, 255, 0.2)',
+              color: 'white',
+              border: '2px solid white',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontSize: '1rem',
+              fontWeight: '600',
+              cursor: 'pointer'
+            }}
+          >
+            End Session
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 200px)', minHeight: '600px' }}>
@@ -1694,6 +1820,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 isMultiplayer={true}
                 isPvP={true}
                 isInSession={true}
+                sessionId={sessionId}
                 onArtifactUsed={() => {
                   // Handle artifact used - end turn
                   setShowBagModal(false);
@@ -2534,8 +2661,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </div>
             </div>
           </div>
-        </div>
-      )}
+          </div>
+        )}
+
+        {/* Session Summary Modal */}
+        {currentUser && (
+          <SessionSummaryModal
+            isOpen={showSessionSummary}
+            onClose={() => setShowSessionSummary(false)}
+            summary={sessionSummary}
+            currentPlayerId={currentUser.uid}
+          />
+        )}
     </div>
   );
 };

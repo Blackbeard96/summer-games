@@ -8,7 +8,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import BattlePass from '../components/BattlePass';
 import Season0IntroModal from '../components/Season0IntroModal';
 import DailyChallenges from '../components/DailyChallenges';
-import { CHAPTERS } from '../types/chapters';
+import { useJourneyStatus } from '../hooks/useJourneyStatus';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -48,9 +48,9 @@ const Home: React.FC = () => {
   const [showVideoReplay, setShowVideoReplay] = useState(false);
   const [battlePassXP, setBattlePassXP] = useState(0);
   const [battlePassTier, setBattlePassTier] = useState(0);
-  const [currentChapter, setCurrentChapter] = useState<number | null>(null);
-  const [currentChallenge, setCurrentChallenge] = useState<string | null>(null);
-  const [chapterProgress, setChapterProgress] = useState<number>(0);
+  
+  // Use shared journey status hook
+  const journeyStatus = useJourneyStatus(currentUser?.uid || null);
 
   // Fetch user level, Battle Pass progress, and check if Season 0 intro should be shown
   useEffect(() => {
@@ -108,80 +108,8 @@ const Home: React.FC = () => {
     fetchUserData();
   }, [currentUser]);
 
-  // Fetch Player's Journey progress
-  useEffect(() => {
-    const fetchJourneyProgress = async () => {
-      if (!currentUser) return;
-      
-      try {
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
-        
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          const chapters = userData.chapters || {};
-          
-          // Find the current active chapter
-          const activeChapter = CHAPTERS.find(chapter => 
-            chapters[chapter.id]?.isActive
-          );
-          
-          if (activeChapter) {
-            setCurrentChapter(activeChapter.id);
-            
-            // Find the current challenge (first incomplete one)
-            const chapterProgress = chapters[activeChapter.id];
-            const currentChallengeObj = activeChapter.challenges.find(challenge => 
-              !chapterProgress?.challenges?.[challenge.id]?.isCompleted
-            );
-            
-            if (currentChallengeObj) {
-              // Find the challenge number (index + 1)
-              const challengeIndex = activeChapter.challenges.findIndex(c => c.id === currentChallengeObj.id);
-              setCurrentChallenge(`${challengeIndex + 1}`);
-            } else {
-              // All challenges completed
-              setCurrentChallenge(null);
-            }
-            
-            // Calculate chapter progress percentage
-            const completedChallenges = activeChapter.challenges.filter(challenge => 
-              chapterProgress?.challenges?.[challenge.id]?.isCompleted
-            ).length;
-            const totalChallenges = activeChapter.challenges.length;
-            const progress = totalChallenges > 0 ? (completedChallenges / totalChallenges) * 100 : 0;
-            setChapterProgress(progress);
-          } else {
-            // No active chapter - find the first incomplete chapter
-            const firstIncompleteChapter = CHAPTERS.find(chapter => 
-              !chapters[chapter.id]?.isCompleted
-            );
-            
-            if (firstIncompleteChapter) {
-              setCurrentChapter(firstIncompleteChapter.id);
-              setCurrentChallenge('1'); // Start with challenge 1
-              setChapterProgress(0);
-            } else {
-              // All chapters completed
-              const lastChapter = CHAPTERS[CHAPTERS.length - 1];
-              setCurrentChapter(lastChapter.id);
-              setCurrentChallenge(null);
-              setChapterProgress(100);
-            }
-          }
-        } else {
-          // New user - start at Chapter 1, Challenge 1
-          setCurrentChapter(1);
-          setCurrentChallenge('1');
-          setChapterProgress(0);
-        }
-      } catch (error) {
-        console.error('Error fetching journey progress:', error);
-      }
-    };
-
-    fetchJourneyProgress();
-  }, [currentUser]);
+  // Journey status is now handled by useJourneyStatus hook
+  // No need for separate fetchJourneyProgress useEffect
 
 
   return (
@@ -368,13 +296,11 @@ const Home: React.FC = () => {
 
         {/* Player's Journey Button */}
         <div
-          onClick={() => navigate('/chapters')}
           style={{
             background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
             border: '3px solid #60a5fa',
             borderRadius: '1rem',
             padding: '3rem 2rem',
-            cursor: 'pointer',
             transition: 'all 0.3s',
             position: 'relative',
             overflow: 'hidden',
@@ -414,12 +340,12 @@ const Home: React.FC = () => {
               opacity: 0.95,
               marginBottom: '1rem'
             }}>
-              Begin Your Story
+              {journeyStatus.isCaughtUp ? 'You\'re caught up — more coming soon!' : 'Begin Your Story'}
             </p>
             
             {/* Progress Display */}
-            {currentChapter !== null && (
-              <div style={{ width: '100%', maxWidth: '300px', margin: '0 auto' }}>
+            {journeyStatus.currentChapterNumber !== null && (
+              <div style={{ width: '100%', maxWidth: '300px', margin: '0 auto', marginBottom: '1rem' }}>
                 <div style={{
                   display: 'flex',
                   justifyContent: 'space-between',
@@ -430,10 +356,10 @@ const Home: React.FC = () => {
                   textShadow: '1px 1px 2px rgba(0, 0, 0, 0.5)'
                 }}>
                   <span>
-                    Chapter {currentChapter}
-                    {currentChallenge && ` - Challenge ${currentChallenge}`}
+                    Chapter {journeyStatus.currentChapterNumber}
+                    {journeyStatus.nextChallenge && ` - ${journeyStatus.nextChallenge.title}`}
                   </span>
-                  <span>{Math.round(chapterProgress)}%</span>
+                  <span>{Math.round(journeyStatus.chapterProgressPercent)}%</span>
                 </div>
                 <div style={{
                   width: '100%',
@@ -444,7 +370,7 @@ const Home: React.FC = () => {
                   border: '1px solid rgba(255, 255, 255, 0.5)'
                 }}>
                   <div style={{
-                    width: `${chapterProgress}%`,
+                    width: `${journeyStatus.chapterProgressPercent}%`,
                     height: '100%',
                     background: 'linear-gradient(90deg, #60a5fa 0%, #3b82f6 100%)',
                     borderRadius: '4px',
@@ -452,8 +378,60 @@ const Home: React.FC = () => {
                     boxShadow: '0 0 10px rgba(96, 165, 250, 0.5)'
                   }} />
                 </div>
+                {journeyStatus.nextChallenge && (
+                  <div style={{
+                    fontSize: '0.75rem',
+                    color: 'white',
+                    textShadow: '1px 1px 2px rgba(0, 0, 0, 0.5)',
+                    marginTop: '0.5rem',
+                    opacity: 0.9
+                  }}>
+                    Next: {journeyStatus.nextChallenge.title}
+                  </div>
+                )}
               </div>
             )}
+            
+            {/* Continue Journey Button */}
+            <button
+              onClick={() => {
+                if (journeyStatus.nextChallenge) {
+                  // Deep-link to next challenge
+                  navigate(`/chapters?focus=${journeyStatus.nextChallenge.challengeId}&chapter=${journeyStatus.nextChallenge.chapterId}`);
+                } else {
+                  // No next challenge - just go to chapters page
+                  navigate('/chapters');
+                }
+              }}
+              disabled={journeyStatus.isCaughtUp}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: journeyStatus.isCaughtUp ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.9)',
+                color: journeyStatus.isCaughtUp ? 'rgba(255, 255, 255, 0.7)' : '#3b82f6',
+                border: '2px solid rgba(255, 255, 255, 0.5)',
+                borderRadius: '0.5rem',
+                cursor: journeyStatus.isCaughtUp ? 'not-allowed' : 'pointer',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                textShadow: journeyStatus.isCaughtUp ? 'none' : '1px 1px 2px rgba(0, 0, 0, 0.2)',
+                transition: 'all 0.2s',
+                marginTop: '0.5rem'
+              }}
+              onMouseEnter={(e) => {
+                if (!journeyStatus.isCaughtUp) {
+                  e.currentTarget.style.background = 'white';
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!journeyStatus.isCaughtUp) {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.9)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }
+              }}
+            >
+              {journeyStatus.isCaughtUp ? 'View Journey' : 'Continue Journey'}
+            </button>
           </div>
         </div>
 
