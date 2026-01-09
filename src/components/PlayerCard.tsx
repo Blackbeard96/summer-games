@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import BadgeDetailModal from './BadgeDetailModal';
 
 interface PlayerCardProps {
   name: string;
@@ -96,6 +97,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   const [showSkillTree, setShowSkillTree] = useState(false);
   const [skillTreeMode, setSkillTreeMode] = useState<'in-game' | 'irl'>(initialSkillTreeMode);
   const [selectedJourneyStage, setSelectedJourneyStage] = useState<string | null>(null);
+  const [selectedBadge, setSelectedBadge] = useState<{ id: string; name: string; imageUrl?: string; description?: string; earnedAt?: any } | null>(null);
   const [ppBoostStatus, setPPBoostStatus] = useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
     isActive: false,
     timeRemaining: '',
@@ -750,6 +752,10 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                       {badges.map((badge) => (
                         <div
                           key={badge.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBadge(badge);
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -757,7 +763,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                             background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
                             borderRadius: 12,
                             border: '2px solid #cbd5e1',
-                            transition: 'all 0.2s ease'
+                            transition: 'all 0.2s ease',
+                            cursor: 'pointer'
                           }}
                           onMouseOver={(e) => {
                             e.currentTarget.style.background = 'linear-gradient(135deg, #f1f5f9 0%, #cbd5e1 100%)';
@@ -1287,6 +1294,13 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
           </div>
         </div>
       </div>
+      
+      {/* Badge Detail Modal */}
+      <BadgeDetailModal
+        isOpen={!!selectedBadge}
+        onClose={() => setSelectedBadge(null)}
+        badge={selectedBadge}
+      />
     </>
   );
 });

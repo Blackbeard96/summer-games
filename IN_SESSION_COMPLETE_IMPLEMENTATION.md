@@ -247,3 +247,4 @@ Check console for:
 - Modal auto-opens when session status changes to 'ended'
 
 
+

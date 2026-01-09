@@ -41,10 +41,21 @@ export function computePPChange(
   const delta = actualScore - goalScore;
   const absDiff = Math.abs(delta);
   
+  // Check if there's a reward tier that matches this difference
+  // This allows close misses (within 1-2 points) to still get rewards
+  const matchingRewardTier = findRewardTier(absDiff, assessment.rewardTiers);
+  const closeToGoalThreshold = matchingRewardTier?.threshold || 0;
+  
   // Determine outcome
+  // If actualScore >= goalScore, it's always a hit/exceed
+  // If actualScore < goalScore but within the closest reward tier threshold (typically 1-2 points),
+  // treat it as a reward scenario (close miss = still rewarded)
   let outcome: OutcomeType;
   if (actualScore >= goalScore) {
     outcome = actualScore > goalScore ? 'exceed' : 'hit';
+  } else if (absDiff <= closeToGoalThreshold && closeToGoalThreshold <= 2) {
+    // Close miss (within 1-2 points) - treat as reward scenario
+    outcome = 'hit';
   } else {
     outcome = 'miss';
   }
@@ -57,9 +68,13 @@ export function computePPChange(
     const tier = findRewardTier(absDiff, assessment.rewardTiers);
     if (tier) {
       ppChange = tier.bonus;
-      tierExplanation = absDiff === 0 
-        ? 'Exact hit bonus'
-        : `Within ${tier.threshold} points tier`;
+      if (absDiff === 0) {
+        tierExplanation = 'Exact hit bonus';
+      } else if (actualScore < goalScore) {
+        tierExplanation = `Close to goal (within ${tier.threshold} points) - reward applied`;
+      } else {
+        tierExplanation = `Within ${tier.threshold} points tier`;
+      }
     } else {
       // No tier matches, use worst tier but cap by bonusCap
       const worstTier = assessment.rewardTiers[assessment.rewardTiers.length - 1];

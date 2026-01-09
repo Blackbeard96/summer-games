@@ -70,6 +70,7 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
   const [flipped, setFlipped] = useState(false);
   const [showBadges, setShowBadges] = useState(false);
   const [selectedJourneyStage, setSelectedJourneyStage] = useState<string | null>(null);
+  const [selectedBadge, setSelectedBadge] = useState<{ id?: string; name: string; imageUrl?: string; description?: string; earnedAt?: any } | null>(null);
   const [ppBoostStatus, setPPBoostStatus] = React.useState<{ isActive: boolean; timeRemaining: string; multiplier: number }>({
     isActive: false,
     timeRemaining: '',
@@ -668,6 +669,10 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                   {playerData.badges.map((badge: any) => (
                     <div
                       key={badge.id || badge.name}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedBadge(badge);
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -675,7 +680,8 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                         background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
                         borderRadius: 12,
                         border: '2px solid #cbd5e1',
-                        transition: 'all 0.2s ease'
+                        transition: 'all 0.2s ease',
+                        cursor: 'pointer'
                       }}
                       onMouseOver={(e) => {
                         e.currentTarget.style.background = 'linear-gradient(135deg, #f1f5f9 0%, #cbd5e1 100%)';

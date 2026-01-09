@@ -25,6 +25,8 @@ import TimuIslandStoryModal from './TimuIslandStoryModal';
 import SquadUpStoryModal from './SquadUpStoryModal';
 import SonidoTransmissionModal from './SonidoTransmissionModal';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
+import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
+import { grantChallengeRewards } from '../utils/challengeRewards';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -2763,230 +2765,179 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   };
 
   const handlePortalIntroComplete = async () => {
+    const DEBUG_CH2 = process.env.REACT_APP_DEBUG_CH2 === 'true';
+    
     if (!currentUser) {
-      console.error('ChapterDetail: handlePortalIntroComplete - No current user');
+      console.error('[CH2] handlePortalIntroComplete - No current user');
       return;
     }
 
     try {
       const challenge = chapter.challenges.find(c => c.id === 'ch2-team-formation');
       if (!challenge) {
-        console.error('ChapterDetail: handlePortalIntroComplete - Challenge not found: ch2-team-formation');
+        console.error('[CH2] handlePortalIntroComplete - Challenge not found: ch2-team-formation');
         return;
       }
 
-      // CRITICAL: Always use currentUser.uid to ensure user-specific updates
-      const userRef = doc(db, 'users', currentUser.uid);
-      console.log('ChapterDetail: handlePortalIntroComplete - User completed Chapter 2-1 by watching video:', {
-        userId: currentUser.uid,
-        userName: currentUser.displayName || currentUser.email,
-        challengeId: 'ch2-team-formation',
-        challengeTitle: challenge.title
-      });
-      
-      // Fetch fresh data from Firestore to ensure we have the latest state
-      const userDoc = await getDoc(userRef);
-      if (!userDoc.exists()) {
-        console.error('ChapterDetail: handlePortalIntroComplete - User document does not exist:', currentUser.uid);
-        alert('Error: User document not found. Please try again.');
-        return;
+      if (DEBUG_CH2) {
+        console.log('[CH2] handlePortalIntroComplete - Starting completion for Chapter 2-1:', {
+          userId: currentUser.uid,
+          challengeId: 'ch2-team-formation',
+          challengeTitle: challenge.title
+        });
       }
-      
-      const currentData = userDoc.data();
-      const chapterKey = String(chapter.id);
-      
-      // Check if challenge was already completed - use fresh data from Firestore
-      const challengeProgress = currentData.chapters?.[chapterKey]?.challenges?.['ch2-team-formation'];
-      const wasAlreadyCompleted = challengeProgress?.isCompleted === true || 
-                                   challengeProgress?.status === 'approved';
-      
-      if (wasAlreadyCompleted) {
-        console.log('ChapterDetail: handlePortalIntroComplete - Challenge already completed for user:', currentUser.uid);
-        // Don't show rewards again, just return
-        return;
+
+      // Use canonical progression engine
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        'ch2-team-formation'
+      );
+
+      if (DEBUG_CH2) {
+        console.log('[CH2] handlePortalIntroComplete - Progression result:', progressionResult);
       }
-      
-      console.log('ChapterDetail: handlePortalIntroComplete - Marking challenge as complete for user:', currentUser.uid);
-      
-      // Build updated chapters object, preserving all existing data
-      const updatedChapters = {
-        ...currentData.chapters,
-        [chapterKey]: {
-          ...currentData.chapters?.[chapterKey],
-          challenges: {
-            ...currentData.chapters?.[chapterKey]?.challenges,
-            'ch2-team-formation': {
-              ...challengeProgress, // Preserve any existing challenge data
-              isCompleted: true,
-              completedAt: serverTimestamp(),
-              status: 'approved',
-              completedBy: currentUser.uid, // Track who completed it
-              completedByName: currentUser.displayName || currentUser.email || 'Unknown'
-            }
-          }
+
+      if (progressionResult.alreadyCompleted) {
+        if (DEBUG_CH2) {
+          console.log('[CH2] handlePortalIntroComplete - Challenge already completed, skipping');
         }
-      };
-
-      // Update Firestore with user-specific document
-      await updateDoc(userRef, {
-        chapters: updatedChapters
-      });
-      
-      console.log('ChapterDetail: handlePortalIntroComplete - Successfully updated challenge completion for user:', currentUser.uid);
-
-      // Apply rewards (only if not already completed)
-      const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-      const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
-
-      if (xpReward > 0 || ppReward > 0) {
-        // CRITICAL: Always use currentUser.uid for user-specific updates
-        const studentRef = doc(db, 'students', currentUser.uid);
-        const userRefForRewards = doc(db, 'users', currentUser.uid);
-        
-        console.log('ChapterDetail: handlePortalIntroComplete - Granting rewards to user:', currentUser.uid, { xpReward, ppReward });
-        
-        // Update both collections with atomic increments
-        await updateDoc(studentRef, {
-          xp: increment(xpReward),
-          powerPoints: increment(ppReward)
-        });
-        
-        await updateDoc(userRefForRewards, {
-          xp: increment(xpReward),
-          powerPoints: increment(ppReward)
-        });
-        
-        console.log('ChapterDetail: handlePortalIntroComplete - Rewards granted successfully');
+        return;
       }
 
-      // Show reward modal only on first completion
-      setRewardModalData({
-        challengeTitle: challenge.title,
-        rewards: challenge.rewards,
-        xpReward: xpReward,
-        ppReward: ppReward
-      });
-      setShowRewardModal(true);
+      if (!progressionResult.success) {
+        console.error('[CH2] handlePortalIntroComplete - Progression failed:', progressionResult.error);
+        alert(`Error completing challenge: ${progressionResult.error}`);
+        return;
+      }
 
-      // Refresh user progress to trigger re-render and unlock next challenge
+      // Grant rewards using canonical service
+      const rewardResult = await grantChallengeRewards(
+        currentUser.uid,
+        'ch2-team-formation',
+        challenge.rewards,
+        challenge.title
+      );
+
+      if (DEBUG_CH2) {
+        console.log('[CH2] handlePortalIntroComplete - Reward result:', rewardResult);
+      }
+
+      if (rewardResult.success) {
+        // Show reward modal
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward: rewardResult.rewardsGranted.xp,
+          ppReward: rewardResult.rewardsGranted.pp
+        });
+        setShowRewardModal(true);
+      } else {
+        console.error('[CH2] handlePortalIntroComplete - Reward grant failed:', rewardResult.error);
+        alert(`Error granting rewards: ${rewardResult.error}`);
+      }
+
+      // Refresh user progress to show unlocked next challenge
+      const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
-        
-        // Force a small delay to ensure Firestore has propagated the changes
-        setTimeout(() => {
-          // Re-check user progress to ensure next challenge unlocks
-          getDoc(userRef).then(doc => {
-            if (doc.exists()) {
-              setUserProgress(doc.data());
-            }
-          });
-        }, 500);
+        setUserProgress(refreshedUserDoc.data());
+      }
+
+      if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
+        console.log('[CH2] handlePortalIntroComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
       }
     } catch (error) {
-      console.error('Error completing portal intro challenge:', error);
+      console.error('[CH2] handlePortalIntroComplete - Error:', error);
       alert('Error completing challenge. Please try again.');
     }
   };
 
   const handleSquadUpStoryComplete = async () => {
-    if (!currentUser) return;
+    const DEBUG_CH2 = process.env.REACT_APP_DEBUG_CH2 === 'true';
+    
+    if (!currentUser) {
+      console.error('[CH2] handleSquadUpStoryComplete - No current user');
+      return;
+    }
 
     try {
       const challenge = chapter.challenges.find(c => c.id === 'ch2-team-trial');
-      if (!challenge) return;
-
-      const userRef = doc(db, 'users', currentUser.uid);
-      const currentData = userProgress || {};
-      
-      // Check if challenge was already completed
-      const wasAlreadyCompleted = currentData.chapters?.[chapter.id]?.challenges?.['ch2-team-trial']?.isCompleted || 
-                                   currentData.chapters?.[chapter.id]?.challenges?.['ch2-team-trial']?.status === 'approved';
-      
-      const updatedChapters = {
-        ...currentData.chapters,
-        [chapter.id]: {
-          ...currentData.chapters?.[chapter.id],
-          challenges: {
-            ...currentData.chapters?.[chapter.id]?.challenges,
-            'ch2-team-trial': {
-              isCompleted: true,
-              completedAt: serverTimestamp(),
-              status: 'approved'
-            }
-          }
-        }
-      };
-
-      await updateDoc(userRef, {
-        chapters: updatedChapters
-      });
-
-      // Only apply rewards and show modal if challenge wasn't already completed
-      if (!wasAlreadyCompleted) {
-        // Use centralized reward granting service
-        const { grantChallengeRewards } = await import('../utils/challengeRewards');
-        
-        console.log('🎁 ChapterDetail: Granting rewards for Squad Up challenge:', {
-          challengeId: 'ch2-team-trial',
-          rewards: challenge.rewards
-        });
-        
-        const rewardResult = await grantChallengeRewards(
-          currentUser.uid,
-          'ch2-team-trial',
-          challenge.rewards,
-          challenge.title
-        );
-
-        if (rewardResult.success) {
-          if (rewardResult.alreadyClaimed) {
-            console.log('🎁 ChapterDetail: Rewards were already claimed previously');
-            // Still show modal but indicate rewards were already granted
-            setRewardModalData({
-              challengeTitle: challenge.title,
-              rewards: challenge.rewards,
-              xpReward: rewardResult.rewardsGranted.xp,
-              ppReward: rewardResult.rewardsGranted.pp
-            });
-            setShowRewardModal(true);
-          } else {
-            console.log('✅ ChapterDetail: Rewards granted successfully:', rewardResult.rewardsGranted);
-            
-            // Show reward modal with granted rewards
-            setRewardModalData({
-              challengeTitle: challenge.title,
-              rewards: challenge.rewards,
-              xpReward: rewardResult.rewardsGranted.xp,
-              ppReward: rewardResult.rewardsGranted.pp
-            });
-            setShowRewardModal(true);
-          }
-        } else {
-          console.error('❌ ChapterDetail: Failed to grant rewards:', rewardResult.error);
-          alert(`Error granting rewards: ${rewardResult.error}. Please try again.`);
-        }
+      if (!challenge) {
+        console.error('[CH2] handleSquadUpStoryComplete - Challenge not found: ch2-team-trial');
+        return;
       }
 
-      // Refresh user progress to trigger re-render and unlock next challenge
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleSquadUpStoryComplete - Starting completion for Chapter 2-3:', {
+          userId: currentUser.uid,
+          challengeId: 'ch2-team-trial',
+          challengeTitle: challenge.title
+        });
+      }
+
+      // Use canonical progression engine
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        'ch2-team-trial'
+      );
+
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleSquadUpStoryComplete - Progression result:', progressionResult);
+      }
+
+      if (progressionResult.alreadyCompleted) {
+        if (DEBUG_CH2) {
+          console.log('[CH2] handleSquadUpStoryComplete - Challenge already completed, skipping');
+        }
+        return;
+      }
+
+      if (!progressionResult.success) {
+        console.error('[CH2] handleSquadUpStoryComplete - Progression failed:', progressionResult.error);
+        alert(`Error completing challenge: ${progressionResult.error}`);
+        return;
+      }
+
+      // Grant rewards using canonical service
+      const rewardResult = await grantChallengeRewards(
+        currentUser.uid,
+        'ch2-team-trial',
+        challenge.rewards,
+        challenge.title
+      );
+
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleSquadUpStoryComplete - Reward result:', rewardResult);
+      }
+
+      if (rewardResult.success) {
+        // Show reward modal
+        setRewardModalData({
+          challengeTitle: challenge.title,
+          rewards: challenge.rewards,
+          xpReward: rewardResult.rewardsGranted.xp,
+          ppReward: rewardResult.rewardsGranted.pp
+        });
+        setShowRewardModal(true);
+      } else {
+        console.error('[CH2] handleSquadUpStoryComplete - Reward grant failed:', rewardResult.error);
+        alert(`Error granting rewards: ${rewardResult.error}`);
+      }
+
+      // Refresh user progress to show unlocked next challenge
+      const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
-        
-        // Force a small delay to ensure Firestore has propagated the changes
-        setTimeout(() => {
-          // Re-check user progress to ensure next challenge unlocks
-          getDoc(userRef).then(doc => {
-            if (doc.exists()) {
-              setUserProgress(doc.data());
-            }
-          });
-        }, 500);
+        setUserProgress(refreshedUserDoc.data());
+      }
+
+      if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
+        console.log('[CH2] handleSquadUpStoryComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
       }
     } catch (error) {
-      console.error('Error completing Squad Up story challenge:', error);
+      console.error('[CH2] handleSquadUpStoryComplete - Error:', error);
       alert('Error completing challenge. Please try again.');
     }
   };
@@ -3297,88 +3248,90 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   };
 
   const handleTimuIslandStoryComplete = async () => {
-    if (!currentUser) return;
+    const DEBUG_CH2 = process.env.REACT_APP_DEBUG_CH2 === 'true';
+    
+    if (!currentUser) {
+      console.error('[CH2] handleTimuIslandStoryComplete - No current user');
+      return;
+    }
 
     try {
       const challenge = chapter.challenges.find(c => c.id === 'ch2-rival-selection');
-      if (!challenge) return;
+      if (!challenge) {
+        console.error('[CH2] handleTimuIslandStoryComplete - Challenge not found: ch2-rival-selection');
+        return;
+      }
 
-      const userRef = doc(db, 'users', currentUser.uid);
-      const currentData = userProgress || {};
-      
-      // Check if challenge was already completed
-      const wasAlreadyCompleted = currentData.chapters?.[chapter.id]?.challenges?.['ch2-rival-selection']?.isCompleted || 
-                                   currentData.chapters?.[chapter.id]?.challenges?.['ch2-rival-selection']?.status === 'approved';
-      
-      const updatedChapters = {
-        ...currentData.chapters,
-        [chapter.id]: {
-          ...currentData.chapters?.[chapter.id],
-          challenges: {
-            ...currentData.chapters?.[chapter.id]?.challenges,
-            'ch2-rival-selection': {
-              isCompleted: true,
-              completedAt: serverTimestamp(),
-              status: 'approved'
-            }
-          }
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleTimuIslandStoryComplete - Starting completion for Chapter 2-2:', {
+          userId: currentUser.uid,
+          challengeId: 'ch2-rival-selection',
+          challengeTitle: challenge.title
+        });
+      }
+
+      // Use canonical progression engine
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        'ch2-rival-selection'
+      );
+
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleTimuIslandStoryComplete - Progression result:', progressionResult);
+      }
+
+      if (progressionResult.alreadyCompleted) {
+        if (DEBUG_CH2) {
+          console.log('[CH2] handleTimuIslandStoryComplete - Challenge already completed, skipping');
         }
-      };
+        return;
+      }
 
-      await updateDoc(userRef, {
-        chapters: updatedChapters
-      });
+      if (!progressionResult.success) {
+        console.error('[CH2] handleTimuIslandStoryComplete - Progression failed:', progressionResult.error);
+        alert(`Error completing challenge: ${progressionResult.error}`);
+        return;
+      }
 
-      // Only apply rewards and show modal if challenge wasn't already completed
-      if (!wasAlreadyCompleted) {
-        // Apply rewards
-        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+      // Grant rewards using canonical service
+      const rewardResult = await grantChallengeRewards(
+        currentUser.uid,
+        'ch2-rival-selection',
+        challenge.rewards,
+        challenge.title
+      );
 
-        if (xpReward > 0 || ppReward > 0) {
-          const studentRef = doc(db, 'students', currentUser.uid);
-          const userRefForRewards = doc(db, 'users', currentUser.uid);
-          
-          // Update both collections with atomic increments
-          await updateDoc(studentRef, {
-            xp: increment(xpReward),
-            powerPoints: increment(ppReward)
-          });
-          
-          await updateDoc(userRefForRewards, {
-            xp: increment(xpReward),
-            powerPoints: increment(ppReward)
-          });
-        }
+      if (DEBUG_CH2) {
+        console.log('[CH2] handleTimuIslandStoryComplete - Reward result:', rewardResult);
+      }
 
-        // Show reward modal only on first completion
+      if (rewardResult.success) {
+        // Show reward modal
         setRewardModalData({
           challengeTitle: challenge.title,
           rewards: challenge.rewards,
-          xpReward: xpReward,
-          ppReward: ppReward
+          xpReward: rewardResult.rewardsGranted.xp,
+          ppReward: rewardResult.rewardsGranted.pp
         });
         setShowRewardModal(true);
+      } else {
+        console.error('[CH2] handleTimuIslandStoryComplete - Reward grant failed:', rewardResult.error);
+        alert(`Error granting rewards: ${rewardResult.error}`);
       }
 
-      // Refresh user progress to trigger re-render and unlock next challenge
+      // Refresh user progress to show unlocked next challenge
+      const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
-        
-        // Force a small delay to ensure Firestore has propagated the changes
-        setTimeout(() => {
-          // Re-check user progress to ensure next challenge unlocks
-          getDoc(userRef).then(doc => {
-            if (doc.exists()) {
-              setUserProgress(doc.data());
-            }
-          });
-        }, 500);
+        setUserProgress(refreshedUserDoc.data());
+      }
+
+      if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
+        console.log('[CH2] handleTimuIslandStoryComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
       }
     } catch (error) {
-      console.error('Error completing Timu Island story challenge:', error);
+      console.error('[CH2] handleTimuIslandStoryComplete - Error:', error);
       alert('Error completing challenge. Please try again.');
     }
   };
