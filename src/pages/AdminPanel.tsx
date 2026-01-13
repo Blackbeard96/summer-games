@@ -33,6 +33,7 @@ import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
 import ArtifactsAdmin from '../components/ArtifactsAdmin';
 import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
 import AssessmentGoalsAdmin from '../components/AssessmentGoalsAdmin';
+import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
 
@@ -90,7 +91,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -2657,6 +2658,23 @@ const AdminPanel: React.FC = () => {
         >
           🎯 Assessment Goals
         </button>
+        <button
+          onClick={() => setActiveTab('training-grounds')}
+          style={{
+            backgroundColor: activeTab === 'training-grounds' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'training-grounds' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          🎯 Training Grounds
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -2710,6 +2728,8 @@ const AdminPanel: React.FC = () => {
         <DailyChallengesAdmin />
       ) : activeTab === 'assessment-goals' ? (
         <AssessmentGoalsAdmin />
+      ) : activeTab === 'training-grounds' ? (
+        <TrainingGroundsAdmin />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',

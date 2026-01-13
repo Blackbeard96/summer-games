@@ -530,6 +530,7 @@ const NavBar = memo(() => {
     { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges' },
     { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System', hasDropdown: true },
     { to: '/island-raid', label: '🏝️ Island Raid', tooltip: 'PvE Co-op Campaign Mode' },
+    { to: '/training-grounds', label: 'Training Grounds', tooltip: 'Practice Quizzes' },
     { to: '/artifacts', label: 'Artifacts', tooltip: 'Artifacts System' },
     { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
   ], []);

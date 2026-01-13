@@ -153,6 +153,9 @@ const InSessionRoom = withRouteSplitting(() => import('./components/InSessionRoo
 const InSessionCreate = withRouteSplitting(() => import('./components/InSessionCreate'));
 const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
+const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
+const QuizPlayer = withRouteSplitting(() => import('./pages/QuizPlayer'));
+const QuizResults = withRouteSplitting(() => import('./pages/QuizResults'));
 
 // Loading component for lazy-loaded routes
 const PageLoader = () => (
@@ -591,6 +594,21 @@ const AppContent = () => {
             <Route path="/in-session/:sessionId" element={
               <ProtectedRoute user={true}>
                 <InSessionBattleView />
+              </ProtectedRoute>
+            } />
+            <Route path="/training-grounds" element={
+              <ProtectedRoute user={true}>
+                <TrainingGrounds />
+              </ProtectedRoute>
+            } />
+            <Route path="/training-grounds/quiz/:quizSetId" element={
+              <ProtectedRoute user={true}>
+                <QuizPlayer />
+              </ProtectedRoute>
+            } />
+            <Route path="/training-grounds/results/:attemptId" element={
+              <ProtectedRoute user={true}>
+                <QuizResults />
               </ProtectedRoute>
             } />
             {/* Catch-all route for 404 */}

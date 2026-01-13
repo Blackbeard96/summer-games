@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 
@@ -8,6 +8,9 @@ import {
   doc, 
   getDoc, 
   addDoc,
+  updateDoc,
+  increment,
+  writeBatch,
   serverTimestamp
 } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
@@ -44,6 +47,16 @@ const ScorekeeperInterface: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [ppBoostStatuses, setPpBoostStatuses] = useState<{ [studentId: string]: boolean }>({});
   const [availableClassrooms, setAvailableClassrooms] = useState<Array<{ id: string; name: string }>>([]);
+  
+  // Sorting state
+  const [sortMode, setSortMode] = useState<'firstName' | 'lastName' | 'pp'>('firstName');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  
+  // Bulk selection state
+  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
+  const [bulkPPAmount, setBulkPPAmount] = useState<number>(0);
+  const [bulkReason, setBulkReason] = useState<string>('');
+  const [isApplyingBulk, setIsApplyingBulk] = useState<boolean>(false);
 
   // Check if current user is a scorekeeper and get assigned class
   useEffect(() => {
@@ -522,8 +535,144 @@ const ScorekeeperInterface: React.FC = () => {
     }
   };
 
+  // Bulk PP adjustment function
+  const handleBulkAdjustPP = async () => {
+    if (!currentUser || selectedStudents.size === 0 || bulkPPAmount === 0 || isApplyingBulk) {
+      return;
+    }
+
+    setIsApplyingBulk(true);
+    try {
+      const selectedIds = Array.from(selectedStudents);
+      const updatedStudents: { id: string; newPP: number; oldPP: number; displayName: string }[] = [];
+
+      // Process in batches of 400 (Firestore limit is 500)
+      const batchSize = 400;
+      for (let i = 0; i < selectedIds.length; i += batchSize) {
+        const chunk = selectedIds.slice(i, i + batchSize);
+        const chunkBatch = writeBatch(db);
+        
+        for (const studentId of chunk) {
+          const student = students.find(s => s.id === studentId);
+          if (!student) continue;
+
+          const oldPP = student.powerPoints || 0;
+          const newPP = Math.max(0, oldPP + bulkPPAmount); // Prevent negative PP
+
+          const studentRef = doc(db, 'students', studentId);
+          chunkBatch.update(studentRef, {
+            powerPoints: newPP,
+            lastUpdated: serverTimestamp()
+          });
+
+          // Also update vault if it exists
+          const vaultRef = doc(db, 'vaults', studentId);
+          const vaultDoc = await getDoc(vaultRef);
+          if (vaultDoc.exists()) {
+            chunkBatch.update(vaultRef, {
+              currentPP: newPP
+            });
+          }
+
+          updatedStudents.push({ id: studentId, newPP, oldPP, displayName: student.displayName });
+        }
+
+        // Commit batch for this chunk
+        await chunkBatch.commit();
+      }
+
+      // Create audit log entry
+      try {
+        await addDoc(collection(db, 'scorekeeperLogs'), {
+          actorUid: currentUser.uid,
+          actorEmail: currentUser.email,
+          targetUids: selectedIds,
+          delta: bulkPPAmount,
+          reason: bulkReason || 'Bulk PP adjustment',
+          createdAt: serverTimestamp(),
+          classId: assignedClassId,
+          className: className,
+          studentCount: selectedIds.length
+        });
+      } catch (logError) {
+        console.error('Error creating audit log:', logError);
+        // Don't fail the operation if logging fails
+      }
+
+      // Update local state
+      setStudents(prev =>
+        prev.map(s => {
+          const found = updatedStudents.find(u => u.id === s.id);
+          return found ? { ...s, powerPoints: found.newPP } : s;
+        })
+      );
+
+      // Clear selection and form
+      setSelectedStudents(new Set());
+      setBulkPPAmount(0);
+      setBulkReason('');
+
+      // Show success message
+      const action = bulkPPAmount > 0 ? 'added' : 'subtracted';
+      const absAmount = Math.abs(bulkPPAmount);
+      alert(`Successfully ${action} ${absAmount} PP to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}!`);
+    } catch (error: any) {
+      console.error('Error in bulk PP adjustment:', error);
+      alert(`Failed to apply bulk PP adjustment: ${error?.message || error}`);
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  };
+
   // Get count of pending changes
   const pendingChangesCount = Object.values(pendingChanges).filter(change => change !== 0).length;
+
+  // Helper function to extract first and last names from displayName
+  const getNameParts = (displayName: string): { firstName: string; lastName: string } => {
+    const parts = displayName.trim().split(/\s+/);
+    if (parts.length === 1) {
+      return { firstName: parts[0], lastName: '' };
+    }
+    return {
+      firstName: parts[0],
+      lastName: parts.slice(1).join(' ')
+    };
+  };
+
+  // Sort filtered students based on sortMode and sortDir (must be before early returns for hooks rules)
+  const sortedStudents = useMemo(() => {
+    const sorted = [...filteredStudents];
+    
+    sorted.sort((a, b) => {
+      let comparison = 0;
+      
+      if (sortMode === 'pp') {
+        const ppA = a.powerPoints || 0;
+        const ppB = b.powerPoints || 0;
+        comparison = ppA - ppB;
+      } else if (sortMode === 'firstName') {
+        const nameA = getNameParts(a.displayName);
+        const nameB = getNameParts(b.displayName);
+        comparison = nameA.firstName.localeCompare(nameB.firstName, undefined, { sensitivity: 'base' });
+        // If first names are equal, compare by last name
+        if (comparison === 0) {
+          comparison = nameA.lastName.localeCompare(nameB.lastName, undefined, { sensitivity: 'base' });
+        }
+      } else if (sortMode === 'lastName') {
+        const nameA = getNameParts(a.displayName);
+        const nameB = getNameParts(b.displayName);
+        comparison = nameA.lastName.localeCompare(nameB.lastName, undefined, { sensitivity: 'base' });
+        // If last names are equal, compare by first name
+        if (comparison === 0) {
+          comparison = nameA.firstName.localeCompare(nameB.firstName, undefined, { sensitivity: 'base' });
+        }
+      }
+      
+      return sortDir === 'asc' ? comparison : -comparison;
+    });
+    
+    return sorted;
+  }, [filteredStudents, sortMode, sortDir]);
 
   if (loading) {
     return (
@@ -609,8 +758,6 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  // Sort filtered students by PP (highest first)
-  const sortedStudents = [...filteredStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
   const totalPP = students.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
   const averagePP = students.length > 0 ? Math.round(totalPP / students.length) : 0;
 
@@ -708,6 +855,52 @@ const ScorekeeperInterface: React.FC = () => {
             Showing {filteredStudents.length} of {students.length} students
           </div>
         )}
+      </div>
+
+      {/* Sorting Controls */}
+      <div style={{ 
+        marginBottom: '1.5rem', 
+        display: 'flex', 
+        gap: '1rem', 
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }}>
+        <label style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+          Sort by:
+        </label>
+        <select
+          value={sortMode}
+          onChange={(e) => setSortMode(e.target.value as 'firstName' | 'lastName' | 'pp')}
+          style={{
+            padding: '0.5rem 0.75rem',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.375rem',
+            fontSize: '0.875rem',
+            backgroundColor: 'white',
+            cursor: 'pointer'
+          }}
+        >
+          <option value="firstName">First Name</option>
+          <option value="lastName">Last Name</option>
+          <option value="pp">PP Amount</option>
+        </select>
+        <button
+          onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+          style={{
+            padding: '0.5rem 0.75rem',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.375rem',
+            fontSize: '0.875rem',
+            backgroundColor: 'white',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.25rem'
+          }}
+          title={sortDir === 'asc' ? 'Ascending (A→Z, Low→High)' : 'Descending (Z→A, High→Low)'}
+        >
+          {sortDir === 'asc' ? '↑' : '↓'} {sortDir === 'asc' ? 'Ascending' : 'Descending'}
+        </button>
       </div>
 
       {/* Instructions Section */}
@@ -876,27 +1069,84 @@ const ScorekeeperInterface: React.FC = () => {
           </p>
         </div>
       ) : (
-        <div style={{ 
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-          gap: '1.5rem'
-        }}>
-          {sortedStudents.map((student) => (
-            <div key={student.id} style={{
-                backgroundColor: 'white',
-              borderRadius: '0.75rem',
-              padding: '1.5rem',
+        <>
+          {/* Bulk Selection Header */}
+          {sortedStudents.length > 0 && (
+            <div style={{
+              marginBottom: '1rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: '#f9fafb',
               border: '1px solid #e5e7eb',
-              boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-              transition: 'box-shadow 0.2s ease'
+              borderRadius: '0.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem'
             }}>
-              {/* Student Info */}
-              <div style={{ 
-                display: 'flex',
-                alignItems: 'center', 
-                marginBottom: '1rem',
-                gap: '0.75rem'
+              <input
+                type="checkbox"
+                checked={selectedStudents.size === sortedStudents.length && sortedStudents.length > 0}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedStudents(new Set(sortedStudents.map(s => s.id)));
+                  } else {
+                    setSelectedStudents(new Set());
+                  }
+                }}
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  cursor: 'pointer'
+                }}
+              />
+              <span style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                Select All ({selectedStudents.size} selected)
+              </span>
+            </div>
+          )}
+
+          <div style={{ 
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+            gap: '1.5rem'
+          }}>
+            {sortedStudents.map((student) => (
+              <div key={student.id} style={{
+                  backgroundColor: selectedStudents.has(student.id) ? '#f0f9ff' : 'white',
+                borderRadius: '0.75rem',
+                padding: '1.5rem',
+                border: selectedStudents.has(student.id) ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+                transition: 'box-shadow 0.2s ease'
               }}>
+                {/* Checkbox for bulk selection */}
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedStudents.has(student.id)}
+                    onChange={(e) => {
+                      const newSelected = new Set(selectedStudents);
+                      if (e.target.checked) {
+                        newSelected.add(student.id);
+                      } else {
+                        newSelected.delete(student.id);
+                      }
+                      setSelectedStudents(newSelected);
+                    }}
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      cursor: 'pointer'
+                    }}
+                  />
+                </div>
+
+                {/* Student Info */}
+                <div style={{ 
+                  display: 'flex',
+                  alignItems: 'center', 
+                  marginBottom: '1rem',
+                  gap: '0.75rem'
+                }}>
                 <div style={{
                   width: '48px',
                   height: '48px',
@@ -1103,6 +1353,89 @@ const ScorekeeperInterface: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+        </>
+      )}
+
+      {/* Bulk Adjust Panel */}
+      {selectedStudents.size > 0 && (
+        <div style={{
+          marginTop: '2rem',
+          padding: '1.5rem',
+          backgroundColor: '#f0f9ff',
+          border: '2px solid #3b82f6',
+          borderRadius: '0.75rem',
+          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+        }}>
+          <h3 style={{
+            fontSize: '1.125rem',
+            fontWeight: '600',
+            color: '#1e40af',
+            margin: 0,
+            marginBottom: '1rem'
+          }}>
+            Bulk Adjust PP ({selectedStudents.size} selected)
+          </h3>
+          <div style={{
+            display: 'flex',
+            gap: '1rem',
+            alignItems: 'flex-end',
+            flexWrap: 'wrap'
+          }}>
+            <div style={{ flex: 1, minWidth: '200px' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                PP Amount
+              </label>
+              <input
+                type="number"
+                value={bulkPPAmount || ''}
+                onChange={(e) => setBulkPPAmount(e.target.value ? parseInt(e.target.value) : 0)}
+                placeholder="Enter amount (positive or negative)"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '0.375rem',
+                  fontSize: '1rem'
+                }}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: '200px' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                Reason (Optional)
+              </label>
+              <input
+                type="text"
+                value={bulkReason}
+                onChange={(e) => setBulkReason(e.target.value)}
+                placeholder="Reason for adjustment"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '0.375rem',
+                  fontSize: '1rem'
+                }}
+              />
+            </div>
+            <button
+              onClick={handleBulkAdjustPP}
+              disabled={isApplyingBulk || bulkPPAmount === 0}
+              style={{
+                padding: '0.75rem 1.5rem',
+                backgroundColor: (isApplyingBulk || bulkPPAmount === 0) ? '#9ca3af' : '#3b82f6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                fontSize: '1rem',
+                fontWeight: '600',
+                cursor: (isApplyingBulk || bulkPPAmount === 0) ? 'not-allowed' : 'pointer',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {isApplyingBulk ? 'Applying...' : `Apply to ${selectedStudents.size} Students`}
+            </button>
+          </div>
         </div>
       )}
 

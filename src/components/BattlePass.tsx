@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattlePassRewardModal from './BattlePassRewardModal';
 
@@ -213,54 +213,40 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
         claimedTiers: updatedClaimedTiers
       });
 
-      // Apply rewards to user
-      const userRef = doc(db, 'students', currentUser.uid);
-      const userDoc = await getDoc(userRef);
+      // Apply rewards to user - Update BOTH users and students collections with atomic increments
+      const userRef = doc(db, 'users', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
       
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        const updates: any = {};
+      const userUpdates: any = {};
+      const studentUpdates: any = {};
 
-        if (reward.type === 'pp') {
-          updates.powerPoints = (userData.powerPoints || 0) + reward.amount;
-        } else if (reward.type === 'xp') {
-          updates.xp = (userData.xp || 0) + reward.amount;
-        } else if (reward.type === 'shard') {
-          updates.truthMetal = (userData.truthMetal || 0) + reward.amount;
-        } else if (reward.type === 'actionCard' && reward.actionCardName) {
-          // Unlock the action card
-          const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
-          const cardsDoc = await getDoc(cardsRef);
+      if (reward.type === 'pp') {
+        userUpdates.powerPoints = increment(reward.amount);
+        studentUpdates.powerPoints = increment(reward.amount);
+      } else if (reward.type === 'xp') {
+        userUpdates.xp = increment(reward.amount);
+        studentUpdates.xp = increment(reward.amount);
+      } else if (reward.type === 'shard') {
+        userUpdates.truthMetal = increment(reward.amount);
+        studentUpdates.truthMetal = increment(reward.amount);
+      } else if (reward.type === 'actionCard' && reward.actionCardName) {
+        // Unlock the action card
+        const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+        const cardsDoc = await getDoc(cardsRef);
+        
+        if (cardsDoc.exists()) {
+          const cardsData = cardsDoc.data();
+          const currentCards = cardsData.cards || [];
           
-          if (cardsDoc.exists()) {
-            const cardsData = cardsDoc.data();
-            const currentCards = cardsData.cards || [];
-            
-            // Check if card already exists
-            const cardIndex = currentCards.findIndex((card: any) => card.name === reward.actionCardName);
-            
-            if (cardIndex >= 0) {
-              // Card exists, just unlock it
-              currentCards[cardIndex].unlocked = true;
-              currentCards[cardIndex].uses = currentCards[cardIndex].maxUses || 1;
-            } else {
-              // Card doesn't exist, add it from template
-              const { ACTION_CARD_TEMPLATES } = await import('../types/battle');
-              const template = ACTION_CARD_TEMPLATES.find(t => t.name === reward.actionCardName);
-              
-              if (template) {
-                const newCard = {
-                  ...template,
-                  id: `card_${Date.now()}`,
-                  unlocked: true,
-                };
-                currentCards.push(newCard);
-              }
-            }
-            
-            await updateDoc(cardsRef, { cards: currentCards });
+          // Check if card already exists
+          const cardIndex = currentCards.findIndex((card: any) => card.name === reward.actionCardName);
+          
+          if (cardIndex >= 0) {
+            // Card exists, just unlock it
+            currentCards[cardIndex].unlocked = true;
+            currentCards[cardIndex].uses = currentCards[cardIndex].maxUses || 1;
           } else {
-            // Create new cards document with the Freeze card
+            // Card doesn't exist, add it from template
             const { ACTION_CARD_TEMPLATES } = await import('../types/battle');
             const template = ACTION_CARD_TEMPLATES.find(t => t.name === reward.actionCardName);
             
@@ -270,14 +256,40 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
                 id: `card_${Date.now()}`,
                 unlocked: true,
               };
-              await setDoc(cardsRef, { cards: [newCard] });
+              currentCards.push(newCard);
             }
           }
+          
+          await updateDoc(cardsRef, { cards: currentCards });
+        } else {
+          // Create new cards document with the card
+          const { ACTION_CARD_TEMPLATES } = await import('../types/battle');
+          const template = ACTION_CARD_TEMPLATES.find(t => t.name === reward.actionCardName);
+          
+          if (template) {
+            const newCard = {
+              ...template,
+              id: `card_${Date.now()}`,
+              unlocked: true,
+            };
+            await setDoc(cardsRef, { cards: [newCard] });
+          }
         }
+      }
 
-        if (Object.keys(updates).length > 0) {
-          await updateDoc(userRef, updates);
-        }
+      // Update both collections atomically
+      const updatePromises: Promise<any>[] = [];
+      
+      if (Object.keys(userUpdates).length > 0) {
+        updatePromises.push(updateDoc(userRef, userUpdates));
+      }
+      
+      if (Object.keys(studentUpdates).length > 0) {
+        updatePromises.push(updateDoc(studentRef, studentUpdates));
+      }
+      
+      if (updatePromises.length > 0) {
+        await Promise.all(updatePromises);
       }
 
       // Update local state
