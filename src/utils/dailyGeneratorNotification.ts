@@ -151,15 +151,24 @@ export async function checkAndCreditDailyGenerator(
 
       // If no days away, still show modal but with 0 earnings (first login of day)
       if (daysAway <= 0) {
+        // CRITICAL FIX: Set claim timestamps even when daysAway is 0 to ensure proper tracking
+        // This prevents the issue where users with null timestamps get 0 earnings forever
+        const now = getCurrentUTCDayStart();
         const updates: any = {
           lastLoginAt: serverTimestamp(),
-          lastDailyGeneratorModalDate: todayKey
+          lastDailyGeneratorModalDate: todayKey,
+          lastGeneratorClaimAt: Timestamp.fromDate(now)
         };
         if (usersDoc.exists()) {
           transaction.update(usersRef, updates);
         } else {
           transaction.set(usersRef, updates);
         }
+        
+        // Also update vault timestamp to ensure consistency
+        transaction.update(vaultRef, {
+          generatorLastClaimedAt: Timestamp.fromDate(now)
+        });
         
         // Return result with 0 earnings but current values for display
         result = {

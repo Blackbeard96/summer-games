@@ -169,74 +169,76 @@ export async function updateProgressOnChallengeComplete(
             console.log(`[Progression] Next challenge ${nextChallengeId} will be unlocked (sequential unlock)`);
           }
         }
-      } else {
-        // This was the last challenge in the chapter - check if chapter should be completed
-        const allCompleted = areAllChallengesCompleted(chapterId, {
-          ...chapterProgress,
-          challenges: updatedChapters[chapterKey].challenges
-        });
+      }
+      
+      // CRITICAL FIX: Always check if chapter is complete after ANY challenge completion
+      // This ensures chapters are marked complete and next chapters unlocked reliably,
+      // regardless of which challenge was completed last
+      const allCompleted = areAllChallengesCompleted(chapterId, {
+        ...chapterProgress,
+        challenges: updatedChapters[chapterKey].challenges
+      });
+      
+      if (allCompleted && !chapterProgress.isCompleted) {
+        // Mark chapter as completed
+        updatedChapters[chapterKey] = {
+          ...updatedChapters[chapterKey],
+          isCompleted: true,
+          completionDate: serverTimestamp(),
+          isActive: false // Deactivate current chapter
+        };
         
-        if (allCompleted && !chapterProgress.isCompleted) {
-          // Mark chapter as completed
-          updatedChapters[chapterKey] = {
-            ...updatedChapters[chapterKey],
-            isCompleted: true,
-            completionDate: serverTimestamp(),
-            isActive: false // Deactivate current chapter
-          };
+        if (DEBUG_PROGRESS) {
+          console.log(`[Progression] Chapter ${chapterId} is now complete (all challenges done)`);
+        }
+        
+        // Unlock next chapter
+        const nextChapterId = chapterId + 1;
+        const nextChapter = CHAPTERS.find(c => c.id === nextChapterId);
+        
+        if (nextChapter) {
+          const nextChapterKey = String(nextChapterId);
+          const nextChapterProgress = chapters[nextChapterKey] || {};
+          const firstChallengeId = getFirstChallengeId(nextChapterId);
           
-          if (DEBUG_PROGRESS) {
-            console.log(`[Progression] Chapter ${chapterId} is now complete (all challenges done)`);
+          // Initialize next chapter if it doesn't exist
+          if (!chapters[nextChapterKey]) {
+            updatedChapters[nextChapterKey] = {
+              isActive: true,
+              isCompleted: false,
+              unlockDate: serverTimestamp(),
+              challenges: {}
+            };
+          } else {
+            updatedChapters[nextChapterKey] = {
+              ...nextChapterProgress,
+              isActive: true,
+              unlockDate: nextChapterProgress.unlockDate || serverTimestamp()
+            };
           }
           
-          // Unlock next chapter
-          const nextChapterId = chapterId + 1;
-          const nextChapter = CHAPTERS.find(c => c.id === nextChapterId);
+          // Initialize first challenge of next chapter if needed
+          if (firstChallengeId) {
+            if (!updatedChapters[nextChapterKey].challenges) {
+              updatedChapters[nextChapterKey].challenges = {};
+            }
+            
+            const firstChallengeProgress = updatedChapters[nextChapterKey].challenges[firstChallengeId] || {};
+            
+            // First challenge is automatically unlocked when chapter is unlocked
+            // (UI logic handles this, but we ensure the challenge exists in structure)
+            if (!firstChallengeProgress.isCompleted && firstChallengeProgress.status !== 'approved') {
+              updatedChapters[nextChapterKey].challenges[firstChallengeId] = {
+                ...firstChallengeProgress,
+                // Status will be determined by UI unlock logic (previous challenge completion or chapter active status)
+              };
+            }
+          }
           
-          if (nextChapter) {
-            const nextChapterKey = String(nextChapterId);
-            const nextChapterProgress = chapters[nextChapterKey] || {};
-            const firstChallengeId = getFirstChallengeId(nextChapterId);
-            
-            // Initialize next chapter if it doesn't exist
-            if (!chapters[nextChapterKey]) {
-              updatedChapters[nextChapterKey] = {
-                isActive: true,
-                isCompleted: false,
-                unlockDate: serverTimestamp(),
-                challenges: {}
-              };
-            } else {
-              updatedChapters[nextChapterKey] = {
-                ...nextChapterProgress,
-                isActive: true,
-                unlockDate: nextChapterProgress.unlockDate || serverTimestamp()
-              };
-            }
-            
-            // Initialize first challenge of next chapter if needed
-            if (firstChallengeId) {
-              if (!updatedChapters[nextChapterKey].challenges) {
-                updatedChapters[nextChapterKey].challenges = {};
-              }
-              
-              const firstChallengeProgress = updatedChapters[nextChapterKey].challenges[firstChallengeId] || {};
-              
-              // First challenge is automatically unlocked when chapter is unlocked
-              // (UI logic handles this, but we ensure the challenge exists in structure)
-              if (!firstChallengeProgress.isCompleted && firstChallengeProgress.status !== 'approved') {
-                updatedChapters[nextChapterKey].challenges[firstChallengeId] = {
-                  ...firstChallengeProgress,
-                  // Status will be determined by UI unlock logic (previous challenge completion or chapter active status)
-                };
-              }
-            }
-            
-            progressionResult.chapterUnlocked = nextChapterId;
-            
-            if (DEBUG_PROGRESS) {
-              console.log(`[Progression] Next chapter ${nextChapterId} unlocked with first challenge ${firstChallengeId}`);
-            }
+          progressionResult.chapterUnlocked = nextChapterId;
+          
+          if (DEBUG_PROGRESS) {
+            console.log(`[Progression] Next chapter ${nextChapterId} unlocked with first challenge ${firstChallengeId}`);
           }
         }
       }

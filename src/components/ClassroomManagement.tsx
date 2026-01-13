@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import StudentListItem from './StudentListItem';
@@ -141,6 +141,14 @@ const ClassroomManagement: React.FC = () => {
   const [googleAuthToken, setGoogleAuthToken] = useState<string>('');
   const [showOAuthSetupModal, setShowOAuthSetupModal] = useState(false);
   const [showClassPPView, setShowClassPPView] = useState<string | null>(null);
+  
+  // View PP UI state (for sorting and bulk operations)
+  const [ppViewSortMode, setPpViewSortMode] = useState<'firstName' | 'lastName' | 'pp'>('firstName');
+  const [ppViewSortDir, setPpViewSortDir] = useState<'asc' | 'desc'>('asc');
+  const [ppViewSelectedStudents, setPpViewSelectedStudents] = useState<Set<string>>(new Set());
+  const [ppViewBulkPPAmount, setPpViewBulkPPAmount] = useState<number>(0);
+  const [ppViewBulkReason, setPpViewBulkReason] = useState<string>('');
+  const [ppViewIsApplyingBulk, setPpViewIsApplyingBulk] = useState<boolean>(false);
   
   // In Session states
   const [inSessionActive, setInSessionActive] = useState(false);
@@ -534,6 +542,89 @@ const ClassroomManagement: React.FC = () => {
       )
     );
     console.log('PP updated successfully');
+  };
+
+  // Helper function to extract first and last names from displayName (for View PP UI)
+  const getNameParts = (displayName: string): { firstName: string; lastName: string } => {
+    const parts = displayName.trim().split(/\s+/);
+    if (parts.length === 1) {
+      return { firstName: parts[0], lastName: '' };
+    }
+    return {
+      firstName: parts[0],
+      lastName: parts.slice(1).join(' ')
+    };
+  };
+
+  // Bulk PP adjustment for View PP UI
+  const handleBulkAdjustPP = async (classStudents: Student[]) => {
+    if (!currentUser || ppViewSelectedStudents.size === 0 || ppViewBulkPPAmount === 0 || ppViewIsApplyingBulk) {
+      return;
+    }
+
+    setPpViewIsApplyingBulk(true);
+    try {
+      const selectedIds = Array.from(ppViewSelectedStudents);
+      const updatedStudents: { id: string; newPP: number; oldPP: number; displayName: string }[] = [];
+
+      // Process in batches of 400 (Firestore limit is 500)
+      const batchSize = 400;
+      for (let i = 0; i < selectedIds.length; i += batchSize) {
+        const chunk = selectedIds.slice(i, i + batchSize);
+        const chunkBatch = writeBatch(db);
+        
+        for (const studentId of chunk) {
+          const student = classStudents.find(s => s.id === studentId);
+          if (!student) continue;
+
+          const oldPP = student.powerPoints || 0;
+          const newPP = Math.max(0, oldPP + ppViewBulkPPAmount); // Prevent negative PP
+
+          const studentRef = doc(db, 'students', studentId);
+          chunkBatch.update(studentRef, {
+            powerPoints: newPP,
+            lastUpdated: serverTimestamp()
+          });
+
+          // Also update vault if it exists
+          const vaultRef = doc(db, 'vaults', studentId);
+          const vaultDoc = await getDoc(vaultRef);
+          if (vaultDoc.exists()) {
+            chunkBatch.update(vaultRef, {
+              currentPP: newPP
+            });
+          }
+
+          updatedStudents.push({ id: studentId, newPP, oldPP, displayName: student.displayName });
+        }
+
+        // Commit batch for this chunk
+        await chunkBatch.commit();
+      }
+
+      // Update local state
+      setStudents(prev =>
+        prev.map(s => {
+          const found = updatedStudents.find(u => u.id === s.id);
+          return found ? { ...s, powerPoints: found.newPP } : s;
+        })
+      );
+
+      // Clear selection and form
+      setPpViewSelectedStudents(new Set());
+      setPpViewBulkPPAmount(0);
+      setPpViewBulkReason('');
+
+      // Show success message
+      const action = ppViewBulkPPAmount > 0 ? 'added' : 'subtracted';
+      const absAmount = Math.abs(ppViewBulkPPAmount);
+      alert(`Successfully ${action} ${absAmount} PP to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}!`);
+    } catch (error: any) {
+      console.error('Error in bulk PP adjustment:', error);
+      alert(`Failed to apply bulk PP adjustment: ${error?.message || error}`);
+    } finally {
+      setPpViewIsApplyingBulk(false);
+    }
   };
 
   // Google Classroom API functions
@@ -2238,7 +2329,12 @@ const ClassroomManagement: React.FC = () => {
                   ⚡ Class Power Points Overview
                 </h3>
                 <button
-                  onClick={() => setShowClassPPView(null)}
+                  onClick={() => {
+                    setShowClassPPView(null);
+                    setPpViewSelectedStudents(new Set());
+                    setPpViewBulkPPAmount(0);
+                    setPpViewBulkReason('');
+                  }}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -2327,9 +2423,36 @@ const ClassroomManagement: React.FC = () => {
                   );
                 }
                 
-                // Filter and sort students by PP (highest first)
+                // Filter students
                 const filteredClassStudents = searchStudents(classStudents, searchQuery);
-                const sortedStudents = [...filteredClassStudents].sort((a, b) => (b.powerPoints || 0) - (a.powerPoints || 0));
+                
+                // Sort students
+                const sortedStudents = [...filteredClassStudents].sort((a, b) => {
+                  let comparison = 0;
+                  
+                  if (ppViewSortMode === 'pp') {
+                    const ppA = a.powerPoints || 0;
+                    const ppB = b.powerPoints || 0;
+                    comparison = ppA - ppB;
+                  } else if (ppViewSortMode === 'firstName') {
+                    const nameA = getNameParts(a.displayName);
+                    const nameB = getNameParts(b.displayName);
+                    comparison = nameA.firstName.localeCompare(nameB.firstName, undefined, { sensitivity: 'base' });
+                    if (comparison === 0) {
+                      comparison = nameA.lastName.localeCompare(nameB.lastName, undefined, { sensitivity: 'base' });
+                    }
+                  } else if (ppViewSortMode === 'lastName') {
+                    const nameA = getNameParts(a.displayName);
+                    const nameB = getNameParts(b.displayName);
+                    comparison = nameA.lastName.localeCompare(nameB.lastName, undefined, { sensitivity: 'base' });
+                    if (comparison === 0) {
+                      comparison = nameA.firstName.localeCompare(nameB.firstName, undefined, { sensitivity: 'base' });
+                    }
+                  }
+                  
+                  return ppViewSortDir === 'asc' ? comparison : -comparison;
+                });
+                
                 const totalPP = classStudents.reduce((sum, student) => sum + (student.powerPoints || 0), 0);
                 const averagePP = classStudents.length > 0 ? Math.round(totalPP / classStudents.length) : 0;
                 
@@ -2373,119 +2496,219 @@ const ClassroomManagement: React.FC = () => {
                       </div>
                     </div>
                     
+                    {/* Sorting Controls */}
+                    <div style={{ 
+                      marginBottom: '1rem', 
+                      display: 'flex', 
+                      gap: '1rem', 
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      padding: '0.75rem',
+                      backgroundColor: 'white',
+                      borderRadius: '0.5rem',
+                      border: '1px solid #e5e7eb'
+                    }}>
+                      <label style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                        Sort by:
+                      </label>
+                      <select
+                        value={ppViewSortMode}
+                        onChange={(e) => setPpViewSortMode(e.target.value as 'firstName' | 'lastName' | 'pp')}
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.375rem',
+                          fontSize: '0.875rem',
+                          backgroundColor: 'white',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="firstName">First Name</option>
+                        <option value="lastName">Last Name</option>
+                        <option value="pp">PP Amount</option>
+                      </select>
+                      <button
+                        onClick={() => setPpViewSortDir(ppViewSortDir === 'asc' ? 'desc' : 'asc')}
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.375rem',
+                          fontSize: '0.875rem',
+                          backgroundColor: 'white',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem'
+                        }}
+                        title={ppViewSortDir === 'asc' ? 'Ascending (A→Z, Low→High)' : 'Descending (Z→A, High→Low)'}
+                      >
+                        {ppViewSortDir === 'asc' ? '↑' : '↓'} {ppViewSortDir === 'asc' ? 'Ascending' : 'Descending'}
+                      </button>
+                    </div>
+                    
+                    {/* Bulk Selection Header */}
+                    {sortedStudents.length > 0 && (
+                      <div style={{ 
+                        marginBottom: '0.75rem',
+                        padding: '0.75rem',
+                        backgroundColor: 'white',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #e5e7eb',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem'
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={ppViewSelectedStudents.size === sortedStudents.length && sortedStudents.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setPpViewSelectedStudents(new Set(sortedStudents.map(s => s.id)));
+                            } else {
+                              setPpViewSelectedStudents(new Set());
+                            }
+                          }}
+                          style={{
+                            width: '18px',
+                            height: '18px',
+                            cursor: 'pointer'
+                          }}
+                        />
+                        <span style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                          Select All ({ppViewSelectedStudents.size} selected)
+                        </span>
+                      </div>
+                    )}
+                    
                     {/* Students List */}
                     <div style={{ 
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
                       gap: '1rem',
-                      maxHeight: 'calc(95vh - 200px)',
-                      overflowY: 'auto',
-                      paddingRight: '0.5rem'
+                      marginBottom: ppViewSelectedStudents.size > 0 ? '1.5rem' : '0'
                     }}>
-                      {sortedStudents.map((student, index) => (
+                      {sortedStudents.map((student) => (
                         <div key={student.id} style={{
-                          backgroundColor: 'white',
+                          backgroundColor: ppViewSelectedStudents.has(student.id) ? '#f0f9ff' : 'white',
                           borderRadius: '0.5rem',
                           padding: '0.75rem',
-                          border: '1px solid #e5e7eb',
+                          border: ppViewSelectedStudents.has(student.id) ? '2px solid #3b82f6' : '1px solid #e5e7eb',
                           display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.75rem',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
                           position: 'relative',
-                          minHeight: '120px'
+                          minHeight: 'auto'
                         }}>
-                          {/* Rank Badge */}
-                          <div style={{
-                            position: 'absolute',
-                            top: '0.5rem',
-                            right: '0.5rem',
-                            backgroundColor: index === 0 ? '#fbbf24' : index === 1 ? '#9ca3af' : index === 2 ? '#f59e0b' : '#e5e7eb',
-                            color: index < 3 ? 'white' : '#6b7280',
-                            borderRadius: '50%',
-                            width: '24px',
-                            height: '24px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold'
-                          }}>
-                            {index + 1}
+                          {/* Selection Checkbox */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={ppViewSelectedStudents.has(student.id)}
+                              onChange={(e) => {
+                                const newSelected = new Set(ppViewSelectedStudents);
+                                if (e.target.checked) {
+                                  newSelected.add(student.id);
+                                } else {
+                                  newSelected.delete(student.id);
+                                }
+                                setPpViewSelectedStudents(newSelected);
+                              }}
+                              style={{
+                                width: '18px',
+                                height: '18px',
+                                cursor: 'pointer'
+                              }}
+                            />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
+                              <img
+                                src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName)}&background=4f46e5&color=fff&size=32`}
+                                alt={student.displayName}
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  borderRadius: '50%',
+                                  objectFit: 'cover',
+                                  border: '2px solid #e5e7eb',
+                                  flexShrink: 0
+                                }}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: '0.875rem', fontWeight: '600', color: '#1f2937', marginBottom: '0.125rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {student.displayName}
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {student.email || 'No email'}
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           
-                          <img
-                            src={student.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.displayName)}&background=4f46e5&color=fff&size=40`}
-                            alt={student.displayName}
-                            style={{
-                              width: '40px',
-                              height: '40px',
-                              borderRadius: '50%',
-                              objectFit: 'cover',
-                              border: '2px solid #e5e7eb'
-                            }}
-                          />
+                          {/* Level and XP */}
+                          <div style={{ 
+                            display: 'flex', 
+                            gap: '0.5rem',
+                            fontSize: '0.75rem',
+                            color: '#9ca3af'
+                          }}>
+                            <span>Level {student.level || 1}</span>
+                            <span>•</span>
+                            <span>{student.xp || 0} XP</span>
+                          </div>
                           
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '1rem', fontWeight: '600', color: '#1f2937', marginBottom: '0.25rem' }}>
-                              {student.displayName}
-                            </div>
-                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                              {student.email}
-                            </div>
-                            <div style={{ 
-                              display: 'flex', 
-                              gap: '1rem',
-                              fontSize: '0.75rem',
-                              color: '#9ca3af',
-                              marginBottom: '0.5rem'
-                            }}>
-                              <span>Level {student.level}</span>
-                              <span>•</span>
-                              <span>{student.xp} XP</span>
-                            </div>
-                            
-                            {/* PP Management */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {/* PP Management */}
+                          <div style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column',
+                            gap: '0.5rem',
+                            paddingTop: '0.5rem',
+                            borderTop: '1px solid #e5e7eb'
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                               <span style={{ 
-                                fontSize: '1rem', 
+                                fontSize: '0.875rem', 
                                 fontWeight: 'bold', 
-                                color: '#8b5cf6',
-                                minWidth: '60px'
+                                color: '#8b5cf6'
                               }}>
                                 {student.powerPoints || 0} PP
                               </span>
-                              <div style={{ display: 'flex', gap: '0.25rem' }}>
-                                <button
-                                  onClick={() => adjustPowerPoints(student.id, 1)}
-                                  style={{
-                                    backgroundColor: '#10b981',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    cursor: 'pointer',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '500'
-                                  }}
-                                >
-                                  +
-                                </button>
-                                <button
-                                  onClick={() => adjustPowerPoints(student.id, -1)}
-                                  style={{
-                                    backgroundColor: '#dc2626',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '0.25rem',
-                                    padding: '0.25rem 0.5rem',
-                                    cursor: 'pointer',
-                                    fontSize: '0.75rem',
-                                    fontWeight: '500'
-                                  }}
-                                >
-                                  -
-                                </button>
-                              </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                              <button
+                                onClick={() => adjustPowerPoints(student.id, 1)}
+                                style={{
+                                  backgroundColor: '#10b981',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.25rem 0.5rem',
+                                  cursor: 'pointer',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '500',
+                                  flex: '1 1 auto',
+                                  minWidth: '40px'
+                                }}
+                              >
+                                +
+                              </button>
+                              <button
+                                onClick={() => adjustPowerPoints(student.id, -1)}
+                                style={{
+                                  backgroundColor: '#dc2626',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.25rem',
+                                  padding: '0.25rem 0.5rem',
+                                  cursor: 'pointer',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '500',
+                                  flex: '1 1 auto',
+                                  minWidth: '40px'
+                                }}
+                              >
+                                -
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
                               <input
                                 type="number"
                                 value={ppAmount[student.id] || ''}
@@ -2507,12 +2730,13 @@ const ClassroomManagement: React.FC = () => {
                                   }
                                 }}
                                 style={{
-                                  width: '60px',
+                                  flex: 1,
                                   padding: '0.25rem 0.5rem',
                                   border: '1px solid #d1d5db',
                                   borderRadius: '0.25rem',
                                   fontSize: '0.75rem',
-                                  textAlign: 'center'
+                                  textAlign: 'center',
+                                  minWidth: 0
                                 }}
                                 placeholder="Set"
                               />
@@ -2533,7 +2757,8 @@ const ClassroomManagement: React.FC = () => {
                                   padding: '0.25rem 0.5rem',
                                   cursor: ppAmount[student.id] !== undefined ? 'pointer' : 'not-allowed',
                                   fontSize: '0.75rem',
-                                  fontWeight: '500'
+                                  fontWeight: '500',
+                                  whiteSpace: 'nowrap'
                                 }}
                               >
                                 Set
@@ -2543,6 +2768,77 @@ const ClassroomManagement: React.FC = () => {
                         </div>
                       ))}
                     </div>
+                    
+                    {/* Bulk PP Adjustment Panel */}
+                    {ppViewSelectedStudents.size > 0 && (
+                      <div style={{
+                        marginTop: '1.5rem',
+                        padding: '1rem',
+                        backgroundColor: '#f0f9ff',
+                        borderRadius: '0.5rem',
+                        border: '2px solid #3b82f6'
+                      }}>
+                        <h3 style={{ fontSize: '1rem', fontWeight: '600', color: '#1f2937', marginBottom: '1rem' }}>
+                          Bulk Adjust PP ({ppViewSelectedStudents.size} selected)
+                        </h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.25rem' }}>
+                              PP Amount (positive or negative)
+                            </label>
+                            <input
+                              type="number"
+                              value={ppViewBulkPPAmount || ''}
+                              onChange={(e) => setPpViewBulkPPAmount(e.target.value ? parseInt(e.target.value) : 0)}
+                              placeholder="Enter amount (positive or negative)"
+                              style={{
+                                width: '100%',
+                                padding: '0.5rem',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.375rem',
+                                fontSize: '0.875rem'
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.25rem' }}>
+                              Reason (optional)
+                            </label>
+                            <input
+                              type="text"
+                              value={ppViewBulkReason}
+                              onChange={(e) => setPpViewBulkReason(e.target.value)}
+                              placeholder="Reason for adjustment"
+                              style={{
+                                width: '100%',
+                                padding: '0.5rem',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.375rem',
+                                fontSize: '0.875rem'
+                              }}
+                            />
+                          </div>
+                          <button
+                            onClick={() => handleBulkAdjustPP(classStudents)}
+                            disabled={ppViewIsApplyingBulk || ppViewBulkPPAmount === 0}
+                            style={{
+                              padding: '0.75rem 1.5rem',
+                              backgroundColor: (ppViewIsApplyingBulk || ppViewBulkPPAmount === 0) ? '#9ca3af' : '#3b82f6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '0.375rem',
+                              fontSize: '0.875rem',
+                              fontWeight: '600',
+                              cursor: (ppViewIsApplyingBulk || ppViewBulkPPAmount === 0) ? 'not-allowed' : 'pointer',
+                              whiteSpace: 'nowrap',
+                              alignSelf: 'flex-start'
+                            }}
+                          >
+                            {ppViewIsApplyingBulk ? 'Applying...' : `Apply to ${ppViewSelectedStudents.size} Students`}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -2556,7 +2852,12 @@ const ClassroomManagement: React.FC = () => {
               borderTop: '1px solid #e5e7eb'
             }}>
               <button
-                onClick={() => setShowClassPPView(null)}
+                onClick={() => {
+                  setShowClassPPView(null);
+                  setPpViewSelectedStudents(new Set());
+                  setPpViewBulkPPAmount(0);
+                  setPpViewBulkReason('');
+                }}
                 style={{
                   backgroundColor: '#6b7280',
                   color: 'white',
