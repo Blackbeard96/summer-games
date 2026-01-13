@@ -306,34 +306,10 @@ export const trackMoveUsage = async (
     
     if (!playerManifest) {
       console.error('[trackMoveUsage] Player manifest not found. User data keys:', Object.keys(userData));
-      console.error('[trackMoveUsage] Attempting to create default manifest...');
-      
-      // Try to get manifest type from other fields
-      const manifestId = userData.manifestationType || userData.manifestId || 'reading';
-      const manifest = MANIFESTS.find(m => m.id === manifestId) || MANIFESTS[0];
-      
-      // Create a default manifest if none exists
-      playerManifest = {
-        manifestId: manifest.id,
-        currentLevel: 1,
-        xp: 0,
-        catalyst: manifest.catalyst,
-        veil: 'Fear of inadequacy',
-        signatureMove: manifest.signatureMove,
-        unlockedLevels: [1],
-        lastAscension: new Date(),
-        moveUsage: {},
-        abilityUsage: {}
-      };
-      
-      console.log('[trackMoveUsage] Created default manifest:', playerManifest);
-      
-      // Save the new manifest to the database
-      await updateDoc(userRef, {
-        manifest: playerManifest
-      });
-      
-      console.log('[trackMoveUsage] Saved default manifest to database');
+      console.error('[trackMoveUsage] Cannot track move usage without a valid manifest. Returning false.');
+      // DO NOT create a default manifest - this would overwrite existing data
+      // The manifest should be set through the proper manifest selection flow
+      return false;
     }
     
     // Initialize moveUsage if it doesn't exist

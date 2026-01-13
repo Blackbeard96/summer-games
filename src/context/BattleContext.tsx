@@ -202,7 +202,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const studentDoc = await getDoc(studentRef);
         const studentData = studentDoc.exists() ? studentDoc.data() : {};
         const playerPP = studentData.powerPoints || 0;
-        const userManifest = studentData.manifest?.manifestId || studentData.manifestationType || 'reading';
+        
+        // Extract manifest ID properly - do NOT default to 'reading' if manifest is missing
+        // Only use valid manifest IDs from the manifest object
+        let userManifest: string | null = null;
+        if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          userManifest = studentData.manifest.manifestId;
+        } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+          // Legacy string manifest format
+          userManifest = studentData.manifest;
+        }
+        
+        if (!userManifest) {
+          console.error('BattleContext: No valid manifest found for user. Student data keys:', Object.keys(studentData));
+          console.error('BattleContext: Manifest field:', studentData.manifest);
+          // Don't proceed with move initialization if manifest is missing
+          setLoading(false);
+          return;
+        }
         const studentInventory = studentData.inventory || [];
         const studentArtifacts = studentData.artifacts || [];
         
@@ -857,43 +874,59 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (studentDoc.exists()) {
             const studentData = studentDoc.data();
             const studentPP = studentData.powerPoints || 0;
-            const currentManifest = studentData.manifest?.manifestId || studentData.manifestationType || 'reading';
             
-            // Update inventory and artifacts in real-time
-            setInventory(studentData.inventory || []);
-            setArtifacts(studentData.artifacts || []);
+            // Extract manifest ID properly - do NOT default to 'reading' if manifest is missing
+            let currentManifest: string | null = null;
+            if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+              currentManifest = studentData.manifest.manifestId;
+            } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+              // Legacy string manifest format
+              currentManifest = studentData.manifest;
+            }
             
-            // Update moves when manifest changes
-            const movesRef = doc(db, 'battleMoves', currentUser.uid);
-            const movesDoc = await getDoc(movesRef);
-            
-            if (movesDoc.exists()) {
-              const movesData = movesDoc.data().moves || [];
+            // Only update moves if we have a valid manifest
+            if (currentManifest) {
+              // Update inventory and artifacts in real-time
+              setInventory(studentData.inventory || []);
+              setArtifacts(studentData.artifacts || []);
               
-              // Check if any manifest moves need to be updated
-              const updatedMoves = movesData.map((move: Move) => {
-                if (move.category === 'manifest') {
-                  const shouldUnlock = move.manifestType === currentManifest;
-                  // Only update if the unlock state has changed
-                  if (move.unlocked !== shouldUnlock) {
-                    console.log(`BattleContext: Manifest changed to ${currentManifest} - updating move ${move.name} (${move.manifestType}) - unlocking: ${shouldUnlock}`);
-                    return { ...move, unlocked: shouldUnlock };
+              // Update moves when manifest changes
+              const movesRef = doc(db, 'battleMoves', currentUser.uid);
+              const movesDoc = await getDoc(movesRef);
+              
+              if (movesDoc.exists()) {
+                const movesData = movesDoc.data().moves || [];
+                
+                // Check if any manifest moves need to be updated
+                const updatedMoves = movesData.map((move: Move) => {
+                  if (move.category === 'manifest') {
+                    const shouldUnlock = move.manifestType === currentManifest;
+                    // Only update if the unlock state has changed
+                    if (move.unlocked !== shouldUnlock) {
+                      console.log(`BattleContext: Manifest changed to ${currentManifest} - updating move ${move.name} (${move.manifestType}) - unlocking: ${shouldUnlock}`);
+                      return { ...move, unlocked: shouldUnlock };
+                    }
                   }
+                  return move;
+                });
+                
+                // Check if any moves were actually updated
+                const hasUpdates = updatedMoves.some((move: Move, index: number) => {
+                  const originalMove = movesData[index];
+                  return originalMove && move.unlocked !== originalMove.unlocked;
+                });
+                
+                if (hasUpdates) {
+                  console.log('BattleContext: Manifest changed - updating moves in database');
+                  await updateDoc(movesRef, { moves: updatedMoves });
+                  setMoves(updatedMoves);
                 }
-                return move;
-              });
-              
-              // Check if any moves were actually updated
-              const hasUpdates = updatedMoves.some((move: Move, index: number) => {
-                const originalMove = movesData[index];
-                return originalMove && move.unlocked !== originalMove.unlocked;
-              });
-              
-              if (hasUpdates) {
-                console.log('BattleContext: Manifest changed - updating moves in database');
-                await updateDoc(movesRef, { moves: updatedMoves });
-                setMoves(updatedMoves);
               }
+            } else {
+              // If manifest is missing, just update inventory/artifacts but don't touch moves
+              setInventory(studentData.inventory || []);
+              setArtifacts(studentData.artifacts || []);
+              console.warn('BattleContext: No valid manifest found in snapshot, skipping move updates');
             }
             
             // Sync vault PP with student PP in real-time

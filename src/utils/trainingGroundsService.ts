@@ -49,10 +49,11 @@ export async function getQuizSet(quizSetId: string): Promise<TrainingQuizSet | n
 }
 
 export async function getPublishedQuizSets(classIds?: string[]): Promise<TrainingQuizSet[]> {
+  // Query only by isPublished to avoid index requirement
+  // We'll sort and filter in memory
   let q = query(
     collection(db, 'trainingQuizSets'),
-    where('isPublished', '==', true),
-    orderBy('createdAt', 'desc')
+    where('isPublished', '==', true)
   );
   
   const snapshot = await getDocs(q);
@@ -60,15 +61,18 @@ export async function getPublishedQuizSets(classIds?: string[]): Promise<Trainin
   
   snapshot.forEach(doc => {
     const data = { id: doc.id, ...doc.data() } as TrainingQuizSet;
-    // Filter by classIds if provided
-    if (classIds && data.classIds && data.classIds.length > 0) {
-      const hasMatchingClass = data.classIds.some(cid => classIds.includes(cid));
-      if (hasMatchingClass || !data.classIds.length) {
-        quizSets.push(data);
-      }
-    } else {
-      quizSets.push(data);
-    }
+    
+    // Show ALL published quiz sets to ALL players
+    // Class filtering is optional - if classIds are assigned, still show to everyone
+    // (Future: can add class-based filtering if needed)
+    quizSets.push(data);
+  });
+  
+  // Sort by createdAt descending (in memory, no index needed)
+  quizSets.sort((a, b) => {
+    const aTime = a.createdAt?.toMillis?.() || a.createdAt || 0;
+    const bTime = b.createdAt?.toMillis?.() || b.createdAt || 0;
+    return bTime - aTime;
   });
   
   return quizSets;
@@ -213,10 +217,11 @@ export async function getAttempt(attemptId: string): Promise<TrainingAttempt | n
 }
 
 export async function getUserAttempts(userId: string, quizSetId?: string): Promise<TrainingAttempt[]> {
+  // Query without orderBy to avoid index requirement
+  // We'll filter and sort in memory
   let q = query(
     collection(db, 'trainingAttempts'),
-    where('userId', '==', userId),
-    orderBy('startedAt', 'desc')
+    where('userId', '==', userId)
   );
   
   if (quizSetId) {
@@ -229,12 +234,44 @@ export async function getUserAttempts(userId: string, quizSetId?: string): Promi
     attempts.push({ id: doc.id, ...doc.data() } as TrainingAttempt);
   });
   
+  // Sort by startedAt descending in memory (most recent first)
+  attempts.sort((a, b) => {
+    const aTime = a.startedAt?.toMillis?.() || (a.startedAt ? new Date(a.startedAt).getTime() : 0);
+    const bTime = b.startedAt?.toMillis?.() || (b.startedAt ? new Date(b.startedAt).getTime() : 0);
+    return bTime - aTime;
+  });
+  
   return attempts;
 }
 
 export async function getLastAttempt(userId: string, quizSetId: string): Promise<TrainingAttempt | null> {
   const attempts = await getUserAttempts(userId, quizSetId);
   return attempts.length > 0 ? attempts[0] : null;
+}
+
+/**
+ * Get all attempts for a quiz set (for admin analytics)
+ */
+export async function getQuizSetAttempts(quizSetId: string): Promise<TrainingAttempt[]> {
+  const q = query(
+    collection(db, 'trainingAttempts'),
+    where('quizSetId', '==', quizSetId)
+  );
+  
+  const snapshot = await getDocs(q);
+  const attempts: TrainingAttempt[] = [];
+  snapshot.forEach(doc => {
+    attempts.push({ id: doc.id, ...doc.data() } as TrainingAttempt);
+  });
+  
+  // Sort by startedAt descending (most recent first)
+  attempts.sort((a, b) => {
+    const aTime = a.startedAt?.toMillis?.() || (a.startedAt ? new Date(a.startedAt).getTime() : 0);
+    const bTime = b.startedAt?.toMillis?.() || (b.startedAt ? new Date(b.startedAt).getTime() : 0);
+    return bTime - aTime;
+  });
+  
+  return attempts;
 }
 
 // ============================================================================

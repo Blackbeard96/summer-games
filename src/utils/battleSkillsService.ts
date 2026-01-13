@@ -54,11 +54,23 @@ export async function getUserUnlockedSkillsForBattle(
     const rrCandyUnlocked = rrCandyStatus.unlocked;
     const rrCandyType = rrCandyStatus.candyType;
 
-    // Get user's manifest from student data
+    // Get user's manifest from student data - do NOT default to 'reading'
     const studentRef = doc(db, 'students', userId);
     const studentDoc = await getDoc(studentRef);
     const studentData = studentDoc.exists() ? studentDoc.data() : {};
-    const userManifest = studentData.manifest?.manifestId || studentData.manifestationType || 'reading';
+    
+    let userManifest: string | null = null;
+    if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+      userManifest = studentData.manifest.manifestId;
+    } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+      userManifest = studentData.manifest;
+    }
+    
+    // If no manifest found, return empty array (don't default to 'reading' moves)
+    if (!userManifest) {
+      console.warn(`[battleSkillsService] No valid manifest found for user ${userId}, returning empty manifest skills`);
+      return allMoves.filter(move => move.category !== 'manifest'); // Only return non-manifest moves
+    }
 
     // Get user's element if not provided
     const element = userElement || studentData.elementalAffinity || '';

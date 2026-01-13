@@ -2,16 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getPublishedQuizSets, getLastAttempt } from '../utils/trainingGroundsService';
-import { TrainingQuizSet } from '../types/trainingGrounds';
-import { db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { TrainingQuizSet, TrainingAttempt } from '../types/trainingGrounds';
+import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 
 const TrainingGrounds: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [quizSets, setQuizSets] = useState<TrainingQuizSet[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lastAttempts, setLastAttempts] = useState<Record<string, { percent: number }>>({});
+  const [lastAttempts, setLastAttempts] = useState<Record<string, TrainingAttempt>>({});
 
   useEffect(() => {
     if (!currentUser) return;
@@ -20,20 +19,19 @@ const TrainingGrounds: React.FC = () => {
       try {
         setLoading(true);
         
-        // Get user's classIds (simplified - adjust based on your class system)
-        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
-        const userData = userDoc.exists() ? userDoc.data() : {};
-        const classIds = userData.classIds || [];
+        // Get user's classrooms from the classrooms collection
+        const userClasses = await getClassesByStudent(currentUser.uid);
+        const classIds = userClasses.map(c => c.id);
         
         const published = await getPublishedQuizSets(classIds);
         setQuizSets(published);
         
         // Load last attempt for each quiz set
-        const attempts: Record<string, { percent: number }> = {};
+        const attempts: Record<string, TrainingAttempt> = {};
         for (const quizSet of published) {
           const lastAttempt = await getLastAttempt(currentUser.uid, quizSet.id);
           if (lastAttempt) {
-            attempts[quizSet.id] = { percent: lastAttempt.percent };
+            attempts[quizSet.id] = lastAttempt;
           }
         }
         setLastAttempts(attempts);
@@ -166,16 +164,36 @@ const TrainingGrounds: React.FC = () => {
                       padding: '0.75rem',
                       marginBottom: '1rem'
                     }}>
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
                         Last attempt
                       </div>
                       <div style={{ 
-                        fontSize: '1.25rem', 
+                        fontSize: '1.5rem', 
                         fontWeight: 'bold',
-                        color: lastAttempt.percent >= 70 ? '#10b981' : lastAttempt.percent >= 50 ? '#f59e0b' : '#ef4444'
+                        color: lastAttempt.percent >= 70 ? '#10b981' : lastAttempt.percent >= 50 ? '#f59e0b' : '#ef4444',
+                        marginBottom: '0.25rem'
                       }}>
                         {lastAttempt.percent}%
                       </div>
+                      <div style={{ 
+                        fontSize: '0.875rem', 
+                        color: '#6b7280'
+                      }}>
+                        {lastAttempt.scoreCorrect} out of {lastAttempt.scoreTotal} correct
+                      </div>
+                      {lastAttempt.rewards && (lastAttempt.rewards.ppGained > 0 || lastAttempt.rewards.xpGained > 0) && (
+                        <div style={{ 
+                          fontSize: '0.75rem', 
+                          color: '#6b7280',
+                          marginTop: '0.5rem',
+                          paddingTop: '0.5rem',
+                          borderTop: '1px solid #e5e7eb'
+                        }}>
+                          Earned: {lastAttempt.rewards.ppGained > 0 && `+${lastAttempt.rewards.ppGained} PP`}
+                          {lastAttempt.rewards.ppGained > 0 && lastAttempt.rewards.xpGained > 0 && ' • '}
+                          {lastAttempt.rewards.xpGained > 0 && `+${lastAttempt.rewards.xpGained} XP`}
+                        </div>
+                      )}
                     </div>
                   )}
 

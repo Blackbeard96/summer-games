@@ -14,6 +14,7 @@ import {
   reorderQuestions,
   uploadQuestionImage,
   deleteQuestionImage,
+  getQuizSetAttempts,
 } from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
@@ -30,6 +31,15 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [editingQuestion, setEditingQuestion] = useState<TrainingQuestion | null>(null);
   const [uploading, setUploading] = useState(false);
   const [availableArtifacts, setAvailableArtifacts] = useState<Array<{ id: string; name: string; icon: string }>>([]);
+  const [showCompletionStats, setShowCompletionStats] = useState(false);
+  const [completionStats, setCompletionStats] = useState<Array<{
+    userId: string;
+    displayName: string;
+    attemptCount: number;
+    bestScore: number;
+    latestScore: number;
+  }>>([]);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   // Form state
   const [quizSetForm, setQuizSetForm] = useState({
@@ -104,6 +114,74 @@ const TrainingGroundsAdmin: React.FC = () => {
     } catch (error) {
       console.error('Error loading questions:', error);
       alert('Failed to load questions');
+    }
+  };
+
+  const loadCompletionStats = async (quizSetId: string) => {
+    if (!quizSetId) return;
+    
+    setLoadingStats(true);
+    try {
+      // Get all attempts for this quiz set
+      const attempts = await getQuizSetAttempts(quizSetId);
+      
+      // Group attempts by user
+      const userAttemptsMap = new Map<string, typeof attempts>();
+      attempts.forEach(attempt => {
+        const userId = attempt.userId;
+        if (!userAttemptsMap.has(userId)) {
+          userAttemptsMap.set(userId, []);
+        }
+        userAttemptsMap.get(userId)!.push(attempt);
+      });
+      
+      // Fetch user display names and calculate stats
+      const statsPromises = Array.from(userAttemptsMap.entries()).map(async ([userId, userAttempts]) => {
+        // Get display name from students or users collection
+        let displayName = userId; // Fallback to userId
+        
+        try {
+          const [userDoc, studentDoc] = await Promise.all([
+            getDoc(doc(db, 'users', userId)),
+            getDoc(doc(db, 'students', userId))
+          ]);
+          
+          if (userDoc.exists()) {
+            displayName = userDoc.data().displayName || displayName;
+          }
+          if (studentDoc.exists() && displayName === userId) {
+            displayName = studentDoc.data().displayName || studentDoc.data().name || displayName;
+          }
+        } catch (error) {
+          console.error(`Error fetching display name for ${userId}:`, error);
+        }
+        
+        // Calculate stats
+        const attemptCount = userAttempts.length;
+        const scores = userAttempts.map(a => a.percent);
+        const bestScore = Math.max(...scores);
+        const latestScore = scores[0]; // Already sorted by most recent first
+        
+        return {
+          userId,
+          displayName,
+          attemptCount,
+          bestScore,
+          latestScore,
+        };
+      });
+      
+      const stats = await Promise.all(statsPromises);
+      // Sort by display name
+      stats.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      
+      setCompletionStats(stats);
+      setShowCompletionStats(true);
+    } catch (error) {
+      console.error('Error loading completion stats:', error);
+      alert('Failed to load completion statistics');
+    } finally {
+      setLoadingStats(false);
     }
   };
 
@@ -195,31 +273,39 @@ const TrainingGroundsAdmin: React.FC = () => {
       setUploading(true);
       const validOptions = questionForm.options.filter(o => o.trim());
       
-      let imageUrl = questionForm.imageUrl;
-      if (questionForm.imageFile) {
-        const tempQuestionId = `temp_${Date.now()}`;
-        imageUrl = await uploadQuestionImage(selectedQuizSet.id, tempQuestionId, questionForm.imageFile);
-        // Note: We'll update the question ID after creation
-      }
-
+      // Create question first (without image)
       const rewardConfig = DEFAULT_REWARDS[questionForm.difficulty];
-      const questionId = await addQuestion(selectedQuizSet.id, {
+      
+      // Build question data - omit undefined fields (Firestore doesn't allow undefined)
+      const questionData: any = {
         prompt: questionForm.prompt,
-        imageUrl: imageUrl || null,
+        imageUrl: questionForm.imageUrl || null,
         options: validOptions,
         correctIndex: questionForm.correctIndex,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
-        category: questionForm.category || undefined,
         pointsPP: rewardConfig.basePP,
         pointsXP: rewardConfig.baseXP,
         order: questions.length,
-      });
+      };
+      
+      // Only include category if it has a value
+      if (questionForm.category && questionForm.category.trim()) {
+        questionData.category = questionForm.category.trim();
+      }
+      
+      const questionId = await addQuestion(selectedQuizSet.id, questionData);
 
-      // Upload image after question is created (if provided)
+      // Upload image after question is created (if new image file provided)
       if (questionForm.imageFile) {
-        const imageUrl = await uploadQuestionImage(selectedQuizSet.id, questionId, questionForm.imageFile);
-        await updateQuestion(selectedQuizSet.id, questionId, { imageUrl });
+        try {
+          const imageUrl = await uploadQuestionImage(selectedQuizSet.id, questionId, questionForm.imageFile);
+          await updateQuestion(selectedQuizSet.id, questionId, { imageUrl });
+        } catch (imageError: any) {
+          // If image upload fails (e.g., permissions), log but don't fail the whole operation
+          console.warn('Failed to upload question image:', imageError);
+          // Question was already created successfully, so we continue
+        }
       }
 
       alert('Question added successfully!');
@@ -258,15 +344,23 @@ const TrainingGroundsAdmin: React.FC = () => {
       }
 
       const validOptions = questionForm.options.filter(o => o.trim());
-      await updateQuestion(selectedQuizSet.id, editingQuestion.id, {
+      
+      // Build update data - omit undefined fields (Firestore doesn't allow undefined)
+      const updateData: any = {
         prompt: questionForm.prompt,
         imageUrl: imageUrl || null,
         options: validOptions,
         correctIndex: questionForm.correctIndex,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
-        category: questionForm.category || undefined,
-      });
+      };
+      
+      // Only include category if it has a value
+      if (questionForm.category && questionForm.category.trim()) {
+        updateData.category = questionForm.category.trim();
+      }
+      
+      await updateQuestion(selectedQuizSet.id, editingQuestion.id, updateData);
 
       alert('Question updated successfully!');
       setEditingQuestion(null);
@@ -545,6 +639,20 @@ const TrainingGroundsAdmin: React.FC = () => {
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
+                  onClick={() => loadCompletionStats(selectedQuizSet.id)}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  📊 View Completion Stats
+                </button>
+                <button
                   onClick={() => handleTogglePublish(selectedQuizSet)}
                   style={{
                     padding: '0.5rem 1rem',
@@ -574,7 +682,6 @@ const TrainingGroundsAdmin: React.FC = () => {
                 </button>
                 <button
                   onClick={() => {
-                    setShowQuestionForm(false);
                     setEditingQuestion(null);
                     setQuestionForm({
                       prompt: '',
@@ -589,6 +696,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                       pointsXP: 10,
                       artifactRewards: [],
                     });
+                    setShowQuestionForm(true);
                   }}
                   style={{
                     padding: '0.5rem 1rem',
@@ -604,6 +712,97 @@ const TrainingGroundsAdmin: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Completion Stats */}
+            {showCompletionStats && (
+              <div style={{
+                marginTop: '1.5rem',
+                marginBottom: '1.5rem',
+                padding: '1.5rem',
+                background: '#f9fafb',
+                borderRadius: '0.75rem',
+                border: '1px solid #e5e7eb',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h4 style={{ fontSize: '1.125rem', fontWeight: 'bold', color: '#111827' }}>
+                    Completion Statistics
+                  </h4>
+                  <button
+                    onClick={() => setShowCompletionStats(false)}
+                    style={{
+                      padding: '0.25rem 0.5rem',
+                      background: '#6b7280',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.25rem',
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+                
+                {loadingStats ? (
+                  <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
+                    Loading statistics...
+                  </div>
+                ) : completionStats.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
+                    No completions yet
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
+                          <th style={{ padding: '0.75rem', textAlign: 'left', fontWeight: '600', color: '#374151' }}>
+                            Player
+                          </th>
+                          <th style={{ padding: '0.75rem', textAlign: 'center', fontWeight: '600', color: '#374151' }}>
+                            Attempts
+                          </th>
+                          <th style={{ padding: '0.75rem', textAlign: 'center', fontWeight: '600', color: '#374151' }}>
+                            Best Score
+                          </th>
+                          <th style={{ padding: '0.75rem', textAlign: 'center', fontWeight: '600', color: '#374151' }}>
+                            Latest Score
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {completionStats.map((stat) => (
+                          <tr key={stat.userId} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                            <td style={{ padding: '0.75rem', color: '#111827' }}>
+                              {stat.displayName}
+                            </td>
+                            <td style={{ padding: '0.75rem', textAlign: 'center', color: '#374151' }}>
+                              {stat.attemptCount}
+                            </td>
+                            <td style={{ 
+                              padding: '0.75rem', 
+                              textAlign: 'center',
+                              color: stat.bestScore >= 70 ? '#10b981' : stat.bestScore >= 50 ? '#f59e0b' : '#ef4444',
+                              fontWeight: '600'
+                            }}>
+                              {stat.bestScore}%
+                            </td>
+                            <td style={{ 
+                              padding: '0.75rem', 
+                              textAlign: 'center',
+                              color: stat.latestScore >= 70 ? '#10b981' : stat.latestScore >= 50 ? '#f59e0b' : '#ef4444',
+                              fontWeight: '600'
+                            }}>
+                              {stat.latestScore}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Questions List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -743,15 +942,17 @@ const TrainingGroundsAdmin: React.FC = () => {
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Answer Options * (2-6 options)</label>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Answer Options * (A, B, C, D)</label>
               {questionForm.options.map((option, index) => (
                 <div key={index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
-                  <input
-                    type="radio"
-                    name="correctAnswer"
-                    checked={questionForm.correctIndex === index}
-                    onChange={() => setQuestionForm({ ...questionForm, correctIndex: index })}
-                  />
+                  <span style={{ 
+                    minWidth: '24px', 
+                    textAlign: 'center', 
+                    fontWeight: '600',
+                    color: '#6b7280'
+                  }}>
+                    {String.fromCharCode(65 + index)}:
+                  </span>
                   <input
                     type="text"
                     value={option}
@@ -760,42 +961,83 @@ const TrainingGroundsAdmin: React.FC = () => {
                       newOptions[index] = e.target.value;
                       setQuestionForm({ ...questionForm, options: newOptions });
                     }}
-                    style={{ flex: 1, padding: '0.5rem', border: '1px solid #ccc', borderRadius: '0.5rem' }}
-                    placeholder={`Option ${index + 1}`}
+                    style={{ 
+                      flex: 1, 
+                      padding: '0.75rem', 
+                      border: '1px solid #d1d5db', 
+                      borderRadius: '0.5rem',
+                      fontSize: '1rem'
+                    }}
+                    placeholder={`Option ${String.fromCharCode(65 + index)}`}
                   />
                   {questionForm.options.length > 2 && (
                     <button
+                      type="button"
                       onClick={() => removeOption(index)}
                       style={{
-                        padding: '0.25rem 0.5rem',
                         background: '#ef4444',
                         color: 'white',
                         border: 'none',
-                        borderRadius: '0.25rem',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.5rem',
                         cursor: 'pointer',
+                        fontSize: '0.875rem'
                       }}
                     >
-                      ×
+                      Remove
                     </button>
                   )}
                 </div>
               ))}
               {questionForm.options.length < 6 && (
                 <button
+                  type="button"
                   onClick={addOption}
                   style={{
                     padding: '0.5rem 1rem',
-                    background: '#e5e7eb',
-                    color: '#374151',
+                    background: '#10b981',
+                    color: 'white',
                     border: 'none',
                     borderRadius: '0.5rem',
                     cursor: 'pointer',
                     fontSize: '0.875rem',
+                    marginTop: '0.5rem'
                   }}
                 >
                   + Add Option
                 </button>
               )}
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Correct Answer * (must match one of the options above)
+              </label>
+              <select
+                value={questionForm.options[questionForm.correctIndex] || ''}
+                onChange={(e) => {
+                  const selectedOption = e.target.value;
+                  const correctIndex = questionForm.options.findIndex(opt => opt === selectedOption);
+                  if (correctIndex !== -1) {
+                    setQuestionForm({ ...questionForm, correctIndex });
+                  }
+                }}
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                  fontSize: '1rem'
+                }}
+              >
+                <option value="">Select correct answer</option>
+                {questionForm.options.filter(o => o.trim()).map((option, index) => (
+                  <option key={index} value={option}>
+                    {String.fromCharCode(65 + index)}: {option}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div style={{ marginBottom: '1rem' }}>

@@ -102,11 +102,14 @@ export async function grantQuizRewards(
 ): Promise<void> {
   const userRef = doc(db, 'users', userId);
   const studentRef = doc(db, 'students', userId);
+  const vaultRef = doc(db, 'vaults', userId);
   
   await runTransaction(db, async (transaction) => {
     const userDoc = await transaction.get(userRef);
     const studentDoc = await transaction.get(studentRef);
+    const vaultDoc = await transaction.get(vaultRef);
     
+    // Update users collection
     if (userDoc.exists()) {
       transaction.update(userRef, {
         powerPoints: increment(rewards.ppGained),
@@ -114,10 +117,23 @@ export async function grantQuizRewards(
       });
     }
     
+    // Update students collection
     if (studentDoc.exists()) {
       transaction.update(studentRef, {
         powerPoints: increment(rewards.ppGained),
         xp: increment(rewards.xpGained),
+      });
+    }
+    
+    // Update vault collection (primary source of truth for PP)
+    if (vaultDoc.exists()) {
+      const vaultData = vaultDoc.data();
+      const vaultCapacity = vaultData.capacity || 1000;
+      const currentVaultPP = vaultData.currentPP || 0;
+      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + rewards.ppGained);
+      
+      transaction.update(vaultRef, {
+        currentPP: newVaultPP,
       });
     }
   });
