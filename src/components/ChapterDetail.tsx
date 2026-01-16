@@ -368,18 +368,35 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Not the first challenge - check if previous challenge is completed
       const previousChallenge = chapter.challenges[challengeIndex - 1];
       const previousChallengeProgress = chapterProgress.challenges?.[previousChallenge.id];
-      previousChallengeCompleted = previousChallengeProgress?.isCompleted || previousChallengeProgress?.status === 'approved';
       
-      if (DEBUG_CH1) {
-        console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): Previous challenge check:`, {
+      // Check if previous challenge is completed (multiple ways to verify)
+      previousChallengeCompleted = 
+        previousChallengeProgress?.isCompleted === true || 
+        previousChallengeProgress?.status === 'approved' ||
+        false; // Explicitly default to false if not found
+      
+      // Debug logging (always log for Chapter 2 challenges)
+      if (DEBUG_CH1 || chapter.id === 2) {
+        console.log(`[DEBUG] getChallengeStatus(${challenge.id}): Previous challenge check:`, {
+          chapterId: chapter.id,
+          challengeIndex,
           previousChallengeId: previousChallenge.id,
           previousChallengeCompleted,
-          previousChallengeProgress: previousChallengeProgress
+          previousChallengeProgress: previousChallengeProgress,
+          allChallenges: Object.keys(chapterProgress.challenges || {}),
+          hasChapterProgress: !!chapterProgress,
+          chapterProgressKeys: chapterProgress ? Object.keys(chapterProgress) : []
         });
       }
       
       if (!previousChallengeCompleted) {
-        if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`);
+        if (DEBUG_CH1 || chapter.id === 2) {
+          console.log(`[DEBUG] Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`, {
+            previousChallengeProgress,
+            isCompleted: previousChallengeProgress?.isCompleted,
+            status: previousChallengeProgress?.status
+          });
+        }
         return 'locked';
       }
     }
@@ -394,8 +411,29 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     // the challenge is available (unlocked)
     // Requirements are checked separately for auto-completion, but don't block availability
     if (previousChallengeCompleted) {
-      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is available - previous challenge completed (or first challenge) and chapter is active`);
+      if (DEBUG_CH1 || chapter.id === 2) {
+        console.log(`[DEBUG] Challenge ${challenge.id} is available - previous challenge completed (or first challenge) and chapter is active`, {
+          chapterId: chapter.id,
+          challengeId: challenge.id,
+          previousChallengeCompleted,
+          chapterActive: chapterProgress.isActive
+        });
+      }
       return 'available';
+    }
+    
+    // FALLBACK: For Chapter 2-2 specifically, if the requirements check shows team formation is complete,
+    // unlock it even if previous challenge check didn't work (handles edge cases with data structure)
+    if (chapter.id === 2 && challenge.id === 'ch2-rival-selection') {
+      const teamFormationChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
+      const isTeamFormationCompleted = teamFormationChallenge?.isCompleted === true || teamFormationChallenge?.status === 'approved';
+      
+      if (isTeamFormationCompleted && chapterProgress.isActive) {
+        if (DEBUG_CH1 || chapter.id === 2) {
+          console.log(`[DEBUG] Challenge ${challenge.id} is available - FALLBACK: team formation challenge completed detected via requirements check`);
+        }
+        return 'available';
+      }
     }
     
     // If no requirements and chapter is active, challenge is available
@@ -451,8 +489,21 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             return userProgress.artifact?.identified;
           }
         case 'team':
-          // For team requirements, we'll check squad membership in the auto-completion logic
-          return true; // Let auto-completion handle this
+          // For team requirements, check if Chapter 2-1 (team formation) is completed
+          // This allows Chapter 2-2 to unlock after completing 2-1, regardless of actual squad membership
+          if (req.value === 'formed') {
+            const teamFormationChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
+            const isTeamFormationCompleted = teamFormationChallenge?.isCompleted || teamFormationChallenge?.status === 'approved';
+            if (DEBUG_CH1) {
+              console.log(`[DEBUG_CH1] Checking team requirement (formed):`, {
+                teamFormationChallenge,
+                isTeamFormationCompleted
+              });
+            }
+            return isTeamFormationCompleted;
+          }
+          // For other team requirements, check squad membership
+          return !!userProgress?.team?.id || !!userProgress?.squad?.id;
         case 'rival':
           return userProgress.rival;
         case 'veil':
@@ -565,6 +616,29 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
       // Get userRef for reward granting and refresh
       const userRef = doc(db, 'users', currentUser.uid);
+      
+      // CRITICAL: Refresh user progress immediately after completion to show unlocked challenges
+      // Wait a moment for Firestore to propagate the transaction changes
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      try {
+        const refreshedDoc = await getDoc(userRef);
+        if (refreshedDoc.exists()) {
+          const refreshedData = refreshedDoc.data();
+          setUserProgress(refreshedData);
+          
+          console.log(`[AutoComplete] User progress refreshed after challenge completion:`, {
+            challengeId: challenge.id,
+            challengeUnlocked: progressionResult.challengeUnlocked,
+            chapterUnlocked: progressionResult.chapterUnlocked,
+            nextChallengeExists: progressionResult.challengeUnlocked 
+              ? !!refreshedData.chapters?.[chapter.id]?.challenges?.[progressionResult.challengeUnlocked]
+              : false
+          });
+        }
+      } catch (refreshError) {
+        console.warn('[AutoComplete] Failed to refresh user progress:', refreshError);
+      }
 
       // SECURITY FIX: Use centralized idempotent reward granting service
       // This ensures rewards can only be granted once, even if challenge is reset and re-completed
@@ -755,9 +829,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       
       switch (challenge.id) {
         case 'ch2-team-formation':
-          // Auto-complete if user is in a squad
-          shouldAutoComplete = isInSquad;
-          console.log('ChapterDetail: Team formation challenge auto-complete check:', { shouldAutoComplete, isInSquad });
+          // Chapter 2-1 completes automatically after watching the video (handled by PortalIntroModal)
+          // Do NOT auto-complete based on squad membership
+          shouldAutoComplete = false;
+          console.log('ChapterDetail: Team formation challenge - completion handled by video watch, not squad membership');
           break;
         case 'ch2-rival-selection':
           // Auto-complete if user has chosen a rival
@@ -2838,15 +2913,38 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       }
 
       // Refresh user progress to show unlocked next challenge
+      // Wait a moment for Firestore to propagate the changes
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        const refreshedData = refreshedUserDoc.data();
+        setUserProgress(refreshedData);
+        
+        if (DEBUG_CH2) {
+          console.log('[CH2] handlePortalIntroComplete - User progress refreshed:', {
+            chapter2Progress: refreshedData.chapters?.[2],
+            challengeUnlocked: progressionResult.challengeUnlocked,
+            nextChallengeProgress: refreshedData.chapters?.[2]?.challenges?.[progressionResult.challengeUnlocked || '']
+          });
+        }
       }
 
       if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
         console.log('[CH2] handlePortalIntroComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
       }
+      
+      // Force a re-check of challenge statuses after refresh
+      // The real-time listener should handle this, but add a small delay to ensure it propagates
+      setTimeout(() => {
+        const finalCheckDoc = getDoc(userRef);
+        finalCheckDoc.then(doc => {
+          if (doc.exists()) {
+            setUserProgress(doc.data());
+          }
+        });
+      }, 1000);
     } catch (error) {
       console.error('[CH2] handlePortalIntroComplete - Error:', error);
       alert('Error completing challenge. Please try again.');
@@ -4204,7 +4302,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                             fontSize: '0.875rem',
                             fontWeight: 'bold'
                           }}>
-                            🔄 This challenge will be completed automatically when you join a team.
+                            📹 This challenge will be completed automatically after watching the video.
                           </div>
                         )}
                         

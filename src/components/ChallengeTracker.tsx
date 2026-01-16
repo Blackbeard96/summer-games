@@ -220,9 +220,10 @@ const ChallengeTracker = () => {
       
       switch (challenge.id) {
         case 'ch2-team-formation':
-          // Auto-complete if user is in a squad
-          shouldAutoComplete = isInSquad;
-          console.log('ChallengeTracker: Team formation challenge auto-complete check:', { shouldAutoComplete, isInSquad });
+          // Chapter 2-1 completes automatically after watching the video (handled by PortalIntroModal)
+          // Do NOT auto-complete based on squad membership
+          shouldAutoComplete = false;
+          console.log('ChallengeTracker: Team formation challenge - completion handled by video watch, not squad membership');
           break;
         case 'ch2-rival-selection':
           // Auto-complete if user has chosen a rival (check both legacy and new chapter system)

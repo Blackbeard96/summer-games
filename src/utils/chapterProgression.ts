@@ -158,16 +158,42 @@ export async function updateProgressOnChallengeComplete(
         
         // Only unlock if not already unlocked/completed
         if (!nextChallengeProgress.isCompleted && nextChallengeProgress.status !== 'approved') {
+          // Ensure challenges object exists
+          if (!updatedChapters[chapterKey].challenges) {
+            updatedChapters[chapterKey].challenges = {};
+          }
+          
+          // Create next challenge entry - this marks it as "unlocked" by ensuring it exists in the structure
+          // The UI unlock logic (getChallengeStatus) will check if previous challenge is completed
           updatedChapters[chapterKey].challenges[nextChallengeId] = {
             ...nextChallengeProgress,
-            // Status remains as-is (will be checked by UI unlock logic)
+            // Don't set isCompleted or status - those remain undefined/empty until challenge is actually completed
+            // The existence of this entry allows the UI to check if it should be available
           };
           
           progressionResult.challengeUnlocked = nextChallengeId;
           
           if (DEBUG_PROGRESS) {
-            console.log(`[Progression] Next challenge ${nextChallengeId} will be unlocked (sequential unlock)`);
+            console.log(`[Progression] Next challenge ${nextChallengeId} will be unlocked (sequential unlock)`, {
+              chapterId,
+              currentChallengeId: challengeId,
+              nextChallengeId,
+              nextChallengeExists: !!chapterProgress.challenges?.[nextChallengeId],
+              chapterKey,
+              allChallenges: Object.keys(updatedChapters[chapterKey].challenges || {})
+            });
           }
+        } else {
+          if (DEBUG_PROGRESS) {
+            console.log(`[Progression] Next challenge ${nextChallengeId} already unlocked/completed, skipping`, {
+              isCompleted: nextChallengeProgress.isCompleted,
+              status: nextChallengeProgress.status
+            });
+          }
+        }
+      } else {
+        if (DEBUG_PROGRESS) {
+          console.log(`[Progression] No next challenge found for ${challengeId} in chapter ${chapterId}`);
         }
       }
       
