@@ -15,10 +15,10 @@ import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
-import { getRRCandyMoves } from '../utils/rrCandyMoves';
 import { normalizePlayerData } from '../utils/playerData';
 import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
+import { SkillTreePage } from '../components/skillTree/SkillTreePage';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -115,7 +115,7 @@ const isEquippableArtifact = (artifact: any): boolean => {
 
 const Profile = () => {
   const { currentUser } = useAuth();
-  const { syncVaultPP, vault, moves: battleMoves, upgradeMove, refreshVaultData } = useBattle();
+  const { syncVaultPP, vault, moves: battleMoves, refreshVaultData } = useBattle();
   const navigate = useNavigate();
   const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -562,48 +562,8 @@ const Profile = () => {
     }
   }, [skillTreeView]);
 
-  // Ensure RR Candy moves are added to Firestore when skill tree is shown
-  useEffect(() => {
-    if (!isSkillTreeShowing || !currentUser || !userData) return;
-
-    const ensureRRCandyMoves = async () => {
-      try {
-        const chapter2 = userData?.chapters?.[2] || userData?.chapters?.['2'];
-        const challenge = chapter2?.challenges?.['ep2-its-all-a-game'];
-        const candyType = challenge?.candyChoice;
-        const isCompleted = challenge?.isCompleted || challenge?.status === 'approved';
-        
-        if (!isCompleted || !candyType) return;
-
-        // Check if moves are in Firestore
-        const movesRef = doc(db, 'battleMoves', currentUser.uid);
-        const movesDoc = await getDoc(movesRef);
-        const existingMoves = movesDoc.exists() ? (movesDoc.data().moves || []) : [];
-        const hasRRCandyMoves = existingMoves.some((m: any) => m.id?.startsWith('rr-candy-'));
-        
-        if (!hasRRCandyMoves) {
-          // Add RR Candy moves to Firestore
-          const rrCandyMoves = getRRCandyMoves(candyType);
-          const updatedMoves = [...existingMoves, ...rrCandyMoves];
-          
-          if (movesDoc.exists()) {
-            await updateDoc(movesRef, { moves: updatedMoves });
-          } else {
-            await setDoc(movesRef, { moves: updatedMoves });
-          }
-          
-          // Refresh moves from context
-          if (refreshVaultData) {
-            await refreshVaultData();
-          }
-        }
-      } catch (error) {
-        console.error('Error ensuring RR Candy moves:', error);
-      }
-    };
-
-    ensureRRCandyMoves();
-  }, [isSkillTreeShowing, currentUser, userData, refreshVaultData]);
+  // Note: RR Candy moves are now managed entirely in Skill Mastery (Battle Arena)
+  // No longer needed to ensure RR Candy moves in Profile
 
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1004,408 +964,122 @@ const Profile = () => {
         {/* Right Column - Profile Settings or Skill Tree Settings */}
         <div>
           {isSkillTreeShowing ? (
-            /* Skill Tree Settings */
-            <div className="skill-tree-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#10b981' }}>
-                🌳 Skill Tree Settings
-              </h2>
-              
-              {/* RR Candy Moves Management */}
-              <div style={{ marginBottom: '2rem' }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
-                  RR Candy Abilities
-                </h3>
-                
-                {/* Get RR Candy moves - generate if not in battleMoves */}
-                {(() => {
-                  // Check if user has completed Chapter 2-4 - try multiple paths
-                  const chapter2 = userData?.chapters?.[2] || userData?.chapters?.['2'];
-                  const challenge = chapter2?.challenges?.['ep2-its-all-a-game'];
-                  const candyType = challenge?.candyChoice || 'on-off'; // Default to 'on-off' if missing
-                  const isCompleted = challenge?.isCompleted || challenge?.status === 'approved';
-                  
-                  // Debug logging
-                  console.log('[Skill Tree Settings] Debug:', {
-                    hasUserData: !!userData,
-                    hasChapter2: !!chapter2,
-                    hasChallenge: !!challenge,
-                    challengeData: challenge,
-                    candyType,
-                    isCompleted,
-                    battleMovesCount: battleMoves?.length || 0
-                  });
-                  
-                  // Get RR Candy moves from battleMoves
-                  let rrCandyMoves = (battleMoves || []).filter((move: any) => move.id?.startsWith('rr-candy-'));
-                  console.log('[Skill Tree Settings] RR Candy moves found:', rrCandyMoves.length);
-                  
-                  // Canonical name mapping for RR Candy skills (ensures correct names even if Firestore has old names)
-                  const canonicalNames: { [key: string]: string } = {
-                    'rr-candy-on-off-shields-off': 'Shield OFF',
-                    'rr-candy-on-off-shields-on': 'Shield ON'
-                  };
-                  
-                  // Apply canonical names to existing moves immediately
-                  rrCandyMoves = rrCandyMoves.map((move: any) => {
-                    const canonicalName = canonicalNames[move.id];
-                    return canonicalName ? { ...move, name: canonicalName } : move;
-                  });
-                  
-                  // If no moves found but user has completed Chapter 2-4, generate them
-                  if (rrCandyMoves.length === 0 && isCompleted) {
-                    console.log('[Skill Tree Settings] Generating RR Candy moves for:', candyType);
-                    const generatedMoves = getRRCandyMoves(candyType as 'on-off' | 'up-down' | 'config');
-                    console.log('[Skill Tree Settings] Generated moves:', generatedMoves.length);
-                    // Try to find matching moves in battleMoves by ID, merge with generated data
-                    // Use ID matching to find existing moves (names may be outdated like "Vault Hack")
-                    rrCandyMoves = generatedMoves.map((genMove) => {
-                      const existingMove = (battleMoves || []).find((m: any) => 
-                        m.id === genMove.id
-                      );
-                      // If found, merge: use existing move data but update name to canonical name and ensure unlocked
-                      if (existingMove) {
-                        return { ...existingMove, name: genMove.name, unlocked: true };
-                      }
-                      // Otherwise use generated move
-                      return genMove;
-                    });
-                    console.log('[Skill Tree Settings] Final RR Candy moves after generation:', rrCandyMoves.length);
-                  }
-                  
-                  // If not completed, show unlock message
-                  if (!isCompleted) {
-                    return (
-                      <div style={{
-                        backgroundColor: '#f3f4f6',
-                        borderRadius: '0.5rem',
-                        padding: '2rem',
-                        textAlign: 'center',
-                        color: '#6b7280'
-                      }}>
-                        <p>No RR Candy abilities unlocked yet.</p>
-                        <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
-                          Complete Chapter 2-4 to unlock your first RR Candy ability!
-                        </p>
-                      </div>
-                    );
-                  }
-                  
-                  // Render moves
-                  return (
-                    <>
-                      {rrCandyMoves.map((move: any) => (
-                        <div
-                          key={move.id}
-                          style={{
-                            backgroundColor: '#f9fafb',
-                            borderRadius: '0.5rem',
-                            padding: '1rem',
-                            marginBottom: '1rem',
-                            border: '1px solid #e5e7eb'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
-                            <div>
-                              <h4 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.25rem' }}>
-                                {move.name}
-                              </h4>
-                              <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                                {move.description}
-                              </p>
-                            </div>
-                            <div style={{
-                              backgroundColor: move.unlocked ? '#10b981' : '#9ca3af',
-                              color: 'white',
-                              padding: '0.25rem 0.75rem',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold'
-                            }}>
-                              {move.unlocked ? 'Unlocked' : 'Locked'}
-                            </div>
-                          </div>
-                          
-                          {/* Move Stats */}
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.875rem' }}>
-                            <div>
-                              <span style={{ color: '#6b7280' }}>Level:</span>{' '}
-                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.level}</span>
-                            </div>
-                            <div>
-                              <span style={{ color: '#6b7280' }}>Mastery:</span>{' '}
-                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.masteryLevel}/5</span>
-                            </div>
-                            <div>
-                              <span style={{ color: '#6b7280' }}>Cost:</span>{' '}
-                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>
-                                {move.id.startsWith('rr-candy-') ? '1 Move' : `${move.cost} PP`}
-                              </span>
-                            </div>
-                            <div>
-                              <span style={{ color: '#6b7280' }}>Cooldown:</span>{' '}
-                              <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{move.cooldown} turns</span>
-                            </div>
-                          </div>
-                          
-                          {/* Level Up Button */}
-                          {move.unlocked && move.masteryLevel < 5 && (() => {
-                            // Calculate upgrade cost - exponential for RR Candy (1000, 2000, 4000, 8000)
-                            const nextLevel = move.masteryLevel + 1;
-                            let upgradeCost = 1000; // 1000 PP for Level 1 → 2
-                            if (nextLevel === 3) {
-                              upgradeCost = 2000; // 2000 PP for Level 2 → 3
-                            } else if (nextLevel === 4) {
-                              upgradeCost = 4000; // 4000 PP for Level 3 → 4
-                            } else if (nextLevel === 5) {
-                              upgradeCost = 8000; // 8000 PP for Level 4 → 5
-                            }
-                            
-                            // RR Candy moves require Truth Metal Shards (level - 1 shards)
-                            const isRRCandyMove = move.id?.startsWith('rr-candy-');
-                            const requiredShards = isRRCandyMove ? (nextLevel - 1) : 0;
-                            const currentTruthMetal = userData?.truthMetal || 0;
-                            const hasEnoughShards = !isRRCandyMove || currentTruthMetal >= requiredShards;
-                            const hasEnoughPP = vault && vault.currentPP >= upgradeCost;
-                            const canUpgrade = hasEnoughPP && hasEnoughShards;
-                            
-                            return (
-                              <button
-                                onClick={async () => {
-                                  if (upgradeMove && canUpgrade) {
-                                    try {
-                                      await upgradeMove(move.id);
-                                      // Refresh user data to show updated moves and truth metal
-                                      if (currentUser?.uid) {
-                                        const userRef = doc(db, 'users', currentUser.uid);
-                                        const userDoc = await getDoc(userRef);
-                                        if (userDoc.exists()) {
-                                          setUserData(userDoc.data());
-                                        }
-                                      }
-                                      // Refresh vault data to update PP
-                                      if (refreshVaultData) {
-                                        await refreshVaultData();
-                                      }
-                                    } catch (error) {
-                                      console.error('Error upgrading move:', error);
-                                      alert('Failed to upgrade ability. Please try again.');
-                                    }
-                                  } else if (!hasEnoughPP) {
-                                    alert(`Not enough PP. Need ${upgradeCost} PP to upgrade.`);
-                                  } else if (!hasEnoughShards) {
-                                    alert(`Not enough Truth Metal Shards. Need ${requiredShards} shards to upgrade to Level ${nextLevel}.`);
-                                  }
-                                }}
-                                disabled={!canUpgrade}
-                                style={{
-                                  backgroundColor: canUpgrade ? '#10b981' : '#9ca3af',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '0.375rem',
-                                  padding: '0.5rem 1rem',
-                                  fontSize: '0.875rem',
-                                  fontWeight: 'bold',
-                                  cursor: canUpgrade ? 'pointer' : 'not-allowed',
-                                  transition: 'all 0.2s ease',
-                                  width: '100%',
-                                  opacity: canUpgrade ? 1 : 0.7
-                                }}
-                                onMouseOver={(e) => {
-                                  if (canUpgrade) {
-                                    e.currentTarget.style.backgroundColor = '#059669';
-                                    e.currentTarget.style.transform = 'translateY(-1px)';
-                                  }
-                                }}
-                                onMouseOut={(e) => {
-                                  if (canUpgrade) {
-                                    e.currentTarget.style.backgroundColor = '#10b981';
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                  }
-                                }}
-                              >
-                                ⬆️ Level Up (Cost: {upgradeCost} PP{isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})
-                                {!hasEnoughPP && ` - Need ${upgradeCost - (vault?.currentPP || 0)} more PP`}
-                                {hasEnoughPP && !hasEnoughShards && ` - Need ${requiredShards - currentTruthMetal} more Truth Metal Shard${requiredShards - currentTruthMetal > 1 ? 's' : ''}`}
-                              </button>
-                            );
-                          })()}
-                          
-                          {/* Preview of next level stats */}
-                          {move.unlocked && move.masteryLevel < 5 && (() => {
-                            const nextLevel = move.masteryLevel + 1;
-                            
-                            // Calculate damage boost multiplier range based on next level
-                            let minMultiplier: number;
-                            let maxMultiplier: number;
-                            
-                            switch (nextLevel) {
-                              case 2:
-                                minMultiplier = 2.0;
-                                maxMultiplier = 2.3;
-                                break;
-                              case 3:
-                                minMultiplier = 1.25;
-                                maxMultiplier = 1.5;
-                                break;
-                              case 4:
-                                minMultiplier = 1.3;
-                                maxMultiplier = 1.6;
-                                break;
-                              case 5:
-                                minMultiplier = 2.0;
-                                maxMultiplier = 2.5;
-                                break;
-                              default:
-                                minMultiplier = 1.0;
-                                maxMultiplier = 1.0;
-                            }
-                            
-                            // Calculate preview stats
-                            const currentDebuffStrength = move.debuffStrength || 0;
-                            const currentShieldBoost = move.shieldBoost || 0;
-                            
-                            const minDebuffStrength = currentDebuffStrength > 0 ? Math.floor(currentDebuffStrength * minMultiplier) : 0;
-                            const maxDebuffStrength = currentDebuffStrength > 0 ? Math.floor(currentDebuffStrength * maxMultiplier) : 0;
-                            const minShieldBoost = currentShieldBoost > 0 ? Math.floor(currentShieldBoost * minMultiplier) : 0;
-                            const maxShieldBoost = currentShieldBoost > 0 ? Math.floor(currentShieldBoost * maxMultiplier) : 0;
-                            
-                            // Calculate cooldown reduction (typically -1 per level, minimum 1)
-                            const newCooldown = Math.max(1, (move.cooldown || 3) - 1);
-                            
-                            return (
-                              <div style={{
-                                backgroundColor: '#f0fdf4',
-                                borderRadius: '0.375rem',
-                                padding: '0.75rem',
-                                marginTop: '0.75rem',
-                                border: '1px solid #86efac'
-                              }}>
-                                <div style={{
-                                  fontSize: '0.75rem',
-                                  fontWeight: 'bold',
-                                  color: '#166534',
-                                  marginBottom: '0.5rem'
-                                }}>
-                                  📊 Preview: Level {nextLevel} Stats
-                                </div>
-                                
-                                <div style={{
-                                  display: 'grid',
-                                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                                  gap: '0.5rem',
-                                  fontSize: '0.75rem'
-                                }}>
-                                  <div>
-                                    <span style={{ color: '#6b7280' }}>Mastery:</span>{' '}
-                                    <span style={{ fontWeight: 'bold', color: '#166534' }}>{nextLevel}/5</span>
-                                  </div>
-                                  
-                                  {currentDebuffStrength > 0 && (
-                                    <div>
-                                      <span style={{ color: '#6b7280' }}>Shield Removal:</span>{' '}
-                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>
-                                        {minDebuffStrength}% - {maxDebuffStrength}%
-                                      </span>
-                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
-                                        (↑ {Math.floor((minMultiplier - 1) * 100)}% - {Math.floor((maxMultiplier - 1) * 100)}%)
-                                      </span>
-                                    </div>
-                                  )}
-                                  
-                                  {currentShieldBoost > 0 && (
-                                    <div>
-                                      <span style={{ color: '#6b7280' }}>Shield Restoration:</span>{' '}
-                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>
-                                        {minShieldBoost}% - {maxShieldBoost}%
-                                      </span>
-                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
-                                        (↑ {Math.floor((minMultiplier - 1) * 100)}% - {Math.floor((maxMultiplier - 1) * 100)}%)
-                                      </span>
-                                    </div>
-                                  )}
-                                  
-                                  {(move.cooldown || 3) > 1 && (
-                                    <div>
-                                      <span style={{ color: '#6b7280' }}>Cooldown:</span>{' '}
-                                      <span style={{ fontWeight: 'bold', color: '#166534' }}>{newCooldown} turns</span>
-                                      <span style={{ color: '#10b981', fontSize: '0.7rem', marginLeft: '0.25rem' }}>
-                                        (↓ -1)
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                                
-                                <div style={{
-                                  fontSize: '0.7rem',
-                                  color: '#6b7280',
-                                  marginTop: '0.5rem',
-                                  fontStyle: 'italic'
-                                }}>
-                                  * Stats shown are ranges. Actual values will be randomly determined on upgrade.
-                                </div>
-                              </div>
-                            );
-                          })()}
-                          
-                          {move.masteryLevel >= 5 && (
-                            <div style={{
-                              backgroundColor: '#fef3c7',
-                              color: '#92400e',
-                              padding: '0.5rem',
-                              borderRadius: '0.375rem',
-                              textAlign: 'center',
-                              fontSize: '0.875rem',
-                              fontWeight: 'bold'
-                            }}>
-                              ⭐ Max Level Reached
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </>
-                  );
-                })()}
-              </div>
-              
-              {/* Skill Tree Info */}
+            /* Skill Tree Page - Ghost of Tsushima Inspired */
+            <div style={{
+              background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+              borderRadius: '0.75rem',
+              padding: '2rem',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              marginBottom: '2rem',
+              minHeight: '600px',
+              maxHeight: 'calc(100vh - 200px)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}>
+              {/* Background texture overlay */}
               <div style={{
-                backgroundColor: '#eff6ff',
-                borderRadius: '0.5rem',
-                padding: '1rem',
-                border: '1px solid #bfdbfe',
-                marginBottom: '1rem'
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: `
+                  repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(255, 255, 255, 0.02) 2px,
+                    rgba(255, 255, 255, 0.02) 4px
+                  )
+                `,
+                pointerEvents: 'none',
+                opacity: 0.3
+              }} />
+              
+              {/* Title */}
+              <div style={{
+                position: 'relative',
+                zIndex: 1,
+                marginBottom: '2rem',
+                textAlign: 'center'
               }}>
-                <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1e40af' }}>
-                  💡 About Skill Trees
-                </h4>
-                <p style={{ fontSize: '0.875rem', color: '#1e40af', lineHeight: '1.5', marginBottom: '1rem' }}>
-                  Level up your RR Candy abilities to increase their power and effectiveness. Each level increases the ability's impact and reduces cooldown time. Master abilities reach their maximum potential at Level 5.
+                <h2 style={{
+                  fontSize: '2rem',
+                  fontWeight: 'bold',
+                  color: '#fff',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.2em',
+                  margin: 0,
+                  textShadow: '0 2px 10px rgba(0, 0, 0, 0.5)'
+                }}>
+                  Skill Tree
+                </h2>
+                <p style={{
+                  fontSize: '0.875rem',
+                  color: 'rgba(255, 255, 255, 0.6)',
+                  marginTop: '0.5rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.1em'
+                }}>
+                  Unlock new abilities • Manage in Skill Mastery
                 </p>
-                <button
-                  onClick={() => navigate('/battle#moves')}
-                  style={{
-                    backgroundColor: '#4f46e5',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.375rem',
-                    padding: '0.75rem 1.5rem',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    width: '100%'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.backgroundColor = '#4338ca';
-                    e.currentTarget.style.transform = 'translateY(-1px)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.backgroundColor = '#4f46e5';
-                    e.currentTarget.style.transform = 'translateY(0)';
-                  }}
-                >
-                  🎯 Manage / Upgrade RR Candy Skills in Skill Mastery
-                </button>
+              </div>
+
+              {/* Skill Tree Component */}
+              <div style={{ position: 'relative', zIndex: 1 }}>
+                {currentUser?.uid ? (
+                  <SkillTreePage
+                    userId={currentUser.uid}
+                    playerLevel={level}
+                    totalPPSpent={userData?.totalPPSpent || 0}
+                  />
+                ) : (
+                  <div style={{
+                    padding: '2rem',
+                    textAlign: 'center',
+                    color: 'rgba(255, 255, 255, 0.7)'
+                  }}>
+                    Loading...
+                  </div>
+                )}
+              </div>
+
+              {/* Info Footer */}
+              <div style={{
+                position: 'relative',
+                zIndex: 1,
+                marginTop: '2rem',
+                padding: '1rem',
+                background: 'rgba(0, 0, 0, 0.3)',
+                borderRadius: '0.5rem',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                textAlign: 'center'
+              }}>
+                <p style={{
+                  fontSize: '0.75rem',
+                  color: 'rgba(255, 255, 255, 0.5)',
+                  margin: 0,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.1em'
+                }}>
+                  To equip and upgrade skills, visit{' '}
+                  <button
+                    onClick={() => navigate('/battle#moves')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#eab308',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      fontSize: '0.75rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.1em'
+                    }}
+                  >
+                    Skill Mastery
+                  </button>
+                </p>
               </div>
             </div>
           ) : (

@@ -249,15 +249,30 @@ const QuizResults: React.FC = () => {
                         </div>
                       )}
                       <div style={{ marginBottom: '1rem' }}>
-                        <strong>Your answer:</strong>{' '}
-                        <span style={{ color: isCorrect ? '#10b981' : '#ef4444', fontWeight: '600' }}>
-                          {question.options[answer?.selectedIndex || 0]}
+                        <strong>Your answer(s):</strong>{' '}
+                        <span style={{ color: isCorrect ? '#10b981' : (answer?.partialCredit && answer.partialCredit > 0 ? '#f59e0b' : '#ef4444'), fontWeight: '600' }}>
+                          {(() => {
+                            const selectedIndices = answer?.selectedIndices || 
+                              (answer?.selectedIndex !== undefined ? [answer.selectedIndex] : []);
+                            if (selectedIndices.length === 0) return 'None selected';
+                            return selectedIndices.map(idx => `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`).join(', ');
+                          })()}
                         </span>
+                        {answer?.partialCredit && answer.partialCredit > 0 && answer.partialCredit < 1 && (
+                          <span style={{ color: '#f59e0b', marginLeft: '0.5rem' }}>
+                            ({Math.round(answer.partialCredit * 100)}% credit)
+                          </span>
+                        )}
                       </div>
                       <div style={{ marginBottom: '1rem' }}>
-                        <strong>Correct answer:</strong>{' '}
+                        <strong>Correct answer(s):</strong>{' '}
                         <span style={{ color: '#10b981', fontWeight: '600' }}>
-                          {question.options[question.correctIndex]}
+                          {(() => {
+                            const correctIndices = (question as any).correctIndices || 
+                              (question.correctIndex !== undefined ? [question.correctIndex] : []);
+                            if (correctIndices.length === 0) return 'None';
+                            return correctIndices.map((idx: number) => `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`).join(', ');
+                          })()}
                         </span>
                       </div>
                       {question.explanation && (

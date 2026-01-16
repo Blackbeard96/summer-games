@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, deleteField } from 'firebase/firestore';
 import {
   getAllQuizSets,
   createQuizSet,
@@ -53,7 +53,8 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [questionForm, setQuestionForm] = useState({
     prompt: '',
     options: ['', '', '', ''], // A, B, C, D - always 4 options
-    correctIndex: 0, // 0=A, 1=B, 2=C, 3=D
+    correctIndex: 0, // DEPRECATED: Use correctIndices instead (0=A, 1=B, 2=C, 3=D)
+    correctIndices: [] as number[], // Array of correct answer indices (supports multiple)
     explanation: '',
     difficulty: 'medium' as 'easy' | 'medium' | 'hard',
     category: '',
@@ -277,15 +278,26 @@ const TrainingGroundsAdmin: React.FC = () => {
       const rewardConfig = DEFAULT_REWARDS[questionForm.difficulty];
       
       // Build question data - omit undefined fields (Firestore doesn't allow undefined)
+      const correctIndices = questionForm.correctIndices.length > 0 
+        ? questionForm.correctIndices 
+        : (questionForm.correctIndex !== undefined ? [questionForm.correctIndex] : []);
+      
+      if (correctIndices.length === 0) {
+        alert('Please select at least one correct answer');
+        return;
+      }
+      
       const questionData: any = {
         prompt: questionForm.prompt,
         imageUrl: questionForm.imageUrl || null,
         options: validOptions,
-        correctIndex: questionForm.correctIndex,
+        correctIndices: correctIndices,
+        // Keep correctIndex for backwards compatibility (use first correct answer if only one)
+        correctIndex: correctIndices.length === 1 ? correctIndices[0] : undefined,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
-        pointsPP: rewardConfig.basePP,
-        pointsXP: rewardConfig.baseXP,
+        pointsPP: questionForm.pointsPP || rewardConfig.basePP,
+        pointsXP: questionForm.pointsXP || rewardConfig.baseXP,
         order: questions.length,
       };
       
@@ -310,19 +322,20 @@ const TrainingGroundsAdmin: React.FC = () => {
 
       alert('Question added successfully!');
       setShowQuestionForm(false);
-      setQuestionForm({
-        prompt: '',
-        options: ['', '', '', ''],
-        correctIndex: 0,
-        explanation: '',
-        difficulty: 'medium',
-        category: '',
-        imageFile: null,
-        imageUrl: null,
-        pointsPP: 10,
-        pointsXP: 10,
-        artifactRewards: [],
-      });
+    setQuestionForm({
+      prompt: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      correctIndices: [],
+      explanation: '',
+      difficulty: 'medium',
+      category: '',
+      imageFile: null,
+      imageUrl: null,
+      pointsPP: 10,
+      pointsXP: 10,
+      artifactRewards: [],
+    });
       await loadQuestions(selectedQuizSet.id);
     } catch (error) {
       console.error('Error adding question:', error);
@@ -337,23 +350,65 @@ const TrainingGroundsAdmin: React.FC = () => {
 
     try {
       setUploading(true);
-      let imageUrl = editingQuestion.imageUrl;
       
-      if (questionForm.imageFile) {
-        imageUrl = await uploadQuestionImage(selectedQuizSet.id, editingQuestion.id, questionForm.imageFile);
-      }
-
       const validOptions = questionForm.options.filter(o => o.trim());
       
       // Build update data - omit undefined fields (Firestore doesn't allow undefined)
+      const correctIndices = questionForm.correctIndices.length > 0 
+        ? questionForm.correctIndices 
+        : (questionForm.correctIndex !== undefined ? [questionForm.correctIndex] : []);
+      
+      if (correctIndices.length === 0) {
+        alert('Please select at least one correct answer');
+        return;
+      }
+      
       const updateData: any = {
         prompt: questionForm.prompt,
-        imageUrl: imageUrl || null,
         options: validOptions,
-        correctIndex: questionForm.correctIndex,
+        correctIndices: correctIndices,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
+        pointsPP: questionForm.pointsPP || DEFAULT_REWARDS[questionForm.difficulty]?.basePP || 10,
+        pointsXP: questionForm.pointsXP || DEFAULT_REWARDS[questionForm.difficulty]?.baseXP || 10,
       };
+      
+      // Handle correctIndex for backwards compatibility
+      // Only set it if there's exactly one correct answer, otherwise delete it if it existed
+      if (correctIndices.length === 1) {
+        updateData.correctIndex = correctIndices[0];
+      } else if (editingQuestion.correctIndex !== undefined) {
+        // If question previously had a single correctIndex but now has multiple, delete the old field
+        updateData.correctIndex = deleteField();
+      }
+      
+      // Handle image upload separately - only if new file is provided
+      if (questionForm.imageFile) {
+        try {
+          const imageUrl = await uploadQuestionImage(selectedQuizSet.id, editingQuestion.id, questionForm.imageFile);
+          updateData.imageUrl = imageUrl;
+        } catch (imageError: any) {
+          // If image upload fails (e.g., permissions), alert user and keep existing image
+          console.error('Failed to upload question image:', imageError);
+          const errorMessage = imageError?.code === 'storage/unauthorized' 
+            ? 'You do not have permission to upload images. Please contact an administrator or check Firebase Storage rules.'
+            : 'Failed to upload image. The question will be saved without the new image.';
+          
+          // Keep existing imageUrl if upload fails
+          if (editingQuestion.imageUrl) {
+            updateData.imageUrl = editingQuestion.imageUrl;
+            alert(`⚠️ ${errorMessage}\n\nQuestion updated with existing image.`);
+          } else {
+            updateData.imageUrl = null;
+            alert(`⚠️ ${errorMessage}\n\nQuestion updated without image.`);
+          }
+          // Continue with the update even if image upload fails
+        }
+      } else {
+        // No new image file - keep existing imageUrl from form or question
+        // Use questionForm.imageUrl if it was set (when editing), otherwise use existing question imageUrl
+        updateData.imageUrl = questionForm.imageUrl || editingQuestion.imageUrl || null;
+      }
       
       // Only include category if it has a value
       if (questionForm.category && questionForm.category.trim()) {
@@ -365,19 +420,20 @@ const TrainingGroundsAdmin: React.FC = () => {
       alert('Question updated successfully!');
       setEditingQuestion(null);
       setShowQuestionForm(false);
-      setQuestionForm({
-        prompt: '',
-        options: ['', '', '', ''],
-        correctIndex: 0,
-        explanation: '',
-        difficulty: 'medium',
-        category: '',
-        imageFile: null,
-        imageUrl: null,
-        pointsPP: 10,
-        pointsXP: 10,
-        artifactRewards: [],
-      });
+    setQuestionForm({
+      prompt: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      correctIndices: [],
+      explanation: '',
+      difficulty: 'medium',
+      category: '',
+      imageFile: null,
+      imageUrl: null,
+      pointsPP: 10,
+      pointsXP: 10,
+      artifactRewards: [],
+    });
       await loadQuestions(selectedQuizSet.id);
     } catch (error) {
       console.error('Error updating question:', error);
@@ -429,10 +485,14 @@ const TrainingGroundsAdmin: React.FC = () => {
     while (options.length < 4) {
       options.push('');
     }
+    const correctIndices = (question as any).correctIndices || 
+      (question.correctIndex !== undefined ? [question.correctIndex] : []);
+    
     setQuestionForm({
       prompt: question.prompt,
       options: options.slice(0, 4), // Always 4 options
-      correctIndex: question.correctIndex,
+      correctIndex: correctIndices.length === 1 ? correctIndices[0] : 0, // For backwards compatibility
+      correctIndices: correctIndices,
       explanation: question.explanation || '',
       difficulty: question.difficulty,
       category: question.category || '',
@@ -683,19 +743,20 @@ const TrainingGroundsAdmin: React.FC = () => {
                 <button
                   onClick={() => {
                     setEditingQuestion(null);
-                    setQuestionForm({
-                      prompt: '',
-                      options: ['', '', '', ''],
-                      correctIndex: 0,
-                      explanation: '',
-                      difficulty: 'medium',
-                      category: '',
-                      imageFile: null,
-                      imageUrl: null,
-                      pointsPP: 10,
-                      pointsXP: 10,
-                      artifactRewards: [],
-                    });
+    setQuestionForm({
+      prompt: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      correctIndices: [],
+      explanation: '',
+      difficulty: 'medium',
+      category: '',
+      imageFile: null,
+      imageUrl: null,
+      pointsPP: 10,
+      pointsXP: 10,
+      artifactRewards: [],
+    });
                     setShowQuestionForm(true);
                   }}
                   style={{
@@ -822,14 +883,49 @@ const TrainingGroundsAdmin: React.FC = () => {
                         Q{index + 1}: {question.prompt}
                       </div>
                       <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                        Difficulty: {question.difficulty} • Correct: {question.options[question.correctIndex]}
+                        Difficulty: {question.difficulty} • Correct: {
+                          (() => {
+                            const correctIndices = (question as any).correctIndices || 
+                              (question.correctIndex !== undefined ? [question.correctIndex] : []);
+                            return correctIndices.map((idx: number) => `${String.fromCharCode(65 + idx)}: ${question.options[idx]}`).join(', ');
+                          })()
+                        }
                       </div>
                       {question.imageUrl && (
-                        <img
-                          src={question.imageUrl}
-                          alt="Question"
-                          style={{ maxWidth: '200px', maxHeight: '150px', borderRadius: '0.5rem', marginBottom: '0.5rem' }}
-                        />
+                        <div style={{ marginBottom: '0.5rem', position: 'relative' }}>
+                          <img
+                            src={question.imageUrl}
+                            alt="Question"
+                            onError={(e) => {
+                              console.error('Failed to load question image:', question.imageUrl);
+                              e.currentTarget.style.display = 'none';
+                              const errorDiv = e.currentTarget.nextElementSibling as HTMLElement;
+                              if (errorDiv) errorDiv.style.display = 'block';
+                            }}
+                            onLoad={(e) => {
+                              e.currentTarget.style.display = 'block';
+                              const errorDiv = e.currentTarget.nextElementSibling as HTMLElement;
+                              if (errorDiv) errorDiv.style.display = 'none';
+                            }}
+                            style={{ 
+                              maxWidth: '200px', 
+                              maxHeight: '150px', 
+                              borderRadius: '0.5rem',
+                              display: 'block'
+                            }}
+                          />
+                          <div style={{
+                            display: 'none',
+                            padding: '0.5rem',
+                            background: '#fee2e2',
+                            border: '1px solid #fca5a5',
+                            borderRadius: '0.5rem',
+                            color: '#991b1b',
+                            fontSize: '0.75rem'
+                          }}>
+                            Image failed to load
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: '0.25rem', flexDirection: 'column' }}>
@@ -1011,33 +1107,68 @@ const TrainingGroundsAdmin: React.FC = () => {
 
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
-                Correct Answer * (must match one of the options above)
+                Correct Answer(s) * (select all that apply)
               </label>
-              <select
-                value={questionForm.options[questionForm.correctIndex] || ''}
-                onChange={(e) => {
-                  const selectedOption = e.target.value;
-                  const correctIndex = questionForm.options.findIndex(opt => opt === selectedOption);
-                  if (correctIndex !== -1) {
-                    setQuestionForm({ ...questionForm, correctIndex });
-                  }
-                }}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  borderRadius: '0.5rem',
-                  border: '1px solid #d1d5db',
-                  fontSize: '1rem'
-                }}
-              >
-                <option value="">Select correct answer</option>
-                {questionForm.options.filter(o => o.trim()).map((option, index) => (
-                  <option key={index} value={option}>
-                    {String.fromCharCode(65 + index)}: {option}
-                  </option>
-                ))}
-              </select>
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                padding: '0.75rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '0.5rem',
+                background: '#f9fafb'
+              }}>
+                {questionForm.options.map((option, index) => {
+                  if (!option.trim()) return null;
+                  const isChecked = questionForm.correctIndices.includes(index);
+                  
+                  return (
+                    <label
+                      key={index}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        cursor: 'pointer',
+                        padding: '0.5rem',
+                        borderRadius: '0.375rem',
+                        background: isChecked ? '#eef2ff' : 'transparent',
+                        border: `1px solid ${isChecked ? '#4f46e5' : 'transparent'}`,
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const newIndices = e.target.checked
+                            ? [...questionForm.correctIndices, index]
+                            : questionForm.correctIndices.filter(i => i !== index);
+                          setQuestionForm({ 
+                            ...questionForm, 
+                            correctIndices: newIndices,
+                            // Update correctIndex for backwards compatibility (use first if only one)
+                            correctIndex: newIndices.length === 1 ? newIndices[0] : 0
+                          });
+                        }}
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          cursor: 'pointer'
+                        }}
+                      />
+                      <span style={{ flex: 1 }}>
+                        <strong>{String.fromCharCode(65 + index)}:</strong> {option}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {questionForm.correctIndices.length === 0 && (
+                <p style={{ fontSize: '0.875rem', color: '#ef4444', marginTop: '0.5rem' }}>
+                  Please select at least one correct answer
+                </p>
+              )}
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -1066,8 +1197,61 @@ const TrainingGroundsAdmin: React.FC = () => {
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Image (optional)</label>
               {questionForm.imageUrl && !questionForm.imageFile && (
+                <div style={{ marginBottom: '0.5rem', position: 'relative' }}>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                    Current image:
+                  </div>
+                  <img 
+                    src={questionForm.imageUrl} 
+                    alt="Current question image"
+                    onError={(e) => {
+                      console.error('Failed to load current image:', questionForm.imageUrl);
+                      e.currentTarget.style.display = 'none';
+                      const errorDiv = e.currentTarget.nextElementSibling as HTMLElement;
+                      if (errorDiv) errorDiv.style.display = 'block';
+                    }}
+                    onLoad={(e) => {
+                      e.currentTarget.style.display = 'block';
+                      const errorDiv = e.currentTarget.nextElementSibling as HTMLElement;
+                      if (errorDiv) errorDiv.style.display = 'none';
+                    }}
+                    style={{ 
+                      maxWidth: '200px', 
+                      maxHeight: '150px', 
+                      borderRadius: '0.5rem',
+                      display: 'block',
+                      border: '1px solid #e5e7eb'
+                    }} 
+                  />
+                  <div style={{
+                    display: 'none',
+                    padding: '0.5rem',
+                    background: '#fee2e2',
+                    border: '1px solid #fca5a5',
+                    borderRadius: '0.5rem',
+                    color: '#991b1b',
+                    fontSize: '0.75rem',
+                    maxWidth: '200px'
+                  }}>
+                    Image failed to load (may need permissions)
+                  </div>
+                </div>
+              )}
+              {questionForm.imageFile && (
                 <div style={{ marginBottom: '0.5rem' }}>
-                  <img src={questionForm.imageUrl} alt="Current" style={{ maxWidth: '200px', maxHeight: '150px', borderRadius: '0.5rem' }} />
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                    New image selected: {questionForm.imageFile.name}
+                  </div>
+                  <img 
+                    src={URL.createObjectURL(questionForm.imageFile)} 
+                    alt="New image preview"
+                    style={{ 
+                      maxWidth: '200px', 
+                      maxHeight: '150px', 
+                      borderRadius: '0.5rem',
+                      border: '1px solid #10b981'
+                    }} 
+                  />
                 </div>
               )}
               <input
@@ -1088,19 +1272,20 @@ const TrainingGroundsAdmin: React.FC = () => {
                 onClick={() => {
                   setShowQuestionForm(false);
                   setEditingQuestion(null);
-                  setQuestionForm({
-                    prompt: '',
-                    options: ['', '', '', ''],
-                    correctIndex: 0,
-                    explanation: '',
-                    difficulty: 'medium',
-                    category: '',
-                    imageFile: null,
-                    imageUrl: null,
-                    pointsPP: 10,
-                    pointsXP: 10,
-                    artifactRewards: [],
-                  });
+    setQuestionForm({
+      prompt: '',
+      options: ['', '', '', ''],
+      correctIndex: 0,
+      correctIndices: [],
+      explanation: '',
+      difficulty: 'medium',
+      category: '',
+      imageFile: null,
+      imageUrl: null,
+      pointsPP: 10,
+      pointsXP: 10,
+      artifactRewards: [],
+    });
                 }}
                 style={{
                   padding: '0.5rem 1rem',
