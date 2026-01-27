@@ -174,9 +174,10 @@ function calculateChapterProgress(chapter: Chapter, userProgress: any): number {
   }
 
   const chapterProgress = userProgress.chapters[chapter.id];
-  const completedChallenges = chapter.challenges.filter(challenge => 
-    chapterProgress?.challenges?.[challenge.id]?.isCompleted
-  ).length;
+  const completedChallenges = chapter.challenges.filter(challenge => {
+    const challengeProgress = chapterProgress?.challenges?.[challenge.id];
+    return challengeProgress?.isCompleted || challengeProgress?.status === 'approved';
+  }).length;
   const totalChallenges = chapter.challenges.length;
 
   return totalChallenges > 0 ? (completedChallenges / totalChallenges) * 100 : 0;
@@ -210,8 +211,8 @@ function findNextChallenge(userProgress: any): NextChallenge | null {
   for (const challenge of currentChapter.challenges) {
     const challengeProgress = userProgress.chapters[currentChapter.id]?.challenges?.[challenge.id];
     
-    // Skip if already completed
-    if (challengeProgress?.isCompleted) {
+    // Skip if already completed (check both isCompleted and status === 'approved')
+    if (challengeProgress?.isCompleted || challengeProgress?.status === 'approved') {
       continue;
     }
 
