@@ -22,14 +22,18 @@ import {
   AssessmentGoal,
   AssessmentResult,
   PPLedgerEntry,
-  ArtifactReward
+  ArtifactReward,
+  HabitSubmission,
+  HabitDuration,
+  HabitSubmissionStatus,
+  HabitVerification
 } from '../types/assessmentGoals';
 import {
   generateGoalId,
   generateResultId,
   computePPChange
 } from './assessmentGoals';
-import { arrayUnion } from 'firebase/firestore';
+import { arrayUnion, runTransaction } from 'firebase/firestore';
 
 // Artifact lookup data (matches Marketplace.tsx artifacts list)
 const ARTIFACT_LOOKUP: { [key: string]: { description: string; icon: string; image: string; category: 'time' | 'protection' | 'food' | 'special'; rarity: 'common' | 'rare' | 'epic' | 'legendary' } } = {
@@ -49,6 +53,7 @@ const ARTIFACT_LOOKUP: { [key: string]: { description: string; icon: string; ima
   'terra-ring': { description: 'Adds +1 Level to all Earth Elemental Moves. Equip to a ring slot to activate.', icon: '💍', image: '/images/Terra Ring.png', category: 'special', rarity: 'epic' },
   'aqua-ring': { description: 'Adds +1 Level to all Water Elemental Moves. Equip to a ring slot to activate.', icon: '💍', image: '/images/Aqua Ring.png', category: 'special', rarity: 'epic' },
   'air-ring': { description: 'Adds +1 Level to all Air Elemental Moves. Equip to a ring slot to activate.', icon: '💍', image: '/images/Air Ring.png', category: 'special', rarity: 'epic' },
+  'instant-regrade-pass': { description: 'Allows players to get assignments regraded without coming in person. Lasts for 1 day.', icon: '📋', image: '/images/Instant Regrade Pass.png', category: 'special', rarity: 'common' },
   'captain-helmet': { description: "Captain's Helmet - A rare artifact", icon: '⛑️', image: '', category: 'special', rarity: 'rare' }
 };
 
@@ -841,5 +846,327 @@ export async function applyAssessmentResults(assessmentId: string): Promise<{
     appliedCount,
     errors
   };
+}
+
+// ============================================================================
+// Habit Submissions Collection
+// ============================================================================
+
+/**
+ * Generate habit submission ID (same format as goalId/resultId)
+ */
+function generateHabitSubmissionId(assessmentId: string, studentId: string): string {
+  return `${assessmentId}_${studentId}`;
+}
+
+/**
+ * Creates a habit submission (student commits to a habit)
+ */
+export async function createHabitSubmission(
+  assessmentId: string,
+  studentId: string,
+  classId: string,
+  habitText: string,
+  duration: HabitDuration
+): Promise<void> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  
+  const startAt = Timestamp.now();
+  const startDate = startAt.toDate();
+  
+  // Import helper functions dynamically to avoid circular dependency
+  const { calculateEndDate, getRequiredCheckIns } = await import('./habitSubmissions');
+  const endDate = calculateEndDate(startDate, duration);
+  const endAt = Timestamp.fromDate(endDate);
+  const requiredCheckIns = getRequiredCheckIns(duration);
+  
+  const submissionData: any = {
+    id: submissionId,
+    assessmentId,
+    classId,
+    studentId,
+    habitText: habitText.trim(),
+    duration,
+    startAt,
+    endAt,
+    status: 'IN_PROGRESS', // Default status when created
+    // Legacy check-in fields (kept for backward compatibility)
+    checkIns: {},
+    requiredCheckIns,
+    checkInCount: 0,
+    rewardApplied: false,
+    consequenceApplied: false,
+    // New status-based fields
+    evidence: null,
+    // verification is optional and should not be included if undefined
+    ppImpact: 0, // Will be computed when status changes
+    applied: false,
+    appliedAt: null,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now()
+  };
+  
+  // Only include verification if it has a value (don't include undefined)
+  // verification will be set later when the habit is verified
+  
+  await setDoc(submissionRef, submissionData);
+  
+  // Increment numGoalsSet on assessment (reusing existing field)
+  const assessmentRef = doc(db, 'assessments', assessmentId);
+  await updateDoc(assessmentRef, {
+    numGoalsSet: increment(1)
+  });
+}
+
+/**
+ * Gets a student's habit submission for an assessment
+ */
+export async function getHabitSubmission(
+  assessmentId: string,
+  studentId: string
+): Promise<HabitSubmission | null> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  const submissionDoc = await getDoc(submissionRef);
+  if (!submissionDoc.exists()) return null;
+  return { id: submissionDoc.id, ...submissionDoc.data() } as HabitSubmission;
+}
+
+/**
+ * Gets all habit submissions for an assessment
+ */
+export async function getHabitSubmissionsByAssessment(assessmentId: string): Promise<HabitSubmission[]> {
+  const submissionsRef = collection(db, 'habitSubmissions');
+  const q = query(submissionsRef, where('assessmentId', '==', assessmentId));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HabitSubmission));
+}
+
+/**
+ * Records a check-in for a habit submission (idempotent - one per day)
+ */
+export async function checkInHabit(
+  assessmentId: string,
+  studentId: string
+): Promise<void> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  
+  // Use transaction to ensure idempotency
+  await runTransaction(db, async (transaction) => {
+    const submissionDoc = await transaction.get(submissionRef);
+    if (!submissionDoc.exists()) {
+      throw new Error('Habit submission not found');
+    }
+    
+    const submission = submissionDoc.data() as HabitSubmission;
+    
+    // Check if already completed or failed
+    if (submission.status !== 'active') {
+      throw new Error(`Habit submission is ${submission.status}`);
+    }
+    
+    // Check eligibility
+    const { canCheckIn, getDateKey } = await import('./habitSubmissions');
+    const now = new Date();
+    const todayKey = getDateKey(now);
+    
+    if (!canCheckIn(submission.duration, submission.checkIns || {}, submission.endAt)) {
+      throw new Error('Cannot check in at this time');
+    }
+    
+    // Add check-in
+    const updatedCheckIns = {
+      ...submission.checkIns,
+      [todayKey]: Timestamp.now()
+    };
+    
+    const newCheckInCount = Object.keys(updatedCheckIns).length;
+    
+    transaction.update(submissionRef, {
+      checkIns: updatedCheckIns,
+      checkInCount: newCheckInCount,
+      updatedAt: Timestamp.now()
+    });
+  });
+}
+
+/**
+ * Finalizes a habit submission (called when time expires or manually)
+ * Checks completion status and applies rewards/consequences
+ */
+export async function finalizeHabitSubmission(
+  assessmentId: string,
+  studentId: string
+): Promise<{ completed: boolean; rewardApplied: boolean; consequenceApplied: boolean }> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  const assessmentRef = doc(db, 'assessments', assessmentId);
+  
+  return runTransaction(db, async (transaction) => {
+    const [submissionDoc, assessmentDoc] = await Promise.all([
+      transaction.get(submissionRef),
+      transaction.get(assessmentRef)
+    ]);
+    
+    if (!submissionDoc.exists()) {
+      throw new Error('Habit submission not found');
+    }
+    if (!assessmentDoc.exists()) {
+      throw new Error('Assessment not found');
+    }
+    
+    const submission = submissionDoc.data() as HabitSubmission;
+    const assessment = assessmentDoc.data() as Assessment;
+    
+    // Only finalize if still active
+    if (submission.status !== 'active') {
+      return {
+        completed: submission.status === 'completed',
+        rewardApplied: submission.rewardApplied || false,
+        consequenceApplied: submission.consequenceApplied || false
+      };
+    }
+    
+    // Check completion (with defaults for legacy compatibility)
+    const checkInCount = submission.checkInCount ?? 0;
+    const requiredCheckIns = submission.requiredCheckIns ?? 0;
+    const completed = checkInCount >= requiredCheckIns;
+    const newStatus: HabitSubmissionStatus = completed ? 'completed' : 'failed';
+    
+    // Apply rewards/consequences (idempotent)
+    let rewardApplied = submission.rewardApplied || false;
+    let consequenceApplied = submission.consequenceApplied || false;
+    
+    if (completed && !rewardApplied && assessment.habitsConfig) {
+      const { defaultRewardPP, defaultRewardXP } = assessment.habitsConfig;
+      // TODO: Apply PP/XP rewards (integrate with existing reward system)
+      rewardApplied = true;
+    }
+    
+    if (!completed && !consequenceApplied && assessment.habitsConfig) {
+      const { defaultConsequencePP, defaultConsequenceXP } = assessment.habitsConfig;
+      // TODO: Apply PP/XP penalties (integrate with existing penalty system)
+      consequenceApplied = true;
+    }
+    
+    // Update submission
+    transaction.update(submissionRef, {
+      status: newStatus,
+      resolvedAt: Timestamp.now(),
+      rewardApplied,
+      consequenceApplied,
+      updatedAt: Timestamp.now()
+    });
+    
+    return {
+      completed,
+      rewardApplied,
+      consequenceApplied
+    };
+  });
+}
+
+/**
+ * Updates a habit submission with status, evidence, and verification
+ */
+export async function updateHabitSubmission(
+  assessmentId: string,
+  studentId: string,
+  updates: {
+    status?: HabitSubmissionStatus;
+    evidence?: string | null;
+    verification?: HabitVerification;
+    ppImpact?: number;
+  }
+): Promise<void> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  
+  const updateData: any = {
+    ...updates,
+    updatedAt: Timestamp.now()
+  };
+  
+  // If ppImpact is calculated from status, include it
+  if (updates.status && !updates.ppImpact) {
+    const { computeHabitImpact } = await import('./habitRewards');
+    updateData.ppImpact = computeHabitImpact(updates.status);
+  }
+  
+  await updateDoc(submissionRef, updateData);
+}
+
+/**
+ * Applies PP impact for a specific habit submission (idempotent)
+ */
+export async function applyHabitPP(
+  assessmentId: string,
+  studentId: string
+): Promise<{ success: boolean; error?: string }> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  const studentRef = doc(db, 'students', studentId);
+  const userRef = doc(db, 'users', studentId);
+  
+  return runTransaction(db, async (transaction) => {
+    // Read habit submission
+    const submissionDoc = await transaction.get(submissionRef);
+    if (!submissionDoc.exists()) {
+      throw new Error('Habit submission not found');
+    }
+    
+    const submission = submissionDoc.data() as HabitSubmission;
+    
+    // Check if already applied (idempotent)
+    if (submission.applied === true) {
+      return { success: true }; // Already applied, return success
+    }
+    
+    // Verify status and verification
+    if (!submission.ppImpact || submission.ppImpact === 0) {
+      return { success: false, error: 'PP impact is zero or not set' };
+    }
+    
+    if (!submission.verification) {
+      return { success: false, error: 'Verification is required' };
+    }
+    
+    // Read student and user docs
+    const [studentDoc, userDoc] = await Promise.all([
+      transaction.get(studentRef),
+      transaction.get(userRef)
+    ]);
+    
+    if (!studentDoc.exists()) {
+      throw new Error('Student document not found');
+    }
+    
+    // Update PP balance
+    const ppChange = submission.ppImpact || 0;
+    
+    // Update student PP
+    transaction.update(studentRef, {
+      powerPoints: increment(ppChange)
+    });
+    
+    // Update user PP (keep in sync)
+    if (userDoc.exists()) {
+      transaction.update(userRef, {
+        powerPoints: increment(ppChange)
+      });
+    }
+    
+    // Mark habit as applied
+    transaction.update(submissionRef, {
+      applied: true,
+      appliedAt: Timestamp.now(),
+      appliedStatus: 'APPLIED',
+      updatedAt: Timestamp.now()
+    });
+    
+    return { success: true };
+  });
 }
 

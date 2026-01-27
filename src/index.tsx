@@ -42,17 +42,23 @@ const isFirestoreInternalError = (error: any): boolean => {
   return (
     allErrorStrings.includes('INTERNAL ASSERTION FAILED') ||
     allErrorStrings.includes('ID: ca9') ||
+    allErrorStrings.includes('ca9') || // Catch ca9 anywhere in error (e.g., "(ID: ca9)")
     allErrorStrings.includes('ID: b815') ||
+    allErrorStrings.includes('b815') || // Catch b815 anywhere in error
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('Unexpected state')) ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
-    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815'))) ||
+    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815') || allErrorStrings.includes('ca9') || allErrorStrings.includes('b815'))) ||
     // Check for the specific error pattern from the stack trace
     allErrorStrings.includes('__PRIVATE__fail') ||
     allErrorStrings.includes('__PRIVATE_hardAssert') ||
     allErrorStrings.includes('__PRIVATE_WatchChangeAggregator') ||
     allErrorStrings.includes('__PRIVATE_PersistentListenStream') ||
     allErrorStrings.includes('BrowserConnectivityMonitor') ||
-    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)'))
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)')) ||
+    // Firefox-specific patterns
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
+    // Check for CONTEXT with ve:-1 (version error indicator)
+    (allErrorStrings.includes('CONTEXT') && allErrorStrings.includes('"ve":-1'))
   );
 };
 
@@ -141,14 +147,23 @@ if (typeof window !== 'undefined') {
         };
       }
       
-      // Intercept showErrorOverlay
+      // Intercept showErrorOverlay - check all arguments and combined message
       if (hook.showErrorOverlay) {
         const originalShowErrorOverlay = hook.showErrorOverlay;
         hook.showErrorOverlay = function(...args: any[]) {
+          // Check all arguments individually
           for (const arg of args) {
             if (isFirestoreInternalError(arg) || isFirestoreInternalError(String(arg))) {
               return;
             }
+          }
+          // Check combined message string for Firefox-specific patterns
+          const combinedMessage = args.map(a => String(a)).join(' ');
+          if (isFirestoreInternalError(combinedMessage) || 
+              combinedMessage.includes('INTERNAL ASSERTION FAILED') ||
+              combinedMessage.includes('ca9') ||
+              (combinedMessage.includes('FIRESTORE') && combinedMessage.includes('Unexpected state'))) {
+            return;
           }
           return originalShowErrorOverlay.apply(this, args);
         };
@@ -199,7 +214,19 @@ if (typeof window !== 'undefined') {
   // Method 3: Intercept window.onerror more aggressively
   const originalWindowOnError = window.onerror;
   window.onerror = function(message, source, lineno, colno, error) {
-    if (isFirestoreInternalError(message) || isFirestoreInternalError(error) || isFirestoreInternalError(String(message))) {
+    // Check all possible error representations
+    const errorMessage = String(message || '');
+    const errorString = error ? String(error) : '';
+    const errorStack = error?.stack || '';
+    
+    if (isFirestoreInternalError(message) || 
+        isFirestoreInternalError(error) || 
+        isFirestoreInternalError(errorMessage) ||
+        isFirestoreInternalError(errorString) ||
+        isFirestoreInternalError(errorStack) ||
+        errorMessage.includes('INTERNAL ASSERTION FAILED') ||
+        errorMessage.includes('ca9') ||
+        (errorMessage.includes('FIRESTORE') && errorMessage.includes('Unexpected state'))) {
       return true; // Suppress the error
     }
     if (originalWindowOnError) {

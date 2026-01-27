@@ -85,15 +85,16 @@ const AssessmentGoalsAdmin: React.FC = () => {
         title: assessmentData.title,
         type: assessmentData.type,
         date: Timestamp.fromDate(new Date(assessmentData.date)),
-        maxScore: assessmentData.maxScore || 100,
+        maxScore: assessmentData.type === 'habits' ? 100 : (assessmentData.maxScore || 100), // Default for habits, not used
         createdBy: currentUser.uid,
         isLocked: assessmentData.isLocked || false,
         gradingStatus: 'open',
         rewardMode: 'pp',
-        rewardTiers: assessmentData.rewardTiers,
-        missPenaltyTiers: assessmentData.missPenaltyTiers,
+        rewardTiers: assessmentData.rewardTiers || [],
+        missPenaltyTiers: assessmentData.missPenaltyTiers || [],
         penaltyCap: assessmentData.penaltyCap || 75,
-        bonusCap: assessmentData.bonusCap || 75
+        bonusCap: assessmentData.bonusCap || 75,
+        habitsConfig: assessmentData.habitsConfig
       };
 
       const validation = validateAssessmentConfig(newAssessment);

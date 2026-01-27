@@ -69,6 +69,15 @@ export async function updateSkillLevel(userId: string, skillId: string, newLevel
     });
     
     await updateDoc(movesRef, { moves: updatedMoves });
+    
+    // Recalculate power level after skill upgrade
+    try {
+      const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+      await recalculatePowerLevel(userId);
+    } catch (plError) {
+      console.error('Error recalculating power level after skill upgrade:', plError);
+      // Don't throw - power level recalculation is non-critical
+    }
   } catch (error) {
     console.error('Error updating skill level:', error);
     throw error;
@@ -97,6 +106,15 @@ export async function updateSkillMastery(userId: string, skillId: string, newMas
     });
     
     await updateDoc(movesRef, { moves: updatedMoves });
+    
+    // Recalculate power level after skill mastery upgrade (mastery affects upgradeLevel)
+    try {
+      const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+      await recalculatePowerLevel(userId);
+    } catch (plError) {
+      console.error('Error recalculating power level after skill mastery upgrade:', plError);
+      // Don't throw - power level recalculation is non-critical
+    }
   } catch (error) {
     console.error('Error updating skill mastery:', error);
     throw error;

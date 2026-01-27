@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db } from '../firebase';
@@ -26,13 +26,14 @@ interface InSessionRoom {
 }
 
 const InSessionNotification: React.FC = () => {
-  const { currentUser, isAdmin } = useAuth();
+  const { currentUser, isAdmin: isAdminUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [activeSession, setActiveSession] = useState<InSessionRoom | null>(null);
   const [isJoining, setIsJoining] = useState(false);
   const [isInSession, setIsInSession] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
+  const previousSessionIdRef = useRef<string | null>(null); // Track previous session ID to prevent unnecessary updates
 
   // Get user's classrooms and listen for active sessions
   useEffect(() => {
@@ -188,7 +189,7 @@ const InSessionNotification: React.FC = () => {
             
             // Check if user is actively viewing the session page
             // This is the PRIMARY check - if user is on the session page, hide notification
-            const isOnSessionPage = location.pathname.startsWith(`/in-session/${latestSession.id}`);
+            const isOnSessionPage = location.pathname.startsWith(`/live-events/${latestSession.id}`) || location.pathname.startsWith(`/in-session/${latestSession.id}`);
             const activeViewers = latestSession.activeViewers || [];
             const userIsInActiveViewers = activeViewers.includes(userId);
             
@@ -219,7 +220,11 @@ const InSessionNotification: React.FC = () => {
                 currentPath: location.pathname
               });
               debug.groupEnd();
-              setActiveSession(null);
+              // Only clear if we had a session before (prevents unnecessary state updates)
+              if (previousSessionIdRef.current !== null) {
+                previousSessionIdRef.current = null;
+                setActiveSession(null);
+              }
               return; // Exit early - don't check anything else
             }
 
@@ -227,30 +232,44 @@ const InSessionNotification: React.FC = () => {
             // Show notification if:
             // 1. User is NOT in the session players list (hasn't joined) - show "Join Session"
             // 2. User is in the session but NOT on the session page (left the session view) - show "Rejoin Session"
-            if (!userInSession) {
-              // User hasn't joined the session - show notification to join
-              debug.log('InSessionNotification', '✅ Showing join notification - user not in session', {
-                sessionId: latestSession.id,
-                userId,
-                playerIds: latestSession.players?.map((p: any) => p.userId) || []
-              });
-              debug.groupEnd();
-              setActiveSession(latestSession);
-            } else {
-              // User is in session but NOT on the session page - show notification to rejoin
-              debug.log('InSessionNotification', '✅ Showing rejoin notification - user not on session page');
-              debug.groupEnd();
-              setActiveSession(latestSession);
+            // Only update state if the session ID actually changed (prevents flickering)
+            if (previousSessionIdRef.current !== latestSession.id) {
+              if (!userInSession) {
+                // User hasn't joined the session - show notification to join
+                debug.log('InSessionNotification', '✅ Showing join notification - user not in session', {
+                  sessionId: latestSession.id,
+                  userId,
+                  playerIds: latestSession.players?.map((p: any) => p.userId) || []
+                });
+                debug.groupEnd();
+                previousSessionIdRef.current = latestSession.id;
+                setActiveSession(latestSession);
+              } else {
+                // User is in session but NOT on the session page - show notification to rejoin
+                debug.log('InSessionNotification', '✅ Showing rejoin notification - user not on session page');
+                debug.groupEnd();
+                previousSessionIdRef.current = latestSession.id;
+                setActiveSession(latestSession);
+              }
             }
+            // If session ID hasn't changed, don't update state (keeps notification stable)
           } else {
             debug.log('InSessionNotification', 'No sessions found for user classrooms');
             debug.groupEnd();
-            setActiveSession(null);
+            // Only clear if we had a session before (prevents unnecessary state updates)
+            if (previousSessionIdRef.current !== null) {
+              previousSessionIdRef.current = null;
+              setActiveSession(null);
+            }
             setIsInSession(false);
           }
         } else {
           debug.throttle('no-active-sessions', 5000, 'InSessionNotification', 'No active sessions found');
-          setActiveSession(null);
+          // Only clear if we had a session before (prevents unnecessary state updates)
+          if (previousSessionIdRef.current !== null) {
+            previousSessionIdRef.current = null;
+            setActiveSession(null);
+          }
           setIsInSession(false);
         }
       } catch (error) {
@@ -354,10 +373,13 @@ const InSessionNotification: React.FC = () => {
       
       if (joined) {
         debug.log('InSessionNotification', `User ${currentUser.uid} joined session ${activeSession.id}`);
+        // Immediately hide notification since user is joining
+        setActiveSession(null);
+        setIsInSession(true);
         // Navigate to session battle view
-        navigate(`/in-session/${activeSession.id}`);
+        navigate(`/live-events/${activeSession.id}`);
       } else {
-        alert('Failed to join session. Please try again.');
+        alert('Failed to join live event. Please try again.');
       }
     } catch (error) {
       debug.error('InSessionNotification', 'Error joining session', error);
@@ -376,7 +398,7 @@ const InSessionNotification: React.FC = () => {
     if (!currentUser || !activeSession || isEnding) return;
 
     // Confirm with admin before ending session
-    if (!window.confirm(`Are you sure you want to end the session "${activeSession.className}"? This will end the session for all ${activeSession.players.length} player(s).`)) {
+      if (!window.confirm(`Are you sure you want to end the live event "${activeSession.className}"? This will end the event for all ${activeSession.players.length} player(s).`)) {
       return;
     }
 
@@ -438,17 +460,17 @@ const InSessionNotification: React.FC = () => {
             <div style={{ fontSize: '2rem' }}>📚</div>
             <div>
               <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>
-                {isInSession ? '📚 Rejoin Session' : '📚 Class In Session - Join Now!'}
+                {isInSession ? '📚 Rejoin Live Event' : '📚 Live Event Active - Join Now!'}
               </h3>
               <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', opacity: 0.9 }}>
-                {activeSession.className} - {activeSession.players.length} player{activeSession.players.length !== 1 ? 's' : ''} {isInSession ? 'in session' : 'joined'}
+                {activeSession.className} - {activeSession.players.length} player{activeSession.players.length !== 1 ? 's' : ''} {isInSession ? 'in event' : 'joined'}
               </p>
             </div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
-            onClick={isInSession ? () => navigate(`/in-session/${activeSession.id}`) : handleJoinSession}
+            onClick={isInSession ? () => navigate(`/live-events/${activeSession.id}`) : handleJoinSession}
             disabled={isJoining}
             style={{
               flex: 1,
@@ -464,9 +486,9 @@ const InSessionNotification: React.FC = () => {
               transition: 'all 0.2s'
             }}
           >
-            {isJoining ? 'Joining...' : isInSession ? '🎮 Rejoin Session' : '🎮 Join Session'}
+            {isJoining ? 'Joining...' : isInSession ? '🎮 Rejoin Live Event' : '🎮 Join Live Event'}
           </button>
-          {isAdmin() && (
+          {isAdminUser && (
             <button
               onClick={handleEndSession}
               disabled={isEnding}
@@ -484,7 +506,7 @@ const InSessionNotification: React.FC = () => {
                 whiteSpace: 'nowrap'
               }}
             >
-              {isEnding ? 'Ending...' : '⏹️ End Session'}
+              {isEnding ? 'Ending...' : '⏹️ End Live Event'}
             </button>
           )}
         </div>

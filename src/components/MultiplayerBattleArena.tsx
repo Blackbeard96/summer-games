@@ -23,6 +23,7 @@ interface Participant {
   maxPP?: number;
   maxShieldStrength?: number;
   level?: number;
+  powerLevel?: number | null; // Power Level (PL)
   vaultHealth?: number;
   maxVaultHealth?: number;
   isPlayer?: boolean; // True if this is the current player
@@ -49,6 +50,8 @@ interface MultiplayerBattleArenaProps {
   battleName?: string; // Battle name for invitations
   onInviteClick?: () => void; // Callback when invite button is clicked
   allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
+  currentWave?: number; // Current wave number (for multi-wave battles)
+  maxWaves?: number; // Maximum number of waves (for multi-wave battles)
 }
 
 const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
@@ -58,6 +61,8 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   selectedMove,
   selectedTarget,
   isInSession = false,
+  currentWave,
+  maxWaves,
   availableMoves,
   allies,
   enemies,
@@ -200,15 +205,52 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   // Render participant card (for both allies and enemies)
   const renderParticipantCard = (participant: Participant, isAlly: boolean, index: number) => {
     const isSelected = selectedTarget === participant.id;
-    const isCurrentPlayer = participant.isPlayer;
+    const isCurrentPlayer = participant.isPlayer === true; // Explicitly check for true
+    // Enemies can always be clicked when a move is selected and it's player's turn
+    // Allies can only be clicked if it's the current player (self-targeting)
+    // For enemies (isAlly = false), canClick = selectedMove && isPlayerTurn && (!false || false) = selectedMove && isPlayerTurn && true
     const canClick = selectedMove && isPlayerTurn && (!isAlly || isCurrentPlayer);
+    
+    // Always log when a move is selected to help debug
+    if (selectedMove && !isAlly) {
+      console.log(`🎯 [MultiplayerBattleArena] Enemy ${participant.name} (${participant.id}) - canClick: ${canClick}`, {
+        selectedMove: selectedMove?.name,
+        selectedMoveId: selectedMove?.id,
+        isPlayerTurn,
+        isAlly,
+        isCurrentPlayer,
+        participantIsPlayer: participant.isPlayer,
+        hasSelectedMove: !!selectedMove
+      });
+    }
     
     return (
       <div
         key={participant.id}
-        onClick={() => {
+        onClick={(e) => {
+          console.log(`🖱️ [MultiplayerBattleArena] onClick FIRED on ${isAlly ? 'ally' : 'enemy'}: ${participant.name}`);
+          e.preventDefault();
+          e.stopPropagation();
+          
           if (canClick) {
-            // Can only target enemies or self, and only when a move is selected
+            console.log(`✅ [MultiplayerBattleArena] Valid click - selecting target: ${participant.id}`);
+            onTargetSelect(participant.id);
+          } else {
+            console.warn(`⚠️ [MultiplayerBattleArena] Click blocked - canClick: ${canClick}`, {
+              selectedMove: selectedMove?.name,
+              isPlayerTurn,
+              isAlly,
+              isCurrentPlayer
+            });
+          }
+        }}
+        onMouseDown={(e) => {
+          console.log(`🖱️ [MultiplayerBattleArena] MouseDown FIRED on ${isAlly ? 'ally' : 'enemy'}: ${participant.name}`);
+          
+          if (canClick) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log(`✅ [MultiplayerBattleArena] MouseDown - selecting target: ${participant.id}`);
             onTargetSelect(participant.id);
           }
         }}
@@ -227,17 +269,26 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           borderRadius: '0.5rem',
           padding: '0.6rem',
           marginBottom: '0.5rem',
-          cursor: canClick ? 'pointer' : 'default',
+          cursor: canClick ? 'pointer' : (selectedMove && !isAlly ? 'not-allowed' : 'default'),
           transition: 'all 0.2s ease',
           position: 'relative',
           boxShadow: isSelected 
             ? '0 4px 12px rgba(59, 130, 246, 0.4)' 
             : (canClick && !isAlly)
               ? '0 0 15px rgba(251, 191, 36, 0.6)'
-              : '0 2px 8px rgba(0, 0, 0, 0.1)',
+              : (selectedMove && !isAlly && !canClick)
+                ? '0 0 10px rgba(239, 68, 68, 0.4)'
+                : '0 2px 8px rgba(0, 0, 0, 0.1)',
           transform: canClick && !isAlly ? 'scale(1.05)' : 'scale(1)',
           boxSizing: 'border-box',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          pointerEvents: 'auto', // Ensure clicks are not blocked
+          zIndex: canClick ? 100 : (selectedMove && !isAlly ? 50 : 1), // Much higher z-index when clickable
+          opacity: selectedMove && !isAlly && !canClick ? 0.7 : 1, // Dim if move selected but can't click
+          userSelect: 'none', // Prevent text selection on click
+          WebkitUserSelect: 'none',
+          MozUserSelect: 'none',
+          msUserSelect: 'none'
         }}
         onMouseEnter={(e) => {
           if (canClick) {
@@ -308,24 +359,29 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           </div>
           
           {/* Name and Level */}
-          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ 
-              fontSize: '0.8rem', 
+              fontSize: '0.9rem', 
               fontWeight: 'bold',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              lineHeight: '1.2',
+              color: '#1f2937',
+              lineHeight: '1.3',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px'
+              gap: '4px',
+              flexWrap: 'wrap',
+              marginBottom: '0.2rem'
             }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {formatOpponentName(participant.name)}
+              <span style={{ 
+                overflow: 'visible',
+                wordBreak: 'break-word',
+                display: 'block',
+                width: '100%'
+              }}>
+                {formatOpponentName(participant.name || 'Unknown')}
               </span>
               {squadAbbreviations.get(participant.id) && (
                 <span style={{
-                  fontSize: '0.7rem',
+                  fontSize: '0.75rem',
                   color: '#4f46e5',
                   fontWeight: '600',
                   flexShrink: 0
@@ -334,12 +390,28 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 </span>
               )}
               {isCurrentPlayer && (
-                <span style={{ flexShrink: 0 }}> (You)</span>
+                <span style={{ 
+                  flexShrink: 0,
+                  fontSize: '0.75rem',
+                  color: '#f59e0b',
+                  fontWeight: '600'
+                }}> (You)</span>
               )}
             </div>
-            {participant.level && (
-              <div style={{ fontSize: '0.7rem', color: '#6b7280', lineHeight: '1.2' }}>
-                Lv.{participant.level}
+            {(participant.level || participant.powerLevel !== null) && (
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', lineHeight: '1.2', display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                {participant.level && <span>Lv.{participant.level}</span>}
+                {participant.powerLevel !== null && participant.powerLevel !== undefined && (
+                  <span style={{ 
+                    color: '#8b5cf6', 
+                    fontWeight: '600',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '2px'
+                  }}>
+                    ⚡ PL {participant.powerLevel}
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -483,6 +555,27 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         ⚔️ MST BATTLE ARENA ⚔️
       </div>
 
+      {/* Wave Information */}
+      {currentWave !== undefined && maxWaves !== undefined && maxWaves > 1 && (
+        <div style={{
+          position: 'absolute',
+          top: '60px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          fontSize: '1.25rem',
+          fontWeight: 'bold',
+          color: customBackground ? '#ffffff' : '#8B4513',
+          textShadow: customBackground ? '2px 2px 4px rgba(0, 0, 0, 0.8)' : 'none',
+          zIndex: 1,
+          backgroundColor: customBackground ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.8)',
+          padding: '0.5rem 1rem',
+          borderRadius: '0.5rem',
+          border: customBackground ? '2px solid rgba(255, 255, 255, 0.3)' : '2px solid #8B4513'
+        }}>
+          Wave {currentWave} of {maxWaves}
+        </div>
+      )}
+
       {/* Main Battle Layout */}
       <div style={{
         display: 'flex',
@@ -593,8 +686,18 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               fontFamily: 'monospace'
             }}>
               {selectedMove && isPlayerTurn && !selectedTarget ? (
-                <div style={{ color: '#fbbf24', fontWeight: 'bold' }}>
-                  Selected: {selectedMove.name} - Click an enemy to attack!
+                <div style={{ 
+                  color: '#fbbf24', 
+                  fontWeight: 'bold',
+                  padding: '0.5rem',
+                  background: 'rgba(251, 191, 36, 0.1)',
+                  borderRadius: '0.25rem',
+                  border: '2px solid #fbbf24'
+                }}>
+                  ✅ Selected: <strong>{selectedMove.name}</strong>
+                  <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', color: '#fff' }}>
+                    🎯 <strong>Click an enemy card on the right to attack!</strong>
+                  </div>
                   <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.8 }}>
                     (Click FIGHT button again to change move)
                   </div>
@@ -818,8 +921,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               borderRadius: '0.5rem',
               padding: '1rem',
               overflowY: 'auto',
-              zIndex: 10,
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+              zIndex: 200, // High z-index for menu, but it should close when move is selected
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              pointerEvents: 'auto' // Ensure menu is clickable
             }}>
               <div style={{ 
                 display: 'flex',
@@ -935,10 +1039,15 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   return (
                     <button
                       key={move.id}
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log(`🎯 [MultiplayerBattleArena] Move selected: ${move.name} (${move.id})`);
                         onMoveSelect(move);
                         setShowMoveMenu(false);
-                        setShowTargetMenu(true);
+                        console.log(`✅ [MultiplayerBattleArena] Move menu closed. Enemies should now be clickable.`);
+                        // Don't show target menu - enemies are clickable directly when move is selected
+                        // setShowTargetMenu(true);
                       }}
                       style={{
                         padding: '0.75rem',
@@ -1177,17 +1286,27 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         </div>
 
         {/* Right Side - Enemies (up to 4) */}
-        <div style={{
-          flex: '0 0 300px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.5rem',
-          overflowY: 'auto',
-          overflowX: 'visible',
-          paddingLeft: '1.5rem',
-          paddingRight: '1.5rem',
-          boxSizing: 'border-box'
-        }}>
+        <div 
+          style={{
+            flex: '0 0 300px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+            overflowY: 'auto',
+            overflowX: 'visible',
+            paddingLeft: '1.5rem',
+            paddingRight: '1.5rem',
+            boxSizing: 'border-box',
+            position: 'relative',
+            zIndex: selectedMove && isPlayerTurn ? 50 : 2 // Higher z-index when move is selected
+          }}
+          onClick={(e) => {
+            // Debug: log if clicks reach the container
+            if (selectedMove && isPlayerTurn) {
+              console.log('🖱️ [MultiplayerBattleArena] Click detected on enemies container', e.target);
+            }
+          }}
+        >
           <div style={{
             fontSize: '0.875rem',
             fontWeight: 'bold',

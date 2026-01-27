@@ -373,6 +373,10 @@ export const trackMoveUsage = async (
     
     console.log(`[trackMoveUsage] Successfully updated Firestore for move: "${moveName}"`);
     
+    // Note: We don't recalculate power level here because move usage doesn't directly affect power level.
+    // Power level is based on manifest.currentLevel (ascension level), not usage counts.
+    // If manifest.currentLevel is updated elsewhere, it should trigger recalculation there.
+    
     console.log(`[trackMoveUsage] Tracked move usage: ${moveName} used ${playerManifest.moveUsage[moveName]} times`);
     return true;
   } catch (error) {
@@ -537,6 +541,9 @@ export const claimMilestoneRewards = async (
       ...updateData,
       manifest: playerManifest
     });
+    
+    // Note: Milestone rewards don't directly change manifest.currentLevel, so we don't recalculate here.
+    // If manifest.currentLevel is updated elsewhere, it should trigger recalculation there.
     
     console.log(`[claimMilestoneRewards] Claimed milestone rewards for ${moveName}:`, claimedMilestones);
   } catch (error) {

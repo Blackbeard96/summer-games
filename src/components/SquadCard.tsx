@@ -11,6 +11,8 @@ interface SquadMember {
   level: number;
   xp: number;
   powerPoints?: number;
+  powerLevel?: number | null;
+  powerBreakdown?: { base: number; skills: number; artifacts: number; ascension: number; total: number } | null;
   manifest?: string | { manifestId?: string; manifestationType?: string; [key: string]: any };
   rarity?: number;
   style?: string;
@@ -393,6 +395,8 @@ const SquadCard: React.FC<SquadCardProps> = ({
                   powerPoints={member.powerPoints || 0}
                   manifest={manifestInfo.manifest}
                   level={member.level}
+                  powerLevel={member.powerLevel}
+                  powerBreakdown={member.powerBreakdown}
                   rarity={member.rarity || 1}
                   style={member.style || manifestInfo.style}
                   description={member.description || `${member.role || 'Member'} of ${squad.name}`}

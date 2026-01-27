@@ -129,7 +129,7 @@ const artifacts: Artifact[] = [
     id: 'work-extension',
     name: 'Work Extension', 
     description: 'Complete assignments that were past due and normally would no longer be graded', 
-    price: 100, 
+    price: 250, 
     icon: '📝', 
     image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
@@ -185,6 +185,16 @@ const artifacts: Artifact[] = [
     category: 'special',
     rarity: 'epic'
   },
+  { 
+    id: 'instant-regrade-pass',
+    name: 'Instant Regrade Pass', 
+    description: 'Allows players to get assignments regraded without coming in person. Lasts for 1 day.', 
+    price: 200, 
+    icon: '📋', 
+    image: '/images/Instant Regrade Pass.png',
+    category: 'special',
+    rarity: 'common'
+  },
 ];
 
 const Marketplace = () => {
@@ -201,7 +211,7 @@ const Marketplace = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
   const [showPPEarningModal, setShowPPEarningModal] = useState(false);
-  const isAdmin = checkIsAdmin?.() ?? false;
+  const isAdmin = checkIsAdmin ?? false;
 
   // Function to create admin notifications
   const createAdminNotification = async (notification: any) => {
@@ -1002,6 +1012,9 @@ const Marketplace = () => {
     try {
       const userRef = doc(db, 'students', currentUser.uid);
       
+      // Check if this is a UXP artifact
+      const isUXPArtifact = item.name.includes('UXP') || item.id.startsWith('uxp-credit');
+      
       // Create detailed artifact purchase record
       const purchasedArtifact = {
         id: item.id,
@@ -1013,7 +1026,12 @@ const Marketplace = () => {
         category: item.category,
         rarity: item.rarity,
         purchasedAt: new Date(),
-        used: false
+        used: false,
+        // UXP artifacts require admin approval before being active
+        ...(isUXPArtifact && {
+          pendingApproval: true,
+          approvalStatus: 'pending'
+        })
       };
       
       // Get current user data to access existing artifacts
@@ -1059,6 +1077,11 @@ const Marketplace = () => {
             [item.id]: true,
             [`${item.id}_purchase`]: purchasedArtifact
           };
+        }
+        
+        // For UXP artifacts, show message about pending approval
+        if (isUXPArtifact) {
+          alert('Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.');
         }
         
         await updateDoc(usersRef, {

@@ -112,7 +112,7 @@ export async function createSession(
       status: 'live',
       mode: 'in_session',
       players: [],
-      battleLog: ['📚 In Session Battle Started!'],
+      battleLog: ['🎆 Live Event Started!'],
       createdAt: serverTimestamp(),
       startedAt: serverTimestamp()
     };
@@ -223,15 +223,22 @@ export async function joinSession(
       debug('inSessionService', `Player ${player.userId} joined session ${sessionId}`);
     }
     
-    // Ensure player presence doc exists
+    // Ensure player presence doc exists and is marked as connected
     const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
     const playerPresenceDoc = await getDoc(playerPresenceRef);
     
     if (!playerPresenceDoc.exists()) {
+      // Create presence doc with connected: true
       await setDoc(playerPresenceRef, {
         connected: true,
         lastSeenAt: serverTimestamp(),
         joinedAt: serverTimestamp()
+      });
+    } else {
+      // Update existing presence doc to mark as connected
+      await updateDoc(playerPresenceRef, {
+        connected: true,
+        lastSeenAt: serverTimestamp()
       });
     }
     

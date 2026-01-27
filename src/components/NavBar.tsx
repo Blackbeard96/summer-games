@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef, CSSProperties, MouseEvent, memo, us
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc, addDoc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc, addDoc, query, where, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { UserRole } from '../types/roles';
 import { logger } from '../utils/debugLogger';
 import { useAriaLive, ariaUtils, generateId } from '../utils/accessibility';
+import { getNavConfig, filterNavItemsByRole, flattenNavConfig } from '../config/navConfig';
+import type { NavItem } from '../config/navConfig';
 import {
   getClassesByStudent,
   getAssessmentsByClass,
@@ -47,9 +49,9 @@ const getNavItemStyle = (screenSize: 'mobile' | 'tablet' | 'desktop'): CSSProper
     case 'mobile':
       return { ...baseStyle, padding: '0.25rem 0.5rem', fontSize: '0.75rem' };
     case 'tablet':
-      return { ...baseStyle, padding: '0.375rem 0.75rem', fontSize: '0.875rem' };
+      return { ...baseStyle, padding: '0.375rem 0.625rem', fontSize: '0.8125rem' };
     case 'desktop':
-      return { ...baseStyle, padding: '0.5rem 1rem', fontSize: '1rem' };
+      return { ...baseStyle, padding: '0.5rem 0.875rem', fontSize: '0.9375rem' };
     default:
       return baseStyle;
   }
@@ -70,9 +72,74 @@ interface Notification {
 }
 
 const NavBar = memo(() => {
-  const { currentUser, logout, currentRole, userProfile } = useAuth();
+  const { currentUser, logout, currentRole, userProfile, role, isAdmin: isAdminUser } = useAuth();
   const navigate = useNavigate();
-  console.log('🎯 NavBar component rendered - currentUser:', currentUser?.email, 'currentRole:', currentRole);
+  console.log('🎯 NavBar component rendered - currentUser:', currentUser?.email, 'currentRole:', currentRole, 'role:', role, 'isAdmin:', isAdminUser);
+  
+  // Function to grant admin access
+  const grantAdminAccess = async () => {
+    if (!currentUser) {
+      alert('You must be logged in to grant admin access.');
+      return;
+    }
+    
+    // Check if user email matches admin criteria
+    const isAdminEmail = currentUser.email === 'eddymosley@compscihigh.org' || 
+                        currentUser.email === 'admin@mstgames.net' ||
+                        currentUser.email === 'edm21179@gmail.com' ||
+                        currentUser.email?.includes('eddymosley') ||
+                        currentUser.email?.includes('admin') ||
+                        currentUser.email?.includes('mstgames');
+    
+    if (!isAdminEmail) {
+      alert('Your email does not match admin criteria. Contact an administrator for access.');
+      return;
+    }
+    
+    try {
+      // Create or update userRoles document to grant admin access
+      const roleRef = doc(db, 'userRoles', currentUser.uid);
+      const roleDoc = await getDoc(roleRef);
+      
+      if (roleDoc.exists()) {
+        // Update existing role document
+        await updateDoc(roleRef, {
+          role: 'admin',
+          updatedAt: serverTimestamp()
+        });
+        console.log('✅ Admin role updated in userRoles collection');
+      } else {
+        // Create new role document
+        await setDoc(roleRef, {
+          role: 'admin',
+          assignedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        console.log('✅ Admin role created in userRoles collection');
+      }
+      
+      // Also update users collection role field as fallback
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await updateDoc(userRef, {
+          role: 'admin'
+        });
+        console.log('✅ Admin role updated in users collection');
+      }
+      
+      alert('✅ Admin access granted! Navigating to admin panel...');
+      // Navigate to admin panel and then refresh to ensure role is loaded
+      navigate('/admin');
+      // Small delay before refresh to ensure navigation happens
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error) {
+      console.error('Error granting admin access:', error);
+      alert('Error granting admin access. Please try again or contact support.');
+    }
+  };
   
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -81,11 +148,11 @@ const NavBar = memo(() => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [userRole, setUserRole] = useState<UserRole>('student');
-  const [showBattleDropdown, setShowBattleDropdown] = useState(false);
-  const battleDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [showProfileDropdown, setShowProfileDropdown] = useState(false);
-  const profileDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Track which dropdown is open (by item path)
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const dropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [pendingAssessmentGoals, setPendingAssessmentGoals] = useState(0);
+  const [activeLiveEventsCount, setActiveLiveEventsCount] = useState(0);
   
   // Accessibility features
   const { announce } = useAriaLive();
@@ -354,6 +421,24 @@ const NavBar = memo(() => {
     }
   }, [showNotifications]);
 
+  // Close dropdown on Escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && openDropdown) {
+        setOpenDropdown(null);
+        if (dropdownTimeoutRef.current) {
+          clearTimeout(dropdownTimeoutRef.current);
+          dropdownTimeoutRef.current = null;
+        }
+      }
+    };
+
+    if (openDropdown) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [openDropdown]);
+
   const handleNotificationClick = useCallback(async (notif: Notification) => {
     if (notif.challengeId) {
       navigate(`/chapters?challenge=${notif.challengeId}`);
@@ -517,55 +602,103 @@ const NavBar = memo(() => {
     announce('Mobile menu closed');
   }, [announce]);
 
-  // Battle Arena sub-menu items
-  const battleSubItems = useMemo(() => [
-    { to: '/battle#vault', label: 'Vault Management', icon: '🏦' },
-    { to: '/battle#moves', label: 'Skill Mastery', icon: '🎯' },
-    { to: '/battle#cards', label: 'Action Cards', icon: '🃏' },
-  ], []);
+  // Removed battleSubItems - now using item.children from navConfig
 
-  // Memoize navigation items to prevent unnecessary re-renders
-  const navItems = useMemo(() => [
-    { to: '/home', label: 'Home', tooltip: 'Home Hub' },
-    { to: '/chapters', label: "Player's Journey", tooltip: 'Chapter Challenges' },
-    { to: '/battle', label: 'Battle Arena', tooltip: 'MST Battle System', hasDropdown: true },
-    { to: '/island-raid', label: '🏝️ Island Raid', tooltip: 'PvE Co-op Campaign Mode' },
-    { to: '/training-grounds', label: 'Training Grounds', tooltip: 'Practice Quizzes' },
-    { to: '/artifacts', label: 'Artifacts', tooltip: 'Artifacts System' },
-    { to: '/leaderboard', label: 'Hall of Fame', tooltip: 'Leaderboard' },
-  ], []);
+  // Track active live events count
+  useEffect(() => {
+    if (!currentUser) {
+      setActiveLiveEventsCount(0);
+      return;
+    }
 
-  const userNavItems = useMemo(() => currentUser ? [
-    { to: '/profile', label: 'My Profile', tooltip: 'My Manifestation', hasDropdown: true },
-    { to: '/squads', label: 'Squads', tooltip: 'Team Management' },
-    { to: '/marketplace', label: 'MST MKT', tooltip: 'Artifact Marketplace' },
-    { to: '/assessment-goals', label: '🎯 Goal Setting', tooltip: 'Set Assessment Goals', hasNotification: pendingAssessmentGoals > 0, notificationCount: pendingAssessmentGoals },
-    { to: '#', label: '📚 Review Tutorials', tooltip: 'Review Tutorials', isButton: true, onClick: () => (window as any).tutorialTriggers?.showReviewModal?.() },
-  ] : [], [currentUser, pendingAssessmentGoals]);
+    // Get user's classrooms
+    let userClassrooms: string[] = [];
+    const getClassrooms = async () => {
+      try {
+        const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+        userClassrooms = classroomsSnapshot.docs
+          .filter(doc => {
+            const classData = doc.data();
+            return (classData.students || []).includes(currentUser.uid);
+          })
+          .map(doc => doc.id);
+      } catch (error) {
+        console.error('Error fetching classrooms for live events badge:', error);
+      }
+    };
 
-  // Profile sub-menu items
-  const profileSubItems = useMemo(() => [
-    { to: '/profile?view=skill-tree&mode=in-game', label: 'In Game Abilities', icon: '🎮' },
-    { to: '/profile?view=skill-tree&mode=irl', label: 'In Real Life Abilities', icon: '🌍' },
-  ], []);
+    getClassrooms().then(() => {
+      if (userClassrooms.length === 0) {
+        setActiveLiveEventsCount(0);
+        return;
+      }
 
-  // Scorekeeper navigation items (only for scorekeepers)
-  // Temporary: Also show for Blackbeard for testing
-  const isScorekeeper = useMemo(() => {
-    const result = hasScorekeeperRole || 
-      userRole === 'scorekeeper' || 
-      (currentUser?.email === 'eddymosley9@gmail.com' && process.env.NODE_ENV === 'development');
-    console.log(`🔍 Scorekeeper check - hasScorekeeperRole: ${hasScorekeeperRole}, userRole: ${userRole}, email: ${currentUser?.email}, result: ${result}`);
-    return result;
-  }, [hasScorekeeperRole, userRole, currentUser?.email]);
+      // Subscribe to active live events in user's classrooms
+      const eventsRef = collection(db, 'inSessionRooms');
+      const q = query(eventsRef, where('status', 'in', ['open', 'active', 'live']));
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const activeCount = snapshot.docs.filter(doc => {
+          const data = doc.data();
+          return userClassrooms.includes(data.classId);
+        }).length;
+        setActiveLiveEventsCount(activeCount);
+      }, (error) => {
+        console.error('Error listening to live events for badge:', error);
+        setActiveLiveEventsCount(0);
+      });
+
+      return () => unsubscribe();
+    });
+  }, [currentUser]);
+
+  // Get nav config and filter by role
+  const navConfig = useMemo(() => getNavConfig(activeLiveEventsCount, pendingAssessmentGoals), [activeLiveEventsCount, pendingAssessmentGoals]);
   
-  const scorekeeperNavItems = useMemo(() => (currentUser && isScorekeeper) ? [
-    { to: '/scorekeeper', label: '📊 Scorekeeper', tooltip: 'Manage Class Power Points', isScorekeeper: true }
-  ] : [], [currentUser, isScorekeeper]);
+  // Flatten and filter nav items based on role
+  const allNavItems = useMemo(() => {
+    if (!currentUser) return [];
+    return flattenNavConfig(navConfig, role);
+  }, [navConfig, currentUser, role]);
 
-  const adminNavItems = useMemo(() => currentUser?.email === 'edm21179@gmail.com' ? [
-    { to: '/admin', label: "Sage's Chamber", tooltip: 'Admin Panel', isAdmin: true }
-  ] : [], [currentUser?.email]);
+  // Separate primary (priority 1) and secondary (priority 2) items
+  const primaryNavItems = useMemo(() => {
+    // Filter for priority 1 items (default to 1 if not specified)
+    return allNavItems.filter(item => (item.priority ?? 1) === 1);
+  }, [allNavItems]);
+
+  // Secondary items no longer needed - all items are now priority 1 in the new structure
+
+  // Legacy support - use primary items for main nav
+  const navItems = primaryNavItems;
+
+  // User nav items (for mobile menu and legacy code)
+  const userNavItems = useMemo(() => {
+    // Second section items (user nav) - now used for mobile menu
+    return navConfig[1]?.items ? filterNavItemsByRole(navConfig[1].items, role) : [];
+  }, [navConfig, role]);
+
+  // Admin nav items (third section)
+  const adminNavItems = useMemo(() => {
+    if (!isAdminUser) return [];
+    return navConfig[2]?.items ? filterNavItemsByRole(navConfig[2].items, role) : [];
+  }, [navConfig, role, isAdminUser]);
+
+  // Profile sub-menu items (from user nav items)
+  const profileSubItems = useMemo(() => {
+    const profileItem = userNavItems.find(item => item.path === '/profile');
+    return profileItem?.children || [];
+  }, [userNavItems]);
+
+  // Scorekeeper nav items (filtered from main nav items based on scorekeeper role)
+  const scorekeeperNavItems = useMemo(() => {
+    if (userRole !== 'scorekeeper' && !hasScorekeeperRole) return [];
+    // Filter nav items that are visible to scorekeepers
+    return allNavItems.filter(item => {
+      // Scorekeeper can see their specific items (handled by navConfig filtering)
+      return true;
+    });
+  }, [allNavItems, userRole, hasScorekeeperRole]);
 
   // Debug navigation items generation
   logger.roles.debug('NavBar: Navigation items generated:', {
@@ -580,7 +713,7 @@ const NavBar = memo(() => {
   // Temporary debug indicator for role detection
   if (currentUser && process.env.NODE_ENV === 'development') {
     console.log(`🎯 NavBar Debug - User: ${currentUser.email}, Role: ${userRole}, Scorekeeper items: ${scorekeeperNavItems.length}`);
-    console.log(`🔍 Scorekeeper check - isScorekeeper: ${isScorekeeper}, userRole: ${userRole}, email: ${currentUser.email}`);
+    console.log(`🔍 Scorekeeper check - userRole: ${userRole}, email: ${currentUser.email}`);
     console.log(`🔍 hasScorekeeperRole: ${hasScorekeeperRole}`);
     console.log(`🔍 scorekeeperNavItems:`, scorekeeperNavItems);
   }
@@ -620,9 +753,11 @@ const NavBar = memo(() => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: screenSize === 'tablet' ? '0.5rem' : '1rem',
-        flexWrap: screenSize === 'tablet' ? 'wrap' : 'nowrap',
-        width: '100%'
+        gap: screenSize === 'tablet' ? '0.5rem' : '0.75rem',
+        flexWrap: 'nowrap', // NEVER wrap - single row always
+        width: '100%',
+        minWidth: 0, // Allow container to shrink if needed
+        overflow: 'visible' // Allow dropdowns to show
       }}>
         {/* Logo/Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: screenSize === 'tablet' ? '0.5rem' : '0.75rem', flexShrink: 0 }}>
@@ -640,12 +775,13 @@ const NavBar = memo(() => {
           }}>
             X
           </div>
-          {screenSize !== 'tablet' && (
+          {screenSize === 'desktop' && (
             <span style={{
-              fontSize: screenSize === 'mobile' ? '1.125rem' : '1.25rem',
+              fontSize: '1.125rem',
               fontWeight: 'bold',
               color: 'white',
-              whiteSpace: 'nowrap'
+              whiteSpace: 'nowrap',
+              flexShrink: 0
             }}>
               Xiotein School
             </span>
@@ -656,46 +792,55 @@ const NavBar = memo(() => {
         {!isMobile && (
           <div style={{
             display: 'flex',
-            gap: screenSize === 'tablet' ? '0.5rem' : screenSize === 'desktop' ? '0.75rem' : '0.5rem',
+            gap: screenSize === 'tablet' ? '0.375rem' : '0.5rem',
             alignItems: 'center',
-            flexWrap: 'wrap',
+            flexWrap: 'nowrap', // NO WRAPPING - single row only
             justifyContent: 'center',
             flex: '1 1 auto',
             minWidth: 0,
-            maxWidth: '100%'
+            maxWidth: '100%',
+            overflow: 'visible', // Allow dropdowns to show
+            flexShrink: 1 // Allow shrinking if needed
           }}>
             {navItems.map((item) => (
               <div 
-                key={item.to} 
-                style={{ ...getNavItemStyle(screenSize), position: 'relative' }} 
+                key={item.to || item.path} 
+                style={{ 
+                  ...getNavItemStyle(screenSize), 
+                  position: 'relative', 
+                  flexShrink: 0,
+                  pointerEvents: 'auto' // Ensure hover events work
+                }} 
                 onMouseEnter={(e) => {
                   showTooltip(e);
                   e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
                   e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
-                  if (item.hasDropdown) {
+                  if (item.hasDropdown && item.children && item.children.length > 0) {
                     // Clear any pending timeout
-                    if (battleDropdownTimeoutRef.current) {
-                      clearTimeout(battleDropdownTimeoutRef.current);
-                      battleDropdownTimeoutRef.current = null;
+                    if (dropdownTimeoutRef.current) {
+                      clearTimeout(dropdownTimeoutRef.current);
+                      dropdownTimeoutRef.current = null;
                     }
-                    setShowBattleDropdown(true);
+                    // Show dropdown immediately on hover
+                    console.log('[NavBar] Hover detected, opening dropdown:', item.label, item.path);
+                    setOpenDropdown(item.path);
                   }
                 }}
                 onMouseLeave={(e) => {
                   hideTooltip(e);
                   e.currentTarget.style.backgroundColor = 'transparent';
                   e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
-                  if (item.hasDropdown) {
-                    // Add delay before hiding dropdown (500ms gives time to move to dropdown)
-                    battleDropdownTimeoutRef.current = setTimeout(() => {
-                      setShowBattleDropdown(false);
-                      battleDropdownTimeoutRef.current = null;
-                    }, 500);
+                  if (item.hasDropdown && item.children && item.children.length > 0) {
+                    // Add delay before hiding dropdown (300ms gives time to move to dropdown)
+                    dropdownTimeoutRef.current = setTimeout(() => {
+                      setOpenDropdown(null);
+                      dropdownTimeoutRef.current = null;
+                    }, 300);
                   }
                 }}
               >
                 <Link 
-                  to={item.to} 
+                  to={item.to || item.path || '#'} 
                   style={{ 
                     color: 'inherit', 
                     textDecoration: 'none',
@@ -704,12 +849,12 @@ const NavBar = memo(() => {
                     height: '100%'
                   }}
                 >
-                  {item.label}
+                  {item.label}{item.hasDropdown && item.children && item.children.length > 0 ? ' ▼' : ''}
                 </Link>
                 <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
                 
-                {/* Battle Arena Dropdown */}
-                {item.hasDropdown && showBattleDropdown && (
+                {/* Dropdown Menu (Play, Learn, Community, Profile) */}
+                {item.hasDropdown && item.children && item.children.length > 0 && openDropdown === item.path && (
                   <div style={{
                     position: 'absolute',
                     top: '100%',
@@ -719,192 +864,53 @@ const NavBar = memo(() => {
                     borderRadius: '0.5rem',
                     boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
                     border: '1px solid #374151',
-                    zIndex: 1000,
-                    minWidth: '200px',
+                    zIndex: 1001,
+                    minWidth: '220px',
+                    maxWidth: '280px',
                     padding: '0.5rem 0'
                   }}
                   onMouseEnter={() => {
                     // Clear any pending timeout when mouse enters dropdown
-                    if (battleDropdownTimeoutRef.current) {
-                      clearTimeout(battleDropdownTimeoutRef.current);
-                      battleDropdownTimeoutRef.current = null;
+                    if (dropdownTimeoutRef.current) {
+                      clearTimeout(dropdownTimeoutRef.current);
+                      dropdownTimeoutRef.current = null;
                     }
-                    setShowBattleDropdown(true);
+                    setOpenDropdown(item.path);
                   }}
                   onMouseLeave={() => {
-                    // Add delay before hiding dropdown (500ms gives time to move back)
-                    battleDropdownTimeoutRef.current = setTimeout(() => {
-                      setShowBattleDropdown(false);
-                      battleDropdownTimeoutRef.current = null;
-                    }, 500);
+                    // Add delay before hiding dropdown (300ms gives time to move back)
+                    dropdownTimeoutRef.current = setTimeout(() => {
+                      setOpenDropdown(null);
+                      dropdownTimeoutRef.current = null;
+                    }, 300);
                   }}
                   >
-                    {battleSubItems.map((subItem) => (
-                      <Link
-                        key={subItem.to}
-                        to={subItem.to}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          color: 'white',
-                          textDecoration: 'none',
-                          padding: '0.75rem 1rem',
-                          transition: 'background-color 0.2s'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }}
-                      >
-                        <span>{subItem.icon}</span>
-                        <span>{subItem.label}</span>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {userNavItems.map((item) => {
-              // Hide "Review Tutorials" on smaller screens to save space
-              if (screenSize === 'tablet' && item.label.includes('Review Tutorials')) {
-                return null;
-              }
-              return (
-                <div 
-                  key={item.to} 
-                  style={{ ...getNavItemStyle(screenSize), position: 'relative' }} 
-                  onMouseEnter={(e) => {
-                    showTooltip(e);
-                    e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
-                    e.currentTarget.style.setProperty('background-color', 'rgba(255,255,255,0.2)', 'important');
-                    if (item.hasDropdown) {
-                      // Clear any pending timeout
-                      if (profileDropdownTimeoutRef.current) {
-                        clearTimeout(profileDropdownTimeoutRef.current);
-                        profileDropdownTimeoutRef.current = null;
-                      }
-                      setShowProfileDropdown(true);
-                    }
-                  }} 
-                  onMouseLeave={(e) => {
-                    hideTooltip(e);
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.setProperty('background-color', 'transparent', 'important');
-                    if (item.hasDropdown) {
-                      // Add delay before hiding dropdown (500ms gives time to move to dropdown)
-                      profileDropdownTimeoutRef.current = setTimeout(() => {
-                        setShowProfileDropdown(false);
-                        profileDropdownTimeoutRef.current = null;
-                      }, 500);
-                    }
-                  }}
-                >
-                  {item.isButton ? (
-                    <button
-                      onClick={item.onClick}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'inherit',
-                        textDecoration: 'none',
-                        cursor: 'pointer',
-                        fontSize: 'inherit',
-                        fontFamily: 'inherit',
-                        padding: 0,
-                        width: '100%',
-                        height: '100%'
-                      }}
-                    >
-                      {screenSize === 'tablet' ? item.label.replace('📚 Review Tutorials', '📚') : item.label}
-                    </button>
-                  ) : (
-                    <Link 
-                      to={item.to} 
-                      style={{ 
-                        color: 'inherit', 
-                        textDecoration: 'none',
-                        display: 'block',
-                        width: '100%',
-                        height: '100%',
-                        position: 'relative'
-                      }}
-                    >
-                      {screenSize === 'tablet' && item.label === 'MST MKT' ? 'MKT' : item.label}
-                      {/* Notification Badge */}
-                      {item.hasNotification && item.notificationCount && item.notificationCount > 0 && (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: '-5px',
-                            right: '-5px',
-                            backgroundColor: '#ef4444',
-                            color: 'white',
-                            borderRadius: '50%',
-                            width: '20px',
-                            height: '20px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            border: '2px solid #1e293b'
+                    {item.children.map((subItem) => {
+                      // Filter children by role
+                      if (subItem.visibility === 'admin' && role !== 'admin') return null;
+                      
+                      return subItem.isButton ? (
+                        <button
+                          key={subItem.path || subItem.label}
+                          onClick={() => {
+                            if (subItem.onClick) subItem.onClick();
+                            setOpenDropdown(null);
                           }}
-                        >
-                          {item.notificationCount > 9 ? '9+' : item.notificationCount}
-                        </span>
-                      )}
-                    </Link>
-                  )}
-                  <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
-                  
-                  {/* Profile Dropdown */}
-                  {item.hasDropdown && showProfileDropdown && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: '0',
-                      marginTop: '0.5rem',
-                      backgroundColor: '#1f2937',
-                      borderRadius: '0.5rem',
-                      boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
-                      border: '1px solid #374151',
-                      zIndex: 1000,
-                      minWidth: '220px',
-                      padding: '0.5rem 0'
-                    }}
-                    onMouseEnter={() => {
-                      // Clear any pending timeout when mouse enters dropdown
-                      if (profileDropdownTimeoutRef.current) {
-                        clearTimeout(profileDropdownTimeoutRef.current);
-                        profileDropdownTimeoutRef.current = null;
-                      }
-                      setShowProfileDropdown(true);
-                    }}
-                    onMouseLeave={() => {
-                      // Add delay before hiding dropdown (500ms gives time to move back)
-                      profileDropdownTimeoutRef.current = setTimeout(() => {
-                        setShowProfileDropdown(false);
-                        profileDropdownTimeoutRef.current = null;
-                      }, 500);
-                    }}
-                    >
-                      {profileSubItems.map((subItem) => (
-                        <Link
-                          key={subItem.to}
-                          to={subItem.to}
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.75rem',
-                            padding: '0.75rem 1rem',
+                            background: 'none',
+                            border: 'none',
                             color: 'white',
                             textDecoration: 'none',
-                            transition: 'background-color 0.2s ease',
-                            fontSize: '0.875rem'
+                            cursor: 'pointer',
+                            fontSize: '0.875rem',
+                            fontFamily: 'inherit',
+                            padding: '0.75rem 1rem',
+                            width: '100%',
+                            textAlign: 'left',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            transition: 'background-color 0.2s'
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
@@ -913,71 +919,80 @@ const NavBar = memo(() => {
                             e.currentTarget.style.backgroundColor = 'transparent';
                           }}
                         >
-                          <span>{subItem.icon}</span>
+                          {subItem.icon && <span>{subItem.icon}</span>}
                           <span>{subItem.label}</span>
+                          {/* Notification Badge */}
+                          {subItem.hasNotification && subItem.notificationCount && subItem.notificationCount > 0 && (
+                            <span
+                              style={{
+                                marginLeft: 'auto',
+                                backgroundColor: '#ef4444',
+                                color: 'white',
+                                borderRadius: '50%',
+                                minWidth: '20px',
+                                height: '20px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                padding: '0 6px'
+                              }}
+                            >
+                              {subItem.notificationCount > 9 ? '9+' : subItem.notificationCount}
+                            </span>
+                          )}
+                        </button>
+                      ) : (
+                        <Link
+                          key={subItem.path || subItem.label}
+                          to={subItem.to || subItem.path || '#'}
+                          onClick={() => setOpenDropdown(null)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: 'white',
+                            textDecoration: 'none',
+                            padding: '0.75rem 1rem',
+                            transition: 'background-color 0.2s',
+                            position: 'relative'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                        >
+                          {subItem.icon && <span>{subItem.icon}</span>}
+                          <span>{subItem.label}</span>
+                          {/* Notification Badge */}
+                          {subItem.hasNotification && subItem.notificationCount && subItem.notificationCount > 0 && (
+                            <span
+                              style={{
+                                marginLeft: 'auto',
+                                backgroundColor: '#ef4444',
+                                color: 'white',
+                                borderRadius: '50%',
+                                minWidth: '20px',
+                                height: '20px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.75rem',
+                                fontWeight: 'bold',
+                                padding: '0 6px'
+                              }}
+                            >
+                              {subItem.notificationCount > 9 ? '9+' : subItem.notificationCount}
+                            </span>
+                          )}
                         </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {scorekeeperNavItems.map((item) => (
-              <div 
-                key={item.to} 
-                style={{ ...getNavItemStyle(screenSize), backgroundColor: '#059669' }} 
-                onMouseEnter={(e) => {
-                  showTooltip(e);
-                  e.currentTarget.style.backgroundColor = '#047857';
-                }} 
-                onMouseLeave={(e) => {
-                  hideTooltip(e);
-                  e.currentTarget.style.backgroundColor = '#059669';
-                }}
-              >
-                <Link 
-                  to={item.to} 
-                  style={{ 
-                    color: 'inherit', 
-                    textDecoration: 'none',
-                    display: 'block',
-                    width: '100%',
-                    height: '100%'
-                  }}
-                >
-                  {screenSize === 'tablet' ? '📊' : item.label}
-                </Link>
-                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
-              </div>
-            ))}
-
-            {adminNavItems.map((item) => (
-              <div 
-                key={item.to} 
-                style={{ ...getNavItemStyle(screenSize), backgroundColor: '#dc2626' }} 
-                onMouseEnter={(e) => {
-                  showTooltip(e);
-                  e.currentTarget.style.backgroundColor = '#b91c1c';
-                }} 
-                onMouseLeave={(e) => {
-                  hideTooltip(e);
-                  e.currentTarget.style.backgroundColor = '#dc2626';
-                }}
-              >
-                <Link 
-                  to={item.to} 
-                  style={{ 
-                    color: 'inherit', 
-                    textDecoration: 'none',
-                    display: 'block',
-                    width: '100%',
-                    height: '100%'
-                  }}
-                >
-                  {screenSize === 'tablet' ? "Sage's" : item.label}
-                </Link>
-                <span className="tooltip" style={tooltipStyle}>{item.tooltip}</span>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -992,6 +1007,64 @@ const NavBar = memo(() => {
         }}>
           {currentUser && (
             <>
+              {/* Admin Mode Indicator / Grant Access Button */}
+              {(() => {
+                // Check if user email matches admin criteria (even if role isn't set yet)
+                const isAdminEmail = currentUser?.email === 'eddymosley@compscihigh.org' || 
+                                    currentUser?.email === 'admin@mstgames.net' ||
+                                    currentUser?.email === 'edm21179@gmail.com' ||
+                                    currentUser?.email?.includes('eddymosley') ||
+                                    currentUser?.email?.includes('admin') ||
+                                    currentUser?.email?.includes('mstgames');
+                
+                if (isAdminEmail) {
+                  // Show clickable button for all admin-eligible users (whether role is set or not)
+                  // This allows re-granting access if role gets lost
+                  return (
+                    <button
+                      onClick={() => {
+                        // If already admin, navigate to admin panel
+                        // Otherwise, grant admin access
+                        if (isAdminUser) {
+                          navigate('/admin');
+                        } else {
+                          grantAdminAccess();
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.375rem',
+                        padding: screenSize === 'mobile' ? '0.25rem 0.5rem' : screenSize === 'tablet' ? '0.25rem 0.5rem' : '0.375rem 0.625rem',
+                        backgroundColor: isAdminUser ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.3)',
+                        border: isAdminUser ? '1px solid rgba(139, 92, 246, 0.4)' : '1px solid rgba(139, 92, 246, 0.6)',
+                        borderRadius: '0.375rem',
+                        fontSize: screenSize === 'mobile' ? '0.75rem' : screenSize === 'tablet' ? '0.75rem' : '0.8125rem',
+                        color: '#c4b5fd',
+                        fontWeight: '500',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(139, 92, 246, 0.5)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.8)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = isAdminUser ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.3)';
+                        e.currentTarget.style.borderColor = isAdminUser ? 'rgba(139, 92, 246, 0.4)' : 'rgba(139, 92, 246, 0.6)';
+                      }}
+                      title={isAdminUser ? "Click to open Admin Panel" : "Click to grant admin access"}
+                    >
+                      <span>👑</span>
+                      {screenSize === 'desktop' && <span>Admin</span>}
+                    </button>
+                  );
+                }
+                return null;
+              })()}
+              
               {/* Notifications Bell */}
               <div style={{ position: 'relative' }} data-notifications onMouseEnter={!isMobile ? showTooltip : undefined} onMouseLeave={!isMobile ? hideTooltip : undefined}>
                 <button
@@ -1384,51 +1457,9 @@ const NavBar = memo(() => {
           }}
         >
           <div style={{ padding: '1rem' }}>
-            {/* Navigation Items */}
-            <div style={{ marginBottom: '1.5rem' }}>
-              <div style={{
-                fontSize: '0.875rem',
-                color: '#9ca3af',
-                fontWeight: '600',
-                marginBottom: '0.75rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em'
-              }}>
-                Main Navigation
-              </div>
-              {navItems.map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  onClick={closeMobileMenu}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    color: 'white',
-                    textDecoration: 'none',
-                    padding: '0.875rem 1rem',
-                    borderRadius: '0.5rem',
-                    marginBottom: '0.25rem',
-                    transition: 'all 0.2s ease',
-                    fontSize: '1rem',
-                    fontWeight: '500',
-                    minHeight: '48px'
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </div>
-
-            {/* User Navigation Items */}
-            {userNavItems.length > 0 && (
-              <div style={{ 
-                marginBottom: '1.5rem', 
-                borderTop: 'none', 
-                paddingTop: '1.5rem' 
-              }}>
+            {/* Primary Navigation Items */}
+            {primaryNavItems.length > 0 && (
+              <div style={{ marginBottom: '1.5rem' }}>
                 <div style={{
                   fontSize: '0.875rem',
                   color: '#9ca3af',
@@ -1437,12 +1468,12 @@ const NavBar = memo(() => {
                   textTransform: 'uppercase',
                   letterSpacing: '0.05em'
                 }}>
-                  My Account
+                  Main Navigation
                 </div>
-                {userNavItems.map((item) => (
+                {primaryNavItems.map((item) => (
                   <Link
-                    key={item.to}
-                    to={item.to}
+                    key={item.to || item.path || '#'}
+                    to={item.to || item.path || '#'}
                     onClick={closeMobileMenu}
                     style={{
                       display: 'flex',
@@ -1455,16 +1486,40 @@ const NavBar = memo(() => {
                       transition: 'all 0.2s ease',
                       fontSize: '1rem',
                       fontWeight: '500',
-                      minHeight: '48px'
+                      minHeight: '48px',
+                      position: 'relative'
                     }}
                     onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
                     onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
                     {item.label}
+                    {/* Notification Badge */}
+                    {item.hasNotification && item.notificationCount && item.notificationCount > 0 && (
+                      <span
+                        style={{
+                          marginLeft: 'auto',
+                          backgroundColor: '#ef4444',
+                          color: 'white',
+                          borderRadius: '50%',
+                          minWidth: '20px',
+                          height: '20px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold',
+                          padding: '0 6px'
+                        }}
+                      >
+                        {item.notificationCount > 9 ? '9+' : item.notificationCount}
+                      </span>
+                    )}
                   </Link>
                 ))}
               </div>
             )}
+
+            {/* Secondary Navigation Items removed - all items are now in primary nav */}
 
             {/* Scorekeeper Navigation Items */}
             {scorekeeperNavItems.length > 0 && (
@@ -1485,8 +1540,8 @@ const NavBar = memo(() => {
                 </div>
                 {scorekeeperNavItems.map((item) => (
                   <Link
-                    key={item.to}
-                    to={item.to}
+                    key={item.to || item.path || '#'}
+                    to={item.to || item.path || '#'}
                     onClick={closeMobileMenu}
                     style={{
                       display: 'flex',
@@ -1529,8 +1584,8 @@ const NavBar = memo(() => {
                 </div>
                 {adminNavItems.map((item) => (
                   <Link
-                    key={item.to}
-                    to={item.to}
+                    key={item.to || item.path || '#'}
+                    to={item.to || item.path || '#'}
                     onClick={closeMobileMenu}
                     style={{
                       display: 'flex',

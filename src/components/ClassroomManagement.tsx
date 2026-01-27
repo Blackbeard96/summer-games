@@ -166,8 +166,8 @@ const ClassroomManagement: React.FC = () => {
         return;
       }
       
-      // First check AuthContext's isAdmin function (email-based)
-      const isAdminFromAuthContext = isAdminFromAuth();
+      // First check AuthContext's isAdmin boolean (email-based)
+      const isAdminFromAuthContext = isAdminFromAuth;
       
       // Also check email-based admin directly (as additional check)
       const isAdminByEmail = currentUser.email === 'eddymosley@compscihigh.org' || 
@@ -1143,7 +1143,7 @@ const ClassroomManagement: React.FC = () => {
                       );
                     
                     if (!canHost) {
-                      alert('Only administrators can start In Session battles.');
+                      alert('Only administrators can start Live Events.');
                       return;
                     }
                     
@@ -1154,7 +1154,7 @@ const ClassroomManagement: React.FC = () => {
                         .filter(Boolean) as Student[];
                       
                       if (classStudents.length === 0) {
-                        alert('No students in this classroom. Add students before starting a session.');
+                        alert('No students in this classroom. Add students before starting a live event.');
                         return;
                       }
                       
@@ -1167,14 +1167,14 @@ const ClassroomManagement: React.FC = () => {
                       );
                       
                       if (sessionId) {
-                        // Navigate to the session view
-                        navigate(`/in-session/${sessionId}`);
+                        // Navigate to the live event view
+                        navigate(`/live-events/${sessionId}`);
                       } else {
-                        alert('Failed to start session. Please try again.');
+                        alert('Failed to start live event. Please try again.');
                       }
                     } catch (error) {
-                      console.error('Error starting session:', error);
-                      alert('Failed to start session. Please try again.');
+                      console.error('Error starting live event:', error);
+                      alert('Failed to start live event. Please try again.');
                     }
                   }}
                   disabled={!isAdmin}
@@ -1196,9 +1196,9 @@ const ClassroomManagement: React.FC = () => {
                     whiteSpace: 'nowrap',
                     opacity: isAdmin ? 1 : 0.6
                   }}
-                  title={isAdmin ? "Start an In Session battle for this class" : "Only administrators can start In Session battles"}
+                  title={isAdmin ? "Start a Live Event battle for this class" : "Only administrators can start Live Events"}
                 >
-                  📚 Start In Session
+                  🎆 Start Live Event
                 </button>
                 <button
                   onClick={() => setShowAddStudentsModal(classroom.id)}

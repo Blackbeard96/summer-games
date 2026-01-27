@@ -24,6 +24,7 @@ import PortalIntroModal from './PortalIntroModal';
 import TimuIslandStoryModal from './TimuIslandStoryModal';
 import SquadUpStoryModal from './SquadUpStoryModal';
 import SonidoTransmissionModal from './SonidoTransmissionModal';
+import ImpositionTestBattle from './ImpositionTestBattle';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
 import { grantChallengeRewards } from '../utils/challengeRewards';
@@ -35,7 +36,7 @@ interface ChapterDetailProps {
 }
 
 const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusChallengeId }) => {
-  const { currentUser, isAdmin } = useAuth();
+  const { currentUser, isAdmin: isAdminUser } = useAuth();
   const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
   const navigate = useNavigate();
@@ -71,6 +72,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   const [showTimuIslandStoryModal, setShowTimuIslandStoryModal] = useState(false);
   const [showSquadUpStoryModal, setShowSquadUpStoryModal] = useState(false);
   const [showSonidoTransmissionModal, setShowSonidoTransmissionModal] = useState(false);
+  const [showImpositionTestBattle, setShowImpositionTestBattle] = useState(false);
   const [expandedChallenges, setExpandedChallenges] = useState<Set<string>>(new Set());
 
   // Handle deep-linking: expand and scroll to focused challenge
@@ -130,11 +132,84 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       try {
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          console.log('ChapterDetail: User data updated (real-time):', {
-            chapterId: chapter.id,
-            chapterData: userData.chapters?.[chapter.id],
-            challengeData: userData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
-          });
+          const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
+          const ch2TeamFormation = userData.chapters?.[chapter.id]?.challenges?.['ch2-team-formation'];
+          
+          if (DEBUG_CH2_1 || chapter.id === 2) {
+            console.log('[CH2-1] ChapterDetail: User data updated (real-time):', {
+              chapterId: chapter.id,
+              chapterKey: String(chapter.id),
+              challengeId: 'ch2-team-formation',
+              challengeData: ch2TeamFormation,
+              isCompleted: ch2TeamFormation?.isCompleted,
+              status: ch2TeamFormation?.status,
+              completedAt: ch2TeamFormation?.completedAt,
+              allChallenges: Object.keys(userData.chapters?.[chapter.id]?.challenges || {})
+            });
+          }
+          
+          // VALIDATION FIX: If Chapter 2-2 (ch2-rival-selection) is completed but 2-1 (ch2-team-formation) is not,
+          // automatically mark 2-1 as completed to fix data inconsistency
+          // This ensures logical consistency: if 2-2 is done, 2-1 must be done too
+          // Check both string and number keys for chapter 2 (Firestore can use either)
+          if (currentUser) {
+            const chapter2Data = userData.chapters?.[2] || userData.chapters?.['2'];
+            if (chapter2Data) {
+              const ch2RivalSelection = chapter2Data.challenges?.['ch2-rival-selection'];
+              const ch2TeamFormationCheck = chapter2Data.challenges?.['ch2-team-formation'];
+              
+              const isRivalSelectionCompleted = ch2RivalSelection?.isCompleted === true || ch2RivalSelection?.status === 'approved';
+              const isTeamFormationCompleted = ch2TeamFormationCheck?.isCompleted === true || ch2TeamFormationCheck?.status === 'approved';
+              
+              console.log('[CH2-1] ChapterDetail: Validation check:', {
+                chapterId: chapter.id,
+                hasChapter2Data: !!chapter2Data,
+                isRivalSelectionCompleted,
+                isTeamFormationCompleted,
+                ch2RivalSelection: ch2RivalSelection,
+                ch2TeamFormationCheck: ch2TeamFormationCheck
+              });
+              
+              if (isRivalSelectionCompleted && !isTeamFormationCompleted) {
+                console.warn('[CH2-1] ChapterDetail: Data inconsistency detected - 2-2 is completed but 2-1 is not. Auto-fixing...', {
+                  ch2RivalSelection: ch2RivalSelection,
+                  ch2TeamFormationCheck: ch2TeamFormationCheck
+                });
+                
+                // Fix the inconsistency asynchronously (don't block the UI update)
+                (async () => {
+                  try {
+                    const fixUserRef = doc(db, 'users', currentUser.uid);
+                    // Try both string and number keys
+                    const chapterKey = userData.chapters?.[2] ? '2' : (userData.chapters?.['2'] ? '2' : '2');
+                    const updateData: any = {
+                      [`chapters.${chapterKey}.challenges.ch2-team-formation.isCompleted`]: true
+                    };
+                    
+                    // Use the rival selection's completedAt as a reference, or serverTimestamp if not available
+                    if (ch2RivalSelection?.completedAt) {
+                      // Use the same timestamp as 2-2 (or slightly before if we had that capability)
+                      updateData[`chapters.${chapterKey}.challenges.ch2-team-formation.completedAt`] = ch2RivalSelection.completedAt;
+                    } else {
+                      updateData[`chapters.${chapterKey}.challenges.ch2-team-formation.completedAt`] = serverTimestamp();
+                    }
+                    
+                    console.log('[CH2-1] ChapterDetail: Applying fix with updateData:', updateData);
+                    await updateDoc(fixUserRef, updateData);
+                    console.log('[CH2-1] ChapterDetail: ✅ Auto-fixed - marked ch2-team-formation as completed');
+                    
+                    // The onSnapshot listener will automatically fire again with the updated data
+                  } catch (fixError) {
+                    console.error('[CH2-1] ChapterDetail: ❌ Error auto-fixing data inconsistency:', fixError);
+                  }
+                })();
+              } else if (isRivalSelectionCompleted && isTeamFormationCompleted) {
+                console.log('[CH2-1] ChapterDetail: ✅ Data is consistent - both 2-1 and 2-2 are completed');
+              }
+            }
+          }
+          
+          // Always set userProgress (the fix above will trigger another snapshot if needed)
           setUserProgress(userData);
           setLoading(false);
         }
@@ -279,8 +354,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
     
     // Ensure chapter.id is used as a string key (Firestore uses string keys)
+    // Check both number and string keys since Firestore can store either
     const chapterKey = String(chapter.id);
-    const chapterProgress = userProgress.chapters?.[chapterKey];
+    const chapterProgress = userProgress.chapters?.[chapterKey] || userProgress.chapters?.[chapter.id];
     const challengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
     
     if (DEBUG_CH1) {
@@ -290,7 +366,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         challengeIndex,
         hasChapterProgress: !!chapterProgress,
         chapterProgressIsActive: chapterProgress?.isActive,
-        firestorePath: `users/${currentUser.uid}/chapters/${chapterKey}/challenges/${challenge.id}`
+        firestorePath: `users/${currentUser.uid}/chapters/${chapterKey}/challenges/${challenge.id}`,
+        availableChapterKeys: userProgress.chapters ? Object.keys(userProgress.chapters) : []
       });
     }
     
@@ -315,15 +392,24 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       return 'locked';
     }
     
+    // Get challenge progress - check the challenges object
     const challengeProgress = chapterProgress.challenges?.[challenge.id];
-    if (DEBUG_CH1) {
-      console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}) - Challenge progress:`, {
+    
+    // Always log for ch2-team-formation to debug completion issues
+    if (DEBUG_CH1 || challenge.id === 'ch2-team-formation') {
+      console.log(`[DEBUG] getChallengeStatus(${challenge.id}) - Challenge progress:`, {
         userId: currentUser.uid,
         challengeId: challenge.id,
+        chapterId: chapter.id,
+        chapterKey: chapterKey,
         challengeProgress: challengeProgress,
-        allChallenges: chapterProgress.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges',
+        chapterProgressKeys: chapterProgress ? Object.keys(chapterProgress) : [],
+        allChallenges: chapterProgress?.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges',
         status: challengeProgress?.status,
-        isCompleted: challengeProgress?.isCompleted
+        isCompleted: challengeProgress?.isCompleted,
+        completedAt: challengeProgress?.completedAt,
+        rawData: JSON.stringify(challengeProgress),
+        hasChapterProgress: !!chapterProgress
       });
     }
     
@@ -350,14 +436,36 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // For other challenges, use standard completion check
       // CRITICAL: Verify completion is for the current user
       if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted === true) {
-        // Log completion details for debugging
-        console.log('ChapterDetail: getChallengeStatus - Challenge completed:', {
+        // Log completion details for debugging (always log for ch2-team-formation)
+        if (challenge.id === 'ch2-team-formation') {
+          console.log('[CH2-1] ChapterDetail: getChallengeStatus - Challenge COMPLETED:', {
+            userId: currentUser.uid,
+            challengeId: challenge.id,
+            status: challengeProgress?.status,
+            isCompleted: challengeProgress?.isCompleted,
+            completedBy: challengeProgress?.completedBy,
+            completedAt: challengeProgress?.completedAt,
+            rawProgress: challengeProgress
+          });
+        } else {
+          console.log('ChapterDetail: getChallengeStatus - Challenge completed:', {
+            userId: currentUser.uid,
+            challengeId: challenge.id,
+            completedBy: challengeProgress?.completedBy,
+            completedAt: challengeProgress?.completedAt
+          });
+        }
+        return 'completed';
+      } else if (challenge.id === 'ch2-team-formation') {
+        // Special logging for ch2-team-formation when NOT completed
+        console.log('[CH2-1] ChapterDetail: getChallengeStatus - Challenge NOT completed:', {
           userId: currentUser.uid,
           challengeId: challenge.id,
-          completedBy: challengeProgress?.completedBy,
-          completedAt: challengeProgress?.completedAt
+          status: challengeProgress?.status,
+          isCompleted: challengeProgress?.isCompleted,
+          hasProgress: !!challengeProgress,
+          rawProgress: challengeProgress
         });
-        return 'completed';
       }
     }
     
@@ -882,83 +990,50 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           continue;
         }
         
-        console.log(`Auto-completing challenge: ${challenge.id}`);
-        const studentRef = doc(db, 'students', currentUser.uid);
+        console.log(`ChapterDetail: Auto-completing challenge: ${challenge.id} using progression engine`);
         
-        // Update user progress
-        const updatedChapters = {
-          ...userProgress.chapters,
-          [chapter.id]: {
-            ...userProgress.chapters?.[chapter.id],
-            challenges: {
-              ...userProgress.chapters?.[chapter.id]?.challenges,
-              [challenge.id]: {
-                isCompleted: true,
-                status: 'approved',
-                completedAt: serverTimestamp()
-              }
-            }
-          }
-        };
+        // Use the canonical progression engine to handle challenge completion and unlocking
+        const progressionResult = await updateProgressOnChallengeComplete(
+          currentUser.uid,
+          chapter.id,
+          challenge.id
+        );
 
-        // Apply rewards
-        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
-        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
-        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
-
-        // Update user progress with rewards using atomic increments
-        await updateDoc(userRef, {
-          chapters: updatedChapters,
-          xp: increment(xpReward),
-          powerPoints: increment(ppReward),
-          truthMetal: increment(truthMetalReward)
-        });
-
-        // Update student data (legacy system) using atomic increments
-        const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) {
-          const studentData = studentDoc.data();
-          const updatedChallenges = {
-            ...studentData.challenges,
-            [challenge.id]: {
-              completed: true,
-              status: 'approved',
-              completedAt: serverTimestamp()
-            }
-          };
-          
-          // Grant artifact rewards
-          const currentArtifacts = studentData.artifacts || {};
-          const updatedArtifacts = { ...currentArtifacts };
-          
-          artifactRewards.forEach(artifactReward => {
-            updatedArtifacts[artifactReward.value] = true;
-          });
-          
-          await updateDoc(studentRef, {
-            challenges: updatedChallenges,
-            xp: increment(xpReward),
-            powerPoints: increment(ppReward),
-            truthMetal: increment(truthMetalReward),
-            artifacts: updatedArtifacts
-          });
-          
-          // Elemental Ring is granted, but player will choose their element on the Artifacts page
-          // No need to unlock moves here - the modal on Artifacts page will handle element selection
+        if (!progressionResult.success) {
+          console.error(`ChapterDetail: Failed to update progression for ${challenge.id}:`, progressionResult.error);
+          continue;
         }
 
-        // Double-check that challenge wasn't already completed before showing modal
-        // This prevents the modal from showing if the challenge was already completed
-        const userDocAfterUpdate = await getDoc(userRef);
-        const userProgressAfterUpdate = userDocAfterUpdate.exists() ? userDocAfterUpdate.data() : {};
-        const challengeProgressAfterUpdate = userProgressAfterUpdate.chapters?.[chapter.id]?.challenges?.[challenge.id];
-        
+        if (progressionResult.alreadyCompleted) {
+          console.log(`ChapterDetail: Challenge ${challenge.id} already completed, skipping`);
+          continue;
+        }
+
+        console.log(`ChapterDetail: Progression updated for ${challenge.id}:`, {
+          challengeUnlocked: progressionResult.challengeUnlocked,
+          chapterUnlocked: progressionResult.chapterUnlocked
+        });
+
+        // Grant rewards using the reward system
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          challenge.id,
+          challenge.rewards,
+          challenge.title
+        );
+
+        if (!rewardResult.success) {
+          console.error(`ChapterDetail: Failed to grant rewards for ${challenge.id}:`, rewardResult.error);
+        } else {
+          console.log(`ChapterDetail: Rewards granted successfully for ${challenge.id}`);
+        }
+
+        // Get reward values for notification and modal
+        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+
         // Only show reward modal if this was a new completion (not already completed)
-        const wasNewlyCompleted = !wasAlreadyCompleted && 
-                                  (challengeProgressAfterUpdate?.isCompleted || challengeProgressAfterUpdate?.status === 'approved');
-        
-        if (wasNewlyCompleted) {
+        if (!wasAlreadyCompleted) {
           // Add notification
           await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
             type: 'challenge_completed',
@@ -981,16 +1056,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           setShowRewardModal(true);
         }
 
-        // Unlock the next challenge in the same chapter
-        const currentChallengeIndex = chapter.challenges.findIndex(c => c.id === challenge.id);
-        if (currentChallengeIndex >= 0 && currentChallengeIndex < chapter.challenges.length - 1) {
-          const nextChallenge = chapter.challenges[currentChallengeIndex + 1];
-          console.log('Auto-complete: Next challenge will be unlocked when requirements are checked:', nextChallenge.id);
-          // Refresh user progress to trigger requirement checks for next challenge
-          const refreshedUserDoc = await getDoc(userRef);
-          if (refreshedUserDoc.exists()) {
-            setUserProgress(refreshedUserDoc.data());
-          }
+        // Refresh user progress to trigger requirement checks for next challenge
+        const refreshedUserDoc = await getDoc(userRef);
+        if (refreshedUserDoc.exists()) {
+          setUserProgress(refreshedUserDoc.data());
         }
 
         // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
@@ -2040,7 +2109,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2128,7 +2197,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2212,12 +2281,85 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
   };
 
+  // Fix Chapter 2-1 completion if 2-2 is completed (can be called manually or automatically)
+  const fixChapter2Challenge1 = async () => {
+    if (!currentUser) {
+      console.error('[CH2-1] fixChapter2Challenge1 - No current user');
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        console.error('[CH2-1] fixChapter2Challenge1 - User document not found');
+        return;
+      }
+
+      const userData = userDoc.data();
+      const chapter2Data = userData.chapters?.[2] || userData.chapters?.['2'];
+      
+      if (!chapter2Data) {
+        console.log('[CH2-1] fixChapter2Challenge1 - No Chapter 2 data found');
+        return;
+      }
+
+      const ch2RivalSelection = chapter2Data.challenges?.['ch2-rival-selection'];
+      const ch2TeamFormation = chapter2Data.challenges?.['ch2-team-formation'];
+      
+      const isRivalSelectionCompleted = ch2RivalSelection?.isCompleted === true || ch2RivalSelection?.status === 'approved';
+      const isTeamFormationCompleted = ch2TeamFormation?.isCompleted === true || ch2TeamFormation?.status === 'approved';
+      
+      console.log('[CH2-1] fixChapter2Challenge1 - Checking status:', {
+        isRivalSelectionCompleted,
+        isTeamFormationCompleted,
+        ch2RivalSelection,
+        ch2TeamFormation
+      });
+
+      if (isRivalSelectionCompleted && !isTeamFormationCompleted) {
+        console.log('[CH2-1] fixChapter2Challenge1 - Fixing inconsistency...');
+        
+        const chapterKey = userData.chapters?.[2] ? '2' : '2';
+        const updateData: any = {
+          [`chapters.${chapterKey}.challenges.ch2-team-formation.isCompleted`]: true
+        };
+        
+        if (ch2RivalSelection?.completedAt) {
+          updateData[`chapters.${chapterKey}.challenges.ch2-team-formation.completedAt`] = ch2RivalSelection.completedAt;
+        } else {
+          updateData[`chapters.${chapterKey}.challenges.ch2-team-formation.completedAt`] = serverTimestamp();
+        }
+        
+        await updateDoc(userRef, updateData);
+        console.log('[CH2-1] fixChapter2Challenge1 - ✅ Fixed! Chapter 2-1 is now marked as completed');
+        alert('✅ Chapter 2-1 has been fixed and marked as completed!');
+        
+        // Refresh user progress
+        const refreshedUserDoc = await getDoc(userRef);
+        if (refreshedUserDoc.exists()) {
+          setUserProgress(refreshedUserDoc.data());
+        }
+      } else if (isTeamFormationCompleted) {
+        console.log('[CH2-1] fixChapter2Challenge1 - No fix needed, Chapter 2-1 is already completed');
+        alert('Chapter 2-1 is already marked as completed. No fix needed.');
+      } else {
+        console.log('[CH2-1] fixChapter2Challenge1 - No fix needed, Chapter 2-2 is not completed yet');
+        alert('Chapter 2-2 is not completed yet. Complete Chapter 2-2 first.');
+      }
+    } catch (error) {
+      console.error('[CH2-1] fixChapter2Challenge1 - Error:', error);
+      alert('Error fixing Chapter 2-1. Please try again.');
+    }
+  };
+
   // Reset Chapter 2-1 for current user (ADMIN ONLY)
   const resetChapter2Challenge1 = async (autoReset: boolean = false) => {
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!autoReset && !isAdmin()) {
+    if (!autoReset && !isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2279,7 +2421,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2334,7 +2476,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2442,7 +2584,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -2618,219 +2760,161 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const challenge = chapter.challenges.find(c => c.id === 'ep1-where-it-started');
       if (!challenge) return;
 
-      const userRef = doc(db, 'users', currentUser.uid);
-      const studentRef = doc(db, 'students', currentUser.uid);
-      const currentData = await getDoc(userRef);
+      console.log('ChapterDetail: Completing Challenge 9 (ep1-where-it-started) using progression engine');
 
-      if (currentData.exists()) {
-        const currentChapters = currentData.data().chapters || {};
-        // Ensure chapter.id is used as a string key (Firestore uses string keys)
+      // Use the canonical progression engine to handle challenge completion and unlocking
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        'ep1-where-it-started'
+      );
+
+      if (!progressionResult.success) {
+        console.error('ChapterDetail: Failed to update progression:', progressionResult.error);
+        return;
+      }
+
+      if (progressionResult.alreadyCompleted) {
+        console.log('ChapterDetail: Challenge already completed, skipping');
+        return;
+      }
+
+      console.log('ChapterDetail: Progression updated successfully:', {
+        challengeUnlocked: progressionResult.challengeUnlocked,
+        chapterUnlocked: progressionResult.chapterUnlocked
+      });
+
+      // Grant rewards using the reward system
+      const rewardResult = await grantChallengeRewards(
+        currentUser.uid,
+        'ep1-where-it-started',
+        challenge.rewards,
+        challenge.title
+      );
+
+      if (!rewardResult.success) {
+        console.error('ChapterDetail: Failed to grant rewards:', rewardResult.error);
+      } else {
+        console.log('ChapterDetail: Rewards granted successfully');
+      }
+
+      // Update students collection to keep it in sync
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentData = await getDoc(studentRef);
+      if (studentData.exists()) {
+        const studentDataObj = studentData.data();
+        const studentChapters = studentDataObj.chapters || {};
         const chapterKey = String(chapter.id);
-        const currentChapterData = currentChapters[chapterKey] || {};
-        const currentChallenges = currentChapterData.challenges || {};
-        
-        console.log('ChapterDetail: Completing Challenge 9 - Current data:', {
-          chapterId: chapter.id,
-          chapterKey: chapterKey,
-          currentChapters,
-          currentChapterData,
-          currentChallenges,
-          allChapterKeys: Object.keys(currentChapters)
-        });
-        
-        // Mark Challenge 9 as complete
-        const updatedChallenges = {
-          ...currentChallenges,
+        const studentChapterData = studentChapters[chapterKey] || {};
+        const studentChallenges = studentChapterData.challenges || {};
+
+        // Sync challenge completion status
+        const updatedStudentChallenges = {
+          ...studentChallenges,
           'ep1-where-it-started': {
+            ...studentChallenges['ep1-where-it-started'],
             isCompleted: true,
             status: 'approved',
             completedAt: serverTimestamp()
           }
         };
-        
-        // Check if ALL Chapter 1 challenges are now completed before marking chapter as complete
-        const allChapter1Challenges = chapter.challenges.map(c => c.id);
-        const allChallengesCompleted = allChapter1Challenges.every(challengeId => 
-          updatedChallenges[challengeId]?.isCompleted === true
-        );
-        
-        console.log('ChapterDetail: Checking if all Chapter 1 challenges are completed:', {
-          allChapter1Challenges,
-          completedChallenges: allChapter1Challenges.filter(id => updatedChallenges[id]?.isCompleted),
-          allChallengesCompleted,
-          challengeStatuses: allChapter1Challenges.map(id => ({ id, completed: updatedChallenges[id]?.isCompleted }))
-        });
-        
-        // Only mark chapter as complete if ALL challenges are completed
-        const updatedChapters = {
-          ...currentChapters,
+
+        // Update chapter completion status if needed
+        const refreshedUserDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        const refreshedUserData = refreshedUserDoc.exists() ? refreshedUserDoc.data() : {};
+        const refreshedChapterData = refreshedUserData.chapters?.[chapter.id];
+
+        const updatedStudentChapters = {
+          ...studentChapters,
           [chapterKey]: {
-            ...currentChapterData,
-            isCompleted: allChallengesCompleted, // Only true if all challenges are done
-            completionDate: allChallengesCompleted ? serverTimestamp() : currentChapterData.completionDate,
-            isActive: allChallengesCompleted ? false : currentChapterData.isActive, // Keep active if not all challenges done
-            challenges: updatedChallenges
+            ...studentChapterData,
+            isCompleted: refreshedChapterData?.isCompleted || false,
+            completionDate: refreshedChapterData?.completionDate || studentChapterData.completionDate,
+            isActive: refreshedChapterData?.isActive !== false,
+            challenges: updatedStudentChallenges
           }
-          // Chapter 2 unlock disabled - will be enabled later
-          // 2: {
-          //   ...currentChapters[2],
-          //   isActive: true,
-          //   unlockDate: serverTimestamp()
-          // }
         };
 
-        console.log('ChapterDetail: Updating with:', {
-          chapterId: chapter.id,
-          chapterKey: chapterKey,
-          updatedChapters: updatedChapters[chapterKey],
-          challengeData: updatedChapters[chapterKey].challenges['ep1-where-it-started']
-        });
-
-        // Get reward values
-        const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
-        const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
-        const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
-        const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
-
-        // Grant rewards to users collection using increment for atomic updates
-        await updateDoc(userRef, {
-          chapters: updatedChapters,
-          xp: increment(xpReward),
-          powerPoints: increment(ppReward),
-          truthMetal: increment(truthMetalReward)
-        });
-        
-        console.log('ChapterDetail: Challenge 9 completion saved to users collection with rewards');
-
-        // Grant rewards and update students collection
-        const studentData = await getDoc(studentRef);
-        if (studentData.exists()) {
-          const studentDataObj = studentData.data();
-          const studentChapters = studentDataObj.chapters || {};
-          const chapterKey = String(chapter.id);
-          const studentChapterData = studentChapters[chapterKey] || {};
-          const studentChallenges = studentChapterData.challenges || {};
-          
-          console.log('ChapterDetail: Updating students collection - Current data:', {
-            chapterId: chapter.id,
-            chapterKey: chapterKey,
-            studentChapters,
-            studentChapterData,
-            studentChallenges,
-            allChapterKeys: Object.keys(studentChapters)
-          });
-
-          // Grant artifact rewards
-          const currentArtifacts = studentDataObj.artifacts || {};
-          const updatedArtifacts = { ...currentArtifacts };
-          updatedArtifacts.chapter_1_completed = true;
-
-          // Check if ALL Chapter 1 challenges are completed
-          const allChapter1Challenges = chapter.challenges.map(c => c.id);
-          const updatedStudentChallenges = {
-            ...studentChallenges,
-            'ep1-where-it-started': {
-              isCompleted: true,
-              status: 'approved',
-              completedAt: serverTimestamp()
-            }
-          };
-          const allChallengesCompleted = allChapter1Challenges.every(challengeId => 
-            updatedStudentChallenges[challengeId]?.isCompleted === true
-          );
-          
-          const updatedStudentChapters = {
-            ...studentChapters,
-            [chapterKey]: {
-              ...studentChapterData,
-              isCompleted: allChallengesCompleted, // Only true if all challenges are done
-              completionDate: allChallengesCompleted ? serverTimestamp() : studentChapterData.completionDate,
-              isActive: allChallengesCompleted ? false : studentChapterData.isActive, // Keep active if not all challenges done
-              challenges: updatedStudentChallenges
-            }
-          };
-
-          console.log('ChapterDetail: Updating students with:', {
-            chapterId: chapter.id,
-            chapterKey: chapterKey,
-            updatedChapter: updatedStudentChapters[chapterKey],
-            challengeData: updatedStudentChapters[chapterKey].challenges['ep1-where-it-started']
-          });
-
-          // Grant rewards to students collection using increment for atomic updates
-          await updateDoc(studentRef, {
-            powerPoints: increment(ppReward),
-            xp: increment(xpReward),
-            truthMetal: increment(truthMetalReward),
-            artifacts: updatedArtifacts,
-            chapters: updatedStudentChapters
-            // storyChapter: 2 // Disabled for now
-          });
-          
-          console.log('ChapterDetail: Challenge 9 completion saved to students collection with rewards');
+        // Update storyChapter if chapter was completed
+        const updateData: any = {
+          chapters: updatedStudentChapters
+        };
+        if (refreshedChapterData?.isCompleted && progressionResult.chapterUnlocked) {
+          updateData.storyChapter = progressionResult.chapterUnlocked;
         }
 
-        // Wait a moment for Firestore to propagate the changes
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Refresh user progress from both collections
-        const refreshedUserDoc = await getDoc(userRef);
-        if (refreshedUserDoc.exists()) {
-          const refreshedData = refreshedUserDoc.data();
-          console.log('ChapterDetail: Refreshed user data:', {
-            chapterId: chapter.id,
-            chapterData: refreshedData.chapters?.[chapter.id],
-            challengeData: refreshedData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
-          });
-          setUserProgress(refreshedData);
-        }
-
-        // Also refresh student data
-        const refreshedStudentDoc = await getDoc(studentRef);
-        if (refreshedStudentDoc.exists()) {
-          const refreshedStudentData = refreshedStudentDoc.data();
-          console.log('ChapterDetail: Refreshed student data:', {
-            chapterId: chapter.id,
-            chapterData: refreshedStudentData.chapters?.[chapter.id],
-            challengeData: refreshedStudentData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
-          });
-          setStudentData(refreshedStudentData);
-        }
-
-        // Check if all challenges are completed using the refreshed data
-        const refreshedChapterData = refreshedUserDoc.exists() ? refreshedUserDoc.data().chapters?.[chapter.id] : null;
-        const isChapterComplete = refreshedChapterData?.isCompleted === true;
-        
-        // Prepare reward modal data
-        const rewardModalRewards = [
-          ...artifactRewards.map(r => ({
-            type: r.type as 'artifact',
-            value: r.value,
-            name: r.description
-          })),
-          ...(truthMetalReward > 0 ? [{
-            type: 'truthMetal' as const,
-            value: truthMetalReward
-          }] : [])
-        ];
-
-        // Show reward modal
-        setRewardModalData({
-          challengeTitle: challenge.title,
-          rewards: rewardModalRewards,
-          xpReward: xpReward as number,
-          ppReward: ppReward as number
-        });
-        setShowRewardModal(true);
-        
-        console.log('ChapterDetail: Challenge 9 completed successfully with rewards:', {
-          xpReward,
-          ppReward,
-          truthMetalReward,
-          artifactRewards: artifactRewards.length,
-          isChapterComplete
-        });
+        await updateDoc(studentRef, updateData);
+        console.log('ChapterDetail: Students collection synced');
       }
+
+      // Wait a moment for Firestore to propagate the changes
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Refresh user progress from both collections
+      const userRef = doc(db, 'users', currentUser.uid);
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        const refreshedData = refreshedUserDoc.data();
+        console.log('ChapterDetail: Refreshed user data:', {
+          chapterId: chapter.id,
+          chapterData: refreshedData.chapters?.[chapter.id],
+          challengeData: refreshedData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+        });
+        setUserProgress(refreshedData);
+      }
+
+      // Also refresh student data
+      const refreshedStudentDoc = await getDoc(studentRef);
+      if (refreshedStudentDoc.exists()) {
+        const refreshedStudentData = refreshedStudentDoc.data();
+        console.log('ChapterDetail: Refreshed student data:', {
+          chapterId: chapter.id,
+          chapterData: refreshedStudentData.chapters?.[chapter.id],
+          challengeData: refreshedStudentData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
+        });
+        setStudentData(refreshedStudentData);
+      }
+
+      // Check if all challenges are completed using the refreshed data
+      const refreshedChapterData = refreshedUserDoc.exists() ? refreshedUserDoc.data().chapters?.[chapter.id] : null;
+      const isChapterComplete = refreshedChapterData?.isCompleted === true;
+
+      // Prepare reward modal data
+      const xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+      const ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
+      const truthMetalReward = challenge.rewards.find(r => r.type === 'truthMetal')?.value || 0;
+      const artifactRewards = challenge.rewards.filter(r => r.type === 'artifact');
+
+      const rewardModalRewards = [
+        ...artifactRewards.map(r => ({
+          type: r.type as 'artifact',
+          value: r.value,
+          name: r.description
+        })),
+        ...(truthMetalReward > 0 ? [{
+          type: 'truthMetal' as const,
+          value: truthMetalReward
+        }] : [])
+      ];
+
+      // Show reward modal
+      setRewardModalData({
+        challengeTitle: challenge.title,
+        rewards: rewardModalRewards,
+        xpReward: xpReward as number,
+        ppReward: ppReward as number
+      });
+      setShowRewardModal(true);
+      
+      console.log('ChapterDetail: Challenge 9 completed successfully with rewards:', {
+        xpReward,
+        ppReward,
+        truthMetalReward,
+        artifactRewards: artifactRewards.length,
+        isChapterComplete,
+        challengeUnlocked: progressionResult.challengeUnlocked,
+        chapterUnlocked: progressionResult.chapterUnlocked
+      });
     } catch (error) {
       console.error('Error completing Challenge 9:', error);
       alert('❌ Failed to complete challenge. Please try again.');
@@ -2841,52 +2925,74 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
   const handlePortalIntroComplete = async () => {
     const DEBUG_CH2 = process.env.REACT_APP_DEBUG_CH2 === 'true';
+    const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
     
     if (!currentUser) {
-      console.error('[CH2] handlePortalIntroComplete - No current user');
+      console.error('[CH2-1] handlePortalIntroComplete - No current user');
       return;
     }
 
     try {
       const challenge = chapter.challenges.find(c => c.id === 'ch2-team-formation');
       if (!challenge) {
-        console.error('[CH2] handlePortalIntroComplete - Challenge not found: ch2-team-formation');
+        console.error('[CH2-1] handlePortalIntroComplete - Challenge not found: ch2-team-formation');
         return;
       }
 
-      if (DEBUG_CH2) {
-        console.log('[CH2] handlePortalIntroComplete - Starting completion for Chapter 2-1:', {
+      if (DEBUG_CH2 || DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Starting completion for Chapter 2-1:', {
           userId: currentUser.uid,
+          chapterId: chapter.id,
           challengeId: 'ch2-team-formation',
-          challengeTitle: challenge.title
+          challengeTitle: challenge.title,
+          timestamp: new Date().toISOString()
         });
       }
 
       // Use canonical progression engine
+      if (DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Calling updateProgressOnChallengeComplete...');
+      }
+      
       const progressionResult = await updateProgressOnChallengeComplete(
         currentUser.uid,
         chapter.id,
         'ch2-team-formation'
       );
 
-      if (DEBUG_CH2) {
-        console.log('[CH2] handlePortalIntroComplete - Progression result:', progressionResult);
+      if (DEBUG_CH2 || DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Progression result:', {
+          success: progressionResult.success,
+          alreadyCompleted: progressionResult.alreadyCompleted,
+          challengeUnlocked: progressionResult.challengeUnlocked,
+          error: progressionResult.error,
+          timestamp: new Date().toISOString()
+        });
       }
 
       if (progressionResult.alreadyCompleted) {
-        if (DEBUG_CH2) {
-          console.log('[CH2] handlePortalIntroComplete - Challenge already completed, skipping');
+        if (DEBUG_CH2 || DEBUG_CH2_1) {
+          console.log('[CH2-1] handlePortalIntroComplete - Challenge already completed, skipping');
         }
+        // Still show welcome screen and allow modal to close
         return;
       }
 
       if (!progressionResult.success) {
-        console.error('[CH2] handlePortalIntroComplete - Progression failed:', progressionResult.error);
+        console.error('[CH2-1] handlePortalIntroComplete - Progression failed:', progressionResult.error);
         alert(`Error completing challenge: ${progressionResult.error}`);
-        return;
+        throw new Error(`Progression failed: ${progressionResult.error}`);
+      }
+      
+      if (DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Progression succeeded, proceeding to rewards');
       }
 
       // Grant rewards using canonical service
+      if (DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Granting rewards...');
+      }
+      
       const rewardResult = await grantChallengeRewards(
         currentUser.uid,
         'ch2-team-formation',
@@ -2894,8 +3000,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         challenge.title
       );
 
-      if (DEBUG_CH2) {
-        console.log('[CH2] handlePortalIntroComplete - Reward result:', rewardResult);
+      if (DEBUG_CH2 || DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Reward result:', {
+          success: rewardResult.success,
+          rewardsGranted: rewardResult.rewardsGranted,
+          error: rewardResult.error,
+          timestamp: new Date().toISOString()
+        });
       }
 
       if (rewardResult.success) {
@@ -2912,42 +3023,62 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         alert(`Error granting rewards: ${rewardResult.error}`);
       }
 
-      // Refresh user progress to show unlocked next challenge
-      // Wait a moment for Firestore to propagate the changes
+      // The real-time listener (onSnapshot) should automatically update userProgress
+      // But we'll do a manual refresh to ensure UI updates immediately
+      if (DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Waiting for Firestore propagation...');
+      }
+      
+      // Wait a moment for Firestore transaction to commit
       await new Promise(resolve => setTimeout(resolve, 500));
       
       const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        const challengeData = refreshedData.chapters?.[chapter.id]?.challenges?.['ch2-team-formation'];
         
-        if (DEBUG_CH2) {
-          console.log('[CH2] handlePortalIntroComplete - User progress refreshed:', {
-            chapter2Progress: refreshedData.chapters?.[2],
+        if (DEBUG_CH2_1) {
+          console.log('[CH2-1] handlePortalIntroComplete - User progress refreshed:', {
+            chapterId: chapter.id,
+            challengeId: 'ch2-team-formation',
+            isCompleted: challengeData?.isCompleted,
+            status: challengeData?.status,
+            completedAt: challengeData?.completedAt,
             challengeUnlocked: progressionResult.challengeUnlocked,
-            nextChallengeProgress: refreshedData.chapters?.[2]?.challenges?.[progressionResult.challengeUnlocked || '']
+            nextChallengeProgress: refreshedData.chapters?.[chapter.id]?.challenges?.[progressionResult.challengeUnlocked || '']
           });
         }
+        
+        // Force update userProgress to ensure UI reflects completion
+        setUserProgress(refreshedData);
+        
+        // Double-check that the challenge is marked as completed
+        if (!challengeData?.isCompleted && challengeData?.status !== 'approved') {
+          console.warn('[CH2-1] handlePortalIntroComplete - Challenge not marked as completed after update!', {
+            challengeData,
+            progressionResult
+          });
+        } else {
+          if (DEBUG_CH2_1) {
+            console.log('[CH2-1] handlePortalIntroComplete - ✅ Challenge successfully marked as completed in Firestore');
+          }
+        }
+      } else {
+        console.error('[CH2-1] handlePortalIntroComplete - User document not found after completion!');
       }
 
-      if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
-        console.log('[CH2] handlePortalIntroComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
+      if (DEBUG_CH2_1 && progressionResult.challengeUnlocked) {
+        console.log('[CH2-1] handlePortalIntroComplete - Next challenge unlocked:', progressionResult.challengeUnlocked);
       }
       
-      // Force a re-check of challenge statuses after refresh
-      // The real-time listener should handle this, but add a small delay to ensure it propagates
-      setTimeout(() => {
-        const finalCheckDoc = getDoc(userRef);
-        finalCheckDoc.then(doc => {
-          if (doc.exists()) {
-            setUserProgress(doc.data());
-          }
-        });
-      }, 1000);
+      if (DEBUG_CH2_1) {
+        console.log('[CH2-1] handlePortalIntroComplete - Completion flow finished successfully');
+      }
     } catch (error) {
-      console.error('[CH2] handlePortalIntroComplete - Error:', error);
+      console.error('[CH2-1] handlePortalIntroComplete - Error:', error);
       alert('Error completing challenge. Please try again.');
+      throw error; // Re-throw so caller knows it failed
     }
   };
 
@@ -3293,7 +3424,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
     
     // SECURITY: Only admins can reset challenges
-    if (!isAdmin()) {
+    if (!isAdminUser) {
       alert('❌ Only administrators can reset challenges.');
       return;
     }
@@ -3648,14 +3779,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           <h3 style={{ 
             fontSize: '1rem', 
             fontWeight: '600',
-            color: '#6b7280',
+            color: '#4b5563',
             marginBottom: '0.5rem'
           }}>
             Description
           </h3>
           <p style={{ 
             fontSize: '0.875rem', 
-            color: '#374151',
+            color: '#1f2937',
             lineHeight: '1.6'
           }}>
             {chapter.description}
@@ -3811,7 +3942,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                     <div style={{ flex: 1 }}>
                       <p style={{ 
                         fontSize: '0.875rem', 
-                        color: '#374151',
+                        color: '#1f2937',
                         lineHeight: '1.6',
                         marginBottom: '1rem'
                       }}>
@@ -3978,7 +4109,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         {/* Timu Island Story for Chapter 2-2 */}
                         {challenge.id === 'ch2-rival-selection' && (
                           <>
-                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                            {(status === 'available' || (isAdminUser && status === 'completed')) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4005,7 +4136,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                                 Find a Home
                               </button>
                             )}
-                            {isAdmin() && status === 'completed' && (
+                            {isAdminUser && status === 'completed' && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4038,7 +4169,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         {/* Squad Up Story for Chapter 2-3 */}
                         {challenge.id === 'ch2-team-trial' && (
                           <>
-                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                            {(status === 'available' || (isAdminUser && status === 'completed')) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4065,7 +4196,40 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                                 Squad Up
                               </button>
                             )}
-                            {isAdmin() && status === 'completed' && (
+                          </>
+                        )}
+
+                        {/* Imposition Test Battle for Chapter 2-5 */}
+                        {challenge.id === 'ch2-5-imposition-test' && (
+                          <>
+                            {(status === 'available' || (isAdminUser && status === 'completed')) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowImpositionTestBattle(true);
+                                }}
+                                style={{
+                                  background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                                  color: 'white',
+                                  padding: '0.75rem 1.5rem',
+                                  borderRadius: '0.5rem',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '100%',
+                                  marginBottom: status === 'completed' ? '0.5rem' : '0'
+                                }}
+                              >
+                                <span style={{ marginRight: '0.5rem' }}>⚡</span>
+                                Use the power of Imposition and Escape
+                              </button>
+                            )}
+                            {isAdminUser && status === 'completed' && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4098,10 +4262,19 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         {/* Portal Intro Video for Chapter 2-1 */}
                         {challenge.id === 'ch2-team-formation' && (
                           <>
-                            {(status === 'available' || (isAdmin() && status === 'completed')) && (
+                            {(status === 'available' || (isAdminUser && status === 'completed')) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
+                                  if (DEBUG_CH2_1) {
+                                    console.log('[CH2-1] ChapterDetail: "Go through the Portal" button clicked', {
+                                      challengeId: 'ch2-team-formation',
+                                      chapterId: chapter.id,
+                                      userId: currentUser?.uid,
+                                      timestamp: new Date().toISOString()
+                                    });
+                                  }
                                   setShowPortalIntroModal(true);
                                 }}
                                 style={{
@@ -4126,7 +4299,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                               </button>
                             )}
                             {/* Reset button for testing (admin only) */}
-                            {isAdmin() && status === 'completed' && (
+                            {isAdminUser && status === 'completed' && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4210,7 +4383,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                         )}
                         
                         {/* Reset button for Chapter 2-4 (ADMIN ONLY) */}
-                        {status === 'completed' && challenge.id === 'ep2-its-all-a-game' && isAdmin() && (
+                        {status === 'completed' && challenge.id === 'ep2-its-all-a-game' && isAdminUser && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -4332,12 +4505,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                               color: '#166534',
                               fontSize: '0.875rem',
                               fontWeight: 'bold',
-                              marginBottom: chapter.id === 1 && isAdmin() ? '0.5rem' : '0'
+                              marginBottom: chapter.id === 1 && isAdminUser ? '0.5rem' : '0'
                             }}>
                               ✅ Completed on {userProgress?.chapters?.[chapter.id]?.challenges?.[challenge.id]?.completedAt?.toDate?.()?.toLocaleDateString() || 'Unknown date'}
                             </div>
                             {/* Admin Reset Button for Chapter 1 Challenges */}
-                            {chapter.id === 1 && isAdmin() && (
+                            {chapter.id === 1 && isAdminUser && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4427,6 +4600,25 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                             borderRadius: '0.5rem'
                           }}
                         />
+                      ) : challenge.id === 'ch2-5-imposition-test' ? (
+                        <img 
+                          src="/images/Ch2-5_Preview.png" 
+                          alt="Tests, Allies, and Enemies Preview"
+                          onError={(e) => {
+                            console.error('Failed to load Ch2-5_Preview.png - file may not exist in public/images/');
+                            (e.target as HTMLImageElement).style.display = 'none';
+                            const parent = (e.target as HTMLImageElement).parentElement;
+                            if (parent) {
+                              parent.innerHTML = '<span style="color: #9ca3af; font-size: 0.875rem;">Image not found</span>';
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
                       ) : (
                         <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
                           Image Preview
@@ -4448,7 +4640,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       <h3 className="text-lg font-semibold text-white mb-4">Team Formation</h3>
       {chapter.teamSize > 1 ? (
         <div className="bg-white p-4 rounded-lg border">
-          <p className="text-gray-700 mb-4">
+          <p className="mb-4" style={{ color: '#111827' }}>
             This chapter requires a team of {chapter.teamSize} players. 
             {!userProgress?.team ? ' You need to form a team to proceed.' : ' Your team is ready.'}
           </p>
@@ -4465,7 +4657,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         </div>
       ) : (
         <div className="bg-gray-50 p-4 rounded-lg">
-          <p className="text-gray-600">This is a solo chapter. No team formation required.</p>
+          <p style={{ color: '#374151' }}>This is a solo chapter. No team formation required.</p>
         </div>
       )}
     </div>
@@ -4480,7 +4672,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         <h3 className="text-lg font-semibold text-white mb-4">Rival Selection</h3>
         {!rival ? (
           <div className="bg-white p-4 rounded-lg border">
-            <p className="text-gray-700 mb-4">
+            <p className="mb-4" style={{ color: '#111827' }}>
               Choose your rival - an enemy or internalized foe to overcome in this chapter.
             </p>
             <button 
@@ -4492,10 +4684,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           </div>
         ) : (
           <div className="bg-white p-4 rounded-lg border">
-            <div className="text-gray-700 mb-2">
+            <div className="mb-2" style={{ color: '#111827' }}>
               <strong>Current Rival:</strong> {rival.name}
             </div>
-            <p className="text-sm text-gray-600 mb-2">{rival.description}</p>
+            <p className="text-sm mb-2" style={{ color: '#4b5563' }}>{rival.description}</p>
             {rival.isDefeated ? (
               <div className="text-green-700">✓ Rival defeated</div>
             ) : (
@@ -4518,7 +4710,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       <h3 className="text-lg font-semibold text-white mb-4">The Veil</h3>
       {!userProgress?.veil ? (
         <div className="bg-white p-4 rounded-lg border">
-          <p className="text-gray-700 mb-4">
+          <p className="mb-4" style={{ color: '#111827' }}>
             Enter the inmost cave to confront your greatest fear or internal block.
           </p>
           <button className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition-colors">
@@ -4547,8 +4739,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {['Believe', 'Listen', 'Speak', 'Grow', 'Let Go', 'Give'].map((ethic) => (
           <div key={ethic} className="bg-white p-4 rounded-lg border">
-            <h4 className="font-semibold text-gray-800 mb-2">{ethic}</h4>
-            <p className="text-sm text-gray-600 mb-3">
+            <h4 className="font-semibold mb-2" style={{ color: '#111827' }}>{ethic}</h4>
+            <p className="text-sm mb-3" style={{ color: '#4b5563' }}>
               {ethic === 'Believe' && 'Blind Devotion vs. Discernment'}
               {ethic === 'Listen' && 'Silencing vs. Hearing Truth'}
               {ethic === 'Speak' && 'Lies vs. Responsibility'}
@@ -4650,8 +4842,8 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           marginBottom: '2rem'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Season Progress</span>
-            <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
+            <span style={{ fontSize: '0.875rem', color: '#4b5563' }}>Season Progress</span>
+            <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#111827' }}>
               {storyProgress.completedEpisodes.length}/9 Episodes
             </span>
           </div>
@@ -4678,7 +4870,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           display: 'inline-block',
           marginBottom: '2rem'
         }}>
-          <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+          <div style={{ fontSize: '0.875rem', color: '#4b5563', marginBottom: '0.25rem' }}>
             Your Power Level
           </div>
           <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
@@ -4922,7 +5114,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             </h2>
 
             <p style={{
-              color: '#6b7280',
+              color: '#4b5563',
               fontSize: '1rem',
               lineHeight: '1.6',
               marginBottom: '2rem',
@@ -5284,7 +5476,30 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           {/* Portal Intro Modal */}
           <PortalIntroModal
             isOpen={showPortalIntroModal}
-            onClose={() => setShowPortalIntroModal(false)}
+            onClose={async () => {
+              setShowPortalIntroModal(false);
+              // Force refresh user progress when modal closes to ensure UI updates
+              if (currentUser) {
+                try {
+                  const userRef = doc(db, 'users', currentUser.uid);
+                  const userDoc = await getDoc(userRef);
+                  if (userDoc.exists()) {
+                    const refreshedData = userDoc.data();
+                    setUserProgress(refreshedData);
+                    const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
+                    if (DEBUG_CH2_1) {
+                      const challengeData = refreshedData.chapters?.[chapter.id]?.challenges?.['ch2-team-formation'];
+                      console.log('[CH2-1] ChapterDetail: Modal closed, refreshed user progress:', {
+                        isCompleted: challengeData?.isCompleted,
+                        status: challengeData?.status
+                      });
+                    }
+                  }
+                } catch (error) {
+                  console.error('[CH2-1] ChapterDetail: Error refreshing progress on modal close:', error);
+                }
+              }
+            }}
             onComplete={handlePortalIntroComplete}
           />
 
@@ -5300,6 +5515,28 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             isOpen={showSquadUpStoryModal}
             onClose={() => setShowSquadUpStoryModal(false)}
             onComplete={handleSquadUpStoryComplete}
+          />
+
+          {/* Imposition Test Battle Modal */}
+          <ImpositionTestBattle
+            isOpen={showImpositionTestBattle}
+            onClose={() => setShowImpositionTestBattle(false)}
+            onComplete={async () => {
+              setShowImpositionTestBattle(false);
+              // Refresh user progress after battle
+              if (currentUser) {
+                try {
+                  const userRef = doc(db, 'users', currentUser.uid);
+                  const userDoc = await getDoc(userRef);
+                  if (userDoc.exists()) {
+                    setUserProgress(userDoc.data());
+                  }
+                } catch (error) {
+                  console.error('Error refreshing user progress:', error);
+                }
+              }
+            }}
+            challengeId="ch2-5-imposition-test"
           />
 
           {/* Sonido Transmission Modal */}

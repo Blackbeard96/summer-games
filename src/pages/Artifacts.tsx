@@ -21,7 +21,7 @@ const artifactPrices: { [key: string]: number } = {
   'uxp-credit-4': 100,
   'double-pp': 75,
   'skip-the-line': 50,
-  'work-extension': 50,
+  'work-extension': 250,
   'instant-a': 99
 };
 
@@ -450,6 +450,15 @@ const Artifacts: React.FC = () => {
       // Refresh available artifacts (remove equipped one)
       setAvailableArtifacts(prev => prev.filter(a => a.id !== artifact.id));
       
+      // Recalculate power level after artifact equip
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after artifact equip:', plError);
+        // Don't block the operation - power level recalculation is non-critical
+      }
+      
       alert(`✅ ${artifact.name} equipped to ${slotConfig.find(s => s.key === slot)?.label || slot}!`);
     } catch (error) {
       console.error('Error equipping artifact:', error);
@@ -492,6 +501,15 @@ const Artifacts: React.FC = () => {
       
       // Update local state
       setEquippedArtifacts(updatedEquipped);
+      
+      // Recalculate power level after artifact unequip
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after artifact unequip:', plError);
+        // Don't block the operation - power level recalculation is non-critical
+      }
       
       // Reload available artifacts to show the unequipped one
       const refreshedStudentData = (await getDoc(studentRef)).data();

@@ -257,3 +257,5 @@ const BadgeDetailModal: React.FC<BadgeDetailModalProps> = ({
 export default BadgeDetailModal;
 
 
+
+

@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { doc, onSnapshot, updateDoc, serverTimestamp, getDoc, collection, addDoc, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, serverTimestamp, getDoc, collection, addDoc, setDoc, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import { IslandRunLobby, IslandRunPlayer } from '../types/islandRun';
 import { getLevelFromXP } from '../utils/leveling';
-import { joinRaidLobby, leaveRaidLobby, touchRaidLobby } from '../utils/raidLobbyService';
+import { joinRaidLobby, leaveRaidLobby, touchRaidLobby, touchRaidLobbyMember } from '../utils/raidLobbyService';
 
 const IslandRunLobbyView: React.FC = () => {
   const { lobbyId } = useParams<{ lobbyId: string }>();
@@ -14,6 +14,7 @@ const IslandRunLobbyView: React.FC = () => {
   const [lobby, setLobby] = useState<IslandRunLobby | null>(null);
   const [loading, setLoading] = useState(true);
   const [isReady, setIsReady] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now()); // For timer updates
   const hasJoinedRef = useRef(false);
   const joinAttemptedRef = useRef(false);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -132,8 +133,14 @@ const IslandRunLobbyView: React.FC = () => {
       console.error('Error listening to lobby:', error);
     });
 
+    // Update timer every second
+    const timerInterval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
     return () => {
       unsubscribe();
+      clearInterval(timerInterval);
     };
   }, [lobbyId, currentUser, navigate]);
 
@@ -144,20 +151,28 @@ const IslandRunLobbyView: React.FC = () => {
     // Clear any existing interval
     stopHeartbeat();
 
-    // Start heartbeat interval
+    // Start heartbeat interval (10 seconds for member presence, 15 seconds for lobby-level)
     heartbeatIntervalRef.current = setInterval(() => {
-      if (hasJoinedRef.current) {
+      if (hasJoinedRef.current && lobbyId && currentUser) {
+        // Update per-player presence (member subcollection)
+        touchRaidLobbyMember(lobbyId, currentUser.uid).catch((error) => {
+          console.error('[IslandRunLobby] Error updating member heartbeat:', error);
+        });
+        // Also update lobby-level activity (for backward compatibility)
         touchRaidLobby(lobbyId).catch((error) => {
-          console.error('[IslandRunLobby] Error updating heartbeat:', error);
+          console.error('[IslandRunLobby] Error updating lobby heartbeat:', error);
         });
       }
-    }, 15000); // 15 seconds
+    }, 10000); // 10 seconds for better presence accuracy
 
     // Also update on page visibility change (when tab becomes visible)
     const handleVisibilityChange = () => {
-      if (!document.hidden && hasJoinedRef.current) {
+      if (!document.hidden && hasJoinedRef.current && lobbyId && currentUser) {
+        touchRaidLobbyMember(lobbyId, currentUser.uid).catch((error) => {
+          console.error('[IslandRunLobby] Error updating member heartbeat on visibility change:', error);
+        });
         touchRaidLobby(lobbyId).catch((error) => {
-          console.error('[IslandRunLobby] Error updating heartbeat on visibility change:', error);
+          console.error('[IslandRunLobby] Error updating lobby heartbeat on visibility change:', error);
         });
       }
     };
@@ -225,14 +240,27 @@ const IslandRunLobbyView: React.FC = () => {
         
         if (playerIndex !== -1) {
           // Toggle ready status
+          const newReadyStatus = !players[playerIndex].isReady;
           players[playerIndex] = {
             ...players[playerIndex],
-            isReady: !players[playerIndex].isReady
+            isReady: newReadyStatus
           };
           
+          // Update players array
           await updateDoc(lobbyRef, {
             players: players as any, // Type assertion needed for Firestore nested objects
             updatedAt: serverTimestamp()
+          });
+
+          // Also update member subcollection
+          const memberRef = doc(db, 'islandRunLobbies', lobbyId, 'members', currentUser.uid);
+          await updateDoc(memberRef, {
+            ready: newReadyStatus
+          }).catch((err) => {
+            // Member doc might not exist (legacy lobby), that's OK
+            if (process.env.REACT_APP_DEBUG_RAID === 'true') {
+              console.warn('[IslandRunLobby] Could not update member ready status:', err);
+            }
           });
         } else {
           // Player not found - this shouldn't happen if join worked correctly
@@ -650,6 +678,24 @@ const IslandRunLobbyView: React.FC = () => {
         <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🏝️ {lobby.name}</h1>
         <p style={{ fontSize: '1rem', opacity: 0.9 }}>
           Difficulty: <strong>{lobby.difficulty.toUpperCase()}</strong>
+        </p>
+        <p style={{ fontSize: '0.9rem', marginTop: '0.5rem', opacity: 0.95 }}>
+          ⏱️ Time Remaining: {(() => {
+            const TEN_MINUTES_MS = 10 * 60 * 1000; // 10 minutes in milliseconds
+            const elapsedMs = currentTime - lobby.createdAt.getTime();
+            const remainingMs = Math.max(0, TEN_MINUTES_MS - elapsedMs);
+            const remainingSeconds = Math.floor(remainingMs / 1000);
+            
+            if (remainingSeconds <= 0) {
+              return '0:00';
+            }
+            
+            const minutes = Math.floor(remainingSeconds / 60);
+            const seconds = remainingSeconds % 60;
+            
+            // Format as MM:SS
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          })()}
         </p>
       </div>
 

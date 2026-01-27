@@ -17,7 +17,9 @@ interface Student {
 }
 
 const InSessionBattleView: React.FC = () => {
-  const { sessionId } = useParams<{ sessionId: string }>();
+  // Support both eventId (new route) and sessionId (backward compatibility)
+  const { eventId, sessionId: sessionIdParam } = useParams<{ eventId?: string; sessionId?: string }>();
+  const sessionId = eventId || sessionIdParam;
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [session, setSession] = useState<any>(null);
@@ -103,6 +105,7 @@ const InSessionBattleView: React.FC = () => {
         return () => unsubscribe();
       } catch (error) {
         console.error('Error loading session:', error);
+        setLoading(false);
         alert('Failed to load session.');
         navigate('/home');
       }

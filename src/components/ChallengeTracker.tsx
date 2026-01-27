@@ -259,28 +259,32 @@ const ChallengeTracker = () => {
       }
 
       if (shouldAutoComplete) {
-        console.log(`ChallengeTracker: Auto-completing challenge: ${challenge.id}`);
+        console.log(`ChallengeTracker: Auto-completing challenge: ${challenge.id} using progression engine`);
         
         const userRef = doc(db, 'users', currentUser.uid);
         const studentRef = doc(db, 'students', currentUser.uid);
         
-        const updatedChapters = {
-          ...userProgress.chapters,
-          [currentChapter.id]: {
-            ...userProgress.chapters[currentChapter.id],
-            challenges: {
-              ...userProgress.chapters[currentChapter.id]?.challenges,
-              [challenge.id]: {
-                isCompleted: true,
-                status: 'approved',
-                completedAt: serverTimestamp()
-              }
-            }
-          }
-        };
-        
-        await updateDoc(userRef, {
-          chapters: updatedChapters
+        // Use the canonical progression engine to handle challenge completion and unlocking
+        const { updateProgressOnChallengeComplete } = await import('../utils/chapterProgression');
+        const progressionResult = await updateProgressOnChallengeComplete(
+          currentUser.uid,
+          currentChapter.id,
+          challenge.id
+        );
+
+        if (!progressionResult.success) {
+          console.error(`ChallengeTracker: Failed to update progression for ${challenge.id}:`, progressionResult.error);
+          continue;
+        }
+
+        if (progressionResult.alreadyCompleted) {
+          console.log(`ChallengeTracker: Challenge ${challenge.id} already completed, skipping`);
+          continue;
+        }
+
+        console.log(`ChallengeTracker: Progression updated for ${challenge.id}:`, {
+          challengeUnlocked: progressionResult.challengeUnlocked,
+          chapterUnlocked: progressionResult.chapterUnlocked
         });
 
         // Use centralized reward granting service
@@ -779,6 +783,15 @@ const ChallengeTracker = () => {
       await updateDoc(userRef, { manifest: newPlayerManifest });
       setPlayerManifest(newPlayerManifest);
       setShowManifestSelection(false);
+      
+      // Recalculate power level after manifest selection
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after manifest selection:', plError);
+        // Don't throw - power level recalculation is non-critical
+      }
     } catch (error) {
       console.error('Error setting manifest:', error);
       alert('Failed to set manifest. Please try again.');

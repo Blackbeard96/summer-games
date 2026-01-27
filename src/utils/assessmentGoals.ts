@@ -41,6 +41,10 @@ export function computePPChange(
   const delta = actualScore - goalScore;
   const absDiff = Math.abs(delta);
   
+  // Special rule: If player is exactly 1 point away from goal, treat as tier 2 reward (within 1 point = tier 2)
+  // This ensures fairness - being 1 point off shouldn't result in a penalty
+  const isOnePointAway = absDiff === 1 && actualScore < goalScore;
+  
   // Check if there's a reward tier that matches this difference
   // This allows close misses (within 1-2 points) to still get rewards
   const matchingRewardTier = findRewardTier(absDiff, assessment.rewardTiers);
@@ -48,11 +52,15 @@ export function computePPChange(
   
   // Determine outcome
   // If actualScore >= goalScore, it's always a hit/exceed
+  // If actualScore < goalScore but exactly 1 point away, treat as hit (tier 2 reward)
   // If actualScore < goalScore but within the closest reward tier threshold (typically 1-2 points),
   // treat it as a reward scenario (close miss = still rewarded)
   let outcome: OutcomeType;
   if (actualScore >= goalScore) {
     outcome = actualScore > goalScore ? 'exceed' : 'hit';
+  } else if (isOnePointAway) {
+    // Exactly 1 point away - treat as hit with tier 2 reward
+    outcome = 'hit';
   } else if (absDiff <= closeToGoalThreshold && closeToGoalThreshold <= 2) {
     // Close miss (within 1-2 points) - treat as reward scenario
     outcome = 'hit';
@@ -65,11 +73,21 @@ export function computePPChange(
   
   if (outcome === 'hit' || outcome === 'exceed') {
     // Award bonus based on reward tiers
-    const tier = findRewardTier(absDiff, assessment.rewardTiers);
+    // Special handling: If exactly 1 point away, always use tier 2 (threshold: 2) rewards
+    let tier: RewardTier | null;
+    if (isOnePointAway) {
+      // For 1 point misses, always use tier 2 (threshold: 2) rewards
+      tier = findRewardTier(2, assessment.rewardTiers);
+    } else {
+      // For all other cases, use normal tier matching
+      tier = findRewardTier(absDiff, assessment.rewardTiers);
+    }
     if (tier) {
       ppChange = tier.bonus;
       if (absDiff === 0) {
         tierExplanation = 'Exact hit bonus';
+      } else if (isOnePointAway) {
+        tierExplanation = `1 point away - Tier 2 reward applied`;
       } else if (actualScore < goalScore) {
         tierExplanation = `Close to goal (within ${tier.threshold} points) - reward applied`;
       } else {
@@ -108,9 +126,16 @@ export function computePPChange(
   // Get artifacts for the matching tier
   let artifactsGranted: ArtifactReward[] | undefined;
   if (outcome === 'hit' || outcome === 'exceed') {
-    const tier = findRewardTier(absDiff, assessment.rewardTiers);
-    if (tier && tier.artifacts && tier.artifacts.length > 0) {
-      artifactsGranted = tier.artifacts;
+    // Use same tier logic as above for artifacts (1 point away = tier 2)
+    let tierForArtifacts: RewardTier | null;
+    if (isOnePointAway) {
+      tierForArtifacts = findRewardTier(2, assessment.rewardTiers);
+    } else {
+      tierForArtifacts = findRewardTier(absDiff, assessment.rewardTiers);
+    }
+    
+    if (tierForArtifacts && tierForArtifacts.artifacts && tierForArtifacts.artifacts.length > 0) {
+      artifactsGranted = tierForArtifacts.artifacts;
     }
   }
 

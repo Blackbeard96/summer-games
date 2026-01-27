@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   getClassesByStudent,
   getAssessmentsByClass,
-  getAssessmentGoal
+  getAssessmentGoal,
+  getHabitSubmission
 } from '../utils/assessmentGoalsFirestore';
 import { Assessment, AssessmentWithGoal } from '../types/assessmentGoals';
 
@@ -37,12 +38,23 @@ const AssessmentGoalsNotifier: React.FC = () => {
         // Filter for assessments that:
         // 1. Are not locked
         // 2. Are in 'open' status
-        // 3. Student hasn't set a goal yet
+        // 3. Student hasn't set a goal yet (for habits, check habit submission instead)
         const pending: Assessment[] = [];
         for (const assessment of allAssessments) {
           if (!assessment.isLocked && assessment.gradingStatus === 'open') {
-            const goal = await getAssessmentGoal(assessment.id, currentUser.uid);
-            if (!goal) {
+            let hasGoal = false;
+            
+            if (assessment.type === 'habits') {
+              // For habits, check if there's a habit submission
+              const habitSubmission = await getHabitSubmission(assessment.id, currentUser.uid);
+              hasGoal = !!habitSubmission;
+            } else {
+              // For regular assessments, check if there's a goal
+              const goal = await getAssessmentGoal(assessment.id, currentUser.uid);
+              hasGoal = !!goal;
+            }
+            
+            if (!hasGoal) {
               pending.push(assessment);
             }
           }
@@ -50,8 +62,12 @@ const AssessmentGoalsNotifier: React.FC = () => {
 
         setPendingAssessments(pending);
 
-        // Show notification if there are pending assessments and we haven't shown it yet
-        if (pending.length > 0 && !hasShownNotification) {
+        // Hide notification immediately if there are no pending assessments
+        if (pending.length === 0) {
+          setShowNotification(false);
+          setHasShownNotification(false); // Reset so it can show again if new assessments appear
+        } else if (pending.length > 0 && !hasShownNotification) {
+          // Show notification if there are pending assessments and we haven't shown it yet
           // Delay notification slightly to avoid showing immediately on page load
           const timer = setTimeout(() => {
             setShowNotification(true);
@@ -196,6 +212,8 @@ const AssessmentGoalsNotifier: React.FC = () => {
 };
 
 export default AssessmentGoalsNotifier;
+
+
 
 
 

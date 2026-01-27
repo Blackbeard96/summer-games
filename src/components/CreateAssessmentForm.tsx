@@ -20,6 +20,7 @@ const AVAILABLE_ARTIFACTS = [
   { id: 'terra-ring', name: 'Terra Ring' },
   { id: 'aqua-ring', name: 'Aqua Ring' },
   { id: 'air-ring', name: 'Air Ring' },
+  { id: 'instant-regrade-pass', name: 'Instant Regrade Pass' },
   { id: 'captain-helmet', name: "Captain's Helmet" }
 ];
 
@@ -35,7 +36,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   onCancel
 }) => {
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<'test' | 'exam' | 'quiz'>('test');
+  const [type, setType] = useState<'test' | 'exam' | 'quiz' | 'habits'>('test');
   const [date, setDate] = useState('');
   const [maxScore, setMaxScore] = useState(100);
   const [minGoalScore, setMinGoalScore] = useState<number | ''>(0);
@@ -53,6 +54,14 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
     { threshold: 5, penalty: 15 },  // 3-5 away - Penalty Tier 1
     { threshold: 20, penalty: 50 }   // 6+ away - Penalty Tier 2 (max)
   ]);
+
+  // Habits-specific fields
+  const [defaultDuration, setDefaultDuration] = useState<'1_class' | '1_day' | '3_days' | '1_week'>('1_week');
+  const [defaultRewardPP, setDefaultRewardPP] = useState<number | ''>(50);
+  const [defaultRewardXP, setDefaultRewardXP] = useState<number | ''>(25);
+  const [defaultConsequencePP, setDefaultConsequencePP] = useState<number | ''>(0);
+  const [defaultConsequenceXP, setDefaultConsequenceXP] = useState<number | ''>(0);
+  const [requireNotesOnCheckIn, setRequireNotesOnCheckIn] = useState(false);
 
   const addRewardTier = () => {
     setRewardTiers([...rewardTiers, { threshold: 0, bonus: 0 }]);
@@ -124,7 +133,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const assessmentData = {
+    const assessmentData: any = {
       title,
       type,
       date,
@@ -136,6 +145,18 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       bonusCap,
       penaltyCap
     };
+
+    // Add Habits-specific config if type is habits
+    if (type === 'habits') {
+      assessmentData.habitsConfig = {
+        defaultDuration,
+        defaultRewardPP: defaultRewardPP === '' ? undefined : Number(defaultRewardPP),
+        defaultRewardXP: defaultRewardXP === '' ? undefined : Number(defaultRewardXP),
+        defaultConsequencePP: defaultConsequencePP === '' ? undefined : Number(defaultConsequencePP),
+        defaultConsequenceXP: defaultConsequenceXP === '' ? undefined : Number(defaultConsequenceXP),
+        requireNotesOnCheckIn
+      };
+    }
 
     onSave(assessmentData);
   };
@@ -172,7 +193,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
             </label>
             <select
               value={type}
-              onChange={(e) => setType(e.target.value as 'test' | 'exam' | 'quiz')}
+              onChange={(e) => setType(e.target.value as 'test' | 'exam' | 'quiz' | 'habits')}
               style={{
                 width: '100%',
                 padding: '0.75rem',
@@ -184,6 +205,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               <option value="test">Test</option>
               <option value="exam">Exam</option>
               <option value="quiz">Quiz</option>
+              <option value="habits">Habits</option>
             </select>
           </div>
 
@@ -207,67 +229,70 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-              Max Score:
-            </label>
-            <input
-              type="number"
-              value={maxScore}
-              onChange={(e) => {
-                const newMax = parseInt(e.target.value) || 100;
-                setMaxScore(newMax);
-                // Ensure minGoalScore doesn't exceed maxScore
-                if (minGoalScore !== '' && Number(minGoalScore) > newMax) {
-                  setMinGoalScore(newMax);
-                }
-              }}
-              min="1"
-              required
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #d1d5db',
-                fontSize: '1rem'
-              }}
-            />
-          </div>
-
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-              Minimum Goal Score (Optional):
-            </label>
-            <input
-              type="number"
-              value={minGoalScore}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (value === '') {
-                  setMinGoalScore('');
-                } else {
-                  const numValue = parseInt(value) || 0;
+        {/* Max Score and Minimum Goal Score (hidden for Habits) */}
+        {type !== 'habits' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Max Score:
+              </label>
+              <input
+                type="number"
+                value={maxScore}
+                onChange={(e) => {
+                  const newMax = parseInt(e.target.value) || 100;
+                  setMaxScore(newMax);
                   // Ensure minGoalScore doesn't exceed maxScore
-                  setMinGoalScore(Math.min(numValue, maxScore));
-                }
-              }}
-              min="0"
-              max={maxScore}
-              placeholder="0"
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #d1d5db',
-                fontSize: '1rem'
-              }}
-            />
-            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: '#6b7280' }}>
-              Students must set a goal of at least this score (default: 0)
-            </p>
+                  if (minGoalScore !== '' && Number(minGoalScore) > newMax) {
+                    setMinGoalScore(newMax);
+                  }
+                }}
+                min="1"
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                  fontSize: '1rem'
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Minimum Goal Score (Optional):
+              </label>
+              <input
+                type="number"
+                value={minGoalScore}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    setMinGoalScore('');
+                  } else {
+                    const numValue = parseInt(value) || 0;
+                    // Ensure minGoalScore doesn't exceed maxScore
+                    setMinGoalScore(Math.min(numValue, maxScore));
+                  }
+                }}
+                min="0"
+                max={maxScore}
+                placeholder="0"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                  fontSize: '1rem'
+                }}
+              />
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: '#6b7280' }}>
+                Students must set a goal of at least this score (default: 0)
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         <div style={{ marginBottom: '1.5rem' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -280,8 +305,141 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
           </label>
         </div>
 
-        {/* Reward Tiers */}
-        <div style={{ marginBottom: '1.5rem' }}>
+        {/* Habits-specific fields (shown only when type === 'habits') */}
+        {type === 'habits' && (
+          <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f3f4f6', borderRadius: '0.5rem' }}>
+            <h3 style={{ marginBottom: '1rem' }}>Habits Configuration</h3>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Default Duration:
+              </label>
+              <select
+                value={defaultDuration}
+                onChange={(e) => setDefaultDuration(e.target.value as '1_class' | '1_day' | '3_days' | '1_week')}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                  fontSize: '1rem'
+                }}
+              >
+                <option value="1_class">1 Class</option>
+                <option value="1_day">1 Day</option>
+                <option value="3_days">3 Days</option>
+                <option value="1_week">1 Week</option>
+              </select>
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: '#6b7280' }}>
+                Default time frame for habit commitments (students can choose a different duration if allowed)
+              </p>
+            </div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Default Reward PP:
+                </label>
+                <input
+                  type="number"
+                  value={defaultRewardPP}
+                  onChange={(e) => setDefaultRewardPP(e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
+                  min="0"
+                  placeholder="50"
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Default Reward XP:
+                </label>
+                <input
+                  type="number"
+                  value={defaultRewardXP}
+                  onChange={(e) => setDefaultRewardXP(e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
+                  min="0"
+                  placeholder="25"
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem'
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Default Consequence PP (penalty):
+                </label>
+                <input
+                  type="number"
+                  value={defaultConsequencePP}
+                  onChange={(e) => setDefaultConsequencePP(e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
+                  min="0"
+                  placeholder="0"
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Default Consequence XP (penalty):
+                </label>
+                <input
+                  type="number"
+                  value={defaultConsequenceXP}
+                  onChange={(e) => setDefaultConsequenceXP(e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
+                  min="0"
+                  placeholder="0"
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem'
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={requireNotesOnCheckIn}
+                  onChange={(e) => setRequireNotesOnCheckIn(e.target.checked)}
+                  style={{ width: '1rem', height: '1rem' }}
+                />
+                <span style={{ fontWeight: 'bold' }}>Require notes on check-in</span>
+              </label>
+              <p style={{ margin: '0.25rem 0 0 1.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                Students must provide notes/reflection when checking in
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Reward Tiers (hidden for Habits) */}
+        {type !== 'habits' && (
+          <>
+          <div style={{ marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3>Reward Tiers</h3>
             <button
@@ -542,6 +700,8 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
             />
           </div>
         </div>
+          </>
+        )}
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>

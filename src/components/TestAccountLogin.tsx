@@ -9,13 +9,13 @@ interface TestAccountLoginProps {
 }
 
 const TestAccountLogin: React.FC<TestAccountLoginProps> = ({ isOpen, onClose }) => {
-  const { currentUser, currentRole, switchToTestAccount, switchToAdmin, isAdmin } = useAuth();
+  const { currentUser, currentRole, switchToTestAccount, switchToAdmin, isAdmin: isAdminFromAuth } = useAuth();
   const [loading, setLoading] = useState(false);
   const [testAccountId, setTestAccountId] = useState('test-account-001');
   const [adminOverride, setAdminOverride] = useState(false);
 
   // Check if current user is admin
-  const isAdminUser = adminOverride || isAdmin();
+  const isAdminUser = adminOverride || isAdminFromAuth;
 
   const handleSwitchToTestAccount = async () => {
     if (!isAdminUser) return;

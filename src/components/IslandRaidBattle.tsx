@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, onSnapshot, updateDoc, setDoc, serverTimestamp, getDoc, arrayUnion, arrayRemove, increment, deleteField } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, setDoc, serverTimestamp, getDoc, arrayUnion, arrayRemove, increment, deleteField, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { IslandRaidBattleRoom, IslandRaidEnemy, IslandRaidPlayer } from '../types/islandRaid';
@@ -515,20 +515,25 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     console.log(`🔍 [LISTENER] Enemy ${enemy.name} (${enemy.id}) waveNumber: ${enemyWave}, room.waveNumber: ${room.waveNumber}, local waveNumber: ${waveNumber}`);
                   }
                   
+                  // CRITICAL: Firestore is the source of truth - always use enemy.health/shield from Firestore
+                  // Don't preserve local state for health/shield - sync from Firestore
+                  const firestoreHealth = Number(enemy.health || 0);
+                  const firestoreShield = Number(enemy.shieldStrength || 0);
+                  
                   return {
                     id: enemy.id,
                     name: enemy.name,
                     currentPP: existingOpp?.currentPP || 0,
                     maxPP: existingOpp?.maxPP || 0,
-                    shieldStrength: enemy.shieldStrength || 0,
+                    shieldStrength: firestoreShield, // Always use Firestore value
                     maxShieldStrength: enemy.maxShieldStrength || 0,
                     level: enemy.level || existingOpp?.level || 1,
-                    health: enemy.health,
-                    maxHealth: enemy.maxHealth,
+                    health: firestoreHealth, // Always use Firestore value
+                    maxHealth: enemy.maxHealth || 100,
                     type: enemy.type || existingOpp?.type || 'zombie',
                     image: enemy.image || existingOpp?.image || undefined,
-                    vaultHealth: enemy.health, // Use health as vaultHealth for Island Raid enemies
-                    maxVaultHealth: enemy.maxHealth, // Use maxHealth as maxVaultHealth
+                    vaultHealth: firestoreHealth, // Always use Firestore value (source of truth)
+                    maxVaultHealth: enemy.maxHealth || 100, // Always use Firestore value
                     waveNumber: enemyWave // CRITICAL: Set waveNumber for filtering
                   };
                 });
@@ -1684,12 +1689,90 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         maxShieldStrength: e.maxShieldStrength
       })));
 
-      await updateDoc(battleRoomRef, {
-        enemies: allEnemies,
-        updatedAt: serverTimestamp()
-      });
-      
-      console.log('✅ IslandRaidBattle: Successfully saved enemies to Firestore');
+      // Use transaction to prevent race conditions when multiple players update simultaneously
+      // Firestore automatically retries transactions on version conflicts, but we add manual retry
+      // for better error handling and to reduce console noise
+      try {
+        await runTransaction(db, async (transaction) => {
+          const battleRoomDoc = await transaction.get(battleRoomRef);
+          
+          if (!battleRoomDoc.exists()) {
+            throw new Error('Battle room does not exist');
+          }
+          
+          const currentRoomData = battleRoomDoc.data();
+          const currentEnemies = (currentRoomData.enemies || []) as IslandRaidEnemy[];
+          
+          // Merge updates intelligently: use the minimum health/shield (most damage taken)
+          // This ensures all players see the worst-case state (most accurate)
+          const mergedEnemies = allEnemies.map(updatedEnemy => {
+            const currentEnemy = currentEnemies.find(e => e.id === updatedEnemy.id);
+            
+            if (!currentEnemy) {
+              // New enemy, use updated values
+              return updatedEnemy;
+            }
+            
+            // Get numeric values for comparison
+            const updatedHealth = Number(updatedEnemy.health || currentEnemy.health || 100);
+            const currentHealth = Number(currentEnemy.health || updatedEnemy.health || 100);
+            const updatedShield = Number(updatedEnemy.shieldStrength || currentEnemy.shieldStrength || 0);
+            const currentShield = Number(currentEnemy.shieldStrength || updatedEnemy.shieldStrength || 0);
+            
+            // Merge: use minimum health/shield to ensure all players see the most damage
+            // This prevents one player's update from overwriting another player's damage
+            const mergedHealth = Math.min(updatedHealth, currentHealth);
+            const mergedShield = Math.min(updatedShield, currentShield);
+            
+            // Preserve all other properties from updated enemy, but use merged health/shield
+            return {
+              ...updatedEnemy,
+              health: mergedHealth,
+              shieldStrength: mergedShield,
+              // Also preserve max values from current if they exist
+              maxHealth: updatedEnemy.maxHealth || currentEnemy.maxHealth || 100,
+              maxShieldStrength: updatedEnemy.maxShieldStrength || currentEnemy.maxShieldStrength || 0
+            };
+          });
+          
+          // Preserve enemies that weren't in the update
+          const updatedEnemyIds = new Set(allEnemies.map(e => e.id));
+          const preservedEnemies = currentEnemies.filter(e => !updatedEnemyIds.has(e.id));
+          const finalEnemies = [...mergedEnemies, ...preservedEnemies];
+          
+          transaction.update(battleRoomRef, {
+            enemies: finalEnemies,
+            updatedAt: serverTimestamp()
+          });
+        });
+        
+        console.log('✅ IslandRaidBattle: Successfully saved enemies to Firestore (transactional)');
+      } catch (error: any) {
+        // Firestore transactions automatically retry on version conflicts
+        // Suppress version mismatch errors (they're expected with concurrent updates)
+        const isVersionMismatch = error?.message?.includes('version') || 
+                                 error?.message?.includes('does not match') ||
+                                 error?.code === 'failed-precondition';
+        
+        if (isVersionMismatch) {
+          // This is expected with concurrent updates - Firestore will retry automatically
+          // The listener will sync the correct state from Firestore
+          console.log('🔄 IslandRaidBattle: Transaction version conflict (expected with concurrent updates, Firestore will retry)');
+        } else {
+          // Other errors should be logged
+          console.error('❌ IslandRaidBattle: Transaction error:', error);
+          // Fall back to non-transactional update as last resort (less safe but better than failing)
+          try {
+            await updateDoc(battleRoomRef, {
+              enemies: allEnemies,
+              updatedAt: serverTimestamp()
+            });
+            console.warn('⚠️ IslandRaidBattle: Fallback to non-transactional update');
+          } catch (fallbackError) {
+            console.error('❌ IslandRaidBattle: Fallback update also failed:', fallbackError);
+          }
+        }
+      }
       
       // Update local opponents state immediately to reflect the changes
       // CRITICAL: Handle both updates to existing opponents AND add any new opponents that might be missing

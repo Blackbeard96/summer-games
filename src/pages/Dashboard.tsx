@@ -177,6 +177,15 @@ const Dashboard = () => {
       
       setPlayerManifest(newPlayerManifest);
       setShowManifestSelection(false);
+      
+      // Recalculate power level after manifest selection
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after manifest selection:', plError);
+        // Don't throw - power level recalculation is non-critical
+      }
     } catch (error) {
       console.error('Error setting manifest:', error);
       if (error instanceof Error && error.message.includes('permission')) {

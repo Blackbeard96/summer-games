@@ -89,7 +89,16 @@ const Chapters: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 py-20 chapters-page">
+    <div 
+      className="min-h-screen py-20 chapters-page"
+      style={{
+        backgroundImage: 'url(/images/PlayerJourney_BKG.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        backgroundAttachment: 'fixed'
+      }}
+    >
       <div className="max-w-6xl mx-auto px-16 chapters-container">
         {selectedChapter ? (
           <ChapterDetail 

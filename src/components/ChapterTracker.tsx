@@ -11,7 +11,7 @@ interface ChapterTrackerProps {
 }
 
 const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
-  const { currentUser, isAdmin } = useAuth();
+  const { currentUser, isAdmin: isAdminUser } = useAuth();
   const [userProgress, setUserProgress] = useState<any>(null);
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -187,11 +187,6 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     }
   };
 
-  const handleRefresh = () => {
-    setRefreshKey(prev => prev + 1);
-    setLoading(true);
-    console.log('Manual refresh triggered');
-  };
 
   const getStatusText = (status: string) => {
     switch (status) {
@@ -211,8 +206,8 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
           <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center mb-4">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent"></div>
           </div>
-          <h3 className="text-lg font-semibold text-gray-700 mb-2">Loading Your Journey</h3>
-          <p className="text-gray-500 text-center">Preparing your epic quest through the Nine Knowings Universe...</p>
+          <h3 className="text-lg font-semibold mb-2" style={{ color: '#ffffff', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)' }}>Loading Your Journey</h3>
+          <p className="text-center" style={{ color: '#e5e7eb', textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)' }}>Preparing your epic quest through the Nine Knowings Universe...</p>
         </div>
       </div>
     );
@@ -228,50 +223,21 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
         <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full mb-6">
           <span className="text-2xl">🏛️</span>
         </div>
-        <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent mb-4">
+        <h2 className="text-3xl font-bold text-white mb-4" style={{ 
+          textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 20px rgba(139, 92, 246, 0.5)',
+          background: 'linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text'
+        }}>
           The Player's Journey
         </h2>
-        <p className="text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">
+        <p className="text-lg max-w-3xl mx-auto leading-relaxed" style={{ 
+          color: '#f3f4f6',
+          textShadow: '1px 1px 2px rgba(0, 0, 0, 0.7)'
+        }}>
           Embark on your epic quest through the Nine Knowings Universe. Each chapter reveals new mysteries, challenges, and opportunities for growth.
         </p>
-        <div className="mt-4 flex gap-2 justify-center">
-          <button
-            onClick={handleRefresh}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            🔄 Refresh Progress
-          </button>
-          {isAdmin() && (
-            <button
-              onClick={async () => {
-                if (!currentUser) {
-                  alert('No current user found');
-                  return;
-                }
-                if (!window.confirm('Reset your chapter progress? This will clear all completions.')) {
-                  return;
-                }
-                try {
-                  console.log('Resetting progress for user:', currentUser.uid);
-                  await updateDoc(doc(db, 'users', currentUser.uid), {
-                    chapters: {},
-                    storyChapter: 1,
-                    resetAt: new Date(),
-                    resetBy: 'self'
-                  });
-                  console.log('Progress reset successfully');
-                  alert('Progress reset! Click Refresh to see changes.');
-                } catch (error) {
-                  console.error('Error resetting progress:', error);
-                  alert('Failed to reset progress');
-                }
-              }}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-            >
-              🗑️ Reset My Progress
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Progress Summary Cards - Inline Styles */}
@@ -343,7 +309,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
 
       {/* Chapter Cards Grid */}
       <div className="mb-8">
-        <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center">
+          <h3 className="text-xl font-bold mb-6 flex items-center" style={{ 
+            color: '#1f2937',
+            textShadow: 'none'
+          }}>
           <span className="mr-2">📚</span>
           Your Journey Chapters
         </h3>
@@ -480,7 +449,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   <h3 style={{ 
                     fontSize: '1.125rem', 
                     fontWeight: 'bold', 
-                    color: '#1f2937', 
+                    color: '#111827', 
                     marginBottom: '4px',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -490,7 +459,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                   </h3>
                   <p style={{ 
                     fontSize: '0.875rem', 
-                    color: '#6b7280', 
+                    color: '#4b5563', 
                     fontStyle: 'italic', 
                     fontWeight: '500' 
                   }}>
@@ -500,7 +469,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
 
                 {/* Description */}
                 <p style={{ 
-                  color: '#374151', 
+                  color: '#1f2937', 
                   marginBottom: '1rem', 
                   lineHeight: '1.6', 
                   fontSize: '0.875rem',
@@ -521,7 +490,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                       justifyContent: 'space-between', 
                       fontSize: '0.875rem', 
                       fontWeight: '500', 
-                      color: '#6b7280', 
+                      color: '#374151', 
                       marginBottom: '8px' 
                     }}>
                       <span>Progress</span>
@@ -672,7 +641,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                       display: 'flex', 
                       alignItems: 'center', 
                       fontSize: '0.75rem', 
-                      color: '#6b7280' 
+                      color: '#4b5563' 
                     }}>
                       <span style={{ 
                         width: '12px', 

@@ -332,6 +332,27 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
             >
               TM: {playerData.tm}
             </span>
+            {/* Power Level badge */}
+            {playerData.powerLevel !== null && playerData.powerLevel !== undefined && (
+              <span 
+                style={{ 
+                  background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)', 
+                  color: 'white', 
+                  borderRadius: 8, 
+                  padding: '2px 10px', 
+                  fontWeight: 'bold', 
+                  fontSize: 14,
+                  boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  flexShrink: 0
+                }}
+                title={playerData.powerBreakdown ? `Base: ${playerData.powerBreakdown.base} | Skills: ${playerData.powerBreakdown.skills} | Artifacts: ${playerData.powerBreakdown.artifacts} | Ascension: ${playerData.powerBreakdown.ascension}` : 'Power Level'}
+              >
+                ⚡ PL: {playerData.powerLevel}
+              </span>
+            )}
             {/* Level badge */}
             <span style={{ 
               background: '#4f46e5', 
@@ -340,7 +361,7 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
               padding: '2px 10px', 
               fontWeight: 'bold', 
               fontSize: 14, 
-              marginLeft: 'auto',
+              marginLeft: playerData.powerLevel === null || playerData.powerLevel === undefined ? 'auto' : '0',
               flexShrink: 0
             }}>
               Lv. {playerData.level}

@@ -6,7 +6,9 @@ import {
   Assessment,
   AssessmentGoal,
   AssessmentResult,
-  AssessmentWithGoal
+  AssessmentWithGoal,
+  HabitSubmission,
+  HabitDuration
 } from '../types/assessmentGoals';
 import {
   getClassesByStudent,
@@ -14,7 +16,8 @@ import {
   getAssessmentGoal,
   getAssessmentResult,
   setAssessmentGoal,
-  getAssessment
+  getAssessment,
+  getHabitSubmission
 } from '../utils/assessmentGoalsFirestore';
 import { validateGoalScore } from '../utils/assessmentGoals';
 import { formatOutcome, formatPPChange } from '../utils/assessmentGoals';
@@ -32,6 +35,7 @@ const AssessmentGoalsStudent: React.FC = () => {
   const [selectedAssessment, setSelectedAssessment] = useState<AssessmentWithGoal | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
   const [resultModalData, setResultModalData] = useState<{ result: AssessmentResult; assessment: Assessment; goalScore: number } | null>(null);
+  const [habitSubmissions, setHabitSubmissions] = useState<Map<string, HabitSubmission>>(new Map());
 
   // Fetch classes for current student
   useEffect(() => {
@@ -62,13 +66,19 @@ const AssessmentGoalsStudent: React.FC = () => {
       try {
         const classAssessments = await getAssessmentsByClass(selectedClassId);
         
-        // Fetch goals and results for each assessment
+        // Fetch goals, results, and habit submissions for each assessment
         const assessmentsWithData = await Promise.all(
           classAssessments.map(async (assessment) => {
-            const [goal, result] = await Promise.all([
+            const [goal, result, habitSubmission] = await Promise.all([
               getAssessmentGoal(assessment.id, currentUser.uid),
-              getAssessmentResult(assessment.id, currentUser.uid)
+              getAssessmentResult(assessment.id, currentUser.uid),
+              assessment.type === 'habits' ? getHabitSubmission(assessment.id, currentUser.uid) : Promise.resolve(null)
             ]);
+
+            // Store habit submission in map for easy access
+            if (habitSubmission) {
+              setHabitSubmissions(prev => new Map(prev).set(assessment.id, habitSubmission));
+            }
 
             return {
               ...assessment,
@@ -96,10 +106,17 @@ const AssessmentGoalsStudent: React.FC = () => {
       const updatedAssessments = await Promise.all(
         snapshot.docs.map(async (doc) => {
           const assessment = { id: doc.id, ...doc.data() } as Assessment;
-          const [goal, result] = await Promise.all([
+          const [goal, result, habitSubmission] = await Promise.all([
             getAssessmentGoal(assessment.id, currentUser.uid),
-            getAssessmentResult(assessment.id, currentUser.uid)
+            getAssessmentResult(assessment.id, currentUser.uid),
+            assessment.type === 'habits' ? getHabitSubmission(assessment.id, currentUser.uid) : Promise.resolve(null)
           ]);
+          
+          // Store habit submission in map for easy access
+          if (habitSubmission) {
+            setHabitSubmissions(prev => new Map(prev).set(assessment.id, habitSubmission));
+          }
+          
           return { ...assessment, goal, result } as AssessmentWithGoal;
         })
       );
@@ -118,7 +135,16 @@ const AssessmentGoalsStudent: React.FC = () => {
     if (!currentUser || !selectedAssessment) return;
     
     // Refresh the assessment data
-    const updatedGoal = await getAssessmentGoal(selectedAssessment.id, currentUser.uid);
+    const [updatedGoal, habitSubmission] = await Promise.all([
+      getAssessmentGoal(selectedAssessment.id, currentUser.uid),
+      selectedAssessment.type === 'habits' ? getHabitSubmission(selectedAssessment.id, currentUser.uid) : Promise.resolve(null)
+    ]);
+    
+    // Update habit submission in map if it exists
+    if (habitSubmission) {
+      setHabitSubmissions(prev => new Map(prev).set(selectedAssessment.id, habitSubmission));
+    }
+    
     setAssessments(prev => prev.map(a => 
       a.id === selectedAssessment.id 
         ? { ...a, goal: updatedGoal || undefined }
@@ -127,6 +153,16 @@ const AssessmentGoalsStudent: React.FC = () => {
     
     setShowSetGoalModal(false);
     setSelectedAssessment(null);
+  };
+
+  const getDurationLabel = (duration: HabitDuration): string => {
+    switch (duration) {
+      case '1_class': return '1 Class';
+      case '1_day': return '1 Day';
+      case '3_days': return '3 Days';
+      case '1_week': return '1 Week';
+      default: return duration;
+    }
   };
 
   const getStatusBadge = (assessment: AssessmentWithGoal) => {
@@ -227,10 +263,22 @@ const AssessmentGoalsStudent: React.FC = () => {
               </div>
 
               {/* Goal Display */}
-              {assessment.goal ? (
-                <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '0.5rem' }}>
-                  <p style={{ margin: 0, fontWeight: 'bold' }}>
-                    Your Goal: {assessment.goal.goalScore} / {assessment.maxScore}
+              {assessment.type === 'habits' && habitSubmissions.get(assessment.id) ? (
+                <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '0.5rem', border: '2px solid #10b981' }}>
+                  <p style={{ margin: 0, marginBottom: '0.5rem', fontWeight: 'bold', color: '#10b981' }}>
+                    ✅ Your Habit Commitment:
+                  </p>
+                  <p style={{ margin: 0, marginBottom: '0.5rem', fontStyle: 'italic', color: '#374151' }}>
+                    "{habitSubmissions.get(assessment.id)!.habitText}"
+                  </p>
+                  <p style={{ margin: 0, fontSize: '0.875rem', color: '#6b7280' }}>
+                    Duration: {getDurationLabel(habitSubmissions.get(assessment.id)!.duration)}
+                  </p>
+                </div>
+              ) : assessment.goal ? (
+                <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '0.5rem', border: '2px solid #3b82f6' }}>
+                  <p style={{ margin: 0, fontWeight: 'bold', color: '#3b82f6' }}>
+                    ✅ Your Goal: {assessment.goal.goalScore} / {assessment.maxScore}
                   </p>
                 </div>
               ) : (

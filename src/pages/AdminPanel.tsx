@@ -29,6 +29,7 @@ import MindforgeQuestionManager from '../components/MindforgeQuestionManager';
 import CPUOpponentMovesAdmin from '../components/CPUOpponentMovesAdmin';
 import ActionCardsAdmin from '../components/ActionCardsAdmin';
 import ArtifactCompensation from '../components/ArtifactCompensation';
+import UXPApproval from '../components/UXPApproval';
 import ElementalMovesAdmin from '../components/ElementalMovesAdmin';
 import ArtifactsAdmin from '../components/ArtifactsAdmin';
 import DailyChallengesAdmin from '../components/DailyChallengesAdmin';
@@ -72,6 +73,128 @@ interface Student {
   storyChapter?: number;
 }
 
+// Progression Repair Tool Component
+const ProgressionRepairTool: React.FC = () => {
+  const [userId, setUserId] = useState('');
+  const [repairing, setRepairing] = useState(false);
+  const [result, setResult] = useState<{
+    success: boolean;
+    challengesRepaired: number;
+    chaptersRepaired: number;
+    errors: string[];
+  } | null>(null);
+
+  const handleRepair = async () => {
+    if (!userId.trim()) {
+      alert('Please enter a user ID');
+      return;
+    }
+
+    setRepairing(true);
+    setResult(null);
+
+    try {
+      const { repairUserProgression } = await import('../utils/chapterProgression');
+      const repairResult = await repairUserProgression(userId);
+      setResult(repairResult);
+    } catch (error: any) {
+      setResult({
+        success: false,
+        challengesRepaired: 0,
+        chaptersRepaired: 0,
+        errors: [error.message || 'Unknown error']
+      });
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  return (
+    <div style={{
+      background: '#f8fafc',
+      borderRadius: '0.75rem',
+      padding: '2rem',
+      minHeight: '300px',
+      color: '#374151',
+      border: '1px solid #e5e7eb',
+      marginBottom: '2rem'
+    }}>
+      <h2 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '1rem', color: '#dc2626' }}>
+        🔧 Chapter Progression Repair Tool
+      </h2>
+      <p style={{ fontSize: '1rem', color: '#6b7280', marginBottom: '2rem' }}>
+        This tool repairs chapter progression for stuck players. It scans all completed challenges and ensures
+        that next challenges and chapters are properly unlocked. Use this if a player is unable to progress
+        despite completing challenges.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+          User ID:
+        </label>
+        <input
+          type="text"
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+          placeholder="Enter user ID (uid)"
+          style={{
+            width: '100%',
+            maxWidth: '400px',
+            padding: '0.75rem',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.5rem',
+            fontSize: '1rem'
+          }}
+        />
+      </div>
+
+      <button
+        onClick={handleRepair}
+        disabled={repairing || !userId.trim()}
+        style={{
+          padding: '0.75rem 1.5rem',
+          background: repairing ? '#9ca3af' : '#dc2626',
+          color: 'white',
+          border: 'none',
+          borderRadius: '0.5rem',
+          cursor: repairing ? 'wait' : 'pointer',
+          fontWeight: 'bold',
+          fontSize: '1rem',
+          marginBottom: '1.5rem'
+        }}
+      >
+        {repairing ? 'Repairing...' : 'Repair Progression'}
+      </button>
+
+      {result && (
+        <div style={{
+          padding: '1rem',
+          borderRadius: '0.5rem',
+          background: result.success ? '#d1fae5' : '#fee2e2',
+          border: `1px solid ${result.success ? '#10b981' : '#ef4444'}`,
+          color: result.success ? '#065f46' : '#991b1b'
+        }}>
+          <h3 style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+            {result.success ? '✅ Repair Complete' : '❌ Repair Failed'}
+          </h3>
+          <p>Challenges Repaired: {result.challengesRepaired}</p>
+          <p>Chapters Repaired: {result.chaptersRepaired}</p>
+          {result.errors.length > 0 && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <strong>Errors:</strong>
+              <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                {result.errors.map((error, idx) => (
+                  <li key={idx}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AdminPanel: React.FC = () => {
   const { showLevelUpNotification } = useLevelUp();
   const { currentUser } = useAuth();
@@ -91,7 +214,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'progression-repair' | 'uxp-approval'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1808,108 +1931,107 @@ const AdminPanel: React.FC = () => {
       
       // 2. Handle different submission types
       if (sub.submissionType === 'chapter_challenge') {
-        // Handle chapter challenge submissions
+        // Handle chapter challenge submissions using progression engine
         const userRef = doc(db, 'users', sub.userId);
         const studentRef = doc(db, 'students', sub.userId);
         
-        // Get current user progress
-        const userDoc = await getDoc(userRef);
-        const studentDoc = await getDoc(studentRef);
-        const userProgress = userDoc.exists() ? userDoc.data() : {};
-        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        // Import progression engine and reward system
+        const { updateProgressOnChallengeComplete } = await import('../utils/chapterProgression');
+        const { grantChallengeRewards } = await import('../utils/challengeRewards');
         
-        // Mark challenge as completed in user progress
-        const updatedChapters = {
-          ...userProgress.chapters,
-          [sub.chapterId]: {
-            ...userProgress.chapters?.[sub.chapterId],
-            challenges: {
-              ...userProgress.chapters?.[sub.chapterId]?.challenges,
-              [sub.challengeId]: {
-                isCompleted: true,
-                completionDate: new Date()
-              }
-            }
-          }
-        };
-        
-        // Apply rewards
-        let newXP = (userProgress.xp || 0) + (sub.xpReward || 0);
-        let newPP = (userProgress.powerPoints || 0) + (sub.ppReward || 0);
-        let newTruthMetal = (userProgress.truthMetal || 0) + (sub.truthMetalReward || 0);
-        
-        // Update both collections
-        await updateDoc(userRef, {
-          chapters: updatedChapters,
-          xp: newXP,
-          powerPoints: newPP,
-          truthMetal: newTruthMetal
-        });
-        
-        // Also update legacy challenges field for profile display compatibility
-        const updatedLegacyChallenges = {
-          ...studentData.challenges,
-          [sub.challengeId]: {
-            ...(studentData.challenges?.[sub.challengeId] || {}),
-            completed: true,
-            submitted: true,
-            status: 'approved'
-          }
-        };
-        
-        await updateDoc(studentRef, {
-          xp: (studentData.xp || 0) + (sub.xpReward || 0),
-          powerPoints: (studentData.powerPoints || 0) + (sub.ppReward || 0),
-          truthMetal: (studentData.truthMetal || 0) + (sub.truthMetalReward || 0),
-          challenges: updatedLegacyChallenges
-        });
-        
-        // Unlock the next challenge in the same chapter immediately after approval
+        // Get challenge definition for rewards
         const currentChapter = CHAPTERS.find(ch => ch.id === sub.chapterId);
-        if (currentChapter) {
-          const currentChallengeIndex = currentChapter.challenges.findIndex(c => c.id === sub.challengeId);
-          if (currentChallengeIndex >= 0 && currentChallengeIndex < currentChapter.challenges.length - 1) {
-            const nextChallenge = currentChapter.challenges[currentChallengeIndex + 1];
-            console.log('Unlocking next challenge after approval:', nextChallenge.id);
-            // The next challenge will be unlocked automatically when requirements are checked
-            // No need to explicitly unlock it here as the requirement check will handle it
-          }
+        const challenge = currentChapter?.challenges.find(c => c.id === sub.challengeId);
+        
+        // Use the canonical progression engine to handle challenge completion and unlocking
+        const progressionResult = await updateProgressOnChallengeComplete(
+          sub.userId,
+          sub.chapterId,
+          sub.challengeId
+        );
+
+        if (!progressionResult.success) {
+          throw new Error(`Failed to update progression: ${progressionResult.error}`);
         }
 
-        // Check if all challenges in chapter are completed
-        const chapterProgress = updatedChapters[sub.chapterId];
-        const allChallengesCompleted = chapterProgress?.challenges && 
-          Object.values(chapterProgress.challenges).every((ch: any) => ch.isCompleted);
+        if (progressionResult.alreadyCompleted) {
+          console.log(`Challenge ${sub.challengeId} already completed, skipping progression update`);
+        } else {
+          console.log('Admin: Progression updated successfully:', {
+            challengeUnlocked: progressionResult.challengeUnlocked,
+            chapterUnlocked: progressionResult.chapterUnlocked
+          });
+        }
+
+        // Grant rewards if challenge definition exists
+        if (challenge) {
+          const rewardResult = await grantChallengeRewards(
+            sub.userId,
+            sub.challengeId,
+            challenge.rewards,
+            challenge.title
+          );
+
+          if (!rewardResult.success) {
+            console.error('Admin: Failed to grant rewards:', rewardResult.error);
+          } else {
+            console.log('Admin: Rewards granted successfully');
+          }
+        } else {
+          // Fallback: Use submission reward values if challenge definition not found
+          const fallbackRewards = [
+            ...(sub.xpReward ? [{ type: 'xp', value: sub.xpReward }] : []),
+            ...(sub.ppReward ? [{ type: 'pp', value: sub.ppReward }] : []),
+            ...(sub.truthMetalReward ? [{ type: 'truthMetal', value: sub.truthMetalReward }] : [])
+          ];
+          
+          if (fallbackRewards.length > 0) {
+            const rewardResult = await grantChallengeRewards(
+              sub.userId,
+              sub.challengeId,
+              fallbackRewards as any,
+              `Challenge ${sub.challengeId}`
+            );
+            
+            if (!rewardResult.success) {
+              console.error('Admin: Failed to grant fallback rewards:', rewardResult.error);
+            }
+          }
+        }
         
-        if (allChallengesCompleted) {
-          await updateDoc(userRef, {
-            [`chapters.${sub.chapterId}.isCompleted`]: true,
-            [`chapters.${sub.chapterId}.completionDate`]: new Date(),
-            [`chapters.${sub.chapterId}.isActive`]: false
+        // Update legacy challenges field for profile display compatibility
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          const updatedLegacyChallenges = {
+            ...studentData.challenges,
+            [sub.challengeId]: {
+              ...(studentData.challenges?.[sub.challengeId] || {}),
+              completed: true,
+              submitted: true,
+              status: 'approved'
+            }
+          };
+          
+          await updateDoc(studentRef, {
+            challenges: updatedLegacyChallenges
+          });
+        }
+        
+        // Update storyChapter if chapter was unlocked
+        if (progressionResult.chapterUnlocked) {
+          await updateDoc(studentRef, {
+            storyChapter: progressionResult.chapterUnlocked
           });
           
-          // Activate next chapter if available
-          const nextChapter = sub.chapterId + 1;
-          if (nextChapter <= 9) {
-            await updateDoc(userRef, {
-              [`chapters.${nextChapter}.isActive`]: true,
-              [`chapters.${nextChapter}.unlockDate`]: new Date()
-            });
-            
-            // Update storyChapter in students collection for profile display
-            await updateDoc(studentRef, {
-              storyChapter: nextChapter
-            });
-            
-            // Add notification for chapter unlock
-            await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
-              type: 'chapter_unlocked',
-              message: `🎉 Chapter ${sub.chapterId} Complete! Chapter ${nextChapter} is now unlocked!`,
-              chapterId: nextChapter,
-              timestamp: serverTimestamp(),
-              read: false
-            });
-          }
+          // Add notification for chapter unlock
+          await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
+            type: 'chapter_unlocked',
+            message: `🎉 Chapter ${sub.chapterId} Complete! Chapter ${progressionResult.chapterUnlocked} is now unlocked!`,
+            chapterId: progressionResult.chapterUnlocked,
+            timestamp: serverTimestamp(),
+            read: false
+          });
         }
       } else {
         // Handle legacy file-based submissions
@@ -2675,6 +2797,42 @@ const AdminPanel: React.FC = () => {
         >
           🎯 Training Grounds
         </button>
+        <button
+          onClick={() => setActiveTab('progression-repair')}
+          style={{
+            backgroundColor: activeTab === 'progression-repair' ? '#dc2626' : '#e5e7eb',
+            color: activeTab === 'progression-repair' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            marginRight: '0.5rem',
+            marginBottom: '0.5rem'
+          }}
+        >
+          🔧 Progression Repair
+        </button>
+        <button
+          onClick={() => setActiveTab('uxp-approval')}
+          style={{
+            padding: '0.75rem 1.5rem',
+            background: activeTab === 'uxp-approval' ? '#8b5cf6' : '#374151',
+            color: 'white',
+            border: 'none',
+            borderRadius: '0.5rem',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          ✅ UXP Approval
+        </button>
       </div>
 
       {activeTab === 'badges' ? (
@@ -2730,6 +2888,10 @@ const AdminPanel: React.FC = () => {
         <AssessmentGoalsAdmin />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />
+      ) : activeTab === 'progression-repair' ? (
+        <ProgressionRepairTool />
+      ) : activeTab === 'uxp-approval' ? (
+        <UXPApproval />
       ) : activeTab === 'manifests' ? (
         <div style={{
           background: '#f8fafc',

@@ -12,6 +12,8 @@ export interface NormalizedPlayerData {
   pp: number;
   tm: number;
   level: number;
+  powerLevel?: number | null; // Power Level (PL)
+  powerBreakdown?: { base: number; skills: number; artifacts: number; ascension: number; total: number } | null; // Power Level breakdown
   xpCurrent: number;
   xpRequired: number;
   levelProgressPercent: number;
@@ -283,6 +285,10 @@ export function normalizePlayerData(
   const moves = studentData?.moves || userData?.moves || [];
   const ordinaryWorld = studentData?.ordinaryWorld || userData?.ordinaryWorld;
   
+  // Power Level and breakdown (from students collection)
+  const powerLevel = studentData?.powerLevel ?? null;
+  const powerBreakdown = studentData?.powerBreakdown ?? null;
+  
   return {
     uid,
     displayName,
@@ -290,6 +296,8 @@ export function normalizePlayerData(
     pp,
     tm,
     level,
+    powerLevel,
+    powerBreakdown,
     xpCurrent: xpProgress.currentLevelXP,
     xpRequired: Math.round(xpProgress.nextLevelXP),
     levelProgressPercent: xpProgress.percent,

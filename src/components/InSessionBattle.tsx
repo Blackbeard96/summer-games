@@ -75,6 +75,7 @@ interface SessionPlayer {
   displayName: string;
   photoURL?: string;
   level: number;
+  powerLevel?: number | null; // Power Level (PL)
   powerPoints: number;
   participationCount: number;
   movesEarned: number;
@@ -105,6 +106,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [selectedMove, setSelectedMove] = useState<any>(null);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [activeViewers, setActiveViewers] = useState<string[]>([]);
+  const [presenceMap, setPresenceMap] = useState<Map<string, { connected: boolean; lastSeenAt: any }>>(new Map());
   const battleEngineRef = useRef<{ selectMove: (move: any) => void; selectTarget: (targetId: string) => void } | null>(null);
   const [squadAbbreviations, setSquadAbbreviations] = useState<Map<string, string | null>>(new Map());
   // CRITICAL: Initialize all permission states as false - button is HIDDEN by default
@@ -139,15 +141,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const cleanupPresence = startPresence(sessionId, currentUser.uid);
 
     // Subscribe to presence updates for all players
-    const unsubscribePresence = subscribeToPresence(sessionId, (presenceMap) => {
+    const unsubscribePresence = subscribeToPresence(sessionId, (newPresenceMap) => {
       debugThrottle('presence-update', 2000, 'inSessionBattle', 
-        `Presence update: ${presenceMap.size} players`, 
-        Array.from(presenceMap.entries()).map(([uid, p]) => ({ uid, connected: p.connected }))
+        `Presence update: ${newPresenceMap.size} players`, 
+        Array.from(newPresenceMap.entries()).map(([uid, p]) => ({ uid, connected: p.connected }))
       );
+      
+      // Store presence map in state for UI to use
+      setPresenceMap(newPresenceMap);
       
       // Update session players with presence data
       setSessionPlayers(prev => prev.map(player => {
-        const presence = presenceMap.get(player.userId);
+        const presence = newPresenceMap.get(player.userId);
         return {
           ...player,
           // Presence data can be used to show online/offline status
@@ -1066,9 +1071,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const isCurrentPlayer = student.id === currentUser?.uid;
     const isActiveInSession = student.isInSession;
     // Check if player is present (actively viewing the session)
-    // For ALL players (including current user), check if they're in the activeViewers list from Firestore
-    // This ensures all players see the same presence status in real-time
-    const isPresent = isActiveInSession && activeViewers.includes(student.id);
+    // Use presence service data (connected: true) or fallback to activeViewers array
+    const playerPresence = presenceMap.get(student.id);
+    const isPresentInPresenceService = playerPresence?.connected === true;
+    const isPresentInActiveViewers = activeViewers.includes(student.id);
+    const isPresent = isActiveInSession && (isPresentInPresenceService || isPresentInActiveViewers);
     
     return (
       <div
@@ -1202,8 +1209,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 </span>
               )}
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-              Level {player?.level || student.level || 1}
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>Level {player?.level || student.level || 1}</span>
+              {(player?.powerLevel !== null && player?.powerLevel !== undefined) && (
+                <span style={{ 
+                  color: '#8b5cf6', 
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '2px'
+                }}>
+                  ⚡ PL {player.powerLevel}
+                </span>
+              )}
             </div>
           </div>
         </div>

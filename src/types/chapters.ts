@@ -292,7 +292,7 @@ export const CHAPTERS: Chapter[] = [
     id: 2,
     title: "Test, Allies, & Enemies",
     subtitle: "Surviving Timu Island",
-    description: "Form a 4-person team, choose a rival, and complete a team trial focusing on coordination and emotional synergy. Then arrive at Xiotein school and meet your rivals, completing orientation and sparring drills.",
+    description: "Form a 4-person team, choose a rival, and complete a team trial focusing on coordination and emotional synergy. Then arrive at Xiotein school and meet your rivals, completing orientation and sparring drills. Finally, face the ultimate test: learning Imposition—the power to command reality, not just react to it. With Kon as your ally, survive waves of Unveiled forces and escape the collapsing research facility.",
     storyArc: "Meeting the Mentor + Story Mode - Episode 2",
     requirements: [
       // Chapter 2 is now available to all players - no requirements
@@ -368,11 +368,31 @@ export const CHAPTERS: Chapter[] = [
         isCompleted: false
       },
       {
+        id: 'ch2-5-imposition-test',
+        title: 'Tests, Allies, and Enemies',
+        description: 'The underground research facility hums violently. The Unveiled Higher ups are on their way to retrieve the power they lost. Kon stands calm amid the chaos—this power is familiar to him. He teaches you about Imposition: forcing your intent onto the system. Most people react to power. Very few command it. Escape the facility—but first, survive what this power attracts.',
+        type: 'team',
+        requirements: [
+          { type: 'challenge', value: 'ep2-its-all-a-game', description: 'Must have received RR Candy' },
+          { type: 'artifact', value: 'rr_candy', description: 'Must have RR Candy' }
+        ],
+        rewards: [
+          { type: 'xp', value: 500, description: 'Imposition Test completion XP' },
+          { type: 'pp', value: 400, description: 'Imposition Test completion PP' },
+          { type: 'ability', value: 'imposition_mastery', description: 'Imposition Mastery: Learn to command power, not react to it' },
+          { type: 'ability', value: 'rr_candy_override', description: 'RR Candy Override: Override reality systems, not just enemies' },
+          { type: 'truthMetal', value: 2, description: '2 Truth Metal shards' }
+        ],
+        isCompleted: false
+      },
+      {
         id: 'ep2-orientation',
         title: 'Complete Orientation',
         description: 'Learn the basics of Xiotein',
         type: 'personal',
-        requirements: [],
+        requirements: [
+          { type: 'challenge', value: 'ch2-5-imposition-test', description: 'Must complete Tests, Allies, and Enemies' }
+        ],
         rewards: [
           { type: 'xp', value: 30, description: 'Orientation XP' },
           { type: 'pp', value: 15, description: 'Orientation PP' }

@@ -10,6 +10,8 @@ interface PlayerCardProps {
   truthMetal?: number;
   manifest: string;
   level: number;
+  powerLevel?: number | null; // Power Level (PL)
+  powerBreakdown?: { base: number; skills: number; artifacts: number; ascension: number; total: number } | null; // Power Level breakdown
   rarity: number; // 1-5
   style: string; // e.g. 'Fire', 'Water', etc.
   description: string;
@@ -72,6 +74,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   truthMetal = 0,
   manifest,
   level,
+  powerLevel = null,
+  powerBreakdown = null,
   rarity,
   style,
   description,
@@ -390,8 +394,28 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 >
                   TM: {truthMetal}
                 </span>
+                {/* Power Level badge */}
+                {powerLevel !== null && (
+                  <span 
+                    style={{ 
+                      background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)', 
+                      color: 'white', 
+                      borderRadius: 8, 
+                      padding: '2px 10px', 
+                      fontWeight: 'bold', 
+                      fontSize: 14,
+                      boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                    title={powerBreakdown ? `Base: ${powerBreakdown.base} | Skills: ${powerBreakdown.skills} | Artifacts: ${powerBreakdown.artifacts} | Ascension: ${powerBreakdown.ascension}` : 'Power Level'}
+                  >
+                    ⚡ PL: {powerLevel}
+                  </span>
+                )}
                 {/* Level badge */}
-                <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, marginLeft: 'auto' }}>Lv. {level}</span>
+                <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, marginLeft: powerLevel === null ? 'auto' : '0' }}>Lv. {level}</span>
               </div>
               {/* Second row: Rarity stars under name */}
               <div style={{ display: 'flex', alignItems: 'center', marginTop: -4 }}>

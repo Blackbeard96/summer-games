@@ -535,7 +535,7 @@ const ScorekeeperInterface: React.FC = () => {
     }
   };
 
-  // Bulk PP adjustment function
+  // Bulk PP adjustment function (tracks pending changes instead of applying directly)
   const handleBulkAdjustPP = async () => {
     if (!currentUser || selectedStudents.size === 0 || bulkPPAmount === 0 || isApplyingBulk) {
       return;
@@ -544,68 +544,82 @@ const ScorekeeperInterface: React.FC = () => {
     setIsApplyingBulk(true);
     try {
       const selectedIds = Array.from(selectedStudents);
+      const originalChangeAmount = bulkPPAmount;
+
+      // Track changes for each selected student (similar to handleAdjustPP)
+      const updatedPendingChanges: { [studentId: string]: number } = { ...pendingChanges };
+      const updatedOriginalPendingChanges: { [studentId: string]: number } = { ...originalPendingChanges };
       const updatedStudents: { id: string; newPP: number; oldPP: number; displayName: string }[] = [];
 
-      // Process in batches of 400 (Firestore limit is 500)
-      const batchSize = 400;
-      for (let i = 0; i < selectedIds.length; i += batchSize) {
-        const chunk = selectedIds.slice(i, i + batchSize);
-        const chunkBatch = writeBatch(db);
+      for (const studentId of selectedIds) {
+        const student = students.find(s => s.id === studentId);
+        if (!student) continue;
+
+        const currentPP = student.powerPoints || 0;
         
-        for (const studentId of chunk) {
-          const student = students.find(s => s.id === studentId);
-          if (!student) continue;
-
-          const oldPP = student.powerPoints || 0;
-          const newPP = Math.max(0, oldPP + bulkPPAmount); // Prevent negative PP
-
-          const studentRef = doc(db, 'students', studentId);
-          chunkBatch.update(studentRef, {
-            powerPoints: newPP,
-            lastUpdated: serverTimestamp()
-          });
-
-          // Also update vault if it exists
-          const vaultRef = doc(db, 'vaults', studentId);
-          const vaultDoc = await getDoc(vaultRef);
-          if (vaultDoc.exists()) {
-            chunkBatch.update(vaultRef, {
-              currentPP: newPP
+        // Get current pending changes (may include boost)
+        const currentPendingBoosted = pendingChanges[studentId] || 0;
+        const currentOriginalChange = originalPendingChanges[studentId] || 0;
+        
+        // Calculate new original (unboosted) change
+        const newOriginalChange = currentOriginalChange + originalChangeAmount;
+        
+        // Apply PP boost if student has one active (for display only)
+        let boostedChange = originalChangeAmount;
+        try {
+          const activeBoost = await getActivePPBoost(studentId);
+          if (activeBoost && originalChangeAmount > 0) {
+            boostedChange = applyPPBoost(originalChangeAmount, studentId, activeBoost);
+            logger.roster.info('ScorekeeperInterface: PP boost applied for bulk adjustment:', {
+              studentId,
+              originalChange: originalChangeAmount,
+              boostedChange,
+              boostMultiplier: activeBoost.multiplier
             });
           }
-
-          updatedStudents.push({ id: studentId, newPP, oldPP, displayName: student.displayName });
+        } catch (error) {
+          logger.roster.error('ScorekeeperInterface: Error checking PP boost:', error);
         }
+        
+        // Calculate new pending boosted change
+        const newPendingBoosted = currentPendingBoosted + boostedChange;
+        
+        // Calculate displayed PP
+        const newDisplayPP = Math.max(0, currentPP + newPendingBoosted);
 
-        // Commit batch for this chunk
-        await chunkBatch.commit();
-      }
+        // Store original (unboosted) change amount
+        updatedOriginalPendingChanges[studentId] = newOriginalChange;
 
-      // Create audit log entry
-      try {
-        await addDoc(collection(db, 'scorekeeperLogs'), {
-          actorUid: currentUser.uid,
-          actorEmail: currentUser.email,
-          targetUids: selectedIds,
-          delta: bulkPPAmount,
-          reason: bulkReason || 'Bulk PP adjustment',
-          createdAt: serverTimestamp(),
-          classId: assignedClassId,
-          className: className,
-          studentCount: selectedIds.length
+        // Store boosted change amount for display
+        updatedPendingChanges[studentId] = newPendingBoosted;
+
+        updatedStudents.push({ 
+          id: studentId, 
+          newPP: newDisplayPP, 
+          oldPP: currentPP,
+          displayName: student.displayName 
         });
-      } catch (logError) {
-        console.error('Error creating audit log:', logError);
-        // Don't fail the operation if logging fails
       }
 
-      // Update local state
-      setStudents(prev =>
-        prev.map(s => {
-          const found = updatedStudents.find(u => u.id === s.id);
-          return found ? { ...s, powerPoints: found.newPP } : s;
-        })
-      );
+      // Update state with tracked changes
+      setOriginalPendingChanges(updatedOriginalPendingChanges);
+      setPendingChanges(updatedPendingChanges);
+
+      // Update local display (but not database)
+      setStudents(prev => prev.map(s => {
+        const found = updatedStudents.find(u => u.id === s.id);
+        return found ? { ...s, powerPoints: found.newPP } : s;
+      }));
+
+      logger.roster.info('ScorekeeperInterface: Bulk PP changes tracked for approval:', {
+        studentCount: updatedStudents.length,
+        changeAmount: originalChangeAmount,
+        bulkReason
+      });
+
+      // Store values for alert before clearing
+      const action = originalChangeAmount > 0 ? 'added' : 'subtracted';
+      const absAmount = Math.abs(originalChangeAmount);
 
       // Clear selection and form
       setSelectedStudents(new Set());
@@ -613,12 +627,10 @@ const ScorekeeperInterface: React.FC = () => {
       setBulkReason('');
 
       // Show success message
-      const action = bulkPPAmount > 0 ? 'added' : 'subtracted';
-      const absAmount = Math.abs(bulkPPAmount);
-      alert(`Successfully ${action} ${absAmount} PP to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}!`);
+      alert(`Successfully tracked ${absAmount} PP ${action} for ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}! Changes are pending and will be applied after approval.`);
     } catch (error: any) {
       console.error('Error in bulk PP adjustment:', error);
-      alert(`Failed to apply bulk PP adjustment: ${error?.message || error}`);
+      alert(`Failed to track bulk PP adjustment: ${error?.message || error}`);
     } finally {
       setIsApplyingBulk(false);
     }

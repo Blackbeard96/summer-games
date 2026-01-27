@@ -8,7 +8,9 @@
 import { 
   doc, 
   getDoc, 
+  setDoc,
   updateDoc, 
+  deleteDoc,
   runTransaction, 
   serverTimestamp,
   collection,
@@ -75,8 +77,15 @@ export async function joinRaidLobby(
       );
       
       if (existingPlayerIndex !== -1) {
+        // Player already in array - update member subcollection to mark as connected
+        const memberRef = doc(db, 'islandRunLobbies', lobbyId, 'members', userId);
+        transaction.set(memberRef, {
+          connected: true,
+          lastSeenAt: serverTimestamp()
+        }, { merge: true });
+        
         if (DEBUG_RAID) {
-          console.log(`🏝️ [RaidLobbyService] User ${userId} already in lobby ${lobbyId}`);
+          console.log(`🏝️ [RaidLobbyService] User ${userId} already in lobby ${lobbyId}, updating presence`);
         }
         return { success: true, alreadyJoined: true };
       }
@@ -117,6 +126,19 @@ export async function joinRaidLobby(
         updatedAt: serverTimestamp(),
         lastActivityAt: serverTimestamp()
       });
+
+      // Also create/update member subcollection for presence tracking
+      const memberRef = doc(db, 'islandRunLobbies', lobbyId, 'members', userId);
+      transaction.set(memberRef, {
+        uid: userId,
+        displayName: userDisplayName,
+        photoURL: userPhotoURL,
+        level: userLevel,
+        joinedAt: serverTimestamp(),
+        connected: true,
+        lastSeenAt: serverTimestamp(),
+        ready: false
+      }, { merge: true });
 
       if (DEBUG_RAID) {
         console.log(`🏝️ [RaidLobbyService] User ${userId} joined lobby ${lobbyId} (${updatedPlayers.length}/${maxPlayers})`);
@@ -205,6 +227,14 @@ export async function leaveRaidLobby(
 
       transaction.update(lobbyRef, updates);
 
+      // Also update/delete member subcollection
+      const memberRef = doc(db, 'islandRunLobbies', lobbyId, 'members', userId);
+      // Mark as disconnected rather than deleting (allows rejoin tracking)
+      transaction.set(memberRef, {
+        connected: false,
+        lastSeenAt: serverTimestamp()
+      }, { merge: true });
+
       if (DEBUG_RAID) {
         console.log(`🏝️ [RaidLobbyService] User ${userId} left lobby ${lobbyId} (${updatedPlayers.length} remaining)`);
       }
@@ -285,17 +315,46 @@ export async function touchRaidLobby(
 }
 
 /**
+ * Update per-player heartbeat (member subcollection)
+ * Call this every 10-15 seconds while player is in lobby/raid
+ */
+export async function touchRaidLobbyMember(
+  lobbyId: string,
+  userId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const memberRef = doc(db, 'islandRunLobbies', lobbyId, 'members', userId);
+    await updateDoc(memberRef, {
+      connected: true,
+      lastSeenAt: serverTimestamp()
+    });
+
+    if (DEBUG_RAID) {
+      console.log(`🏝️ [RaidLobbyService] Updated heartbeat for member ${userId} in lobby ${lobbyId}`);
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    // Member doc might not exist (legacy lobby), that's OK
+    if (DEBUG_RAID) {
+      console.warn(`🏝️ [RaidLobbyService] Could not update member heartbeat:`, error);
+    }
+    return { success: false, error: error.message || 'Unknown error' };
+  }
+}
+
+/**
  * Cleanup expired/inactive lobbies (client-side)
  * 
- * Marks lobbies as expired if:
+ * Deletes lobbies if:
  * - Status is 'waiting' or 'starting'
- * - Has no players (players.length === 0)
- * - lastActivityAt is older than 10 minutes
+ * - lastActivityAt is older than 10 minutes (regardless of player count)
+ * - OR lobby has no players and is inactive for 10+ minutes
  * 
  * NOTE: This is a client-side cleanup. For production, consider using a Cloud Function
  * scheduled to run every minute to handle cleanup server-side.
  * 
- * @returns Number of lobbies marked as expired
+ * @returns Number of lobbies deleted
  */
 export async function cleanupExpiredRaidLobbiesClient(): Promise<number> {
   try {
@@ -309,36 +368,50 @@ export async function cleanupExpiredRaidLobbiesClient(): Promise<number> {
     );
 
     const snapshot = await getDocs(q);
-    let expiredCount = 0;
+    let deletedCount = 0;
 
     for (const docSnapshot of snapshot.docs) {
       const data = docSnapshot.data();
       const players = data.players || [];
       const lastActivityAt = data.lastActivityAt as Timestamp | undefined;
+      const createdAt = data.createdAt as Timestamp | undefined;
 
-      // Check if lobby is empty and inactive for 10+ minutes
-      if (players.length === 0 && lastActivityAt) {
-        // Compare timestamps (lastActivityAt should be before tenMinutesAgo)
-        if (lastActivityAt.toMillis() < tenMinutesAgo.toMillis()) {
-          const lobbyRef = doc(db, 'islandRunLobbies', docSnapshot.id);
-          await updateDoc(lobbyRef, {
-            status: 'expired',
-            updatedAt: serverTimestamp()
-          });
-          expiredCount++;
+      // Determine the timestamp to check (prefer lastActivityAt, fallback to createdAt)
+      const checkTimestamp = lastActivityAt || createdAt;
+      
+      if (!checkTimestamp) {
+        // If no timestamp at all, skip (shouldn't happen, but be safe)
+        continue;
+      }
+
+      // Delete if inactive for 10+ minutes
+      const isInactive = checkTimestamp.toMillis() < tenMinutesAgo.toMillis();
+      
+      if (isInactive) {
+        const lobbyRef = doc(db, 'islandRunLobbies', docSnapshot.id);
+        
+        try {
+          // Delete the lobby document
+          await deleteDoc(lobbyRef);
+          deletedCount++;
 
           if (DEBUG_RAID) {
-            console.log(`🏝️ [RaidLobbyService] Marked empty lobby ${docSnapshot.id} as expired (inactive for 10+ minutes)`);
+            console.log(`🏝️ [RaidLobbyService] Deleted inactive lobby ${docSnapshot.id} (inactive for 10+ minutes, players: ${players.length})`);
+          }
+        } catch (deleteError) {
+          // Log but continue with other lobbies
+          if (DEBUG_RAID) {
+            console.error(`🏝️ [RaidLobbyService] Error deleting lobby ${docSnapshot.id}:`, deleteError);
           }
         }
       }
     }
 
-    if (DEBUG_RAID && expiredCount > 0) {
-      console.log(`🏝️ [RaidLobbyService] Cleanup: Marked ${expiredCount} lobbies as expired`);
+    if (DEBUG_RAID && deletedCount > 0) {
+      console.log(`🏝️ [RaidLobbyService] Cleanup: Deleted ${deletedCount} inactive lobbies`);
     }
 
-    return expiredCount;
+    return deletedCount;
   } catch (error) {
     if (DEBUG_RAID) {
       console.error('🏝️ [RaidLobbyService] Error cleaning up expired lobbies:', error);

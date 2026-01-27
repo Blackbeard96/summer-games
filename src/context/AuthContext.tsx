@@ -17,6 +17,7 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { initializeChapterProgress, migrateExistingUserToChapters } from '../utils/chapterInit';
+import { ensurePlayerPowerLevel } from '../utils/powerLevelMigration';
 
 interface UserProfile {
   displayName: string;
@@ -35,6 +36,9 @@ interface AuthContextType {
   userProfile: UserProfile | null;
   loading: boolean;
   currentRole: 'admin' | 'test' | 'user';
+  role: 'student' | 'admin' | null; // Role from Firestore (userRoles or users collection)
+  isAdmin: boolean; // Computed boolean for admin role
+  loadingRole: boolean; // Loading state for role fetch
   testAccountData: any | null;
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
@@ -47,7 +51,6 @@ interface AuthContextType {
   deleteUserAccount: () => Promise<void>;
   switchToTestAccount: (testAccountId: string) => Promise<void>;
   switchToAdmin: () => void;
-  isAdmin: () => boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
@@ -55,6 +58,9 @@ const AuthContext = createContext<AuthContextType>({
   userProfile: null,
   loading: true,
   currentRole: 'user',
+  role: null,
+  isAdmin: false,
+  loadingRole: true,
   testAccountData: null,
   signup: async () => {},
   login: async () => {},
@@ -66,8 +72,7 @@ const AuthContext = createContext<AuthContextType>({
   updateUserEmail: async () => {},
   deleteUserAccount: async () => {},
   switchToTestAccount: async () => {},
-  switchToAdmin: () => {},
-  isAdmin: () => false
+  switchToAdmin: () => {}
 });
 
 export function useAuth() {
@@ -79,6 +84,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentRole, setCurrentRole] = useState<'admin' | 'test' | 'user'>('user');
+  const [role, setRole] = useState<'student' | 'admin' | null>(null);
+  const [loadingRole, setLoadingRole] = useState(true);
   const [testAccountData, setTestAccountData] = useState<any | null>(null);
   const [originalUser, setOriginalUser] = useState<User | null>(() => {
     // Try to restore from localStorage on mount
@@ -91,6 +98,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
   const [isTestMode, setIsTestMode] = useState(false); // Track if we're in test mode to prevent onAuthStateChanged from overriding
+
+  // Fetch user role from Firestore (userRoles collection or users.role field)
+  const fetchUserRole = useCallback(async (user: User) => {
+    try {
+      setLoadingRole(true);
+      
+      // Try userRoles collection first (existing system)
+      const roleDoc = await getDoc(doc(db, 'userRoles', user.uid));
+      if (roleDoc.exists()) {
+        const roleData = roleDoc.data();
+        const userRole = roleData.role as string;
+        
+        // Check if role is 'admin' or if roles array includes 'admin'
+        const hasAdminRole = userRole === 'admin' || 
+                           (roleData.roles && Array.isArray(roleData.roles) && roleData.roles.includes('admin'));
+        
+        const finalRole: 'student' | 'admin' = hasAdminRole ? 'admin' : 'student';
+        setRole(finalRole);
+        setLoadingRole(false);
+        return finalRole;
+      }
+      
+      // Fallback: try users/{uid}.role field
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        if (userData.role === 'admin' || userData.role === 'student') {
+          const finalRole = userData.role as 'student' | 'admin';
+          setRole(finalRole);
+          setLoadingRole(false);
+          return finalRole;
+        }
+      }
+      
+      // Default to student if no role found
+      setRole('student');
+      setLoadingRole(false);
+      
+      // Log warning if role fetch fails but don't break the app
+      console.warn('AuthContext: No role found for user, defaulting to "student"');
+      return 'student' as const;
+    } catch (error) {
+      console.error('AuthContext: Error fetching user role:', error);
+      // Fallback to student on error
+      setRole('student');
+      setLoadingRole(false);
+      return 'student' as const;
+    }
+  }, []);
 
   // Fetch user profile from Firestore
   const fetchUserProfile = useCallback(async (user: User) => {
@@ -108,6 +164,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Migrate existing user to chapter system if needed
         await migrateExistingUserToChapters(user.uid);
+        
+        // Ensure Power Level is initialized (migration for existing players)
+        await ensurePlayerPowerLevel(user.uid);
       } else {
         // Create new user profile
         const newProfile: UserProfile = {
@@ -130,6 +189,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Initialize chapter progress for new user
         await initializeChapterProgress(user.uid);
+        
+        // Ensure Power Level is initialized for new user
+        await ensurePlayerPowerLevel(user.uid);
       }
     } catch (error) {
       console.error('AuthContext: Error fetching user profile:', error);
@@ -148,15 +210,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log('🔄 [onAuthStateChanged] Auth state changed:', user?.uid, user?.email);
       setCurrentUser(user);
       if (user) {
-        await fetchUserProfile(user);
+        // Fetch both profile and role in parallel
+        await Promise.all([
+          fetchUserProfile(user),
+          fetchUserRole(user)
+        ]);
       } else {
         setUserProfile(null);
+        setRole(null);
+        setLoadingRole(false);
       }
       setLoading(false);
     });
 
     return unsubscribe;
-  }, [isTestMode, currentRole, fetchUserProfile]);
+  }, [isTestMode, currentRole, fetchUserProfile, fetchUserRole]);
 
   // Helper function to validate allowed domains
   const isAllowedDomain = (email: string): boolean => {
@@ -287,20 +355,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await deleteUser(currentUser);
   }, [currentUser]);
 
-  // Check if current user is admin
-  const isAdmin = useCallback((): boolean => {
-    if (!currentUser) return false;
+  // Check if current user is admin (computed from role or legacy email check)
+  const isAdminComputed = useMemo(() => {
+    if (role === 'admin') return true;
+    
+    // Legacy fallback: check email if role not loaded yet
+    if (!currentUser || loadingRole) return false;
+    
     return currentUser.email === 'eddymosley@compscihigh.org' || 
            currentUser.email === 'admin@mstgames.net' ||
            currentUser.email === 'edm21179@gmail.com' ||
            (currentUser.email?.includes('eddymosley') ?? false) ||
            (currentUser.email?.includes('admin') ?? false) ||
            (currentUser.email?.includes('mstgames') ?? false);
-  }, [currentUser]);
+  }, [role, currentUser, loadingRole]);
 
   // Switch to test account
   const switchToTestAccount = useCallback(async (testAccountId: string) => {
-    if (!isAdmin()) {
+    if (!isAdminComputed) {
       throw new Error('Only admins can switch to test accounts');
     }
 
@@ -365,7 +437,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Error switching to test account:', error);
       throw error;
     }
-  }, [isAdmin, currentUser, userProfile]);
+  }, [isAdminComputed, currentUser, userProfile]);
 
   // Switch back to admin
   const switchToAdmin = useCallback(async () => {
@@ -531,6 +603,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     userProfile,
     loading,
     currentRole,
+    role,
+    isAdmin: isAdminComputed,
+    loadingRole,
     testAccountData,
     signup,
     login,
@@ -542,13 +617,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateUserEmail,
     deleteUserAccount,
     switchToTestAccount,
-    switchToAdmin,
-    isAdmin
+    switchToAdmin
   }), [
     currentUser,
     userProfile,
     loading,
     currentRole,
+    role,
+    isAdminComputed,
+    loadingRole,
     testAccountData,
     signup,
     login,
@@ -560,8 +637,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateUserEmail,
     deleteUserAccount,
     switchToTestAccount,
-    switchToAdmin,
-    isAdmin
+    switchToAdmin
   ]);
 
   return (

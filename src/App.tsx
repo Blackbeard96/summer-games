@@ -14,6 +14,7 @@ import NavBar from './components/NavBar';
 import Banner from './components/Banner';
 import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
+import RequireAdmin from './components/RequireAdmin';
 import BadgeRewardNotifier from './components/BadgeRewardNotifier';
 import AssessmentGoalsNotifier from './components/AssessmentGoalsNotifier';
 import AssessmentGoalResultNotifier from './components/AssessmentGoalResultNotifier';
@@ -79,17 +80,23 @@ const isFirestoreInternalError = (error: any): boolean => {
   return (
     allErrorStrings.includes('INTERNAL ASSERTION FAILED') || 
     allErrorStrings.includes('ID: ca9') ||
+    allErrorStrings.includes('ca9') || // Catch ca9 anywhere in error (e.g., "(ID: ca9)")
     allErrorStrings.includes('ID: b815') ||
+    allErrorStrings.includes('b815') || // Catch b815 anywhere in error
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('Unexpected state')) ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
-    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815'))) ||
+    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815') || allErrorStrings.includes('ca9') || allErrorStrings.includes('b815'))) ||
     // Check for specific Firestore internal patterns
     allErrorStrings.includes('__PRIVATE__fail') ||
     allErrorStrings.includes('__PRIVATE_hardAssert') ||
     allErrorStrings.includes('__PRIVATE_WatchChangeAggregator') ||
     allErrorStrings.includes('__PRIVATE_PersistentListenStream') ||
     allErrorStrings.includes('BrowserConnectivityMonitor') ||
-    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)'))
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)')) ||
+    // Firefox-specific patterns
+    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
+    // Check for CONTEXT with ve:-1 (version error indicator)
+    (allErrorStrings.includes('CONTEXT') && allErrorStrings.includes('"ve":-1'))
   );
 };
 
@@ -149,6 +156,7 @@ const IslandRaid = withRouteSplitting(() => import('./pages/IslandRun'));
 const IslandRaidLobby = withRouteSplitting(() => import('./components/IslandRunLobby'));
 const IslandRaidGame = withRouteSplitting(() => import('./components/IslandRaidGame'));
 const InSession = withRouteSplitting(() => import('./pages/InSession'));
+const LiveEvents = withRouteSplitting(() => import('./pages/LiveEvents'));
 const InSessionRoom = withRouteSplitting(() => import('./components/InSessionRoom'));
 const InSessionCreate = withRouteSplitting(() => import('./components/InSessionCreate'));
 const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
@@ -499,7 +507,11 @@ const AppContent = () => {
             <Route path="/login" element={<Login />} />
             <Route path="/reset-password" element={<PasswordReset />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
-            <Route path="/admin" element={<ProtectedAdminRoute />} />
+            <Route path="/admin" element={
+              <RequireAdmin>
+                <ProtectedAdminRoute />
+              </RequireAdmin>
+            } />
             <Route path="/marketplace" element={
               <ProtectedRoute user={true}>
                 <Marketplace />
@@ -536,9 +548,9 @@ const AppContent = () => {
               </ProtectedRoute>
             } />
             <Route path="/scorekeeper" element={
-              <ProtectedRoute user={true} roles={['scorekeeper', 'admin']}>
+              <RequireAdmin>
                 <ScorekeeperInterface />
-              </ProtectedRoute>
+              </RequireAdmin>
             } />
             <Route path="/assessment-goals" element={
               <ProtectedRoute user={true}>
@@ -576,9 +588,22 @@ const AppContent = () => {
                 <IslandRaidGame />
               </ProtectedRoute>
             } />
+            {/* Live Events - Primary routes */}
+            <Route path="/live-events" element={
+              <ProtectedRoute user={true}>
+                <LiveEvents />
+              </ProtectedRoute>
+            } />
+            <Route path="/live-events/:eventId" element={
+              <ProtectedRoute user={true}>
+                <InSessionBattleView />
+              </ProtectedRoute>
+            } />
+            
+            {/* In-Session routes - Backward compatibility */}
             <Route path="/in-session" element={
               <ProtectedRoute user={true}>
-                <InSession />
+                <Navigate to="/live-events" replace />
               </ProtectedRoute>
             } />
             <Route path="/in-session/room/:roomId" element={

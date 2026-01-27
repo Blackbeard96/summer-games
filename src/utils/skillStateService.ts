@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { PlayerSkillState } from '../types/skillSystem';
 import { getStarterNodes } from '../data/skillTreeDefinition';
+import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
 
 const SKILL_STATE_VERSION = 'v1';
 

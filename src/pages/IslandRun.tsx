@@ -15,6 +15,7 @@ const IslandRun: React.FC = () => {
   const [showCreateLobby, setShowCreateLobby] = useState(false);
   const [newLobbyName, setNewLobbyName] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<'easy' | 'normal' | 'hard' | 'nightmare'>('normal');
+  const [currentTime, setCurrentTime] = useState(Date.now()); // For timer updates
 
   // Block hard and nightmare difficulties
   const handleDifficultyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -54,14 +55,14 @@ const IslandRun: React.FC = () => {
         const data = doc.data();
         const players = data.players || [];
         const lastActivityAt = data.lastActivityAt as Timestamp | undefined;
+        const createdAt = data.createdAt as Timestamp | undefined;
         
-        // Filter out lobbies that are empty and inactive for 10+ minutes
-        // (client-side filter in addition to server-side cleanup)
-        if (players.length === 0 && lastActivityAt) {
-          if (lastActivityAt.toMillis() < tenMinutesAgo.toMillis()) {
-            // Skip this lobby - it's expired/inactive
-            return;
-          }
+        // Filter out lobbies that are inactive for 10+ minutes
+        // Check both lastActivityAt and createdAt (fallback)
+        const checkTimestamp = lastActivityAt || createdAt;
+        if (checkTimestamp && checkTimestamp.toMillis() < tenMinutesAgo.toMillis()) {
+          // Skip this lobby - it's inactive for 10+ minutes (will be deleted by cleanup)
+          return;
         }
         
         lobbyList.push({
@@ -90,11 +91,38 @@ const IslandRun: React.FC = () => {
       );
     }, 2 * 60 * 1000); // 2 minutes
 
+    // Update timer every second
+    const timerInterval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
     return () => {
       unsubscribe();
       clearInterval(cleanupInterval);
+      clearInterval(timerInterval);
     };
   }, [currentUser]);
+
+  // Helper function to format elapsed time
+  const formatElapsedTime = (createdAt: Date): string => {
+    const elapsedMs = currentTime - createdAt.getTime();
+    const elapsedSeconds = Math.floor(elapsedMs / 1000);
+    
+    if (elapsedSeconds < 60) {
+      return `${elapsedSeconds}s`;
+    }
+    
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    
+    if (minutes < 60) {
+      return `${minutes}m ${seconds}s`;
+    }
+    
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
+  };
 
   const handleCreateLobby = async () => {
     if (!currentUser || !newLobbyName.trim()) return;
@@ -337,6 +365,9 @@ const IslandRun: React.FC = () => {
                     <div>Difficulty: <strong>{lobby.difficulty.toUpperCase()}</strong></div>
                     <div>Players: {lobby.currentPlayers} / {lobby.maxPlayers}</div>
                     <div>Status: {lobby.status === 'waiting' ? '⏳ Waiting' : '🚀 Starting'}</div>
+                    <div style={{ marginTop: '0.25rem', color: '#059669', fontWeight: '600' }}>
+                      ⏱️ Active: {formatElapsedTime(lobby.createdAt)}
+                    </div>
                   </div>
                 </div>
                 <button

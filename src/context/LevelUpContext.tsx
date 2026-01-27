@@ -66,6 +66,17 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
           setCurrentXP(newXP);
           previousLevelRef.current = newLevel;
           setShowNotification(true);
+          
+          // Recalculate power level after level up (async IIFE)
+          (async () => {
+            try {
+              const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+              await recalculatePowerLevel(currentUser.uid);
+            } catch (plError) {
+              console.error('Error recalculating power level after level up:', plError);
+              // Don't throw - power level recalculation is non-critical
+            }
+          })();
         } else {
           // Same level or level decreased, just update XP
           setCurrentXP(newXP);

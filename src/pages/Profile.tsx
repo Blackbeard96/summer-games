@@ -143,6 +143,7 @@ const Profile = () => {
   const [isSkillTreeShowing, setIsSkillTreeShowing] = useState(false);
   const [showEditRivalModal, setShowEditRivalModal] = useState(false);
   const [rivals, setRivals] = useState<{ chosen?: any; inbound?: any }>({});
+  const [showPowerBreakdown, setShowPowerBreakdown] = useState(false);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -776,6 +777,15 @@ const Profile = () => {
       setPlayerManifest(newPlayerManifest);
       setUserData((prev: any) => ({ ...prev, manifest: newPlayerManifest }));
       setShowManifestSelection(false);
+      
+      // Recalculate power level after manifest selection
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after manifest selection:', plError);
+        // Don't throw - power level recalculation is non-critical
+      }
     } catch (error) {
       console.error('Error setting manifest:', error);
       alert('Failed to set manifest. Please try again.');
@@ -796,6 +806,16 @@ const Profile = () => {
       const userRef = doc(db, 'students', currentUser.uid);
       await updateDoc(userRef, { manifest: updatedManifest });
       setPlayerManifest(updatedManifest);
+      
+      // Recalculate power level after manifest update (veil break might affect ascension)
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after veil break:', plError);
+        // Don't throw - power level recalculation is non-critical
+      }
+      
       alert('Veil broken! New challenge awaits.');
     } catch (error) {
       console.error('Error breaking veil:', error);
@@ -883,6 +903,8 @@ const Profile = () => {
   }
 
   const level = userData ? getLevelFromXP(userData.xp || 0) : 1;
+  const powerLevel = userData?.powerLevel || null;
+  const powerBreakdown = userData?.powerBreakdown || null;
   const avatarUrl = userData?.photoURL || currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
   
   // Debug logging for avatar URL
@@ -916,14 +938,209 @@ const Profile = () => {
 
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
-      <h1 style={{
-        fontSize: '1.875rem',
-        fontWeight: 'bold',
+      {/* Header with Level and Power Level */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: '1rem',
         marginBottom: '1.5rem',
-        textAlign: 'center'
+        flexWrap: 'wrap'
       }}>
-        Your Profile
-      </h1>
+        <h1 style={{
+          fontSize: '1.875rem',
+          fontWeight: 'bold',
+          margin: 0,
+          textAlign: 'center'
+        }}>
+          Your Profile
+        </h1>
+        {powerLevel !== null && (
+          <div 
+            onClick={() => setShowPowerBreakdown(!showPowerBreakdown)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+              padding: '0.5rem 1rem',
+              borderRadius: '0.5rem',
+              boxShadow: '0 2px 8px rgba(139, 92, 246, 0.3)',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              userSelect: 'none'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(139, 92, 246, 0.4)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 2px 8px rgba(139, 92, 246, 0.3)';
+            }}
+          >
+            <span style={{ fontSize: '1.25rem' }}>⚡</span>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.8)', fontWeight: 500 }}>
+                Power Level
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>
+                {powerLevel}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* Power Level Breakdown Panel */}
+      {showPowerBreakdown && powerBreakdown && (
+        <div style={{
+          background: 'linear-gradient(135deg, #1f2937 0%, #374151 100%)',
+          borderRadius: '0.75rem',
+          padding: '1.5rem',
+          marginBottom: '1.5rem',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          border: '2px solid #8b5cf6',
+          position: 'relative'
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '1rem'
+          }}>
+            <h2 style={{
+              fontSize: '1.25rem',
+              fontWeight: 'bold',
+              color: '#fff',
+              margin: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <span>⚡</span>
+              Power Level Breakdown
+            </h2>
+            <button
+              onClick={() => setShowPowerBreakdown(false)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '32px',
+                height: '32px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '20px',
+                color: '#fff',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              }}
+            >
+              ×
+            </button>
+          </div>
+          
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '1rem'
+          }}>
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              borderRadius: '0.5rem',
+              padding: '1rem',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                Base (Level)
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fff' }}>
+                {powerBreakdown.base}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
+                Level {level} × 10
+              </div>
+            </div>
+            
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              borderRadius: '0.5rem',
+              padding: '1rem',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                Skills
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#10b981' }}>
+                +{powerBreakdown.skills}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
+                Equipped skills
+              </div>
+            </div>
+            
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              borderRadius: '0.5rem',
+              padding: '1rem',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                Artifacts
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                +{powerBreakdown.artifacts}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
+                Equipped artifacts
+              </div>
+            </div>
+            
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              borderRadius: '0.5rem',
+              padding: '1rem',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                Ascension
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+                +{powerBreakdown.ascension}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.25rem' }}>
+                Manifest ascension
+              </div>
+            </div>
+          </div>
+          
+          <div style={{
+            marginTop: '1rem',
+            padding: '1rem',
+            background: 'rgba(139, 92, 246, 0.2)',
+            borderRadius: '0.5rem',
+            border: '1px solid rgba(139, 92, 246, 0.4)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ fontSize: '1rem', color: 'rgba(255, 255, 255, 0.9)', fontWeight: 600 }}>
+              Total Power Level
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#fff' }}>
+              {powerLevel}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '2rem', marginBottom: '2rem' }}>
@@ -939,6 +1156,8 @@ const Profile = () => {
               truthMetal={userData?.truthMetal || 0}
               manifest={currentManifest}
               level={level}
+              powerLevel={powerLevel}
+              powerBreakdown={powerBreakdown}
               rarity={rarity}
               style={style}
               description={bio}
@@ -1480,13 +1699,30 @@ const Profile = () => {
             {Array.isArray(userData?.artifacts) && userData.artifacts.length > 0 ? (
               <div>
               {/* Available Artifacts - 2 columns with vertical scroll (only consumable artifacts, equippable ones are on Artifacts page) */}
-                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => !artifact.used && !isEquippableArtifact(artifact)).length > 0 && (
+                {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => {
+                  const enhanced = enhanceLegacyItem(artifact);
+                  // Filter out: used artifacts, equippable artifacts, and pending UXP artifacts
+                  return !enhanced.used && 
+                         !isEquippableArtifact(artifact) && 
+                         !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                }).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
-                      Available Artifacts ({userData.artifacts.filter((a: any) => !a.used && !isEquippableArtifact(a)).length})
+                      Available Artifacts ({userData.artifacts.filter((a: any) => {
+                        const enhanced = enhanceLegacyItem(a);
+                        return !enhanced.used && 
+                               !isEquippableArtifact(a) && 
+                               !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                      }).length})
                     </h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                      {userData.artifacts.filter((artifact: any) => !artifact.used && !isEquippableArtifact(artifact)).map((artifact: any, index: number) => {
+                      {userData.artifacts.filter((artifact: any) => {
+                        const enhanced = enhanceLegacyItem(artifact);
+                        // Filter out: used artifacts, equippable artifacts, and pending UXP artifacts
+                        return !enhanced.used && 
+                               !isEquippableArtifact(artifact) && 
+                               !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                      }).map((artifact: any, index: number) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
                           switch (rarity) {

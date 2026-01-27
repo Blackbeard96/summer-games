@@ -11,7 +11,7 @@ import { Timestamp } from 'firebase/firestore';
 // Core Types
 // ============================================================================
 
-export type AssessmentType = 'test' | 'exam' | 'quiz';
+export type AssessmentType = 'test' | 'exam' | 'quiz' | 'habits';
 export type GradingStatus = 'draft' | 'open' | 'graded';
 export type OutcomeType = 'hit' | 'miss' | 'exceed';
 
@@ -75,6 +75,16 @@ export interface Assessment {
   
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
+  
+  // Habits-specific configuration (only used when type === 'habits')
+  habitsConfig?: {
+    defaultDuration?: HabitDuration; // Default duration for habit commitments
+    defaultRewardPP?: number; // PP reward for completion
+    defaultRewardXP?: number; // XP reward for completion
+    defaultConsequencePP?: number; // PP penalty for failure (negative number)
+    defaultConsequenceXP?: number; // XP penalty for failure (negative number)
+    requireNotesOnCheckIn?: boolean; // Whether check-ins require notes (default: false)
+  };
 }
 
 // ============================================================================
@@ -112,6 +122,49 @@ export interface AssessmentResult {
   artifactsGranted?: ArtifactReward[]; // Artifacts granted for this result
   applied: boolean; // Ensures rewards/penalties apply once
   appliedAt?: Timestamp;
+}
+
+// ============================================================================
+// Habit Submissions Collection (for Habits assessment type)
+// ============================================================================
+
+export type HabitDuration = '1_class' | '1_day' | '3_days' | '1_week';
+export type HabitSubmissionStatus = 'IN_PROGRESS' | 'COMPLETED' | 'BROKEN' | 'DISPUTED' | 'active' | 'completed' | 'failed'; // Legacy statuses kept for compatibility
+export type HabitVerification = 'VERIFIED' | 'NOT_VERIFIED' | 'TRUST_ACCEPTED';
+
+export interface HabitSubmission {
+  id: string; // Format: ${assessmentId}_${studentId}
+  assessmentId: string;
+  classId: string;
+  studentId: string;
+  habitText: string; // 3-180 characters
+  duration: HabitDuration;
+  startAt: Timestamp;
+  endAt: Timestamp;
+  status: HabitSubmissionStatus; // IN_PROGRESS | COMPLETED | BROKEN | DISPUTED
+  
+  // Check-in tracking (legacy, may be deprecated)
+  checkIns?: { [dateKey: string]: Timestamp }; // dateKey format: YYYY-MM-DD
+  requiredCheckIns?: number; // Calculated based on duration
+  checkInCount?: number; // Current count of unique check-ins
+  
+  // New status-based tracking
+  evidence?: string | null; // Optional reflection/evidence text
+  verification?: HabitVerification; // VERIFIED | NOT_VERIFIED | TRUST_ACCEPTED
+  ppImpact?: number; // Computed PP change (+25 for COMPLETED, -15 for BROKEN, etc.)
+  
+  // Application tracking
+  applied?: boolean; // Whether PP has been applied
+  appliedAt?: Timestamp | null; // When PP was applied
+  appliedStatus?: 'APPLIED' | 'PENDING'; // Status of PP application
+  
+  // Legacy resolution tracking (deprecated)
+  resolvedAt?: Timestamp;
+  rewardApplied?: boolean;
+  consequenceApplied?: boolean;
+  
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
 }
 
 // ============================================================================
@@ -156,5 +209,6 @@ export interface StudentAssessmentRow {
   applied: boolean;
   goalId?: string;
   resultId?: string;
+  habitSubmission?: HabitSubmission; // For Habits assessments
 }
 

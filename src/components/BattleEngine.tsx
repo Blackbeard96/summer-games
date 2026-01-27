@@ -42,6 +42,9 @@ interface Opponent {
   isDefeated?: boolean; // Explicit flag for defeated state (true when health <= 0 and shield <= 0)
   defeatedAt?: Date; // Timestamp when enemy was defeated
   waveNumber?: number; // Wave number for Island Raid multi-wave battles
+  isAI?: boolean; // Optional flag to indicate if this is an AI-controlled ally/opponent
+  isPlayer?: boolean; // Optional flag to indicate if this is the current player
+  controller?: 'human' | 'ai'; // Controller type: 'human' for human players, 'ai' for AI-controlled allies/opponents
 }
 
 interface BattleEngineProps {
@@ -192,6 +195,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const [maxWaves, setMaxWaves] = useState(propMaxWaves || 1);
   const [waveTransitioning, setWaveTransitioning] = useState(false);
   const waveTransitioningRef = useRef(false);
+  // Ref to track internal updates to prevent circular sync with props
+  const isInternalUpdateRef = useRef(false);
   
   // Update wave state from props
   useEffect(() => {
@@ -206,6 +211,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   // Helper: Get alive enemies (not defeated)
   const getAliveEnemies = useCallback((enemies: Opponent[]): Opponent[] => {
     return enemies.filter(opp => {
+      // Filter out allies (player and AI allies like Kon)
+      // Exclude player
+      if (opp.isPlayer === true) return false;
+      // Exclude AI allies
+      if (opp.isAI === true) return false;
+      // Exclude specific ally IDs
+      if (opp.id === 'kon_ally' || opp.id?.includes('_ally')) return false;
+      
+      // Now check if this enemy is alive
       const health = opp.vaultHealth !== undefined 
         ? Math.max(0, Number(opp.vaultHealth)) 
         : Math.max(0, Number(opp.currentPP || 0));
@@ -222,6 +236,41 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
   }, []);
   
+  // Helper: Check if opponent is CPU (defined at component level for reuse)
+  const checkIsCPUOpponent = useCallback((opp: Opponent): boolean => {
+    // Check by ID pattern
+    if (opp.id?.startsWith('cpu-')) return true;
+    
+    // Check by name patterns
+    const nameLower = opp.name?.toLowerCase() || '';
+    if (nameLower.includes('training dummy') ||
+        nameLower.includes('novice guard') ||
+        nameLower.includes('elite soldier') ||
+        nameLower.includes('vault keeper') ||
+        nameLower.includes('master guardian') ||
+        nameLower.includes('legendary protector') ||
+        nameLower.includes('mindforge') ||
+        nameLower.includes('zombie') ||
+        nameLower.includes('unveiled')) {
+      return true;
+    }
+    
+    // Check by ID pattern for Chapter 2-5 enemies
+    if (opp.id?.includes('powered_zombie') ||
+        opp.id?.includes('zombie_captain') ||
+        opp.id?.includes('unveiled_')) {
+      return true;
+    }
+    
+    // If opponent doesn't have vaultHealth set, it's likely a CPU opponent (uses currentPP as health)
+    // This is a fallback for enemies that don't match the above patterns
+    if (opp.vaultHealth === undefined && !isPvP) {
+      return true;
+    }
+    
+    return false;
+  }, [isPvP]);
+
   // Helper: Check if all enemies are defeated
   const areAllEnemiesDefeated = useCallback((enemies: Opponent[]): boolean => {
     const alive = getAliveEnemies(enemies);
@@ -710,6 +759,63 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       onBattleLogUpdate(battleState.battleLog);
     }
   }, [battleState.battleLog, mindforgeMode, isMultiplayer, isInSession, onBattleLogUpdate]);
+
+  // Sync opponents state with propOpponents (when parent updates opponents from Firestore/wave changes)
+  useEffect(() => {
+    if (!propOpponents || propOpponents.length === 0) return;
+    
+    // Skip sync if we just updated internally (to prevent circular updates)
+    if (isInternalUpdateRef.current) {
+      isInternalUpdateRef.current = false;
+      return;
+    }
+    
+    // Check if propOpponents represents a meaningful change (new enemies, wave change, etc.)
+    // Only sync if:
+    // 1. Different number of opponents (wave change)
+    // 2. New opponent IDs (new enemies)
+    // 3. Opponents have more health than current (reset/wave change)
+    // BUT: Don't sync if local state has more recent damage (lower health/shield)
+    const opponentIdsChanged = propOpponents.length !== opponents.length ||
+      !propOpponents.every(propOpp => opponents.some(opp => opp.id === propOpp.id));
+    
+    // Check if any prop opponent has more health than local (indicating reset/wave change)
+    // OR if local has more damage (lower health) - in which case don't sync
+    const hasLocalDamage = opponents.some(localOpp => {
+      const propOpp = propOpponents.find(p => p.id === localOpp.id);
+      if (!propOpp) return false;
+      
+      const localHealth = localOpp.vaultHealth !== undefined ? localOpp.vaultHealth : localOpp.currentPP;
+      const propHealth = propOpp.vaultHealth !== undefined ? propOpp.vaultHealth : propOpp.currentPP;
+      const localShield = localOpp.shieldStrength || 0;
+      const propShield = propOpp.shieldStrength || 0;
+      
+      // If local has more damage (lower health/shield), don't sync
+      return localHealth < propHealth || localShield < propShield;
+    });
+    
+    const hasReset = propOpponents.some(propOpp => {
+      const currentOpp = opponents.find(opp => opp.id === propOpp.id);
+      if (!currentOpp) return true; // New opponent
+      const propHealth = propOpp.vaultHealth !== undefined ? propOpp.vaultHealth : propOpp.currentPP;
+      const currentHealth = currentOpp.vaultHealth !== undefined ? currentOpp.vaultHealth : currentOpp.currentPP;
+      // If prop has MORE health than current, it's a reset (wave change) - sync it
+      return propHealth > currentHealth;
+    });
+    
+    // Only sync if it's a wave change/reset AND local doesn't have more recent damage
+    if ((opponentIdsChanged || hasReset) && !hasLocalDamage) {
+      console.log('🔄 [BattleEngine] Syncing opponents from props (wave change or reset):', propOpponents.map(opp => ({
+        id: opp.id,
+        name: opp.name,
+        health: opp.vaultHealth !== undefined ? opp.vaultHealth : opp.currentPP,
+        shield: opp.shieldStrength
+      })));
+      setOpponents(propOpponents);
+    } else if (hasLocalDamage) {
+      console.log('🔄 [BattleEngine] Skipping sync - local state has more recent damage');
+    }
+  }, [propOpponents]);
 
   // Notify parent of opponents updates via useEffect (prevents React error from setState during render)
   useEffect(() => {
@@ -2147,12 +2253,100 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     // Check if all participants have selected moves
     const allParticipants = [...allies, ...opponents];
+    
+    // First, auto-select moves for AI allies (like Kon in Ch2-5)
+    allParticipants.forEach(participant => {
+      const isAlly = allies.some(a => a.id === participant.id);
+      const isAI = participant.isAI === true || participant.controller === 'ai';
+      
+      // Skip if already has a move or not an AI ally
+      if (!isAlly || !isAI || participantMoves.has(participant.id)) return;
+      
+      // Special handling for Kon: Force Push move (2500 damage)
+      if (participant.id === 'kon_ally' || participant.name === 'Kon') {
+        // Find all alive enemies
+        const aliveEnemies = opponents.filter(opp => {
+          const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
+          const shield = opp.shieldStrength || 0;
+          return health > 0 || shield > 0;
+        });
+        
+        // Select a random enemy
+        const targetEnemy = aliveEnemies.length > 0 
+          ? aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)]
+          : null;
+        
+        if (targetEnemy) {
+          // Create Force Push move for Kon
+          const konForcePushMove = {
+            id: 'kon_force_push',
+            name: 'Force Push',
+            type: 'system' as const,
+            damage: 2500, // Fixed 2500 damage
+            cooldown: 0,
+            cost: 0,
+            description: "Kon pushes with overwhelming force."
+          };
+          
+          const aiMoveData = {
+            move: konForcePushMove as any,
+            targetId: targetEnemy.id
+          };
+          setParticipantMoves(prev => {
+            const newMap = new Map(prev);
+            newMap.set(participant.id, aiMoveData);
+            return newMap;
+          });
+          console.log(`⚡ [AI Ally] Kon auto-selected Force Push on ${targetEnemy.name} (${targetEnemy.id})`);
+        }
+        return; // Skip regular move selection for Kon
+      }
+      
+      // Regular AI ally move selection (for other AI allies if any)
+      const availableMoves = moves || [];
+      // Prefer supportive/defensive moves for AI allies, or basic attack
+      const supportiveMove = availableMoves.find(m => m.shieldBoost || m.healing);
+      const basicMove = availableMoves.find(m => m.damage && !m.shieldBoost && !m.healing) || availableMoves[0];
+      const selectedMove = supportiveMove || basicMove;
+      
+      // Select a random enemy as target
+      const aliveEnemies = opponents.filter(opp => {
+        const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
+        return health > 0;
+      });
+      const targetEnemy = aliveEnemies.length > 0 
+        ? aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)]
+        : opponents[0];
+      
+      if (selectedMove && targetEnemy) {
+        const aiMoveData = {
+          move: selectedMove,
+          targetId: targetEnemy.id
+        };
+        setParticipantMoves(prev => {
+          const newMap = new Map(prev);
+          newMap.set(participant.id, aiMoveData);
+          return newMap;
+        });
+        console.log(`🤖 [AI Ally] Auto-selected move for ${participant.name}: ${selectedMove.name} on ${targetEnemy.name}`);
+      }
+    });
+    
+    // Now check if all HUMAN participants have selected moves (skip AI allies)
     const allHaveMoves = allParticipants.every(participant => {
+      // Skip AI allies - they're handled above
+      const isAlly = allies.some(a => a.id === participant.id);
+      const isAI = participant.isAI === true || participant.controller === 'ai';
+      if (isAlly && isAI) {
+        // AI allies should have moves auto-selected above
+        const aiMoveData = participantMoves.get(participant.id);
+        return aiMoveData && aiMoveData.move !== null && aiMoveData.targetId !== null;
+      }
+      
       // Check local participantMoves first (for current player and CPU opponents)
       let moveData = participantMoves.get(participant.id);
       
       // If not found locally and this is a player (ally, including invited players), check Firestore
-      const isAlly = allies.some(a => a.id === participant.id);
       if (!moveData && isAlly) {
         // For current user, we already have the move locally, so skip Firestore check
         if (participant.id === currentUser?.uid) {
@@ -2193,18 +2387,31 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               });
             }
           } else {
-            console.log(`⏳ Waiting for invited player ${participant.name} (${participant.id}) to select move in Firestore`);
+            // Only log waiting for human players, not AI
+            if (!isAI) {
+              console.log(`⏳ Waiting for invited player ${participant.name} (${participant.id}) to select move in Firestore`);
+            }
           }
         }
       }
       
       const hasMove = moveData && moveData.move !== null && moveData.targetId !== null;
-      if (!hasMove) {
+      if (!hasMove && !isAI) {
         console.log(`⏳ Waiting for ${participant.name} (${participant.id}) to select move`);
       }
       return hasMove;
     });
 
+    // For single-player with AI allies (like Ch2-5), don't wait for turn order - execute immediately
+    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+    const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
+    
+    // If single-player with AI, skip turn order calculation - moves execute immediately
+    if (isSinglePlayerWithAI) {
+      // Don't calculate turn order - the player's move executes immediately via executePlayerMove
+      return;
+    }
+    
     if (allHaveMoves && !battleState.turnOrder) {
       console.log('✅ All participants have selected moves. Calculating turn order...');
       console.log('📊 Participant moves summary:', Array.from(participantMoves.entries()).map(([id, data]) => `${id}: ${data.move?.name || 'none'}`));
@@ -2420,6 +2627,107 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         continue;
       }
 
+      // Special handling for Kon's Force Push move
+      const isKon = participant.id === 'kon_ally' || participant.name === 'Kon';
+      const isKonForcePush = isKon && moveData.move.id === 'kon_force_push';
+      
+      if (isKonForcePush && target) {
+        console.log(`⚡ [AI] Kon turn start - targeting ${target.name} (${target.id}) with Force Push`);
+        
+        const targetName = target.name || 'Unknown';
+        const targetId = target.id;
+        const forcePushDamage = 2500;
+        
+        // Apply 2500 damage to target
+        const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
+        const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
+        
+        const targetShieldDamage = Math.min(forcePushDamage, target.shieldStrength || 0);
+        const remainingDamage = forcePushDamage - targetShieldDamage;
+        const targetHealthDamage = Math.min(remainingDamage, targetHealth);
+        
+        // Update target stats
+        const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
+        const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
+        
+        // Update opponents state
+        isInternalUpdateRef.current = true;
+        setOpponents(prev => {
+          const updated = prev.map(opp => {
+            if (opp.id === targetId) {
+              const updatedOpp = {
+                ...opp,
+                shieldStrength: newTargetShield
+              };
+              
+              // Update health based on whether it's a CPU opponent or Island Raid enemy
+              if (opp.vaultHealth !== undefined) {
+                updatedOpp.vaultHealth = newTargetHealth;
+                updatedOpp.maxVaultHealth = targetMaxHealth;
+                
+                // Sync currentPP with vaultHealth for CPU opponents
+                const isCPUOpponent = checkIsCPUOpponent(opp);
+                if (isCPUOpponent) {
+                  updatedOpp.currentPP = newTargetHealth;
+                }
+              } else {
+                updatedOpp.currentPP = newTargetHealth;
+              }
+              
+              // Set isDefeated flag when health and shield reach 0
+              const finalHealth = updatedOpp.vaultHealth !== undefined 
+                ? updatedOpp.vaultHealth 
+                : updatedOpp.currentPP;
+              const finalShield = updatedOpp.shieldStrength;
+              
+              if (finalHealth <= 0 && finalShield <= 0) {
+                updatedOpp.isDefeated = true;
+                updatedOpp.defeatedAt = new Date();
+              } else {
+                updatedOpp.isDefeated = false;
+                updatedOpp.defeatedAt = undefined;
+              }
+              
+              return updatedOpp;
+            }
+            return opp;
+          });
+          
+          // Notify parent of opponent updates (this will update Firestore)
+          if (onOpponentsUpdate) {
+            onOpponentsUpdate(updated);
+          }
+          
+          // Clear the flag after notifying parent
+          setTimeout(() => {
+            isInternalUpdateRef.current = false;
+          }, 100);
+          
+          return updated;
+        });
+        
+        // Add battle log entry
+        const konLogEntry = `⚡ Kon attacked ${targetName} with Force Push for ${forcePushDamage} damage!`;
+        setBattleState(prev => {
+          const newLog = [...prev.battleLog, konLogEntry];
+          if (onBattleLogUpdate) {
+            onBattleLogUpdate(newLog);
+          }
+          return {
+            ...prev,
+            battleLog: newLog
+          };
+        });
+        
+        console.log(`⚡ [AI] Kon dealt ${forcePushDamage} damage to ${target.id}`);
+        
+        // Small delay for visual feedback
+        await new Promise(resolve => setTimeout(resolve, 400));
+        
+        // Continue to next move in turn order
+        continue;
+      }
+
       // Execute the move
       if (isPlayerMove) {
         // Player move execution in multiplayer mode (for both current user and invited players)
@@ -2505,9 +2813,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             };
             
             if (target.vaultHealth !== undefined) {
-              // Island Raid enemy - use vaultHealth
+              // Island Raid enemy or CPU opponent with vaultHealth set - use vaultHealth
               updatedOpponent.vaultHealth = newTargetHealth;
               updatedOpponent.maxVaultHealth = targetMaxHealth;
+              
+              // CRITICAL FIX: For CPU opponents that have vaultHealth set (like Chapter 2-5 zombies),
+              // also update currentPP to keep them in sync for UI consistency
+              const isCPUOpponent = checkIsCPUOpponent(target);
+              if (isCPUOpponent) {
+                updatedOpponent.currentPP = newTargetHealth;
+              }
             } else {
               // CPU opponent (like Ice Golems) - use currentPP as health
               updatedOpponent.currentPP = newTargetHealth;
@@ -2949,11 +3264,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // If we're in execution phase but turn order hasn't been calculated yet, reset to selection
       // This can happen when a player joins mid-battle
-      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0) {
+      // EXCEPT: For single-player with AI allies, we don't need turn order - execute immediately
+      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
+      
+      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0 && !isSinglePlayerWithAI) {
         console.log('BattleEngine: In execution phase without turn order, resetting to selection phase', {
           phase: battleState.phase,
           hasTurnOrder: !!battleState.turnOrder,
-          alliesCount: allies.length
+          alliesCount: allies.length,
+          isSinglePlayerWithAI
         });
         setBattleState(prev => ({
           ...prev,
@@ -2962,6 +3282,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           selectedMove: null, // Clear selected move
           selectedTarget: null // Clear selected target
         }));
+      } else if (battleState.phase === 'execution' && !battleState.turnOrder && isSinglePlayerWithAI) {
+        console.log('✅ BattleEngine: Single-player with AI - allowing execution without turn order', {
+          phase: battleState.phase,
+          hasTurnOrder: !!battleState.turnOrder,
+          alliesCount: allies.length,
+          humanPlayers,
+          isSinglePlayerWithAI
+        });
+        // Don't reset - allow execution to proceed
       }
       
       // Validate selected target still exists in opponents/allies
@@ -2989,42 +3318,62 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     const move = battleState.selectedMove;
     
-    // In multiplayer, wait for all participants to select moves before executing
-    // EXCEPT in In Session mode, where moves execute immediately
-    if (isMultiplayer && !isInSession) {
+    // Check if this is single-player with AI allies (like Chapter 2-5)
+    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+    const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    
+    // In true multiplayer, wait for all participants to select moves before executing
+    // EXCEPT in In Session mode or single-player with AI, where moves execute immediately
+    if (isMultiplayer && !isInSession && !isSinglePlayerWithAI) {
       // Just store the move - execution will happen when turn order is calculated
       return;
     }
     
-    // In In Session mode or single player mode, execute immediately
+    // In In Session mode, single player mode, or single-player with AI, execute immediately
+    console.log('✅ [executePlayerMove] Executing move immediately', { isSinglePlayerWithAI, isInSession, isMultiplayer });
     // Start animation
     setBattleState(prev => ({
       ...prev,
       currentAnimation: move,
       isAnimating: true
     }));
-  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession]);
+  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession, allies, currentUser]);
 
   const handleAnimationComplete = async () => {
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
 
     // Find the target opponent based on selectedTarget ID
     // For multiplayer, search in opponents array. For single player, use opponent.
+    console.log(`🎯 [handleAnimationComplete] Looking for target: ${battleState.selectedTarget}`, {
+      isMultiplayer,
+      opponentsCount: opponents.length,
+      opponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name })),
+      selectedMove: battleState.selectedMove?.name
+    });
+    
     let targetOpponent: Opponent;
     if (isMultiplayer && opponents.length > 0) {
       const found = opponents.find(opp => opp.id === battleState.selectedTarget);
       if (!found) {
-        console.error('Target opponent not found:', battleState.selectedTarget);
+        console.error('❌ [handleAnimationComplete] Target opponent not found:', {
+          targetId: battleState.selectedTarget,
+          availableOpponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name }))
+        });
         return;
       }
       targetOpponent = found;
+      console.log(`✅ [handleAnimationComplete] Target found: ${targetOpponent.name} (${targetOpponent.id})`);
     } else {
       // Single player mode - check if target matches opponent
       if (opponent.id !== battleState.selectedTarget && battleState.selectedTarget !== 'self') {
-        console.error('Target mismatch in single player mode');
+        console.error('❌ [handleAnimationComplete] Target mismatch in single player mode:', {
+          targetId: battleState.selectedTarget,
+          opponentId: opponent.id
+        });
         return;
       }
       targetOpponent = opponent;
+      console.log(`✅ [handleAnimationComplete] Target found (single player): ${targetOpponent.name}`);
     }
 
     // Apply turn effects for player (before move execution)
@@ -3091,10 +3440,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     console.log('Move Execution Debug:', {
       moveName: move.name,
       moveType: move.type,
+      moveCategory: move.category,
       hasShieldBoost: !!move.shieldBoost,
       shieldBoostValue: move.shieldBoost,
       moveObject: move
     });
+    
+    // CRITICAL: Ensure move category is set correctly for damage calculation
+    if (!move.category) {
+      console.warn(`⚠️ [BattleEngine] Move ${move.name} has no category! Defaulting to 'system'`);
+    }
     
     // Track move usage for manifest progress
     const originalMoveName = move.name;
@@ -3155,17 +3510,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const currentPlayerInAllies = allies.find(a => a.id === currentUser?.uid);
     const playerName = currentPlayerInAllies?.name || currentUser?.displayName || 'Player';
     
-    // Helper function to check if opponent is CPU (defined at function scope)
-    const checkIsCPUOpponent = (opp: Opponent) => {
-      return opp.id?.startsWith('cpu-') || 
-             opp.name?.toLowerCase().includes('training dummy') ||
-             opp.name?.toLowerCase().includes('novice guard') ||
-             opp.name?.toLowerCase().includes('elite soldier') ||
-             opp.name?.toLowerCase().includes('vault keeper') ||
-             opp.name?.toLowerCase().includes('master guardian') ||
-             opp.name?.toLowerCase().includes('legendary protector') ||
-             opp.name?.toLowerCase().includes('mindforge');
-    };
+    // Use the component-level checkIsCPUOpponent function (defined above)
     
     // Use actual user level
     const playerLevel = userLevel;
@@ -3731,6 +4076,49 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         });
         
         if (moveResult.success) {
+          // Track skill usage for stats
+          if (sessionId && currentUser?.uid) {
+            try {
+              const { trackSkillUsage, trackDamage } = await import('../utils/inSessionStatsService');
+              
+              // Calculate total damage (health + shield damage)
+              const totalDamage = damage + (shieldDamage || 0);
+              
+              // Track skill usage
+              await trackSkillUsage(
+                sessionId,
+                currentUser.uid,
+                move.id || move.name, // Use move.id if available, otherwise use name as ID
+                move.name,
+                ppCost || 0,
+                totalDamage, // Total damage dealt (health + shield)
+                playerHealing || 0 // Healing given
+              );
+              
+              // Track damage dealt (only if damage was dealt)
+              if (totalDamage > 0) {
+                await trackDamage(
+                  sessionId,
+                  currentUser.uid,
+                  targetOpponent.id,
+                  damage, // Health damage
+                  shieldDamage || 0 // Shield damage
+                );
+              }
+              
+              console.log('✅ [In-Session Stats] Skill usage and damage tracked:', {
+                skillId: move.id || move.name,
+                skillName: move.name,
+                damage,
+                shieldDamage,
+                healing: playerHealing
+              });
+            } catch (trackingError) {
+              console.error('❌ [In-Session Stats] Error tracking skill usage/damage:', trackingError);
+              // Don't fail move execution if tracking fails
+            }
+          }
+          
           // Move applied successfully via Firestore transaction
           // The session listener in InSessionBattle will update local state
           // We just need to update the battle log state so it propagates
@@ -3779,10 +4167,39 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Check if this is a CPU opponent (they use currentPP as health)
     const isCPUOpponent = checkIsCPUOpponent(targetOpponent);
     
+    console.log('🎯 [handleAnimationComplete] Applying damage to target:', {
+      targetId: targetOpponent.id,
+      targetName: targetOpponent.name,
+      isCPUOpponent,
+      damage,
+      shieldDamage,
+      ppStolen,
+      currentPP: targetOpponent.currentPP,
+      maxPP: targetOpponent.maxPP,
+      vaultHealth: targetOpponent.vaultHealth,
+      shieldStrength: targetOpponent.shieldStrength
+    });
+    
     if (isCPUOpponent) {
       // For CPU opponents, currentPP is their health
       const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
+      const oldHealth = targetOpponent.currentPP;
       newTargetOpponent.currentPP = Math.max(0, targetOpponent.currentPP - healthDamage);
+      
+      // CRITICAL FIX: Also update vaultHealth if it exists (for UI consistency)
+      // Some CPU opponents (like Chapter 2-5 zombies) have vaultHealth set for display purposes
+      // We need to keep vaultHealth in sync with currentPP so the UI updates correctly
+      if (targetOpponent.vaultHealth !== undefined) {
+        newTargetOpponent.vaultHealth = newTargetOpponent.currentPP;
+        newTargetOpponent.maxVaultHealth = targetOpponent.maxVaultHealth || targetOpponent.maxPP;
+      }
+      
+      console.log('✅ [handleAnimationComplete] CPU opponent damage applied:', {
+        oldHealth,
+        healthDamage,
+        newHealth: newTargetOpponent.currentPP,
+        vaultHealth: newTargetOpponent.vaultHealth
+      });
     } else {
       // For PvP opponents, damage vault health, not PP
       // Max vault health is always 10% of max PP
@@ -3802,16 +4219,40 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Update opponent state based on mode
     if (isMultiplayer) {
       // Update the target opponent in the opponents array
-      setOpponents(prev => prev.map(opp => 
-        opp.id === targetOpponent.id ? newTargetOpponent : opp
-      ));
-      // Also update callbacks if provided
-      if (onOpponentsUpdate) {
-        const updatedOpponents = opponents.map(opp => 
+      setOpponents(prev => {
+        const updated = prev.map(opp => 
           opp.id === targetOpponent.id ? newTargetOpponent : opp
         );
-        onOpponentsUpdate(updatedOpponents);
-      }
+        // Mark as internal update to prevent circular sync with props
+        isInternalUpdateRef.current = true;
+        // Also update callbacks if provided - use the updated array, not the old one
+        if (onOpponentsUpdate) {
+          // Use setTimeout to ensure state update has been processed
+          setTimeout(() => {
+            console.log(`📤 [BattleEngine] Calling onOpponentsUpdate after damage - target: ${targetOpponent.name}`, {
+              updatedOpponent: {
+                id: newTargetOpponent.id,
+                name: newTargetOpponent.name,
+                currentPP: newTargetOpponent.currentPP,
+                vaultHealth: newTargetOpponent.vaultHealth,
+                shieldStrength: newTargetOpponent.shieldStrength,
+                isDefeated: newTargetOpponent.isDefeated
+              }
+            });
+            onOpponentsUpdate(updated);
+            // Clear the internal update flag after notifying parent
+            setTimeout(() => {
+              isInternalUpdateRef.current = false;
+            }, 100);
+          }, 0);
+        } else {
+          // Clear the flag immediately if no callback
+          setTimeout(() => {
+            isInternalUpdateRef.current = false;
+          }, 100);
+        }
+        return updated;
+      });
     } else {
       // Single player mode - update single opponent
       setOpponent(newTargetOpponent);
@@ -3939,9 +4380,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Check for victory (health depleted)
+    // For CPU opponents, check currentPP; for PvP, check vaultHealth
+    // But also check vaultHealth for CPU opponents if it exists (for UI consistency)
     const opponentHealthDepleted = checkIsCPUOpponent(targetOpponent) 
-      ? newTargetOpponent.currentPP <= 0 
+      ? (newTargetOpponent.currentPP <= 0 || (newTargetOpponent.vaultHealth !== undefined && newTargetOpponent.vaultHealth <= 0))
       : (newTargetOpponent.vaultHealth !== undefined ? newTargetOpponent.vaultHealth <= 0 : false);
+    
+    // Set isDefeated flag when health reaches 0
+    if (opponentHealthDepleted) {
+      newTargetOpponent.isDefeated = true;
+      newTargetOpponent.defeatedAt = new Date();
+    } else {
+      newTargetOpponent.isDefeated = false;
+      newTargetOpponent.defeatedAt = undefined;
+    }
+    
+    // Check if this is a multi-wave battle BEFORE processing victory
+    // This prevents premature victory in multi-wave battles
+    const isIslandRaid = gameId && opponents.length > 0 && (opponents[0].vaultHealth !== undefined || maxWaves > 1);
+    const isMultiWaveBattle = maxWaves && maxWaves > 1;
     
     if (opponentHealthDepleted) {
       newLog.push(`💀 ${targetOpponent.name} has been defeated!`);
@@ -3973,6 +4430,112 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Trigger cutscene callback
         onIceGolemDefeated();
         return;
+      }
+      
+      // For multi-wave battles, check if ALL enemies are defeated before declaring victory
+      // If not all enemies are defeated, just mark this enemy as defeated and continue
+      if (isMultiWaveBattle || isIslandRaid) {
+        // Update the opponent state first
+        if (isMultiplayer) {
+          setOpponents(prev => {
+            const updated = prev.map(opp => 
+              opp.id === targetOpponent.id ? newTargetOpponent : opp
+            );
+            // Mark as internal update to prevent circular sync with props
+            isInternalUpdateRef.current = true;
+            // Notify parent of update
+            if (onOpponentsUpdate) {
+              setTimeout(() => {
+                console.log(`📤 [BattleEngine] Calling onOpponentsUpdate after enemy defeat - target: ${targetOpponent.name}`, {
+                  updatedOpponent: {
+                    id: newTargetOpponent.id,
+                    name: newTargetOpponent.name,
+                    currentPP: newTargetOpponent.currentPP,
+                    vaultHealth: newTargetOpponent.vaultHealth,
+                    shieldStrength: newTargetOpponent.shieldStrength,
+                    isDefeated: newTargetOpponent.isDefeated
+                  }
+                });
+                onOpponentsUpdate(updated);
+                // Clear the internal update flag after notifying parent
+                setTimeout(() => {
+                  isInternalUpdateRef.current = false;
+                }, 100);
+              }, 0);
+            } else {
+              // Clear the flag immediately if no callback
+              setTimeout(() => {
+                isInternalUpdateRef.current = false;
+              }, 100);
+            }
+            return updated;
+          });
+        } else {
+          setOpponent(newTargetOpponent);
+        }
+        
+        // Check if ALL enemies are defeated (including the one we just updated)
+        // Use a function to get the updated opponents array
+        const getUpdatedOpponents = () => {
+          if (isMultiplayer) {
+            // We need to check the current state, but since setState is async,
+            // we'll calculate what the updated state should be
+            return opponents.map(opp => 
+              opp.id === targetOpponent.id ? newTargetOpponent : opp
+            );
+          }
+          return [newTargetOpponent];
+        };
+        
+        const updatedOpponents = getUpdatedOpponents();
+        const allEnemiesDefeated = areAllEnemiesDefeated(updatedOpponents);
+        
+        if (!allEnemiesDefeated) {
+          // Not all enemies defeated - just update state and continue battle
+          // The wave progression logic will handle advancing to the next wave
+          console.log('🌊 [BattleEngine] Enemy defeated in multi-wave battle, but not all enemies defeated. Continuing battle...');
+          setBattleState(prev => ({
+            ...prev,
+            battleLog: newLog,
+            selectedMove: null,
+            selectedTarget: null,
+            currentAnimation: null,
+            isAnimating: false,
+            phase: 'selection' // Return to selection phase for next move
+          }));
+          
+          // Update battle log via callback
+          if (onBattleLogUpdate) {
+            onBattleLogUpdate(newLog);
+          }
+          
+          return; // Don't process victory - let wave progression handle it
+        }
+        
+        // All enemies defeated - check if this is the final wave
+        if (currentWaveIndex >= maxWaves) {
+          console.log('🏆 [BattleEngine] All enemies defeated in final wave - processing victory');
+          // Continue with victory processing below
+        } else {
+          // Not the final wave - wave progression will handle advancing
+          console.log('🌊 [BattleEngine] All enemies defeated in wave, but not final wave. Wave progression will handle advancing.');
+          setBattleState(prev => ({
+            ...prev,
+            battleLog: newLog,
+            selectedMove: null,
+            selectedTarget: null,
+            currentAnimation: null,
+            isAnimating: false,
+            phase: 'selection' // Return to selection phase
+          }));
+          
+          // Update battle log via callback
+          if (onBattleLogUpdate) {
+            onBattleLogUpdate(newLog);
+          }
+          
+          return; // Don't process victory - let wave progression handle it
+        }
       }
       
       // Calculate final PP reward based on defeated opponent's remaining PP
@@ -4101,9 +4664,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Update opponent state based on mode
       if (isMultiplayer) {
-        setOpponents(prev => prev.map(opp => 
-          opp.id === targetOpponent.id ? newTargetOpponent : opp
-        ));
+        setOpponents(prev => {
+          const updated = prev.map(opp => 
+            opp.id === targetOpponent.id ? newTargetOpponent : opp
+          );
+          // Mark as internal update to prevent circular sync with props
+          isInternalUpdateRef.current = true;
+          // Notify parent of update
+          if (onOpponentsUpdate) {
+            setTimeout(() => {
+              onOpponentsUpdate(updated);
+            }, 0);
+          }
+          return updated;
+        });
       } else {
         setOpponent(newTargetOpponent);
       }
@@ -4113,15 +4687,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         onOpponentUpdate(newTargetOpponent);
       }
       
-      // Check if this is a multi-wave battle (Island Raid)
-      const isIslandRaid = gameId && opponents.length > 0 && (opponents[0].vaultHealth !== undefined || maxWaves > 1);
-      const isMultiWaveBattle = maxWaves && maxWaves > 1;
-      
-      // For multi-wave battles (Island Raid), don't call onBattleEnd when a single enemy is defeated
-      // Let the wave progression logic handle it - only call onBattleEnd when ALL waves are complete
+      // For multi-wave battles, we've already handled the check above
+      // This check is now redundant but kept for safety
       if (isIslandRaid || isMultiWaveBattle) {
-        console.log('🏝️ [BattleEngine] Enemy defeated in multi-wave battle - NOT calling onBattleEnd. Wave progression will handle it.');
-        // Just update the opponent state - the wave progression logic in IslandRaidBattle will handle the rest
+        console.log('🏝️ [BattleEngine] Multi-wave battle - victory already processed above or wave progression will handle it.');
+        // Victory processing should have already happened above, or wave progression will handle it
         return;
       }
       
@@ -4135,6 +4705,114 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       return;
     }
     
+    // Check if this is single-player with AI allies (like Chapter 2-5)
+    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || (!ally.isAI && ally.controller !== 'ai')).length;
+    const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    
+    // If single-player with AI, trigger Kon's move immediately after player's move completes
+    if (isSinglePlayerWithAI) {
+      const konAlly = allies.find(ally => ally.id === 'kon_ally' || ally.name === 'Kon');
+      if (konAlly) {
+        // Build updated opponents array with player's damage applied
+        const updatedOpponentsAfterPlayerMove = opponents.map(opp => {
+          if (opp.id === targetOpponent.id) {
+            return newTargetOpponent; // Use the updated opponent from player's move
+          }
+          return opp;
+        });
+        
+        // Find a random alive enemy from the updated state
+        const aliveEnemies = updatedOpponentsAfterPlayerMove.filter(opp => {
+          const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
+          const shield = opp.shieldStrength || 0;
+          return health > 0 || shield > 0;
+        });
+        
+        if (aliveEnemies.length > 0) {
+          const targetEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+          const targetId = targetEnemy.id;
+          
+          // Execute Kon's move immediately after player's move (short delay for visual feedback)
+          setTimeout(() => {
+            console.log(`⚡ [AI] Executing Kon's Force Push on ${targetEnemy.name} after player move`);
+            
+            // Apply 2500 damage
+            const targetHealth = targetEnemy.vaultHealth !== undefined ? targetEnemy.vaultHealth : (targetEnemy.currentPP || 0);
+            const targetMaxHealth = targetEnemy.maxVaultHealth !== undefined ? targetEnemy.maxVaultHealth : (targetEnemy.maxPP || 100);
+            
+            const targetShieldDamage = Math.min(2500, targetEnemy.shieldStrength || 0);
+            const remainingDamage = 2500 - targetShieldDamage;
+            const targetHealthDamage = Math.min(remainingDamage, targetHealth);
+            
+            const newTargetShield = Math.max(0, (targetEnemy.shieldStrength || 0) - targetShieldDamage);
+            const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
+            
+            // Update opponents state
+            isInternalUpdateRef.current = true;
+            setOpponents(prev => {
+              const updated = prev.map(opp => {
+                if (opp.id === targetId) {
+                  const updatedOpp = {
+                    ...opp,
+                    shieldStrength: newTargetShield
+                  };
+                  
+                  if (opp.vaultHealth !== undefined) {
+                    updatedOpp.vaultHealth = newTargetHealth;
+                    updatedOpp.maxVaultHealth = targetMaxHealth;
+                    const isCPUOpponent = checkIsCPUOpponent(opp);
+                    if (isCPUOpponent) {
+                      updatedOpp.currentPP = newTargetHealth;
+                    }
+                  } else {
+                    updatedOpp.currentPP = newTargetHealth;
+                  }
+                  
+                  const finalHealth = updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : updatedOpp.currentPP;
+                  const finalShield = updatedOpp.shieldStrength;
+                  
+                  if (finalHealth <= 0 && finalShield <= 0) {
+                    updatedOpp.isDefeated = true;
+                    updatedOpp.defeatedAt = new Date();
+                  } else {
+                    updatedOpp.isDefeated = false;
+                    updatedOpp.defeatedAt = undefined;
+                  }
+                  
+                  return updatedOpp;
+                }
+                return opp;
+              });
+              
+              // Notify parent of opponent updates
+              if (onOpponentsUpdate) {
+                onOpponentsUpdate(updated);
+              }
+              
+              setTimeout(() => {
+                isInternalUpdateRef.current = false;
+              }, 100);
+              
+              return updated;
+            });
+            
+            // Add battle log entry
+            const konLogEntry = `⚡ Kon attacked ${targetEnemy.name} with Force Push for 2500 damage!`;
+            setBattleState(prev => {
+              const newLog = [...prev.battleLog, konLogEntry];
+              if (onBattleLogUpdate) {
+                onBattleLogUpdate(newLog);
+              }
+              return {
+                ...prev,
+                battleLog: newLog
+              };
+            });
+          }, 400); // Short delay for visual feedback after player's move
+        }
+      }
+    }
+    
     // Update battle state - keep animation state so BattleAnimations can play
     // The animation will be cleared when handleAnimationComplete is called by BattleAnimations
     console.log(`📝 [Player Move] Updating battle state with ${newLog.length} log entries. Last entry: ${newLog[newLog.length - 1]}`);
@@ -4142,9 +4820,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     setBattleState(prev => {
       const updatedState: BattleState = {
         ...prev,
-        phase: mindforgeMode ? 'execution' : 'opponent_turn', // Keep in execution phase for Mindforge so animation plays
+        phase: mindforgeMode ? 'execution' : (isSinglePlayerWithAI ? 'selection' : 'opponent_turn'), // Return to selection for single-player with AI
         battleLog: newLog,
-        isPlayerTurn: mindforgeMode ? true : false,
+        isPlayerTurn: mindforgeMode ? true : (isSinglePlayerWithAI ? true : false), // Keep player turn for single-player with AI
         selectedMove: null, // Clear selected move but keep animation
         selectedTarget: null, // Clear selected target but keep animation
         // Keep currentAnimation and isAnimating so BattleAnimations component can display
@@ -4798,6 +5476,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   const handleTargetSelect = (targetId: string) => {
+    console.log(`🎯 [BattleEngine] handleTargetSelect called with targetId: ${targetId}`, {
+      isMultiplayer,
+      opponentsCount: opponents.length,
+      opponentsIds: opponents.map(opp => ({ id: opp.id, name: opp.name })),
+      alliesIds: allies.map(ally => ({ id: ally.id, name: ally.name })),
+      selectedMove: battleState.selectedMove?.name,
+      isPlayerTurn: battleState.isPlayerTurn
+    });
+
     // Validate target ID exists in current opponents or allies
     // In single player mode, check single opponent. In multiplayer mode, check opponents array.
     const isValidTarget = isMultiplayer
@@ -4813,12 +5500,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
       return; // Don't set invalid target
     }
+
+    console.log(`✅ [BattleEngine] Valid target selected: ${targetId}`);
     
     setBattleState(prev => {
-      // In multiplayer mode, keep phase as 'selection' until turn order is calculated
-      // This ensures moves can be stored properly before execution begins
-      const newPhase = isMultiplayer && !prev.turnOrder ? 'selection' : 'execution';
-      console.log(`🎯 [Target Select] Setting target ${targetId}, phase: ${newPhase} (multiplayer: ${isMultiplayer}, hasTurnOrder: ${!!prev.turnOrder})`);
+      // Check if this is single-player with AI allies (like Chapter 2-5)
+      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+      
+      // In true multiplayer mode, keep phase as 'selection' until turn order is calculated
+      // For single-player with AI, go directly to execution
+      const newPhase = (isMultiplayer && !isSinglePlayerWithAI && !prev.turnOrder) ? 'selection' : 'execution';
+      console.log(`🎯 [Target Select] Setting target ${targetId}, phase: ${newPhase}`, {
+        multiplayer: isMultiplayer,
+        isSinglePlayerWithAI,
+        hasTurnOrder: !!prev.turnOrder,
+        humanPlayers,
+        totalAllies: allies.length
+      });
       return {
         ...prev,
         selectedTarget: targetId,
@@ -4829,16 +5528,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Execute move when both move and target are selected
   // In multiplayer mode, don't execute immediately - wait for turn order calculation
+  // EXCEPT: For single-player battles with AI allies (like Chapter 2-5), execute immediately
   useEffect(() => {
     if (battleState.phase === 'execution' && battleState.selectedMove && battleState.selectedTarget) {
-      // In multiplayer mode, moves are executed via turn order, not immediately
-      if (isMultiplayer) {
+      // Check if this is a single-player battle with AI allies (not true multiplayer)
+      // If there's only one human player and the rest are AI, execute immediately
+      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+      
+      if (isMultiplayer && !isSinglePlayerWithAI) {
         console.log('⏸️ [Move Execution] Multiplayer mode - move will be executed via turn order, not immediately');
         return;
       }
+      
+      // For single-player with AI or true single-player, execute immediately
+      if (isSinglePlayerWithAI) {
+        console.log('✅ [Move Execution] Single-player with AI allies - executing immediately');
+      }
       executePlayerMove();
     }
-  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer]);
+  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer, allies, currentUser]);
 
   // Listen for external move selection events (for In Session mode)
   useEffect(() => {
@@ -4963,6 +5672,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const getCustomBackground = () => {
     if (mindforgeMode) return '/images/Mind Forge BKG.png';
     if (isMultiplayer) {
+      // Check for Chapter 2-5 Imposition Test battle first (priority)
+      const isChapter25Battle = gameId && (
+        gameId.includes('imposition-test') || 
+        gameId.includes('ch2-5') ||
+        gameId.includes('ch2-5-imposition-test')
+      );
+      if (isChapter25Battle) return '/images/Ch2-5_BattleBKG.png';
+      
       // Check for Island Raid battle (opponents have vaultHealth and we have gameId)
       const isIslandRaid = gameId && opponents.length > 0 && opponents[0].vaultHealth !== undefined;
       // Also check for Chapter 2 battles by gameId pattern (rr-candy, ch2-2-battle, chapter2-3, etc.)
@@ -5048,7 +5765,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               maxShieldStrength: opp.maxShieldStrength,
               level: opp.level,
               vaultHealth: opp.vaultHealth,
-              maxVaultHealth: opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : Math.floor((opp.maxPP || 1000) * 0.1)
+              maxVaultHealth: opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : Math.floor((opp.maxPP || 1000) * 0.1),
+              isPlayer: false // Explicitly mark enemies as not players for targeting logic
             };
           })}
           isPlayerTurn={battleState.isPlayerTurn}
@@ -5061,6 +5779,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           battleName={battleName}
           onInviteClick={onInviteClick}
           allowInvites={allowInvites}
+          currentWave={currentWaveIndex}
+          maxWaves={maxWaves}
         />
       ) : (
       <BattleArena

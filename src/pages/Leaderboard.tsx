@@ -9,22 +9,44 @@ interface Student {
   photoURL?: string;
   xp?: number;
   powerPoints?: number;
+  powerLevel?: number | null;
   manifestationType?: string;
   storyChapter?: number;
 }
 
 const Leaderboard = () => {
   const [students, setStudents] = useState<Student[]>([]);
+  const [sortBy, setSortBy] = useState<'xp' | 'powerLevel'>('xp');
 
   useEffect(() => {
     const fetchStudents = async () => {
-      const q = query(collection(db, 'students'), orderBy('xp', 'desc'));
-      const snapshot = await getDocs(q);
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Student[];
-      setStudents(list);
+      // Try to fetch sorted by powerLevel first, fallback to XP
+      try {
+        const q = sortBy === 'powerLevel' 
+          ? query(collection(db, 'students'), orderBy('powerLevel', 'desc'))
+          : query(collection(db, 'students'), orderBy('xp', 'desc'));
+        const snapshot = await getDocs(q);
+        let list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Student[];
+        
+        // If sorting by powerLevel, filter out nulls and sort client-side for nulls
+        if (sortBy === 'powerLevel') {
+          const withPL = list.filter(s => s.powerLevel !== null && s.powerLevel !== undefined).sort((a, b) => (b.powerLevel || 0) - (a.powerLevel || 0));
+          const withoutPL = list.filter(s => s.powerLevel === null || s.powerLevel === undefined);
+          list = [...withPL, ...withoutPL];
+        }
+        
+        setStudents(list);
+      } catch (error) {
+        // Fallback to XP sorting if powerLevel index doesn't exist
+        console.warn('Leaderboard: Error sorting by powerLevel, falling back to XP:', error);
+        const q = query(collection(db, 'students'), orderBy('xp', 'desc'));
+        const snapshot = await getDocs(q);
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Student[];
+        setStudents(list);
+      }
     };
     fetchStudents();
-  }, []);
+  }, [sortBy]);
 
   const getManifestationColor = (type: string) => {
     const colors: {[key: string]: string} = {
@@ -64,6 +86,43 @@ const Leaderboard = () => {
         }}>
           The most powerful manifestors at Xiotein School. Who will rise to the top?
         </p>
+        <div style={{
+          display: 'flex',
+          gap: '1rem',
+          justifyContent: 'center',
+          marginTop: '1rem'
+        }}>
+          <button
+            onClick={() => setSortBy('xp')}
+            style={{
+              padding: '0.5rem 1rem',
+              background: sortBy === 'xp' ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)' : 'rgba(251, 191, 36, 0.2)',
+              color: sortBy === 'xp' ? 'white' : '#fbbf24',
+              border: `2px solid ${sortBy === 'xp' ? '#f59e0b' : 'rgba(251, 191, 36, 0.5)'}`,
+              borderRadius: '0.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            Sort by XP
+          </button>
+          <button
+            onClick={() => setSortBy('powerLevel')}
+            style={{
+              padding: '0.5rem 1rem',
+              background: sortBy === 'powerLevel' ? 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)' : 'rgba(139, 92, 246, 0.2)',
+              color: sortBy === 'powerLevel' ? 'white' : '#8b5cf6',
+              border: `2px solid ${sortBy === 'powerLevel' ? '#a78bfa' : 'rgba(139, 92, 246, 0.5)'}`,
+              borderRadius: '0.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            Sort by Power Level ⚡
+          </button>
+        </div>
       </div>
 
       <div style={{ 
@@ -166,19 +225,43 @@ const Leaderboard = () => {
                   alignItems: 'flex-end',
                   gap: '0.25rem'
                 }}>
-                  <div style={{ 
-                    fontSize: '1.1rem', 
-                    fontWeight: 'bold',
-                    color: '#fbbf24'
-                  }}>
-                    {student.xp || 0} XP
-                  </div>
+                  {sortBy === 'powerLevel' && student.powerLevel !== null && student.powerLevel !== undefined ? (
+                    <div style={{ 
+                      fontSize: '1.2rem', 
+                      fontWeight: 'bold',
+                      color: '#8b5cf6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}>
+                      ⚡ PL: {student.powerLevel}
+                    </div>
+                  ) : (
+                    <div style={{ 
+                      fontSize: '1.1rem', 
+                      fontWeight: 'bold',
+                      color: '#fbbf24'
+                    }}>
+                      {student.xp || 0} XP
+                    </div>
+                  )}
                   <div style={{ 
                     fontSize: '0.875rem',
                     color: '#34d399'
                   }}>
                     {student.powerPoints || 0} PP
                   </div>
+                  {sortBy === 'xp' && student.powerLevel !== null && student.powerLevel !== undefined && (
+                    <div style={{ 
+                      fontSize: '0.875rem',
+                      color: '#8b5cf6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}>
+                      ⚡ PL: {student.powerLevel}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

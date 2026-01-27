@@ -19,6 +19,8 @@ interface SquadMember {
   level: number;
   xp: number;
   powerPoints?: number;
+  powerLevel?: number | null;
+  powerBreakdown?: { base: number; skills: number; artifacts: number; ascension: number; total: number } | null;
   manifest?: string;
   rarity?: number;
   style?: string;
@@ -419,6 +421,8 @@ const Squads: React.FC = () => {
             xp: totalXP, // Total XP (not just current level XP)
             powerPoints: normalized.pp,
             truthMetal: normalized.tm,
+            powerLevel: studentData?.powerLevel || null, // Power Level from student data
+            powerBreakdown: studentData?.powerBreakdown || null, // Power breakdown from student data
             manifest: normalized.manifest,
             rarity: normalized.rarity,
             style: normalized.element,

@@ -197,6 +197,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const initializeBattleData = async () => {
       setLoading(true);
       try {
+        // Ensure Power Level is initialized (migration for existing players)
+        try {
+          const { ensurePlayerPowerLevel } = await import('../utils/powerLevelMigration');
+          await ensurePlayerPowerLevel(currentUser.uid);
+        } catch (plError) {
+          console.error('BattleContext: Error ensuring power level:', plError);
+          // Don't throw - power level migration shouldn't block battle initialization
+        }
         // Get player's current PP, manifest, and inventory from student data
         const studentRef = doc(db, 'students', currentUser.uid);
         const studentDoc = await getDoc(studentRef);
@@ -2565,6 +2573,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ? `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)\n\n${boostedProperties.join('\n')}`
         : `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)`;
       alert(`✅ Successfully upgraded ${move.name} to Level ${newLevel}!${boostInfo}`);
+      
+      // Recalculate power level after move upgrade (if skill is equipped)
+      try {
+        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+        await recalculatePowerLevel(currentUser.uid);
+      } catch (plError) {
+        console.error('Error recalculating power level after move upgrade:', plError);
+        // Don't throw - power level recalculation is non-critical
+      }
     } catch (err) {
       console.error('Error upgrading move:', err);
       setError('Failed to upgrade move');

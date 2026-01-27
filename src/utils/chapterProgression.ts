@@ -86,6 +86,7 @@ export async function updateProgressOnChallengeComplete(
   challengeId: string
 ): Promise<ProgressionResult> {
   const DEBUG_PROGRESS = process.env.REACT_APP_DEBUG_PROGRESS === 'true';
+  const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
   
   if (DEBUG_PROGRESS) {
     console.log(`[Progression] updateProgressOnChallengeComplete called:`, {
@@ -270,12 +271,31 @@ export async function updateProgressOnChallengeComplete(
       }
       
       // Write updates
+      const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
+      
+      if (DEBUG_CH2_1 || DEBUG_PROGRESS) {
+        const challengeData = updatedChapters[chapterKey]?.challenges?.[challengeId];
+        console.log(`[Progression] About to commit transaction for ${challengeId}:`, {
+          chapterId,
+          chapterKey,
+          challengeId,
+          challengeData: {
+            isCompleted: challengeData?.isCompleted,
+            status: challengeData?.status,
+            completedAt: challengeData?.completedAt ? 'present' : 'missing'
+          },
+          fullPath: `users/${userId}/chapters/${chapterKey}/challenges/${challengeId}`,
+          challengeUnlocked: progressionResult.challengeUnlocked,
+          allChallengesInChapter: Object.keys(updatedChapters[chapterKey]?.challenges || {})
+        });
+      }
+      
       transaction.update(userRef, {
         chapters: updatedChapters
       });
       
-      if (DEBUG_PROGRESS) {
-        console.log(`[Progression] Transaction committed:`, {
+      if (DEBUG_PROGRESS || DEBUG_CH2_1) {
+        console.log(`[Progression] Transaction update called for ${challengeId}:`, {
           challengeUnlocked: progressionResult.challengeUnlocked,
           chapterUnlocked: progressionResult.chapterUnlocked
         });
@@ -283,6 +303,16 @@ export async function updateProgressOnChallengeComplete(
       
       return progressionResult;
     });
+    
+    if (DEBUG_CH2_1 || DEBUG_PROGRESS) {
+      console.log(`[Progression] Transaction completed for ${challengeId}:`, {
+        success: result.success,
+        alreadyCompleted: result.alreadyCompleted,
+        challengeUnlocked: result.challengeUnlocked,
+        chapterUnlocked: result.chapterUnlocked,
+        error: result.error
+      });
+    }
     
     return result;
   } catch (error: any) {
