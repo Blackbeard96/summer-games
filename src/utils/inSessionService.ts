@@ -15,7 +15,8 @@ import {
   getDocs,
   serverTimestamp,
   onSnapshot,
-  Unsubscribe
+  Unsubscribe,
+  runTransaction
 } from 'firebase/firestore';
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
@@ -168,83 +169,135 @@ export async function getActiveSessionForClass(classId: string): Promise<InSessi
 
 /**
  * Join a session (idempotent - safe to call multiple times)
+ * NOW TRANSACTION-SAFE: Uses Firestore transaction to prevent race conditions
  */
 export async function joinSession(
   sessionId: string,
   player: SessionPlayer
 ): Promise<boolean> {
+  const DEBUG_JOIN = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                     process.env.REACT_APP_DEBUG === 'true';
+  
+  if (DEBUG_JOIN) {
+    debug('inSessionService', `🔵 JOIN ATTEMPT: ${player.userId} joining session ${sessionId}`, {
+      playerName: player.displayName,
+      playerLevel: player.level,
+      playerPP: player.powerPoints
+    });
+  }
+  
   try {
     const sessionRef = doc(db, 'inSessionRooms', sessionId);
-    const sessionDoc = await getDoc(sessionRef);
+    const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
     
-    if (!sessionDoc.exists()) {
-      debugError('inSessionService', `Session ${sessionId} does not exist`);
-      return false;
-    }
-    
-    const sessionData = sessionDoc.data() as InSessionRoom;
-    
-    if (sessionData.status !== 'live') {
-      debugError('inSessionService', `Session ${sessionId} is not live (status: ${sessionData.status})`);
-      return false;
-    }
-    
-    // Check if player already exists
-    const existingPlayer = sessionData.players.find(p => p.userId === player.userId);
-    
-    if (existingPlayer) {
-      // Update existing player data (idempotent join)
-      const updatedPlayers = sessionData.players.map(p => 
-        p.userId === player.userId 
-          ? { ...p, ...player } // Update with latest data
-          : p
-      );
+    // Use transaction to ensure atomic join
+    const result = await runTransaction(db, async (transaction) => {
+      // Read session document
+      const sessionDoc = await transaction.get(sessionRef);
       
-      await updateDoc(sessionRef, {
-        players: updatedPlayers,
-        updatedAt: serverTimestamp()
-      });
+      if (!sessionDoc.exists()) {
+        if (DEBUG_JOIN) {
+          debugError('inSessionService', `❌ JOIN FAILED: Session ${sessionId} does not exist`);
+        }
+        throw new Error(`Session ${sessionId} does not exist`);
+      }
       
-      debug('inSessionService', `Player ${player.userId} updated in session ${sessionId}`);
-    } else {
-      // Add new player
-      const updatedPlayers = [...sessionData.players, player];
-      const updatedLog = [...sessionData.battleLog, `👋 ${player.displayName} joined the session!`];
+      const sessionData = sessionDoc.data() as InSessionRoom;
       
-      await updateDoc(sessionRef, {
+      if (sessionData.status !== 'live') {
+        if (DEBUG_JOIN) {
+          debugError('inSessionService', `❌ JOIN FAILED: Session ${sessionId} is not live (status: ${sessionData.status})`);
+        }
+        throw new Error(`Session ${sessionId} is not live (status: ${sessionData.status})`);
+      }
+      
+      // Check if player already exists
+      const existingPlayerIndex = sessionData.players.findIndex(p => p.userId === player.userId);
+      const isNewPlayer = existingPlayerIndex === -1;
+      
+      // Update or add player
+      const updatedPlayers = [...sessionData.players];
+      if (isNewPlayer) {
+        updatedPlayers.push(player);
+        if (DEBUG_JOIN) {
+          debug('inSessionService', `✅ NEW PLAYER: Adding ${player.displayName} to session`);
+        }
+      } else {
+        // Update existing player with latest data (idempotent rejoin)
+        updatedPlayers[existingPlayerIndex] = { ...updatedPlayers[existingPlayerIndex], ...player };
+        if (DEBUG_JOIN) {
+          debug('inSessionService', `🔄 REJOIN: Updating existing player ${player.displayName}`);
+        }
+      }
+      
+      // Update battle log only for new players
+      const updatedLog = isNewPlayer 
+        ? [...(sessionData.battleLog || []), `👋 ${player.displayName} joined the session!`]
+        : sessionData.battleLog || [];
+      
+      // Update session document
+      transaction.update(sessionRef, {
         players: updatedPlayers,
         battleLog: updatedLog,
         updatedAt: serverTimestamp()
       });
       
-      // Initialize stats for new player
-      await initializePlayerStats(sessionId, player.userId, player.displayName, player.powerPoints);
+      // Ensure player presence doc exists
+      const presenceDoc = await transaction.get(playerPresenceRef);
+      if (!presenceDoc.exists()) {
+        transaction.set(playerPresenceRef, {
+          connected: true,
+          lastSeenAt: serverTimestamp(),
+          joinedAt: serverTimestamp()
+        });
+        if (DEBUG_JOIN) {
+          debug('inSessionService', `📝 Created presence doc for ${player.userId}`);
+        }
+      } else {
+        transaction.update(playerPresenceRef, {
+          connected: true,
+          lastSeenAt: serverTimestamp()
+        });
+        if (DEBUG_JOIN) {
+          debug('inSessionService', `🔄 Updated presence doc for ${player.userId}`);
+        }
+      }
       
-      debug('inSessionService', `Player ${player.userId} joined session ${sessionId}`);
+      return { isNewPlayer, playerCount: updatedPlayers.length };
+    });
+    
+    // Initialize stats for new player (outside transaction to avoid transaction timeout)
+    if (result.isNewPlayer) {
+      try {
+        await initializePlayerStats(sessionId, player.userId, player.displayName, player.powerPoints);
+        if (DEBUG_JOIN) {
+          debug('inSessionService', `📊 Initialized stats for new player ${player.userId}`);
+        }
+      } catch (statsError) {
+        debugError('inSessionService', `Error initializing stats for ${player.userId}`, statsError);
+        // Don't fail join if stats init fails
+      }
     }
     
-    // Ensure player presence doc exists and is marked as connected
-    const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
-    const playerPresenceDoc = await getDoc(playerPresenceRef);
-    
-    if (!playerPresenceDoc.exists()) {
-      // Create presence doc with connected: true
-      await setDoc(playerPresenceRef, {
-        connected: true,
-        lastSeenAt: serverTimestamp(),
-        joinedAt: serverTimestamp()
-      });
-    } else {
-      // Update existing presence doc to mark as connected
-      await updateDoc(playerPresenceRef, {
-        connected: true,
-        lastSeenAt: serverTimestamp()
+    if (DEBUG_JOIN) {
+      debug('inSessionService', `✅ JOIN SUCCESS: ${player.displayName} joined session ${sessionId}`, {
+        isNewPlayer: result.isNewPlayer,
+        playerCount: result.playerCount
       });
     }
     
     return true;
-  } catch (error) {
-    debugError('inSessionService', `Error joining session ${sessionId}`, error);
+  } catch (error: any) {
+    debugError('inSessionService', `❌ JOIN ERROR: Error joining session ${sessionId}`, error);
+    if (DEBUG_JOIN) {
+      console.error('Join error details:', {
+        sessionId,
+        playerId: player.userId,
+        playerName: player.displayName,
+        errorMessage: error?.message,
+        errorCode: error?.code
+      });
+    }
     return false;
   }
 }

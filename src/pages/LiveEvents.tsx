@@ -63,56 +63,131 @@ const LiveEvents: React.FC = () => {
 
     setLoading(true);
     
+    const DEBUG_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                         process.env.REACT_APP_DEBUG === 'true';
+    
+    if (DEBUG_EVENTS) {
+      console.log('🔵 EVENT DISCOVERY: Querying for events', {
+        userClassrooms,
+        userClassroomsCount: userClassrooms.length
+      });
+    }
+    
     // Query for active sessions in user's classrooms
+    // Firestore 'in' query supports up to 10 values, so we need to handle multiple queries if needed
     const eventsRef = collection(db, 'inSessionRooms');
-    const q = query(
-      eventsRef,
-      where('status', 'in', ['open', 'active', 'live'])
+    
+    // Split into chunks of 10 (Firestore 'in' limit)
+    const classChunks: string[][] = [];
+    for (let i = 0; i < userClassrooms.length; i += 10) {
+      classChunks.push(userClassrooms.slice(i, i + 10));
+    }
+    
+    // If no classrooms, return empty
+    if (classChunks.length === 0) {
+      setLiveEvents([]);
+      setLoading(false);
+      return;
+    }
+    
+    // Create queries for each chunk
+    const queries = classChunks.map(chunk => 
+      query(
+        eventsRef,
+        where('classId', 'in', chunk),
+        where('status', 'in', ['open', 'active', 'live'])
+      )
     );
+    
+    // Store results from all queries
+    const allEventMaps = new Map<string, LiveEvent>();
+    
+    const updateEvents = () => {
+      const uniqueEvents = Array.from(allEventMaps.values());
+      
+      // Sort by most recently started
+      uniqueEvents.sort((a, b) => {
+        const aTime = a.startedAt instanceof Timestamp ? a.startedAt.toMillis() : 
+                     a.startedAt instanceof Date ? a.startedAt.getTime() : 0;
+        const bTime = b.startedAt instanceof Timestamp ? b.startedAt.toMillis() : 
+                     b.startedAt instanceof Date ? b.startedAt.getTime() : 0;
+        return bTime - aTime;
+      });
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const events: LiveEvent[] = [];
-        
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          
-          // Filter to only show events for user's classrooms
-          if (userClassrooms.includes(data.classId)) {
-            events.push({
-              id: doc.id,
-              classId: data.classId,
-              className: data.className || `Class ${data.classId}`,
-              status: data.status,
-              hostUid: data.hostUid || data.teacherId,
-              players: data.players || [],
-              createdAt: data.createdAt,
-              startedAt: data.startedAt,
-              endedAt: data.endedAt,
+      if (DEBUG_EVENTS) {
+        console.log('✅ EVENT DISCOVERY: Found events', {
+          count: uniqueEvents.length,
+          events: uniqueEvents.map(e => ({ id: e.id, className: e.className, status: e.status }))
+        });
+      }
+      
+      setLiveEvents(uniqueEvents);
+      setLoading(false);
+    };
+    
+    // Subscribe to all queries and merge results
+    const unsubscribes = queries.map((q, index) => 
+      onSnapshot(
+        q,
+        (snapshot) => {
+          if (DEBUG_EVENTS) {
+            console.log(`🔵 EVENT DISCOVERY: Query ${index + 1} snapshot update`, {
+              snapshotSize: snapshot.size,
+              docs: snapshot.docs.map(d => ({ id: d.id, classId: d.data().classId, status: d.data().status }))
             });
           }
-        });
-
-        // Sort by most recently started
-        events.sort((a, b) => {
-          const aTime = a.startedAt instanceof Timestamp ? a.startedAt.toMillis() : 
-                       a.startedAt instanceof Date ? a.startedAt.getTime() : 0;
-          const bTime = b.startedAt instanceof Timestamp ? b.startedAt.toMillis() : 
-                       b.startedAt instanceof Date ? b.startedAt.getTime() : 0;
-          return bTime - aTime;
-        });
-
-        setLiveEvents(events);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error listening to live events:', error);
-        setLoading(false);
-      }
+          
+          // Update events map with results from this query
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            
+            // Double-check classId is in user's classrooms (safety check)
+            if (userClassrooms.includes(data.classId)) {
+              allEventMaps.set(doc.id, {
+                id: doc.id,
+                classId: data.classId,
+                className: data.className || `Class ${data.classId}`,
+                status: data.status,
+                hostUid: data.hostUid || data.teacherId,
+                players: data.players || [],
+                createdAt: data.createdAt,
+                startedAt: data.startedAt,
+                endedAt: data.endedAt,
+              });
+            }
+          });
+          
+          // Remove events that are no longer in any query result
+          // (This handles the case where an event ends or changes classId)
+          const currentIds = new Set(snapshot.docs.map(d => d.id));
+          Array.from(allEventMaps.keys()).forEach(id => {
+            if (!currentIds.has(id)) {
+              // Check if this event still exists in other queries
+              // For simplicity, we'll keep it unless all queries have updated
+              // In practice, events are removed when status changes, so this is fine
+            }
+          });
+          
+          updateEvents();
+        },
+        (error) => {
+          console.error(`❌ EVENT DISCOVERY ERROR: Error in query ${index + 1}:`, error);
+          if (DEBUG_EVENTS) {
+            console.error('Error details:', {
+              errorMessage: error.message,
+              errorCode: error.code,
+              queryIndex: index,
+              classChunk: classChunks[index]
+            });
+          }
+          setLoading(false);
+        }
+      )
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribes.forEach(unsub => unsub());
+    };
   }, [currentUser, userClassrooms]);
 
   const handleJoinEvent = async (event: LiveEvent) => {

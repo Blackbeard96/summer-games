@@ -548,9 +548,9 @@ const AppContent = () => {
               </ProtectedRoute>
             } />
             <Route path="/scorekeeper" element={
-              <RequireAdmin>
+              <ProtectedRoute user={true}>
                 <ScorekeeperInterface />
-              </RequireAdmin>
+              </ProtectedRoute>
             } />
             <Route path="/assessment-goals" element={
               <ProtectedRoute user={true}>
