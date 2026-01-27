@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
-import { Assessment, AssessmentGoal, HabitDuration } from '../types/assessmentGoals';
-import { setAssessmentGoal, createHabitSubmission } from '../utils/assessmentGoalsFirestore';
+import React, { useState, useEffect } from 'react';
+import { Assessment, AssessmentGoal, HabitDuration, HabitSubmission } from '../types/assessmentGoals';
+import { setAssessmentGoal, createHabitSubmission, updateHabitSubmissionGoal } from '../utils/assessmentGoalsFirestore';
 import { validateGoalScore } from '../utils/assessmentGoals';
 import { useAuth } from '../context/AuthContext';
 
 interface SetGoalModalProps {
   assessment: Assessment;
   existingGoal?: AssessmentGoal;
+  existingHabitSubmission?: HabitSubmission;
   onClose: () => void;
   onSave: () => void;
 }
@@ -14,6 +15,7 @@ interface SetGoalModalProps {
 const SetGoalModal: React.FC<SetGoalModalProps> = ({
   assessment,
   existingGoal,
+  existingHabitSubmission,
   onClose,
   onSave
 }) => {
@@ -26,10 +28,20 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   );
   
   // For Habits assessments (text + duration)
-  const [habitText, setHabitText] = useState<string>('');
-  const [duration, setDuration] = useState<HabitDuration>(
-    assessment.habitsConfig?.defaultDuration || '1_week'
+  const [habitText, setHabitText] = useState<string>(
+    existingHabitSubmission?.habitText || ''
   );
+  const [duration, setDuration] = useState<HabitDuration>(
+    existingHabitSubmission?.duration || assessment.habitsConfig?.defaultDuration || '1_week'
+  );
+  
+  // Update form when existingHabitSubmission changes
+  useEffect(() => {
+    if (existingHabitSubmission) {
+      setHabitText(existingHabitSubmission.habitText);
+      setDuration(existingHabitSubmission.duration);
+    }
+  }, [existingHabitSubmission]);
   
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -72,14 +84,23 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           return;
         }
         
-        // Create habit submission
-        await createHabitSubmission(
-          assessment.id,
-          currentUser.uid,
-          assessment.classId,
-          trimmedText,
-          duration
-        );
+        // Update existing habit submission or create new one
+        if (existingHabitSubmission) {
+          await updateHabitSubmissionGoal(
+            assessment.id,
+            currentUser.uid,
+            trimmedText,
+            duration
+          );
+        } else {
+          await createHabitSubmission(
+            assessment.id,
+            currentUser.uid,
+            assessment.classId,
+            trimmedText,
+            duration
+          );
+        }
         
         // Store saved data for preview
         setSavedGoalData({
@@ -272,7 +293,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>
-          {existingGoal ? 'Update Goal' : isHabits ? 'Commit to Habit' : 'Set Goal'}
+          {existingGoal || existingHabitSubmission ? 'Edit Goal' : isHabits ? 'Commit to Habit' : 'Set Goal'}
         </h2>
         
         <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
@@ -456,7 +477,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                 fontWeight: 'bold'
               }}
             >
-              {saving ? 'Saving...' : existingGoal ? 'Update Goal' : (isHabits ? 'Commit' : 'Set Goal')}
+              {saving ? 'Saving...' : (existingGoal || existingHabitSubmission) ? 'Update Goal' : (isHabits ? 'Commit' : 'Set Goal')}
             </button>
           </div>
         </form>

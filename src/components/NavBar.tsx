@@ -49,9 +49,9 @@ const getNavItemStyle = (screenSize: 'mobile' | 'tablet' | 'desktop'): CSSProper
     case 'mobile':
       return { ...baseStyle, padding: '0.25rem 0.5rem', fontSize: '0.75rem' };
     case 'tablet':
-      return { ...baseStyle, padding: '0.375rem 0.625rem', fontSize: '0.8125rem' };
+      return { ...baseStyle, padding: '0.375rem 0.5rem', fontSize: '0.8125rem' };
     case 'desktop':
-      return { ...baseStyle, padding: '0.5rem 0.875rem', fontSize: '0.9375rem' };
+      return { ...baseStyle, padding: '0.5rem 0.625rem', fontSize: '0.875rem' };
     default:
       return baseStyle;
   }
@@ -658,8 +658,24 @@ const NavBar = memo(() => {
   // Flatten and filter nav items based on role
   const allNavItems = useMemo(() => {
     if (!currentUser) return [];
-    return flattenNavConfig(navConfig, role);
-  }, [navConfig, currentUser, role]);
+    // Determine effective role - if user has scorekeeper role, use 'scorekeeper', otherwise use the role from auth
+    const effectiveRole = (userRole === 'scorekeeper' || hasScorekeeperRole) ? 'scorekeeper' : role;
+    const filtered = flattenNavConfig(navConfig, effectiveRole, hasScorekeeperRole);
+    
+    // Debug logging for scorekeeper tab
+    if (process.env.NODE_ENV === 'development') {
+      const scorekeeperTab = filtered.find(item => item.label === 'Scorekeepers');
+      console.log(`🔍 NavBar allNavItems - effectiveRole: ${effectiveRole}, hasScorekeeperRole: ${hasScorekeeperRole}, scorekeeperTab found: ${!!scorekeeperTab}`);
+      if (scorekeeperTab) {
+        console.log(`✅ Scorekeepers tab found in allNavItems:`, scorekeeperTab);
+      } else {
+        console.log(`❌ Scorekeepers tab NOT found in allNavItems. Total items: ${filtered.length}`);
+        console.log(`   Available items:`, filtered.map(item => `${item.label} (${item.visibility})`));
+      }
+    }
+    
+    return filtered;
+  }, [navConfig, currentUser, role, userRole, hasScorekeeperRole]);
 
   // Separate primary (priority 1) and secondary (priority 2) items
   const primaryNavItems = useMemo(() => {
@@ -675,14 +691,16 @@ const NavBar = memo(() => {
   // User nav items (for mobile menu and legacy code)
   const userNavItems = useMemo(() => {
     // Second section items (user nav) - now used for mobile menu
-    return navConfig[1]?.items ? filterNavItemsByRole(navConfig[1].items, role) : [];
-  }, [navConfig, role]);
+    const effectiveRole = (userRole === 'scorekeeper' || hasScorekeeperRole) ? 'scorekeeper' : role;
+    return navConfig[1]?.items ? filterNavItemsByRole(navConfig[1].items, effectiveRole, hasScorekeeperRole) : [];
+  }, [navConfig, role, userRole, hasScorekeeperRole]);
 
   // Admin nav items (third section)
   const adminNavItems = useMemo(() => {
     if (!isAdminUser) return [];
-    return navConfig[2]?.items ? filterNavItemsByRole(navConfig[2].items, role) : [];
-  }, [navConfig, role, isAdminUser]);
+    const effectiveRole = (userRole === 'scorekeeper' || hasScorekeeperRole) ? 'scorekeeper' : role;
+    return navConfig[2]?.items ? filterNavItemsByRole(navConfig[2].items, effectiveRole, hasScorekeeperRole) : [];
+  }, [navConfig, role, userRole, hasScorekeeperRole, isAdminUser]);
 
   // Profile sub-menu items (from user nav items)
   const profileSubItems = useMemo(() => {
@@ -700,21 +718,33 @@ const NavBar = memo(() => {
     });
   }, [allNavItems, userRole, hasScorekeeperRole]);
 
+  // Calculate effective role for debugging
+  const effectiveRole = useMemo(() => {
+    return (userRole === 'scorekeeper' || hasScorekeeperRole) ? 'scorekeeper' : role;
+  }, [userRole, hasScorekeeperRole, role]);
+
   // Debug navigation items generation
   logger.roles.debug('NavBar: Navigation items generated:', {
     currentUser: !!currentUser,
     userEmail: currentUser?.email,
     userRole,
+    role,
+    effectiveRole,
+    hasScorekeeperRole,
     scorekeeperNavItems: scorekeeperNavItems.length,
     userNavItems: userNavItems.length,
-    adminNavItems: adminNavItems.length
+    adminNavItems: adminNavItems.length,
+    allNavItems: allNavItems.length,
+    primaryNavItems: primaryNavItems.length,
+    navItems: navItems.length
   });
 
   // Temporary debug indicator for role detection
   if (currentUser && process.env.NODE_ENV === 'development') {
-    console.log(`🎯 NavBar Debug - User: ${currentUser.email}, Role: ${userRole}, Scorekeeper items: ${scorekeeperNavItems.length}`);
-    console.log(`🔍 Scorekeeper check - userRole: ${userRole}, email: ${currentUser.email}`);
-    console.log(`🔍 hasScorekeeperRole: ${hasScorekeeperRole}`);
+    console.log(`🎯 NavBar Debug - User: ${currentUser.email}, Role: ${userRole}, Auth Role: ${role}, Effective Role: ${effectiveRole}`);
+    console.log(`🔍 Scorekeeper check - userRole: ${userRole}, hasScorekeeperRole: ${hasScorekeeperRole}, effectiveRole: ${effectiveRole}`);
+    console.log(`🔍 Navigation items - allNavItems: ${allNavItems.length}, primaryNavItems: ${primaryNavItems.length}, navItems: ${navItems.length}`);
+    console.log(`🔍 navItems labels:`, navItems.map(item => item.label));
     console.log(`🔍 scorekeeperNavItems:`, scorekeeperNavItems);
   }
 
@@ -741,7 +771,7 @@ const NavBar = memo(() => {
       )}
       <nav className="nav" style={{
         backgroundColor: '#1f2937',
-        padding: screenSize === 'mobile' ? '0.75rem 1rem' : screenSize === 'tablet' ? '0.875rem 1.25rem' : '1rem 1.5rem',
+        padding: screenSize === 'mobile' ? '0.75rem 1rem' : screenSize === 'tablet' ? '0.875rem 1rem' : '0.875rem 1.25rem',
         boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
         position: 'sticky',
         top: 0,
@@ -753,7 +783,7 @@ const NavBar = memo(() => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: screenSize === 'tablet' ? '0.5rem' : '0.75rem',
+        gap: screenSize === 'tablet' ? '0.375rem' : '0.5rem',
         flexWrap: 'nowrap', // NEVER wrap - single row always
         width: '100%',
         minWidth: 0, // Allow container to shrink if needed
@@ -792,7 +822,7 @@ const NavBar = memo(() => {
         {!isMobile && (
           <div style={{
             display: 'flex',
-            gap: screenSize === 'tablet' ? '0.375rem' : '0.5rem',
+            gap: screenSize === 'tablet' ? '0.25rem' : '0.375rem',
             alignItems: 'center',
             flexWrap: 'nowrap', // NO WRAPPING - single row only
             justifyContent: 'center',
@@ -809,6 +839,7 @@ const NavBar = memo(() => {
                   ...getNavItemStyle(screenSize), 
                   position: 'relative', 
                   flexShrink: 0,
+                  flexGrow: 0,
                   pointerEvents: 'auto' // Ensure hover events work
                 }} 
                 onMouseEnter={(e) => {
@@ -887,7 +918,9 @@ const NavBar = memo(() => {
                   >
                     {item.children.map((subItem) => {
                       // Filter children by role
-                      if (subItem.visibility === 'admin' && role !== 'admin') return null;
+                      const effectiveRole = (userRole === 'scorekeeper' || hasScorekeeperRole) ? 'scorekeeper' : role;
+                      if (subItem.visibility === 'admin' && effectiveRole !== 'admin') return null;
+                      if (subItem.visibility === 'scorekeeper' && effectiveRole !== 'scorekeeper' && !hasScorekeeperRole) return null;
                       
                       return subItem.isButton ? (
                         <button

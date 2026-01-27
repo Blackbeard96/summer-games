@@ -17,14 +17,14 @@ export type NavItem = {
   isButton?: boolean;
   onClick?: () => void;
   children?: NavItem[];
-  visibility?: 'all' | 'student' | 'admin'; // Who can see this item
+  visibility?: 'all' | 'student' | 'admin' | 'scorekeeper'; // Who can see this item
   priority?: 1 | 2; // 1 = Primary (always visible), 2 = Secondary (in "More" dropdown)
 };
 
 export type NavSection = {
   label?: string;
   items: NavItem[];
-  visibility?: 'all' | 'student' | 'admin';
+  visibility?: 'all' | 'student' | 'admin' | 'scorekeeper';
 };
 
 /**
@@ -122,7 +122,7 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               label: 'Scorekeeper',
               path: '/scorekeeper',
               icon: '📊',
-              visibility: 'admin'
+              visibility: 'admin' // Keep in dropdown for admins
             },
             {
               label: 'Sage\'s Chamber',
@@ -131,6 +131,13 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'admin'
             }
           ]
+        },
+        {
+          label: 'Scorekeepers',
+          path: '/scorekeeper',
+          tooltip: 'Manage class power points',
+          visibility: 'scorekeeper',
+          priority: 1
         },
         {
           label: 'Artifacts',
@@ -218,7 +225,7 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
 /**
  * Filter nav items based on user role
  */
-export const filterNavItemsByRole = (items: NavItem[], role: 'student' | 'admin' | null): NavItem[] => {
+export const filterNavItemsByRole = (items: NavItem[], role: 'student' | 'admin' | 'scorekeeper' | null, isScorekeeper?: boolean): NavItem[] => {
   return items
     .filter(item => {
       // If visibility not specified, show to all
@@ -227,6 +234,14 @@ export const filterNavItemsByRole = (items: NavItem[], role: 'student' | 'admin'
       // Filter by role
       if (item.visibility === 'admin' && role !== 'admin') return false;
       if (item.visibility === 'student' && role === 'admin') return false; // Students-only items hidden from admin
+      // Show scorekeeper items if role is 'scorekeeper', isScorekeeper flag is true, OR user is admin
+      if (item.visibility === 'scorekeeper') {
+        const shouldShow = role === 'scorekeeper' || isScorekeeper === true || role === 'admin';
+        if (process.env.NODE_ENV === 'development' && item.label === 'Scorekeepers') {
+          console.log(`🔍 Filtering Scorekeepers tab - role: ${role}, isScorekeeper: ${isScorekeeper}, shouldShow: ${shouldShow}`);
+        }
+        return shouldShow;
+      }
       
       return true;
     })
@@ -241,7 +256,7 @@ export const filterNavItemsByRole = (items: NavItem[], role: 'student' | 'admin'
         if (item.children) {
           return {
             ...itemWithTo,
-            children: filterNavItemsByRole(item.children, role).map(child => ({
+            children: filterNavItemsByRole(item.children, role, isScorekeeper).map(child => ({
               ...child,
               to: child.path
             }))
@@ -254,17 +269,37 @@ export const filterNavItemsByRole = (items: NavItem[], role: 'student' | 'admin'
 /**
  * Flatten nav sections into a single array of items
  */
-export const flattenNavConfig = (sections: NavSection[], role: 'student' | 'admin' | null): NavItem[] => {
+export const flattenNavConfig = (sections: NavSection[], role: 'student' | 'admin' | 'scorekeeper' | null, isScorekeeper?: boolean): NavItem[] => {
   const allItems: NavItem[] = [];
+  
+  // Debug logging
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`🔍 flattenNavConfig called with role: ${role}, isScorekeeper: ${isScorekeeper}`);
+  }
   
   for (const section of sections) {
     // Check section visibility
     if (section.visibility === 'admin' && role !== 'admin') continue;
     if (section.visibility === 'student' && role === 'admin') continue;
+    if (section.visibility === 'scorekeeper' && role !== 'scorekeeper' && !isScorekeeper) continue;
     
     // Filter and add items
-    const filteredItems = filterNavItemsByRole(section.items, role);
+    const filteredItems = filterNavItemsByRole(section.items, role, isScorekeeper);
+    
+    // Debug logging for scorekeeper tab
+    if (process.env.NODE_ENV === 'development') {
+      const scorekeeperTab = filteredItems.find(item => item.label === 'Scorekeepers');
+      if (scorekeeperTab) {
+        console.log(`✅ Scorekeepers tab found in section, adding to allItems`);
+      }
+    }
+    
     allItems.push(...filteredItems);
+  }
+  
+  if (process.env.NODE_ENV === 'development') {
+    const scorekeeperTab = allItems.find(item => item.label === 'Scorekeepers');
+    console.log(`🔍 flattenNavConfig result - total items: ${allItems.length}, Scorekeepers tab: ${!!scorekeeperTab}`);
   }
   
   return allItems;

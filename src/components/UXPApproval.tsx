@@ -34,13 +34,60 @@ const UXPApproval: React.FC = () => {
     try {
       const allPending: PendingUXPArtifact[] = [];
 
-      // Query all users to find pending UXP artifacts
-      const usersRef = collection(db, 'users');
-      const usersSnapshot = await getDocs(usersRef);
+      // Fetch all user info upfront to create a lookup map
+      const [usersSnapshot, studentsSnapshot] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'students'))
+      ]);
 
+      // Create a map of user info from both collections
+      const userInfoMap = new Map<string, { displayName: string; email: string }>();
+      
+      // Process users collection
+      usersSnapshot.docs.forEach(doc => {
+        const userData = doc.data();
+        const displayName = userData.displayName || userData.name || userData.username || null;
+        const email = userData.email || null;
+        
+        if (displayName || email) {
+          userInfoMap.set(doc.id, {
+            displayName: displayName || `User ${doc.id.substring(0, 8)}`,
+            email: email || 'No email'
+          });
+        }
+      });
+      
+      // Process students collection (students collection takes precedence if both exist)
+      studentsSnapshot.docs.forEach(doc => {
+        const studentData = doc.data();
+        const displayName = studentData.displayName || studentData.name || studentData.username || null;
+        const email = studentData.email || null;
+        
+        // Only update if we have better info or if user wasn't in users collection
+        const existing = userInfoMap.get(doc.id);
+        if (!existing || (displayName && email)) {
+          userInfoMap.set(doc.id, {
+            displayName: displayName || existing?.displayName || `User ${doc.id.substring(0, 8)}`,
+            email: email || existing?.email || 'No email'
+          });
+        }
+      });
+
+      // Helper function to get user info from map
+      const getUserInfo = (userId: string): { displayName: string; email: string } => {
+        return userInfoMap.get(userId) || {
+          displayName: `User ${userId.substring(0, 8)}`,
+          email: 'No email'
+        };
+      };
+
+      // Query all users to find pending UXP artifacts
       for (const userDoc of usersSnapshot.docs) {
         const userData = userDoc.data();
         const artifacts = userData.artifacts || {};
+
+        // Get user info from map
+        const userInfo = getUserInfo(userDoc.id);
 
         // Check if artifacts is an array
         if (Array.isArray(artifacts)) {
@@ -49,8 +96,8 @@ const UXPApproval: React.FC = () => {
               if (artifact.pendingApproval === true || artifact.approvalStatus === 'pending') {
                 allPending.push({
                   userId: userDoc.id,
-                  userDisplayName: userData.displayName || 'Unknown',
-                  userEmail: userData.email || 'Unknown',
+                  userDisplayName: userInfo.displayName,
+                  userEmail: userInfo.email,
                   artifactId: artifact.id,
                   artifactName: artifact.name,
                   artifactData: artifact,
@@ -71,8 +118,8 @@ const UXPApproval: React.FC = () => {
                   const baseId = key.replace('_purchase', '');
                   allPending.push({
                     userId: userDoc.id,
-                    userDisplayName: userData.displayName || 'Unknown',
-                    userEmail: userData.email || 'Unknown',
+                    userDisplayName: userInfo.displayName,
+                    userEmail: userInfo.email,
                     artifactId: artifact.id || baseId,
                     artifactName: artifact.name,
                     artifactData: artifact,
@@ -88,12 +135,12 @@ const UXPApproval: React.FC = () => {
       }
 
       // Also check students collection
-      const studentsRef = collection(db, 'students');
-      const studentsSnapshot = await getDocs(studentsRef);
-
       for (const studentDoc of studentsSnapshot.docs) {
         const studentData = studentDoc.data();
         const artifacts = studentData.artifacts || {};
+
+        // Get user info from map
+        const userInfo = getUserInfo(studentDoc.id);
 
         // Students collection uses object format
         Object.keys(artifacts).forEach(key => {
@@ -110,8 +157,8 @@ const UXPApproval: React.FC = () => {
                 if (!exists) {
                   allPending.push({
                     userId: studentDoc.id,
-                    userDisplayName: studentData.displayName || 'Unknown',
-                    userEmail: studentData.email || 'Unknown',
+                    userDisplayName: userInfo.displayName,
+                    userEmail: userInfo.email,
                     artifactId: artifact.id || baseId,
                     artifactName: artifact.name,
                     artifactData: artifact,

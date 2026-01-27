@@ -265,9 +265,28 @@ const AssessmentGoalsStudent: React.FC = () => {
               {/* Goal Display */}
               {assessment.type === 'habits' && habitSubmissions.get(assessment.id) ? (
                 <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '0.5rem', border: '2px solid #10b981' }}>
-                  <p style={{ margin: 0, marginBottom: '0.5rem', fontWeight: 'bold', color: '#10b981' }}>
-                    ✅ Your Habit Commitment:
-                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                    <p style={{ margin: 0, fontWeight: 'bold', color: '#10b981' }}>
+                      ✅ Your Habit Commitment:
+                    </p>
+                    {!assessment.isLocked && (
+                      <button
+                        onClick={() => handleSetGoal(assessment)}
+                        style={{
+                          padding: '0.375rem 0.75rem',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.375rem',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                   <p style={{ margin: 0, marginBottom: '0.5rem', fontStyle: 'italic', color: '#374151' }}>
                     "{habitSubmissions.get(assessment.id)!.habitText}"
                   </p>
@@ -319,6 +338,7 @@ const AssessmentGoalsStudent: React.FC = () => {
         <SetGoalModal
           assessment={selectedAssessment}
           existingGoal={selectedAssessment.goal || undefined}
+          existingHabitSubmission={selectedAssessment.type === 'habits' ? (habitSubmissions.get(selectedAssessment.id) || undefined) : undefined}
           onClose={() => {
             setShowSetGoalModal(false);
             setSelectedAssessment(null);

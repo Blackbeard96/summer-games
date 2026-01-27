@@ -934,6 +934,47 @@ export async function getHabitSubmission(
 }
 
 /**
+ * Updates an existing habit submission goal (allows editing habit text and duration)
+ * This is separate from the status/verification update function
+ */
+export async function updateHabitSubmissionGoal(
+  assessmentId: string,
+  studentId: string,
+  habitText: string,
+  duration: HabitDuration
+): Promise<void> {
+  const submissionId = generateHabitSubmissionId(assessmentId, studentId);
+  const submissionRef = doc(db, 'habitSubmissions', submissionId);
+  const submissionDoc = await getDoc(submissionRef);
+  
+  if (!submissionDoc.exists()) {
+    throw new Error('Habit submission not found');
+  }
+  
+  const existingSubmission = submissionDoc.data() as HabitSubmission;
+  
+  // Recalculate end date and required check-ins if duration changed
+  let endAt = existingSubmission.endAt;
+  let requiredCheckIns = existingSubmission.requiredCheckIns;
+  
+  if (duration !== existingSubmission.duration) {
+    const startDate = existingSubmission.startAt.toDate();
+    const { calculateEndDate, getRequiredCheckIns } = await import('./habitSubmissions');
+    const endDate = calculateEndDate(startDate, duration);
+    endAt = Timestamp.fromDate(endDate);
+    requiredCheckIns = getRequiredCheckIns(duration);
+  }
+  
+  await updateDoc(submissionRef, {
+    habitText: habitText.trim(),
+    duration,
+    endAt,
+    requiredCheckIns,
+    updatedAt: Timestamp.now()
+  });
+}
+
+/**
  * Gets all habit submissions for an assessment
  */
 export async function getHabitSubmissionsByAssessment(assessmentId: string): Promise<HabitSubmission[]> {
