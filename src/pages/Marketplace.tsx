@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, addDoc, collection, runTransaction } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { activatePPBoost, getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
@@ -655,7 +655,10 @@ const Marketplace = () => {
 
   // Function to handle using an artifact
   const handleUseArtifact = async (artifactName: string) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('❌ You must be logged in to use artifacts.');
+      return;
+    }
 
     // Handle Instant A - show ERROR 1001 and don't consume the item
     if (artifactName === 'Instant A') {
@@ -665,10 +668,45 @@ const Marketplace = () => {
 
     try {
       const userRef = doc(db, 'students', currentUser.uid);
+      const usersRef = doc(db, 'users', currentUser.uid);
       
-      // Get current user data
-      const userSnap = await getDoc(userRef);
+      // Get current user data from both collections
+      const [userSnap, usersSnap] = await Promise.all([
+        getDoc(userRef),
+        getDoc(usersRef)
+      ]);
+      
       const currentUserData = userSnap.exists() ? userSnap.data() : {};
+      const currentUsersData = usersSnap.exists() ? usersSnap.data() : {};
+      
+      // Check if artifact exists in either collection
+      const studentsInventory = currentUserData.inventory || [];
+      const usersArtifacts = currentUsersData.artifacts || [];
+      
+      // Check if artifact exists in students inventory
+      const inStudentsInventory = studentsInventory.includes(artifactName);
+      
+      // Check if artifact exists in users artifacts (not used)
+      const inUsersArtifacts = usersArtifacts.some((artifact: any) => {
+        if (typeof artifact === 'string') {
+          return artifact === artifactName;
+        } else {
+          const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+          return artifact.name === artifactName && isNotUsed;
+        }
+      });
+      
+      if (!inStudentsInventory && !inUsersArtifacts) {
+        alert(`❌ You don't have "${artifactName}" in your inventory. Please refresh the page and try again.`);
+        // Refresh inventory
+        await updateAllArtifactCounts();
+        const refreshedSnap = await getDoc(userRef);
+        if (refreshedSnap.exists()) {
+          const refreshedData = refreshedSnap.data();
+          setInventory(refreshedData.inventory || []);
+        }
+        return;
+      }
       
       // Handle Health Potion (25) - check if it can be used before consuming
       if (artifactName === 'Health Potion (25)') {
@@ -690,61 +728,78 @@ const Marketplace = () => {
         const healthToRestore = Math.min(25, maxVaultHealth - currentVaultHealth);
         const newVaultHealth = currentVaultHealth + healthToRestore;
         
-        // Remove one instance of the artifact from inventory
-        const updatedInventory = [...inventory];
-        const artifactIndex = updatedInventory.indexOf(artifactName);
-        if (artifactIndex > -1) {
-          updatedInventory.splice(artifactIndex, 1);
-        }
-        
         // Restore health
         await updateVault({ vaultHealth: newVaultHealth });
         
-        // Update user's inventory in students collection
-        await updateDoc(userRef, {
-          inventory: updatedInventory
-        });
-
-        // Also update the users collection artifacts array to match Profile system
+        // Update both collections atomically using a transaction
         const usersRef = doc(db, 'users', currentUser.uid);
-        const usersSnap = await getDoc(usersRef);
-        if (usersSnap.exists()) {
-          const usersData = usersSnap.data();
-          const currentArtifacts = usersData.artifacts || [];
+        await runTransaction(db, async (transaction) => {
+          // Re-read documents to ensure we have latest data
+          const freshUserSnap = await transaction.get(userRef);
+          const freshUsersSnap = await transaction.get(usersRef);
           
-          let foundOne = false;
-          const updatedArtifacts = currentArtifacts.map((artifact: any) => {
-            if (foundOne) return artifact;
+          if (!freshUserSnap.exists()) {
+            throw new Error('User document not found in students collection');
+          }
+          
+          const freshUserData = freshUserSnap.data();
+          const freshInventory = freshUserData.inventory || [];
+          
+          // Remove artifact from students inventory
+          const freshUpdatedInventory = [...freshInventory];
+          const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+          if (freshArtifactIndex > -1) {
+            freshUpdatedInventory.splice(freshArtifactIndex, 1);
+          }
+          
+          // Update students collection
+          transaction.update(userRef, {
+            inventory: freshUpdatedInventory
+          });
+          
+          // Update users collection artifacts array
+          if (freshUsersSnap.exists()) {
+            const freshUsersData = freshUsersSnap.data();
+            const freshArtifacts = freshUsersData.artifacts || [];
             
-            if (typeof artifact === 'string') {
-              if (artifact === artifactName) {
-                foundOne = true;
-                return { 
-                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                  name: artifactName,
-                  used: true,
-                  usedAt: new Date(),
-                  isLegacy: true
-                };
+            let foundOne = false;
+            const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
+              if (foundOne) return artifact;
+              
+              if (typeof artifact === 'string') {
+                if (artifact === artifactName) {
+                  foundOne = true;
+                  return { 
+                    id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                    name: artifactName,
+                    used: true,
+                    usedAt: new Date(),
+                    isLegacy: true
+                  };
+                }
+                return artifact;
+              } else {
+                const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+                if (artifact.name === artifactName && isNotUsed) {
+                  foundOne = true;
+                  return { ...artifact, used: true, usedAt: new Date() };
+                }
+                return artifact;
               }
-              return artifact;
-            } else {
-              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-              if (artifact.name === artifactName && isNotUsed) {
-                foundOne = true;
-                return { ...artifact, used: true, usedAt: new Date() };
-              }
-              return artifact;
-            }
-          });
-          
-          await updateDoc(usersRef, {
-            artifacts: updatedArtifacts
-          });
+            });
+            
+            transaction.update(usersRef, {
+              artifacts: freshUpdatedArtifacts
+            });
+          }
+        });
+        
+        // Refresh local state
+        const refreshedSnap = await getDoc(userRef);
+        if (refreshedSnap.exists()) {
+          const refreshedData = refreshedSnap.data();
+          setInventory(refreshedData.inventory || []);
         }
-
-        // Update local state
-        setInventory(updatedInventory);
         
         // Refresh artifact counts
         await updateAllArtifactCounts();
@@ -774,58 +829,75 @@ const Marketplace = () => {
         // Add overshield to vault
         await updateVault({ overshield: 1 });
         
-        // Remove one instance of the artifact from inventory
-        const updatedInventory = [...inventory];
-        const artifactIndex = updatedInventory.indexOf(artifactName);
-        if (artifactIndex > -1) {
-          updatedInventory.splice(artifactIndex, 1);
-        }
-        
-        // Update user's inventory in students collection
-        await updateDoc(userRef, {
-          inventory: updatedInventory
-        });
-
-        // Also update the users collection artifacts array
+        // Update both collections atomically using a transaction
         const usersRef = doc(db, 'users', currentUser.uid);
-        const usersSnap = await getDoc(usersRef);
-        if (usersSnap.exists()) {
-          const usersData = usersSnap.data();
-          const currentArtifacts = usersData.artifacts || [];
+        await runTransaction(db, async (transaction) => {
+          // Re-read documents to ensure we have latest data
+          const freshUserSnap = await transaction.get(userRef);
+          const freshUsersSnap = await transaction.get(usersRef);
           
-          let foundOne = false;
-          const updatedArtifacts = currentArtifacts.map((artifact: any) => {
-            if (foundOne) return artifact;
+          if (!freshUserSnap.exists()) {
+            throw new Error('User document not found in students collection');
+          }
+          
+          const freshUserData = freshUserSnap.data();
+          const freshInventory = freshUserData.inventory || [];
+          
+          // Remove artifact from students inventory
+          const freshUpdatedInventory = [...freshInventory];
+          const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+          if (freshArtifactIndex > -1) {
+            freshUpdatedInventory.splice(freshArtifactIndex, 1);
+          }
+          
+          // Update students collection
+          transaction.update(userRef, {
+            inventory: freshUpdatedInventory
+          });
+          
+          // Update users collection artifacts array
+          if (freshUsersSnap.exists()) {
+            const freshUsersData = freshUsersSnap.data();
+            const freshArtifacts = freshUsersData.artifacts || [];
             
-            if (typeof artifact === 'string') {
-              if (artifact === artifactName) {
-                foundOne = true;
-                return { 
-                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                  name: artifactName,
-                  used: true,
-                  usedAt: new Date(),
-                  isLegacy: true
-                };
+            let foundOne = false;
+            const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
+              if (foundOne) return artifact;
+              
+              if (typeof artifact === 'string') {
+                if (artifact === artifactName) {
+                  foundOne = true;
+                  return { 
+                    id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                    name: artifactName,
+                    used: true,
+                    usedAt: new Date(),
+                    isLegacy: true
+                  };
+                }
+                return artifact;
+              } else {
+                const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+                if (artifact.name === artifactName && isNotUsed) {
+                  foundOne = true;
+                  return { ...artifact, used: true, usedAt: new Date() };
+                }
+                return artifact;
               }
-              return artifact;
-            } else {
-              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-              if (artifact.name === artifactName && isNotUsed) {
-                foundOne = true;
-                return { ...artifact, used: true, usedAt: new Date() };
-              }
-              return artifact;
-            }
-          });
-          
-          await updateDoc(usersRef, {
-            artifacts: updatedArtifacts
-          });
+            });
+            
+            transaction.update(usersRef, {
+              artifacts: freshUpdatedArtifacts
+            });
+          }
+        });
+        
+        // Refresh local state
+        const refreshedSnap = await getDoc(userRef);
+        if (refreshedSnap.exists()) {
+          const refreshedData = refreshedSnap.data();
+          setInventory(refreshedData.inventory || []);
         }
-
-        // Update local state
-        setInventory(updatedInventory);
         
         // Refresh artifact counts
         await updateAllArtifactCounts();
@@ -835,10 +907,15 @@ const Marketplace = () => {
       }
       
       // Remove one instance of the artifact from inventory
-      const updatedInventory = [...inventory];
+      // Use the actual data from Firestore, not local state
+      const updatedInventory = [...studentsInventory];
       const artifactIndex = updatedInventory.indexOf(artifactName);
       if (artifactIndex > -1) {
         updatedInventory.splice(artifactIndex, 1);
+      } else {
+        // Artifact not in students inventory but might be in users artifacts
+        // This can happen if there's a sync issue - we'll handle it below
+        console.warn(`Artifact "${artifactName}" not found in students inventory, but may exist in users artifacts`);
       }
       
       // Handle special artifacts
@@ -892,58 +969,74 @@ const Marketplace = () => {
         alert(`✨ ${artifactName} used!`);
       }
       
-      // Update user's inventory in students collection
-      await updateDoc(userRef, {
-        inventory: updatedInventory
+      // Update both collections atomically using a transaction
+      // usersRef is already declared at the top of the try block
+      await runTransaction(db, async (transaction) => {
+        // Re-read documents to ensure we have latest data
+        const freshUserSnap = await transaction.get(userRef);
+        const freshUsersSnap = await transaction.get(usersRef);
+        
+        if (!freshUserSnap.exists()) {
+          throw new Error('User document not found in students collection');
+        }
+        
+        const freshUserData = freshUserSnap.data();
+        const freshInventory = freshUserData.inventory || [];
+        
+        // Remove artifact from students inventory
+        const freshUpdatedInventory = [...freshInventory];
+        const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+        if (freshArtifactIndex > -1) {
+          freshUpdatedInventory.splice(freshArtifactIndex, 1);
+        }
+        
+        // Update students collection
+        transaction.update(userRef, {
+          inventory: freshUpdatedInventory
+        });
+        
+        // Update users collection artifacts array
+        if (freshUsersSnap.exists()) {
+          const freshUsersData = freshUsersSnap.data();
+          const freshArtifacts = freshUsersData.artifacts || [];
+          
+          // Find the FIRST unused artifact with this name and mark only that one as used
+          let foundOne = false;
+          const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
+            // If we already found and marked one, don't mark any more
+            if (foundOne) return artifact;
+            
+            if (typeof artifact === 'string') {
+              // Legacy artifact stored as string - match by name
+              if (artifact === artifactName) {
+                foundOne = true;
+                return { 
+                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                  name: artifactName,
+                  used: true,
+                  usedAt: new Date(),
+                  isLegacy: true
+                };
+              }
+              return artifact;
+            } else {
+              // New artifact stored as object - match by name and check if not already used
+              // Only mark as used if it's not already used (check for used property explicitly)
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
+            }
+          });
+          
+          transaction.update(usersRef, {
+            artifacts: freshUpdatedArtifacts
+          });
+        }
       });
 
-      // Also update the users collection artifacts array to match Profile system
-      // IMPORTANT: Only mark ONE instance as used, not all of them
-      const usersRef = doc(db, 'users', currentUser.uid);
-      const usersSnap = await getDoc(usersRef);
-      if (usersSnap.exists()) {
-        const usersData = usersSnap.data();
-        const currentArtifacts = usersData.artifacts || [];
-        
-        // Find the FIRST unused artifact with this name and mark only that one as used
-        let foundOne = false;
-        const updatedArtifacts = currentArtifacts.map((artifact: any) => {
-          // If we already found and marked one, don't mark any more
-          if (foundOne) return artifact;
-          
-          if (typeof artifact === 'string') {
-            // Legacy artifact stored as string - match by name
-            if (artifact === artifactName) {
-              foundOne = true;
-              return { 
-                id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                name: artifactName,
-                used: true,
-                usedAt: new Date(),
-                isLegacy: true
-              };
-            }
-            return artifact;
-          } else {
-            // New artifact stored as object - match by name and check if not already used
-            // Only mark as used if it's not already used (check for used property explicitly)
-            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-            if (artifact.name === artifactName && isNotUsed) {
-              foundOne = true;
-              return { ...artifact, used: true, usedAt: new Date() };
-            }
-            return artifact;
-          }
-        });
-        
-        await updateDoc(usersRef, {
-          artifacts: updatedArtifacts
-        });
-      }
-
-      // Update local state
-      setInventory(updatedInventory);
-      
       // Refresh user data to ensure consistency
       const refreshedUserSnap = await getDoc(userRef);
       if (refreshedUserSnap.exists()) {
@@ -956,11 +1049,40 @@ const Marketplace = () => {
       await updateAllArtifactCounts();
       
       if (artifactName !== 'Double PP Boost') {
-        alert(`Used ${artifactName}!`);
+        alert(`✅ Used ${artifactName}!`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error using artifact:', error);
-      alert('Failed to use artifact. Please try again.');
+      
+      // Provide more specific error messages
+      let errorMessage = 'Failed to use artifact. Please try again.';
+      
+      if (error?.message) {
+        if (error.message.includes('not found')) {
+          errorMessage = `❌ Artifact "${artifactName}" not found. Please refresh the page and try again.`;
+        } else if (error.message.includes('permission')) {
+          errorMessage = '❌ Permission denied. Please make sure you are logged in.';
+        } else if (error.message.includes('network') || error.message.includes('offline')) {
+          errorMessage = '❌ Network error. Please check your connection and try again.';
+        } else {
+          errorMessage = `❌ Error: ${error.message}`;
+        }
+      }
+      
+      alert(errorMessage);
+      
+      // Refresh inventory on error to sync state
+      try {
+        const userRef = doc(db, 'students', currentUser.uid);
+        const refreshedSnap = await getDoc(userRef);
+        if (refreshedSnap.exists()) {
+          const refreshedData = refreshedSnap.data();
+          setInventory(refreshedData.inventory || []);
+        }
+        await updateAllArtifactCounts();
+      } catch (refreshError) {
+        console.error('Error refreshing inventory after error:', refreshError);
+      }
     }
   };
 

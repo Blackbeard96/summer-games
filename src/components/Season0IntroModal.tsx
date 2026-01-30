@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -128,74 +128,126 @@ const Season0IntroModal: React.FC<Season0IntroModalProps> = ({ isOpen, onClose, 
     }
   };
 
-  const handleClose = async () => {
-    // Mark as seen in Firestore - this ensures it never shows again
-    if (currentUser) {
-      try {
-        const userRef = doc(db, 'students', currentUser.uid);
-        await setDoc(userRef, {
-          season0IntroSeen: true,
-          season0IntroSeenAt: serverTimestamp()
-        }, { merge: true });
-        console.log('Season 0 intro marked as seen for user:', currentUser.uid);
-      } catch (error) {
-        console.error('Error marking intro as seen:', error);
-        // Even if there's an error, close the modal to prevent it from blocking the UI
-      }
-    }
+  const handleClose = useCallback(async () => {
+    // Always close the modal immediately - don't wait for Firestore
     onClose();
-  };
+    
+    // Mark as seen in Firestore in the background (non-blocking)
+    if (currentUser) {
+      // Use a timeout to ensure we don't block the UI
+      setTimeout(async () => {
+        try {
+          const userRef = doc(db, 'students', currentUser.uid);
+          await setDoc(userRef, {
+            season0IntroSeen: true,
+            season0IntroSeenAt: serverTimestamp()
+          }, { merge: true });
+          console.log('Season 0 intro marked as seen for user:', currentUser.uid);
+        } catch (error) {
+          console.error('Error marking intro as seen:', error);
+          // Error is non-critical - modal is already closed
+        }
+      }, 0);
+    }
+  }, [currentUser, onClose]);
+
+  // Add ESC key handler to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleClose();
+      }
+    };
+    
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen, handleClose]);
 
   if (!isOpen) return null;
 
   const currentSlideData = slides[currentSlide];
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.9)',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      zIndex: 10001,
-      padding: '2rem'
-    }}>
-      <div style={{
-        background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-        color: 'white',
-        borderRadius: '1.5rem',
-        padding: '3rem',
-        maxWidth: currentSlide === 0 && currentSlideData.hasVideo ? '900px' : '600px',
-        width: '100%',
-        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7)',
-        border: '2px solid rgba(139, 92, 246, 0.5)',
-        position: 'relative',
-        textAlign: 'center'
-      }}>
+    <div 
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.9)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 10001,
+        padding: '2rem'
+      }}
+      onClick={(e) => {
+        // Close modal when clicking on backdrop (but not on the modal content itself)
+        if (e.target === e.currentTarget) {
+          handleClose();
+        }
+      }}
+    >
+      <div 
+        style={{
+          background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+          color: 'white',
+          borderRadius: '1.5rem',
+          padding: '3rem',
+          maxWidth: currentSlide === 0 && currentSlideData.hasVideo ? '900px' : '600px',
+          width: '100%',
+          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7)',
+          border: '2px solid rgba(139, 92, 246, 0.5)',
+          position: 'relative',
+          textAlign: 'center'
+        }}
+        onClick={(e) => {
+          // Prevent backdrop click from closing when clicking inside modal
+          e.stopPropagation();
+        }}
+      >
         {/* Close Button */}
         <button
-          onClick={handleClose}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleClose();
+          }}
           style={{
             position: 'absolute',
             top: '1rem',
             right: '1rem',
-            background: 'rgba(239, 68, 68, 0.2)',
-            border: '1px solid rgba(239, 68, 68, 0.5)',
+            background: 'rgba(239, 68, 68, 0.3)',
+            border: '2px solid rgba(239, 68, 68, 0.7)',
             borderRadius: '50%',
-            width: '40px',
-            height: '40px',
-            color: '#fca5a5',
+            width: '44px',
+            height: '44px',
+            color: '#fee2e2',
             cursor: 'pointer',
-            fontSize: '1.5rem',
+            fontSize: '1.75rem',
             fontWeight: 'bold',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center'
+            justifyContent: 'center',
+            zIndex: 10002,
+            transition: 'all 0.2s',
+            boxShadow: '0 2px 8px rgba(239, 68, 68, 0.3)'
           }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.5)';
+            e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 1)';
+            e.currentTarget.style.transform = 'scale(1.1)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.3)';
+            e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.7)';
+            e.currentTarget.style.transform = 'scale(1)';
+          }}
+          title="Close (ESC)"
         >
           ×
         </button>

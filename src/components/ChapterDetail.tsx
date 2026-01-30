@@ -2634,6 +2634,11 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
   };
 
+  const handleViewPowerCardChallenge = () => {
+    // Open the Icy Death cutscene which will complete the challenge
+    setShowIcyDeathCutscene(true);
+  };
+
   const handleIcyDeathCutsceneComplete = async () => {
     if (!currentUser) return;
 
@@ -4103,6 +4108,231 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                           >
                             <span style={{ marginRight: '0.5rem' }}>📬</span>
                             View Letter
+                          </button>
+                        )}
+                        
+                        {/* Truth Metal Choice challenge */}
+                        {status === 'available' && challenge.id === 'ep1-truth-metal-choice' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleChallengeComplete(challenge);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>⚡</span>
+                            Make Your Choice
+                          </button>
+                        )}
+                        
+                        {/* Touch Truth Metal challenge */}
+                        {status === 'available' && challenge.id === 'ep1-touch-truth-metal' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowTruthMetalTouchModal(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(245, 158, 11, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>✨</span>
+                            Touch Truth Metal
+                          </button>
+                        )}
+                        
+                        {/* MST Interface Tutorial challenge */}
+                        {status === 'available' && challenge.id === 'ep1-view-mst-ui' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowMSTTutorial(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🎓</span>
+                            Start Tutorial
+                          </button>
+                        )}
+                        
+                        {/* Power Card Intro challenge */}
+                        {status === 'available' && challenge.id === 'ep1-power-card-intro' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleChallengeComplete(challenge);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🃏</span>
+                            Discover Your Power Card
+                          </button>
+                        )}
+                        
+                        {/* Combat Drill challenge */}
+                        {status === 'available' && challenge.id === 'ep1-combat-drill' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCompletingChallenge('ep1-combat-drill');
+                              setShowCPUBattleModal(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>⚔️</span>
+                            Battle CPU Challenger
+                          </button>
+                        )}
+                        
+                        {/* View Power Card challenge */}
+                        {status === 'available' && challenge.id === 'ep1-view-power-card' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewPowerCardChallenge();
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🃏</span>
+                            View Power Card
+                          </button>
+                        )}
+                        
+                        {/* Portal Sequence challenge */}
+                        {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowPortalTutorial(true);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🌀</span>
+                            Navigate the Portal
+                          </button>
+                        )}
+                        
+                        {/* Hela Awakened challenge */}
+                        {status === 'available' && challenge.id === 'ep1-update-profile' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleChallengeComplete(challenge);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(220, 38, 38, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>❄️</span>
+                            Face Hela's Awakened Power
                           </button>
                         )}
                         
