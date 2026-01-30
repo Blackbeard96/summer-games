@@ -510,9 +510,20 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
     
     // Ensure chapter is active before allowing challenge availability
-    if (!chapterProgress.isActive) {
+    // CRITICAL FIX: Chapters 1 and 2 are always available, so don't block on isActive for them
+    // This is especially important for Chapter 2, which should always be accessible
+    const isAlwaysAvailableChapter = chapter.id === 1 || chapter.id === 2;
+    if (!chapterProgress.isActive && !isAlwaysAvailableChapter) {
       if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is locked - chapter ${chapter.id} is not active`);
       return 'locked';
+    }
+    
+    // For chapters 1 and 2, if they're not marked as active, we should still allow access
+    // This handles cases where the chapter wasn't properly initialized
+    if (isAlwaysAvailableChapter && !chapterProgress.isActive) {
+      if (DEBUG_CH1 || chapter.id === 2) {
+        console.log(`[DEBUG] Challenge ${challenge.id} in Chapter ${chapter.id} - chapter not marked active but should be available (always available chapter)`);
+      }
     }
     
     // If previous challenge is completed (or this is the first challenge) and chapter is active,
@@ -532,13 +543,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     
     // FALLBACK: For Chapter 2-2 specifically, if the requirements check shows team formation is complete,
     // unlock it even if previous challenge check didn't work (handles edge cases with data structure)
+    // Chapter 2 is always available, so don't require isActive check
     if (chapter.id === 2 && challenge.id === 'ch2-rival-selection') {
       const teamFormationChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
       const isTeamFormationCompleted = teamFormationChallenge?.isCompleted === true || teamFormationChallenge?.status === 'approved';
       
-      if (isTeamFormationCompleted && chapterProgress.isActive) {
+      if (isTeamFormationCompleted) {
         if (DEBUG_CH1 || chapter.id === 2) {
-          console.log(`[DEBUG] Challenge ${challenge.id} is available - FALLBACK: team formation challenge completed detected via requirements check`);
+          console.log(`[DEBUG] Challenge ${challenge.id} is available - FALLBACK: team formation challenge completed detected via requirements check`, {
+            isTeamFormationCompleted,
+            chapterActive: chapterProgress.isActive,
+            note: 'Chapter 2 is always available, so not requiring isActive check'
+          });
         }
         return 'available';
       }

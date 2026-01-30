@@ -88,6 +88,8 @@ export async function updateProgressOnChallengeComplete(
   const DEBUG_PROGRESS = process.env.REACT_APP_DEBUG_PROGRESS === 'true';
   const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
   
+  // Move DEBUG_CH2_1 declaration to top level to avoid "used before declaration" errors
+  
   if (DEBUG_PROGRESS) {
     console.log(`[Progression] updateProgressOnChallengeComplete called:`, {
       userId,
@@ -126,10 +128,17 @@ export async function updateProgressOnChallengeComplete(
       }
       
       // Mark current challenge as completed
+      // CRITICAL: Ensure chapter is active when completing any challenge
+      // Chapters 1 and 2 are always available, so they should always be active
+      const isAlwaysActiveChapter = chapterId === 1 || chapterId === 2;
+      const shouldActivateChapter = isAlwaysActiveChapter && !chapterProgress.isActive;
+      
       const updatedChapters = {
         ...chapters,
         [chapterKey]: {
           ...chapterProgress,
+          // Always set to true for chapters 1 and 2, otherwise preserve existing state
+          isActive: isAlwaysActiveChapter ? true : (chapterProgress.isActive ?? false),
           challenges: {
             ...chapterProgress.challenges,
             [challengeId]: {
@@ -141,6 +150,10 @@ export async function updateProgressOnChallengeComplete(
           }
         }
       };
+      
+      if (shouldActivateChapter && DEBUG_PROGRESS) {
+        console.log(`[Progression] Activating chapter ${chapterId} because it's Chapter 1 or 2 and should always be active`);
+      }
       
       if (DEBUG_PROGRESS) {
         console.log(`[Progression] Marking challenge ${challengeId} as completed`);
@@ -166,21 +179,33 @@ export async function updateProgressOnChallengeComplete(
           
           // Create next challenge entry - this marks it as "unlocked" by ensuring it exists in the structure
           // The UI unlock logic (getChallengeStatus) will check if previous challenge is completed
+          // CRITICAL: Create a minimal entry that indicates the challenge exists and can be checked
           updatedChapters[chapterKey].challenges[nextChallengeId] = {
             ...nextChallengeProgress,
             // Don't set isCompleted or status - those remain undefined/empty until challenge is actually completed
             // The existence of this entry allows the UI to check if it should be available
+            // Explicitly ensure the entry exists even if nextChallengeProgress was empty
           };
+          
+          // CRITICAL FIX: Ensure chapter remains active when unlocking next challenge
+          // This is especially important for Chapter 2
+          if (!updatedChapters[chapterKey].isActive && (chapterId === 1 || chapterId === 2)) {
+            updatedChapters[chapterKey].isActive = true;
+            if (DEBUG_PROGRESS) {
+              console.log(`[Progression] Ensuring chapter ${chapterId} is active when unlocking next challenge`);
+            }
+          }
           
           progressionResult.challengeUnlocked = nextChallengeId;
           
-          if (DEBUG_PROGRESS) {
+          if (DEBUG_PROGRESS || DEBUG_CH2_1) {
             console.log(`[Progression] Next challenge ${nextChallengeId} will be unlocked (sequential unlock)`, {
               chapterId,
               currentChallengeId: challengeId,
               nextChallengeId,
               nextChallengeExists: !!chapterProgress.challenges?.[nextChallengeId],
               chapterKey,
+              chapterIsActive: updatedChapters[chapterKey].isActive,
               allChallenges: Object.keys(updatedChapters[chapterKey].challenges || {})
             });
           }
@@ -271,7 +296,7 @@ export async function updateProgressOnChallengeComplete(
       }
       
       // Write updates
-      const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
+      // DEBUG_CH2_1 is already declared at the top of the function
       
       if (DEBUG_CH2_1 || DEBUG_PROGRESS) {
         const challengeData = updatedChapters[chapterKey]?.challenges?.[challengeId];
