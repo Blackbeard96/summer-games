@@ -1,0 +1,14 @@
+/* Squad Stream Responsive Layout */
+.squad-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+/* Mobile: Stack vertically */
+@media (max-width: 768px) {
+  .squad-layout {
+    grid-template-columns: 1fr;
+  }
+}

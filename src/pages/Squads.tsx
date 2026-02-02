@@ -4,12 +4,14 @@ import { db } from '../firebase';
 import { collection, doc, getDocs, getDoc, updateDoc, onSnapshot, query, where, addDoc, deleteDoc, arrayUnion, serverTimestamp, deleteField } from 'firebase/firestore';
 import PlayerCard from '../components/PlayerCard';
 import SquadCard from '../components/SquadCard';
+import SquadStream from '../components/SquadStream';
 import InviteModal from '../components/InviteModal';
 import InvitationManager from '../components/InvitationManager';
 import { MANIFESTS } from '../types/manifest';
 import { normalizePlayerData, fetchAndNormalizePlayerData, NormalizedPlayerData } from '../utils/playerData';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import AlliesManager from '../components/AlliesManager';
+import '../styles/squadStream.css';
 
 interface SquadMember {
   uid: string;
@@ -1564,17 +1566,42 @@ const Squads: React.FC = () => {
           {activeTab === 'my-squad' && (
         <div>
           {currentSquad ? (
-            <SquadCard
-              squad={currentSquad}
-              onInvite={openInviteModal}
-              onLeave={leaveSquad}
-              onPromoteToAdmin={promoteToAdmin}
-              onDemoteFromAdmin={demoteFromAdmin}
-              onRemoveMember={removeMember}
-              onUpdateAbbreviation={updateAbbreviation}
-              currentUserId={currentUser?.uid || undefined}
-              isCurrentUserInSquad={true}
-            />
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.6fr)',
+              gap: '1.5rem',
+              alignItems: 'flex-start'
+            }}
+            className="squad-layout"
+            >
+              {/* Left Column: Squad Card */}
+              <div style={{ minWidth: 0 }}>
+                <SquadCard
+                  squad={currentSquad}
+                  onInvite={openInviteModal}
+                  onLeave={leaveSquad}
+                  onPromoteToAdmin={promoteToAdmin}
+                  onDemoteFromAdmin={demoteFromAdmin}
+                  onRemoveMember={removeMember}
+                  onUpdateAbbreviation={updateAbbreviation}
+                  currentUserId={currentUser?.uid || undefined}
+                  isCurrentUserInSquad={true}
+                />
+              </div>
+
+              {/* Right Column: Squad Stream */}
+              <div style={{ minWidth: 0 }}>
+                <SquadStream
+                  squadId={currentSquad.id}
+                  currentUserId={currentUser?.uid || ''}
+                  squadMembers={currentSquad.members.map(m => ({
+                    uid: m.uid,
+                    displayName: m.displayName,
+                    photoURL: m.photoURL
+                  }))}
+                />
+              </div>
+            </div>
           ) : (
             <div style={{
               backgroundColor: '#f9fafb',

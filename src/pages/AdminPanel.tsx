@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
 import ManifestDiagnostic from '../components/ManifestDiagnostic';
 import TestAccountManager from '../components/TestAccountManager';
+import TestAccountManagerV2 from '../components/TestAccountManagerV2';
 import TestAccountLogin from '../components/TestAccountLogin';
 import FirebaseRulesChecker from '../components/FirebaseRulesChecker';
 import RoleManager from '../components/RoleManager';
@@ -2893,72 +2894,25 @@ const AdminPanel: React.FC = () => {
       ) : activeTab === 'uxp-approval' ? (
         <UXPApproval />
       ) : activeTab === 'manifests' ? (
-        <div style={{
-          background: '#f8fafc',
-          borderRadius: '0.75rem',
-          padding: '2rem',
-          minHeight: '300px',
-          color: '#374151',
-          border: '1px solid #e5e7eb',
-          marginBottom: '2rem',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center'
-        }}>
-          <h2 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '1rem', textAlign: 'center' }}>
-            Manifest Administration
-          </h2>
-          <p style={{ fontSize: '1.25rem', color: '#6b7280', textAlign: 'center', marginBottom: '2rem', maxWidth: '600px' }}>
-            Manage manifests, edit move names and damage values, and configure the Nine Knowings Universe manifest system.
-          </p>
-          
-          <button
-            onClick={() => setShowManifestAdmin(true)}
-            style={{
-              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.75rem',
-              padding: '1rem 2rem',
-              fontSize: '1.125rem',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)'
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 6px 20px rgba(79, 70, 229, 0.4)';
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 4px 12px rgba(79, 70, 229, 0.3)';
-            }}
-          >
-            🎯 Open Manifest Admin Panel
-          </button>
-          
-          <div style={{ 
-            marginTop: '2rem', 
-            padding: '1.5rem', 
-            background: 'rgba(79, 70, 229, 0.05)', 
-            borderRadius: '0.5rem',
-            border: '1px solid rgba(79, 70, 229, 0.1)',
-            maxWidth: '500px'
-          }}>
-            <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '0.75rem', color: '#4f46e5' }}>
-              Admin Features:
-            </h3>
-            <ul style={{ fontSize: '0.875rem', color: '#6b7280', lineHeight: '1.6', margin: 0, paddingLeft: '1.25rem' }}>
-              <li>View all manifests in an interactive grid layout</li>
-              <li>Edit move names and damage values</li>
-              <li>Configure manifest details and descriptions</li>
-              <li>Manage ascension levels and XP requirements</li>
-              <li>Preview changes before saving</li>
-            </ul>
-          </div>
-        </div>
+        <ManifestAdmin
+          isOpen={true}
+          onClose={() => {
+            console.log('[AdminPanel] 🔴 onClose callback triggered');
+            console.log('[AdminPanel] Current activeTab:', activeTab);
+            console.log('[AdminPanel] Calling setActiveTab("students")...');
+            try {
+              setActiveTab('students');
+              console.log('[AdminPanel] ✅ setActiveTab called successfully');
+              // Force a small delay to ensure state update
+              setTimeout(() => {
+                console.log('[AdminPanel] State should be updated now');
+              }, 100);
+            } catch (error) {
+              console.error('[AdminPanel] ❌ Error setting activeTab:', error);
+            }
+          }}
+          asModal={false} // Render directly, not as modal
+        />
       ) : activeTab === 'submissions' ? (
         <>
           <div style={{
@@ -4620,8 +4574,8 @@ const AdminPanel: React.FC = () => {
         onClose={() => setShowManifestAdmin(false)}
       />
 
-      {/* Test Account Manager Modal */}
-      <TestAccountManager
+      {/* Test Account Manager Modal V2 */}
+      <TestAccountManagerV2
         isOpen={showTestAccountManager}
         onClose={() => setShowTestAccountManager(false)}
       />

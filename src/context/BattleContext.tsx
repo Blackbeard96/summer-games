@@ -1703,9 +1703,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Get current player PP from student document
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
-      const playerPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+      const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+      const vaultPP = vault.currentPP || 0;
       
-      console.log('🔄 Manual sync - Player PP:', playerPP, 'Vault PP:', vault.currentPP);
+      console.log('🔄 Manual sync - Student PP:', studentPP, 'Vault PP:', vaultPP);
+      
+      // CRITICAL FIX: Use the HIGHER value to prevent overwriting generator earnings
+      // If vault PP is higher than student PP, it means generator earnings or other vault-specific additions occurred
+      // In this case, sync student PP TO vault PP instead of the other way around
+      const finalPP = Math.max(studentPP, vaultPP);
       
       // Max vault health is always 10% of max PP (capacity is the max PP)
       const maxPP = vault.capacity || 1000;
@@ -1727,7 +1733,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Current vault health is capped at current PP if PP < max health
       // UNLESS health was recently restored - then preserve the restored value
-      let correctVaultHealth = calculateCurrentVaultHealth(maxPP, playerPP, vault.vaultHealth);
+      let correctVaultHealth = calculateCurrentVaultHealth(maxPP, finalPP, vault.vaultHealth);
       
       // If health was recently restored, preserve the restored value instead of recalculating
       if (wasRecentlyRestored && vault.vaultHealth && vault.vaultHealth > correctVaultHealth) {
@@ -1735,25 +1741,38 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('🔄 syncVaultPP: Preserving recently restored vault health:', correctVaultHealth);
       }
       
-      if (playerPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth) {
-        // Update vault PP to match player PP and adjust vault health
+      // Determine what needs to be updated
+      const needsVaultUpdate = finalPP !== vault.currentPP || vault.vaultHealth !== correctVaultHealth;
+      const needsStudentUpdate = vaultPP > studentPP; // If vault is higher, student needs update
+      
+      if (needsVaultUpdate || needsStudentUpdate) {
         const vaultRef = doc(db, 'vaults', currentUser.uid);
-        await updateDoc(vaultRef, { 
-          currentPP: playerPP,
-          vaultHealth: correctVaultHealth
-        });
+        
+        // Update vault PP to the higher value and adjust vault health
+        if (needsVaultUpdate) {
+          await updateDoc(vaultRef, { 
+            currentPP: finalPP,
+            vaultHealth: correctVaultHealth
+          });
+        }
+        
+        // If vault PP was higher, also update student PP (preserves generator earnings)
+        if (needsStudentUpdate) {
+          await updateDoc(studentRef, { powerPoints: finalPP });
+          console.log('✅ Student PP synced to vault PP (generator earnings preserved):', finalPP);
+        }
         
         // Update local vault state
         setVault(prevVault => prevVault ? {
           ...prevVault,
-          currentPP: playerPP,
+          currentPP: finalPP,
           vaultHealth: correctVaultHealth
         } : null);
         
-        console.log('✅ Vault PP synced to player PP:', playerPP);
-        console.log(`✅ Vault health updated to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${playerPP})`);
+        console.log('✅ Vault PP synced (using higher value):', finalPP);
+        console.log(`✅ Vault health updated to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${finalPP})`);
       } else {
-        console.log('✅ Vault PP already in sync with player PP');
+        console.log('✅ Vault PP already in sync');
       }
     } catch (err) {
       console.error('Error syncing vault PP:', err);

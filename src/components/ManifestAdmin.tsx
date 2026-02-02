@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MANIFESTS } from '../types/manifest';
-import { MOVE_DAMAGE_VALUES } from '../types/battle';
+import { MOVE_DAMAGE_VALUES, MOVE_TEMPLATES } from '../types/battle';
 import { db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
@@ -8,6 +8,7 @@ import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
 interface ManifestAdminProps {
   isOpen: boolean;
   onClose: () => void;
+  asModal?: boolean; // If false, render directly without modal overlay
 }
 
 interface StatusEffect {
@@ -36,13 +37,25 @@ interface MoveEditData {
   statusEffects?: StatusEffect[]; // New - multiple effects
 }
 
-const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
+const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal = true }) => {
   const [selectedManifest, setSelectedManifest] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState<string | null>(null);
   const [editingMoves, setEditingMoves] = useState<boolean>(false);
   const [moveEdits, setMoveEdits] = useState<{ [key: string]: MoveEditData }>({});
   const [existingOverrides, setExistingOverrides] = useState<{ [key: string]: MoveEditData }>({});
   const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [addingNewMove, setAddingNewMove] = useState<boolean>(false);
+  const [newMoveData, setNewMoveData] = useState<Partial<MoveEditData>>({
+    name: '',
+    type: 'attack',
+    damage: 0,
+    description: ''
+  });
+  
+  // Track if we've already initialized moves for this manifest to prevent unnecessary resets
+  const initializedForManifestRef = useRef<string | null>(null);
 
   // Load existing move overrides when component opens
   useEffect(() => {
@@ -52,53 +65,145 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
   }, [isOpen]);
 
   useEffect(() => {
+    console.log('[ManifestAdmin] useEffect triggered:', { 
+      editingMoves, 
+      selectedManifest, 
+      existingOverridesCount: Object.keys(existingOverrides).length,
+      initializedForManifest: initializedForManifestRef.current
+    });
+    
     if (editingMoves && selectedManifest) {
-      console.log('Rendering move editing interface for manifest:', selectedManifest, 'editingMoves:', editingMoves);
-      
-      // Initialize moveEdits with existing overrides when editing starts
-      const manifestMoves = getManifestMoves(selectedManifest);
-      const initialEdits: { [key: string]: MoveEditData } = {};
-      
-      manifestMoves.forEach(move => {
-        const existingOverride = existingOverrides[move.id] as MoveEditData | undefined;
-        if (existingOverride) {
-          initialEdits[move.id] = {
-            ...existingOverride,
-            id: move.id,
-            name: existingOverride.name || move.id
-          };
+      // Only initialize if we haven't already for this manifest, or if the manifest changed
+      if (initializedForManifestRef.current !== selectedManifest) {
+        console.log('[ManifestAdmin] ✅ Initializing move edits for manifest:', selectedManifest);
+        
+        // Initialize moveEdits with ALL moves (not just overrides) when editing starts
+        const manifestMoves = getManifestMoves(selectedManifest);
+        console.log('[ManifestAdmin] 📋 Found', manifestMoves.length, 'moves for manifest', selectedManifest);
+        console.log('[ManifestAdmin] 📋 Move names:', manifestMoves.map(m => m.name));
+        console.log('[ManifestAdmin] 📋 Move details:', manifestMoves);
+        
+        if (manifestMoves.length === 0) {
+          console.warn('[ManifestAdmin] ⚠️ WARNING: No moves found for manifest:', selectedManifest);
+          console.warn('[ManifestAdmin] ⚠️ This might indicate a problem with getManifestMoves() or MOVE_TEMPLATES');
         }
-      });
-      
-      if (Object.keys(initialEdits).length > 0) {
-        setMoveEdits(prev => ({ ...prev, ...initialEdits }));
+        
+        const initialEdits: { [key: string]: MoveEditData } = {};
+        
+        manifestMoves.forEach(move => {
+          const existingOverride = existingOverrides[move.id] as MoveEditData | undefined;
+          console.log('[ManifestAdmin] 🔍 Processing move:', move.id, {
+            hasOverride: !!existingOverride,
+            overrideName: existingOverride?.name,
+            defaultName: move.name
+          });
+          
+          // Initialize with move data, applying overrides if they exist
+          initialEdits[move.id] = {
+            id: move.id,
+            name: existingOverride?.name || move.name,
+            type: existingOverride?.type || move.type || 'attack',
+            damage: existingOverride?.damage !== undefined ? existingOverride.damage : (move.damage || 0),
+            description: existingOverride?.description || move.description || '',
+            statusEffect: existingOverride?.statusEffect,
+            statusEffects: existingOverride?.statusEffects || move.statusEffects
+          };
+        });
+        
+        console.log('[ManifestAdmin] ✅ Initialized moveEdits with', Object.keys(initialEdits).length, 'moves');
+        console.log('[ManifestAdmin] 📝 Initial edits object:', initialEdits);
+        setMoveEdits(initialEdits);
+        initializedForManifestRef.current = selectedManifest; // Mark as initialized
+      } else {
+        console.log('[ManifestAdmin] ℹ️ Moves already initialized for', selectedManifest, '- skipping re-initialization to preserve edits.');
       }
+    } else {
+      // Clear moveEdits when not editing
+      console.log('[ManifestAdmin] 🧹 Clearing moveEdits (not editing)');
+      setMoveEdits({});
+      initializedForManifestRef.current = null; // Reset ref when not editing
     }
-  }, [editingMoves, selectedManifest, existingOverrides]);
+  }, [editingMoves, selectedManifest]); // Removed existingOverrides from dependencies to prevent resets
 
   const loadExistingOverrides = async () => {
+    console.log('[ManifestAdmin] 🔄 Loading existing overrides...');
     setLoading(true);
     try {
       const moveOverridesRef = doc(db, 'adminSettings', 'moveOverrides');
+      console.log('[ManifestAdmin] 📍 Firestore read path: adminSettings/moveOverrides');
       const overrideDoc = await getDoc(moveOverridesRef);
       
       if (overrideDoc.exists()) {
         const overrideData = overrideDoc.data();
-        setExistingOverrides(overrideData);
-        console.log('Loaded existing move overrides:', overrideData);
-        console.log('Override document exists:', overrideDoc.exists());
-        console.log('Override document ID:', overrideDoc.id);
+        // Filter out metadata fields
+        const { lastUpdated, updatedBy, ...moveOverrides } = overrideData;
+        const loadedOverrides = moveOverrides as { [key: string]: MoveEditData };
+        setExistingOverrides(loadedOverrides);
+        console.log('[ManifestAdmin] ✅ Loaded existing move overrides:', Object.keys(loadedOverrides).length, 'overrides');
+        console.log('[ManifestAdmin] 📋 Override keys:', Object.keys(loadedOverrides));
+        console.log('[ManifestAdmin] 📋 Sample override data:', Object.keys(loadedOverrides).slice(0, 3).map(k => ({
+          key: k,
+          name: loadedOverrides[k]?.name,
+          damage: loadedOverrides[k]?.damage
+        })));
+        
+        // If we're currently editing a manifest, refresh moveEdits with the loaded overrides
+        if (editingMoves && selectedManifest) {
+          console.log('[ManifestAdmin] 🔄 Refreshing moveEdits with loaded overrides for', selectedManifest);
+          const manifestMoves = getManifestMoves(selectedManifest);
+          const refreshedEdits: { [key: string]: MoveEditData } = {};
+          
+          manifestMoves.forEach(move => {
+            const savedOverride = loadedOverrides[move.id] as MoveEditData | undefined;
+            refreshedEdits[move.id] = {
+              id: move.id,
+              name: savedOverride?.name || move.name,
+              type: savedOverride?.type || move.type || 'attack',
+              damage: savedOverride?.damage !== undefined ? savedOverride.damage : (move.damage || 0),
+              description: savedOverride?.description || move.description || '',
+              statusEffect: savedOverride?.statusEffect,
+              statusEffects: savedOverride?.statusEffects || move.statusEffects
+            };
+          });
+          
+          // Also include any custom moves for this manifest
+          Object.keys(loadedOverrides).forEach(key => {
+            if (key.startsWith(`${selectedManifest}-`) && !refreshedEdits[key]) {
+              refreshedEdits[key] = loadedOverrides[key] as MoveEditData;
+            }
+          });
+          
+          console.log('[ManifestAdmin] ✅ Refreshed moveEdits with', Object.keys(refreshedEdits).length, 'moves');
+          setMoveEdits(refreshedEdits);
+          initializedForManifestRef.current = selectedManifest;
+        }
       } else {
-        console.log('No existing move overrides found in database');
+        console.log('[ManifestAdmin] ℹ️ No existing move overrides found in database');
+        setExistingOverrides({});
       }
-    } catch (error) {
-      console.error('Error loading move overrides:', error);
+    } catch (error: any) {
+      console.error('[ManifestAdmin] ❌ Error loading move overrides:', error);
+      console.error('[ManifestAdmin] ❌ Error details:', {
+        message: error.message,
+        code: error.code
+      });
+      setError(`Failed to load overrides: ${error.message || 'Unknown error'}`);
+      setExistingOverrides({});
     } finally {
       setLoading(false);
+      console.log('[ManifestAdmin] ✅ Finished loading overrides');
     }
   };
 
-  if (!isOpen) return null;
+  // Allow component to be rendered directly (not just as modal)
+  // If asModal is false, always render (for direct embedding in AdminPanel)
+  // If asModal is true, only render when isOpen is true (for modal mode)
+  const shouldRender = asModal ? isOpen : true;
+  
+  if (!shouldRender) {
+    console.log('[ManifestAdmin] Not rendering - isOpen:', isOpen, 'asModal:', asModal);
+    return null;
+  }
 
   const handleManifestSelect = (manifestId: string) => {
     setSelectedManifest(manifestId);
@@ -111,49 +216,102 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
   };
 
   const getManifestMoves = (manifestId: string) => {
-    // Map manifest IDs to their associated moves based on the comments in MOVE_DAMAGE_VALUES
-    const manifestMoveMapping: { [key: string]: string[] } = {
-      'reading': ['Read the Room', 'Pattern Shield'],
-      'writing': ['Reality Rewrite', 'Narrative Barrier'],
-      'drawing': ['Illusion Strike', 'Mirage Shield'],
-      'athletics': ['Flow Strike', 'Rhythm Guard'],
-      'singing': ['Harmonic Blast', 'Melody Shield'],
-      'gaming': ['Pattern Break', 'Strategy Matrix'],
-      'observation': ['Precision Strike', 'Memory Shield'],
-      'empathy': ['Emotional Resonance', 'Empathic Barrier'],
-      'creating': ['Tool Strike', 'Construct Shield'],
-      'cooking': ['Energy Feast', 'Nourishing Barrier']
-    };
-
-    const moveNames = manifestMoveMapping[manifestId] || [];
-    const manifestMoves: MoveEditData[] = [];
+    console.log('[ManifestAdmin] 🔍 getManifestMoves called for manifest:', manifestId);
     
-    moveNames.forEach(moveName => {
+    // Get moves from MOVE_TEMPLATES that match this manifest type
+    const manifestMovesFromTemplates = MOVE_TEMPLATES.filter(
+      move => move.category === 'manifest' && move.manifestType === manifestId
+    );
+    
+    console.log('[ManifestAdmin] 📋 Found', manifestMovesFromTemplates.length, 'move templates for', manifestId);
+    console.log('[ManifestAdmin] 📋 Template names:', manifestMovesFromTemplates.map(m => m.name));
+
+    const manifestMoves: MoveEditData[] = [];
+    const processedMoveIds = new Set<string>();
+    
+    // First, process moves from templates
+    manifestMovesFromTemplates.forEach(moveTemplate => {
+      const moveName = moveTemplate.name;
+      processedMoveIds.add(moveName);
       const moveData = MOVE_DAMAGE_VALUES[moveName];
-      if (moveData) {
-        // Check if there's an existing override for this move
-        const override = existingOverrides[moveName];
-        
-                // Support both legacy single effect and new multiple effects
-                const effects = override?.statusEffects || (override?.statusEffect ? [override.statusEffect] : []);
-        
-                manifestMoves.push({
-                  id: moveName,
-                  name: override?.name || moveName,
-                  damage: override?.damage || moveData.damage,
-                  description: override?.description || '',
-                  statusEffect: override?.statusEffect, // Legacy support
-                  statusEffects: effects.length > 0 ? effects : undefined
-                });
+      const override = existingOverrides[moveName];
+      
+      console.log('[ManifestAdmin] 🔍 Processing move template:', moveName, {
+        hasMoveData: !!moveData,
+        hasOverride: !!override,
+        moveDataDamage: moveData?.damage
+      });
+      
+      // Determine move type from template
+      let moveType: 'attack' | 'defense' | 'heal' = 'attack';
+      if (moveTemplate.type === 'defense' || moveTemplate.type === 'support') {
+        moveType = moveTemplate.healing ? 'heal' : 'defense';
+      } else if (moveTemplate.healing) {
+        moveType = 'heal';
+      }
+
+      // Support both legacy single effect and new multiple effects
+      const effects = override?.statusEffects || (override?.statusEffect ? [override.statusEffect] : []);
+      
+      manifestMoves.push({
+        id: moveName,
+        name: override?.name || moveName,
+        type: override?.type || moveType,
+        damage: override?.damage || moveData?.damage || 0,
+        description: override?.description || moveTemplate.description || '',
+        statusEffect: override?.statusEffect, // Legacy support
+        statusEffects: effects.length > 0 ? effects : undefined
+      });
+    });
+
+    // Then, add custom moves from overrides that don't have a template and belong to this manifest
+    // Custom moves have IDs like: "manifestId-move-name-timestamp"
+    Object.keys(existingOverrides).forEach(moveId => {
+      if (!processedMoveIds.has(moveId) && moveId.startsWith(`${manifestId}-`)) {
+        const override = existingOverrides[moveId] as MoveEditData;
+        console.log('[ManifestAdmin] 🔍 Adding custom move from overrides:', moveId, override);
+        manifestMoves.push({
+          id: moveId,
+          name: override.name || moveId,
+          type: override.type || 'attack',
+          damage: override.damage || 0,
+          description: override.description || '',
+          statusEffect: override.statusEffect,
+          statusEffects: override.statusEffects
+        });
       }
     });
 
-    return manifestMoves;
+    // Sort by level (template moves first, then custom moves)
+    const sorted = manifestMoves.sort((a, b) => {
+      const aIsTemplate = !!manifestMovesFromTemplates.find(m => m.name === a.id);
+      const bIsTemplate = !!manifestMovesFromTemplates.find(m => m.name === b.id);
+      
+      // Template moves first
+      if (aIsTemplate && !bIsTemplate) return -1;
+      if (!aIsTemplate && bIsTemplate) return 1;
+      
+      // If both are templates, sort by level
+      if (aIsTemplate && bIsTemplate) {
+        const aLevel = manifestMovesFromTemplates.find(m => m.name === a.id)?.level || 0;
+        const bLevel = manifestMovesFromTemplates.find(m => m.name === b.id)?.level || 0;
+        return aLevel - bLevel;
+      }
+      
+      // If both are custom, sort by name
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    
+    console.log('[ManifestAdmin] ✅ Returning', sorted.length, 'moves for', manifestId, '(including', sorted.length - manifestMovesFromTemplates.length, 'custom moves)');
+    return sorted;
   };
 
   const handleMoveEdit = (moveId: string, field: string, value: any) => {
+    console.log('[ManifestAdmin] ✏️ handleMoveEdit called:', { moveId, field, value, currentMoveEdits: Object.keys(moveEdits).length });
+    
     setMoveEdits(prev => {
       const currentMove = prev[moveId] || {};
+      console.log('[ManifestAdmin] 📝 Current move state for', moveId, ':', currentMove);
       
       // Handle status effect updates (can be an object) - legacy support
       if (field === 'statusEffect') {
@@ -387,78 +545,197 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
   };
 
   const saveMoveChanges = async () => {
+    console.log('[ManifestAdmin] 💾 saveMoveChanges called');
+    console.log('[ManifestAdmin] 📊 Current state:', {
+      selectedManifest,
+      moveEditsCount: Object.keys(moveEdits).length,
+      moveEdits: moveEdits,
+      existingOverridesCount: Object.keys(existingOverrides).length
+    });
+    
+    setError(null);
+    setSaveStatus('saving');
+    
+    if (!selectedManifest) {
+      const errorMsg = '❌ Cannot save: No manifest selected';
+      console.error('[ManifestAdmin]', errorMsg);
+      setError(errorMsg);
+      setSaveStatus('error');
+      return;
+    }
+    
+    if (Object.keys(moveEdits).length === 0) {
+      const errorMsg = '❌ Cannot save: No moves to save. Please ensure moves are loaded.';
+      console.error('[ManifestAdmin]', errorMsg);
+      setError(errorMsg);
+      setSaveStatus('error');
+      return;
+    }
+    
     try {
+      console.log('[ManifestAdmin] 🔄 Starting Firestore save...');
+      
       // For now, we'll save to a Firestore collection for admin move overrides
       // This allows us to override the default MOVE_DAMAGE_VALUES without changing the source code
       const { db } = await import('../firebase');
-      const { collection, doc, setDoc, serverTimestamp } = await import('firebase/firestore');
+      const { collection, doc, setDoc, getDoc, serverTimestamp } = await import('firebase/firestore');
       
       // Create a document with the move overrides
       const moveOverridesRef = doc(collection(db, 'adminSettings'), 'moveOverrides');
+      console.log('[ManifestAdmin] 📍 Firestore path:', 'adminSettings/moveOverrides');
       
-      // Merge existing overrides with new edits, prioritizing new edits
-      const overridesData = {
-        ...existingOverrides,
-        ...moveEdits,
-        lastUpdated: serverTimestamp(),
-        updatedBy: 'admin' // You could get this from auth context
-      };
+      // First, read the current document to get ALL existing overrides (including other manifests)
+      const currentDoc = await getDoc(moveOverridesRef);
+      const allExistingOverrides = currentDoc.exists() ? currentDoc.data() : {};
+      const { lastUpdated: _, updatedBy: __, ...existingOverridesFromDB } = allExistingOverrides;
+      
+      console.log('[ManifestAdmin] 📦 Current overrides in DB:', Object.keys(existingOverridesFromDB).length, 'keys');
+      
+      // Build the data to save:
+      // 1. Start with ALL existing overrides from DB (to preserve other manifests)
+      // 2. Remove any overrides for THIS manifest (we'll replace them with moveEdits)
+      // 3. Add all moveEdits for this manifest
+      const overridesData: any = {};
+      
+      // Preserve overrides for OTHER manifests (not this one)
+      Object.keys(existingOverridesFromDB).forEach(key => {
+        // Keep if it's not for this manifest
+        const isTemplateMove = MOVE_TEMPLATES.find(m => m.name === key);
+        const isCustomMoveForThisManifest = key.startsWith(`${selectedManifest}-`);
+        
+        if (isTemplateMove) {
+          // Check if this template move belongs to this manifest
+          const template = MOVE_TEMPLATES.find(m => m.name === key);
+          if (template && template.category === 'manifest' && template.manifestType !== selectedManifest) {
+            // This template move belongs to a different manifest, preserve it
+            overridesData[key] = existingOverridesFromDB[key];
+          }
+        } else if (!isCustomMoveForThisManifest) {
+          // This is an override for a different manifest or element, preserve it
+          overridesData[key] = existingOverridesFromDB[key];
+        }
+        // If it's a template move for this manifest or a custom move for this manifest, we'll replace it with moveEdits
+      });
+      
+      // Add all moveEdits for THIS manifest (this overwrites any existing overrides for this manifest)
+      Object.keys(moveEdits).forEach(key => {
+        overridesData[key] = moveEdits[key];
+      });
+      
+      // Add metadata
+      overridesData.lastUpdated = serverTimestamp();
+      overridesData.updatedBy = 'admin';
+      
+      console.log('[ManifestAdmin] 📦 Data to save (before cleaning):', {
+        totalKeys: Object.keys(overridesData).length,
+        moveEditsKeys: Object.keys(moveEdits).length,
+        preservedOtherManifestKeys: Object.keys(overridesData).filter(k => !moveEdits[k] && k !== 'lastUpdated' && k !== 'updatedBy').length
+      });
       
       // Remove undefined values before saving (Firestore doesn't allow undefined)
       const cleanedData = removeUndefined(overridesData);
+      console.log('[ManifestAdmin] 🧹 Cleaned data keys:', Object.keys(cleanedData).length);
       
+      console.log('[ManifestAdmin] 💾 Writing to Firestore...');
       await setDoc(moveOverridesRef, cleanedData);
+      console.log('[ManifestAdmin] ✅ Firestore write successful!');
       
-      console.log('Move changes saved to database:', moveEdits);
-      console.log('Overrides data saved:', cleanedData);
-      alert('✅ Move changes saved successfully! These will override the default values in battle.');
+      console.log('[ManifestAdmin] 📝 Move changes saved to database:', moveEdits);
+      console.log('[ManifestAdmin] 📝 Overrides data saved:', cleanedData);
       
-      // Reset editing state
-      setEditingMoves(false);
-      setMoveEdits({});
+      setSaveStatus('success');
       
       // Invalidate the cache so other components get fresh data
+      console.log('[ManifestAdmin] 🔄 Invalidating cache...');
       invalidateMoveOverridesCache();
       
       // Reload the existing overrides to reflect the saved changes
+      console.log('[ManifestAdmin] 🔄 Reloading overrides...');
       await loadExistingOverrides();
       
-    } catch (error) {
-      console.error('Error saving move changes:', error);
-      alert('❌ Failed to save move changes. Please try again.');
+      // After reloading, refresh moveEdits with the saved data (if still editing)
+      // This ensures the UI shows the saved state
+      if (editingMoves && selectedManifest) {
+        console.log('[ManifestAdmin] 🔄 Refreshing moveEdits with saved overrides after save...');
+        const manifestMoves = getManifestMoves(selectedManifest);
+        const refreshedEdits: { [key: string]: MoveEditData } = {};
+        
+        manifestMoves.forEach(move => {
+          // Use the freshly loaded overrides (they're now in existingOverrides state)
+          const savedOverride = existingOverrides[move.id] as MoveEditData | undefined;
+          refreshedEdits[move.id] = {
+            id: move.id,
+            name: savedOverride?.name || move.name,
+            type: savedOverride?.type || move.type || 'attack',
+            damage: savedOverride?.damage !== undefined ? savedOverride.damage : (move.damage || 0),
+            description: savedOverride?.description || move.description || '',
+            statusEffect: savedOverride?.statusEffect,
+            statusEffects: savedOverride?.statusEffects || move.statusEffects
+          };
+        });
+        
+        // Also include any custom moves for this manifest
+        Object.keys(existingOverrides).forEach(key => {
+          if (key.startsWith(`${selectedManifest}-`) && !refreshedEdits[key]) {
+            refreshedEdits[key] = existingOverrides[key] as MoveEditData;
+          }
+        });
+        
+        console.log('[ManifestAdmin] ✅ Refreshed moveEdits with', Object.keys(refreshedEdits).length, 'moves after save');
+        setMoveEdits(refreshedEdits);
+        initializedForManifestRef.current = selectedManifest; // Mark as initialized to prevent useEffect from resetting
+      }
+      
+      console.log('[ManifestAdmin] ✅ Save complete!');
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setSaveStatus('idle');
+      }, 3000);
+      
+    } catch (error: any) {
+      console.error('[ManifestAdmin] ❌ Error saving move changes:', error);
+      console.error('[ManifestAdmin] ❌ Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      
+      let errorMessage = 'Failed to save move changes.';
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Check Firestore security rules.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      setError(errorMessage);
+      setSaveStatus('error');
     }
   };
 
   const cancelMoveEdit = () => {
+    console.log('[ManifestAdmin] 🚫 Cancelling move edit');
     setEditingMoves(false);
     setMoveEdits({});
+    setSelectedManifest(null);
+    setError(null);
+    setSaveStatus('idle');
+    initializedForManifestRef.current = null;
   };
 
-  return (
+  const content = (
     <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      padding: '2rem'
-    }}>
-      <div style={{
-        background: 'rgba(255,255,255,0.1)',
-        backdropFilter: 'blur(10px)',
+      background: asModal ? 'rgba(30, 41, 59, 0.95)' : '#ffffff',
+      backdropFilter: asModal ? 'blur(10px)' : 'none',
         padding: '2rem',
         borderRadius: '1rem',
         maxWidth: '1400px',
         width: '100%',
-        maxHeight: '90vh',
+      maxHeight: asModal ? '90vh' : 'auto',
         overflow: 'auto',
-        color: 'white',
-        border: '1px solid rgba(255,255,255,0.2)'
+      color: asModal ? '#f8fafc' : '#111827',
+      border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+      boxShadow: asModal ? '0 20px 60px rgba(0,0,0,0.5)' : '0 4px 6px rgba(0,0,0,0.1)'
       }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <h1 style={{ 
@@ -475,7 +752,8 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
           <p style={{ 
             fontSize: '1.2rem', 
             marginBottom: '1rem',
-            opacity: 0.9
+            color: asModal ? '#e2e8f0' : '#374151',
+            fontWeight: '500'
           }}>
             Manage manifests, moves, and damage values for the Nine Knowings Universe.
           </p>
@@ -492,10 +770,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
         </div>
 
         <div style={{ 
-          display: 'grid', 
+          display: editingMoves ? 'none' : 'grid', 
           gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
           gap: '1.5rem',
-          marginBottom: '2rem'
+          marginBottom: editingMoves ? '0' : '2rem'
         }}>
           {MANIFESTS.map((manifest) => (
             <div
@@ -535,14 +813,14 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                 fontSize: '1.5rem', 
                 fontWeight: 'bold', 
                 marginBottom: '0.5rem',
-                color: selectedManifest === manifest.id ? manifest.color : 'white'
+                color: selectedManifest === manifest.id ? manifest.color : (asModal ? '#f8fafc' : '#111827')
               }}>
                 {manifest.name}
               </h3>
               <p style={{ 
                 fontSize: '0.9rem', 
                 marginBottom: '1rem',
-                opacity: 0.8,
+                color: asModal ? '#e2e8f0' : '#4b5563',
                 lineHeight: '1.4'
               }}>
                 {manifest.description}
@@ -553,7 +831,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                 justifyContent: 'space-between', 
                 alignItems: 'center',
                 fontSize: '0.8rem',
-                opacity: 0.7
+                color: asModal ? '#cbd5e1' : '#6b7280'
               }}>
                 <span>Catalyst: {manifest.catalyst}</span>
                 <span>Move: {manifest.signatureMove}</span>
@@ -586,10 +864,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                 style={{
                   marginTop: '1rem',
                   padding: '0.5rem 1rem',
-                  background: 'rgba(255,255,255,0.1)',
-                  border: '1px solid rgba(255,255,255,0.3)',
+                  background: asModal ? 'rgba(255,255,255,0.15)' : '#f3f4f6',
+                  border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
                   borderRadius: '0.25rem',
-                  color: 'white',
+                  color: asModal ? '#f8fafc' : '#111827',
                   cursor: 'pointer',
                   fontSize: '0.8rem'
                 }}
@@ -617,7 +895,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                         <span>Level {level.level}: {level.scale}</span>
                         <span>{level.xpRequired} XP</span>
                       </div>
-                      <div style={{ fontSize: '0.7rem', opacity: 0.8 }}>
+                      <div style={{ fontSize: '0.7rem', color: asModal ? '#cbd5e1' : '#6b7280' }}>
                         {level.example}
                       </div>
                     </div>
@@ -636,7 +914,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                           <div style={{ fontWeight: 'bold', fontSize: '0.8rem' }}>
                             {move.name}
                           </div>
-                          <div style={{ fontSize: '0.7rem', opacity: 0.8 }}>
+                          <div style={{ fontSize: '0.7rem', color: asModal ? '#cbd5e1' : '#6b7280' }}>
                             {`Damage: ${typeof move.damage === 'object' 
                               ? `${move.damage.min}-${move.damage.max}` 
                               : move.damage} | ${move.description}`}
@@ -654,7 +932,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                         </div>
                       ))
                     ) : (
-                      <div style={{ fontSize: '0.8rem', opacity: 0.6, fontStyle: 'italic' }}>
+                      <div style={{ fontSize: '0.8rem', color: asModal ? '#94a3b8' : '#9ca3af', fontStyle: 'italic' }}>
                         No specific moves found for this manifest
                       </div>
                     )}
@@ -662,27 +940,40 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        console.log('Edit Moves button clicked for manifest:', manifest.id);
-                        console.log('Current selectedManifest:', selectedManifest);
-                        
-                        // Initialize moveEdits with existing overrides for this manifest's moves
-                        const manifestMoves = getManifestMoves(manifest.id);
-                        const initialEdits: { [key: string]: MoveEditData } = {};
-                        
-                        manifestMoves.forEach(move => {
-                          const existingOverride = existingOverrides[move.id] as MoveEditData | undefined;
-                          if (existingOverride) {
-                            initialEdits[move.id] = {
-                              ...existingOverride,
-                              id: move.id,
-                              name: existingOverride.name || move.id
-                            };
-                          }
+                        e.preventDefault();
+                        console.log('[ManifestAdmin] 🖱️ Edit Moves button clicked for manifest:', manifest.id);
+                        console.log('[ManifestAdmin] 🔍 Current state before click:', {
+                          selectedManifest,
+                          editingMoves,
+                          moveEditsCount: Object.keys(moveEdits).length,
+                          existingOverridesCount: Object.keys(existingOverrides).length,
+                          asModal
                         });
                         
-                        setMoveEdits(initialEdits);
+                        // Set selectedManifest and editingMoves - the useEffect will handle initialization
+                        console.log('[ManifestAdmin] 🔄 Setting selectedManifest to:', manifest.id);
+                        setSelectedManifest(manifest.id);
+                        console.log('[ManifestAdmin] 🔄 Setting editingMoves to: true');
                         setEditingMoves(true);
-                        console.log('editingMoves set to true, initialized with:', initialEdits);
+                        
+                        // Scroll to edit panel after a brief delay to ensure it's rendered
+                        setTimeout(() => {
+                          const editPanel = document.getElementById('manifest-edit-panel');
+                          if (editPanel) {
+                            console.log('[ManifestAdmin] 📍 Scrolling to edit panel');
+                            editPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          } else {
+                            console.warn('[ManifestAdmin] ⚠️ Edit panel not found in DOM - checking again in 200ms');
+                            setTimeout(() => {
+                              const editPanel2 = document.getElementById('manifest-edit-panel');
+                              if (editPanel2) {
+                                editPanel2.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              } else {
+                                console.error('[ManifestAdmin] ❌ Edit panel still not found after delay');
+                              }
+                            }, 200);
+                          }
+                        }, 100);
                       }}
                       style={{
                         marginTop: '0.5rem',
@@ -705,70 +996,85 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
         </div>
 
         {editingMoves && selectedManifest && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0,0,0,0.8)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1001,
-            padding: '2rem'
-          }}>
+          <div 
+            id="manifest-edit-panel"
+            style={{
+              position: asModal ? 'fixed' : 'relative',
+              top: asModal ? 0 : 'auto',
+              left: asModal ? 0 : 'auto',
+              right: asModal ? 0 : 'auto',
+              bottom: asModal ? 0 : 'auto',
+              background: asModal ? 'rgba(0,0,0,0.8)' : 'transparent',
+              display: 'flex',
+              alignItems: asModal ? 'center' : 'flex-start',
+              justifyContent: 'center',
+              zIndex: asModal ? 1001 : 100,
+              padding: asModal ? '2rem' : '0',
+              marginTop: asModal ? 0 : '2rem',
+              marginBottom: asModal ? 0 : '2rem',
+              width: '100%',
+              minHeight: asModal ? '100vh' : 'auto'
+            }}
+          >
             <div style={{
-              background: 'rgba(255,255,255,0.1)',
-              backdropFilter: 'blur(10px)',
+              background: asModal ? 'rgba(30, 41, 59, 0.95)' : '#ffffff',
+              backdropFilter: asModal ? 'blur(10px)' : 'none',
               padding: '2rem',
               borderRadius: '1rem',
-              maxWidth: '800px',
+              maxWidth: asModal ? '800px' : '100%',
               width: '100%',
-              maxHeight: '80vh',
+              maxHeight: asModal ? '80vh' : 'none',
               overflow: 'auto',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.2)'
+              color: asModal ? '#f8fafc' : '#111827',
+              border: asModal ? '1px solid rgba(255,255,255,0.3)' : '2px solid #6366f1',
+              boxShadow: asModal ? '0 20px 60px rgba(0,0,0,0.5)' : '0 8px 16px rgba(0,0,0,0.15)',
+              position: 'relative',
+              zIndex: 1
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ 
                   fontSize: '2rem', 
                   fontWeight: 'bold',
-                  color: '#fbbf24',
+                  color: asModal ? '#fbbf24' : '#111827',
                   margin: 0
                 }}>
                   Edit Moves for {getManifestById(selectedManifest)?.name}
                 </h2>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={() => {
+                      setEditingMoves(false);
+                      setSelectedManifest(null);
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: asModal ? 'rgba(255,255,255,0.1)' : '#6b7280',
+                      border: asModal ? '1px solid rgba(255,255,255,0.3)' : 'none',
+                      borderRadius: '0.5rem',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem'
+                    }}
+                  >
+                    Close
+                  </button>
                 <button
                   onClick={() => {
                     // Reset all moves for this manifest to default values
-                    const manifestMoveMapping: { [key: string]: string[] } = {
-                      'reading': ['Read the Room', 'Pattern Shield'],
-                      'writing': ['Reality Rewrite', 'Narrative Barrier'],
-                      'drawing': ['Illusion Strike', 'Mirage Shield'],
-                      'athletics': ['Flow Strike', 'Rhythm Guard'],
-                      'singing': ['Harmonic Blast', 'Melody Shield'],
-                      'gaming': ['Pattern Break', 'Strategy Matrix'],
-                      'observation': ['Precision Strike', 'Memory Shield'],
-                      'empathy': ['Emotional Resonance', 'Empathic Barrier'],
-                      'creating': ['Tool Strike', 'Construct Shield'],
-                      'cooking': ['Energy Feast', 'Nourishing Barrier']
-                    };
-                    
-                    const moveNames = manifestMoveMapping[selectedManifest] || [];
+                      const manifestMoves = getManifestMoves(selectedManifest);
                     const resetEdits: { [key: string]: MoveEditData } = {};
                     
-                    moveNames.forEach(moveName => {
-                      const originalMove = MOVE_DAMAGE_VALUES[moveName];
-                      if (originalMove) {
-                resetEdits[moveName] = {
-                  id: moveName,
-                  name: moveName, // Reset to original name
-                  damage: originalMove.damage, // Reset to original damage
-                  description: '', // Reset description to empty
-                  statusEffect: undefined // Reset status effect
-                };
-                      }
+                      manifestMoves.forEach(move => {
+                        const moveTemplate = MOVE_TEMPLATES.find(m => m.name === move.id);
+                        resetEdits[move.id] = {
+                          id: move.id,
+                          name: move.id, // Reset to original name
+                          type: moveTemplate?.type === 'defense' ? 'defense' : moveTemplate?.type === 'support' ? 'heal' : 'attack',
+                          damage: MOVE_DAMAGE_VALUES[move.id]?.damage || 0, // Reset to original damage
+                          description: moveTemplate?.description || '', // Reset description
+                          statusEffect: undefined, // Reset status effect
+                          statusEffects: undefined
+                        };
                     });
                     
                     setMoveEdits(resetEdits);
@@ -777,7 +1083,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                     padding: '0.5rem 1rem',
                     background: '#ef4444',
                     border: 'none',
-                    borderRadius: '0.25rem',
+                      borderRadius: '0.5rem',
                     color: 'white',
                     cursor: 'pointer',
                     fontSize: '0.8rem',
@@ -786,9 +1092,292 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                 >
                   Reset to Default
                 </button>
+                </div>
               </div>
               
-              {getManifestMoves(selectedManifest).map((move) => {
+              {error && (
+                <div style={{
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  background: '#fee2e2',
+                  border: '1px solid #ef4444',
+                  borderRadius: '0.5rem',
+                  color: '#991b1b'
+                }}>
+                  <strong>Error:</strong> {error}
+                </div>
+              )}
+              
+              {saveStatus === 'saving' && (
+                <div style={{
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  background: '#dbeafe',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '0.5rem',
+                  color: '#1e40af'
+                }}>
+                  💾 Saving changes...
+                </div>
+              )}
+              
+              {saveStatus === 'success' && (
+                <div style={{
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  background: '#d1fae5',
+                  border: '1px solid #10b981',
+                  borderRadius: '0.5rem',
+                  color: '#065f46'
+                }}>
+                  ✅ Changes saved successfully!
+                </div>
+              )}
+              
+              {saveStatus === 'error' && (
+                <div style={{
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  background: '#fee2e2',
+                  border: '1px solid #ef4444',
+                  borderRadius: '0.5rem',
+                  color: '#991b1b'
+                }}>
+                  ❌ Failed to save changes. Check console for details.
+                </div>
+              )}
+              
+              {/* Debug Panel (Admin Only) */}
+              {process.env.NODE_ENV === 'development' && (
+                <div style={{
+                  padding: '1rem',
+                  marginBottom: '1rem',
+                  background: asModal ? 'rgba(0,0,0,0.3)' : '#f3f4f6',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.75rem',
+                  fontFamily: 'monospace',
+                  color: asModal ? 'white' : '#1f2937'
+                }}>
+                  <strong>🐛 Debug Info:</strong>
+                  <div>Selected Manifest: {selectedManifest || 'null'}</div>
+                  <div>Editing Moves: {editingMoves ? 'true' : 'false'}</div>
+                  <div>Move Edits Count: {Object.keys(moveEdits).length}</div>
+                  <div>Existing Overrides Count: {Object.keys(existingOverrides).length}</div>
+                  <div>Loading: {loading ? 'true' : 'false'}</div>
+                  <div>Save Status: {saveStatus}</div>
+                  <div>Firestore Path: adminSettings/moveOverrides</div>
+                  {selectedManifest && (
+                    <div>Moves for {selectedManifest}: {getManifestMoves(selectedManifest).map(m => m.name).join(', ')}</div>
+                  )}
+                </div>
+              )}
+              
+              {/* Add New Move Button */}
+              <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, color: asModal ? '#fbbf24' : '#1f2937' }}>
+                  Moves ({Object.keys(moveEdits).length})
+                </h3>
+                <button
+                  onClick={() => {
+                    console.log('[ManifestAdmin] ➕ Add New Move button clicked');
+                    setAddingNewMove(true);
+                    setNewMoveData({
+                      name: '',
+                      type: 'attack',
+                      damage: 0,
+                      description: ''
+                    });
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#10B981',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  ➕ Add New Move
+                </button>
+              </div>
+
+              {/* Add New Move Form */}
+              {addingNewMove && (
+                <div style={{
+                  marginBottom: '1rem',
+                  padding: '1rem',
+                  background: asModal ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5',
+                  borderRadius: '0.5rem',
+                  border: asModal ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid #10b981'
+                }}>
+                  <h4 style={{ margin: '0 0 1rem 0', color: asModal ? '#fbbf24' : '#1f2937' }}>
+                    Add New Move
+                  </h4>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                        Move Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMoveData.name || ''}
+                        onChange={(e) => setNewMoveData({ ...newMoveData, name: e.target.value })}
+                        placeholder="Enter move name"
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          borderRadius: '0.25rem',
+                          color: asModal ? '#f8fafc' : '#111827',
+                          fontSize: '0.875rem'
+                        }}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                        Type *
+                      </label>
+                      <select
+                        value={newMoveData.type || 'attack'}
+                        onChange={(e) => setNewMoveData({ ...newMoveData, type: e.target.value as 'attack' | 'defense' | 'heal' })}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          borderRadius: '0.25rem',
+                          color: asModal ? '#f8fafc' : '#111827',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        <option value="attack">Attack</option>
+                        <option value="defense">Defense</option>
+                        <option value="heal">Heal</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                      Base Damage *
+                    </label>
+                    <input
+                      type="number"
+                      value={typeof newMoveData.damage === 'number' ? newMoveData.damage : (typeof newMoveData.damage === 'object' && newMoveData.damage !== null ? newMoveData.damage.min : 0)}
+                      onChange={(e) => setNewMoveData({ ...newMoveData, damage: parseInt(e.target.value) || 0 })}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                        border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                        borderRadius: '0.25rem',
+                        color: asModal ? '#f8fafc' : '#111827',
+                        fontSize: '0.875rem'
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                      Description
+                    </label>
+                    <textarea
+                      value={newMoveData.description || ''}
+                      onChange={(e) => setNewMoveData({ ...newMoveData, description: e.target.value })}
+                      placeholder="Enter move description"
+                      rows={2}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                        border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                        borderRadius: '0.25rem',
+                        color: asModal ? '#f8fafc' : '#111827',
+                        fontSize: '0.875rem',
+                        resize: 'vertical'
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => {
+                        console.log('[ManifestAdmin] ❌ Cancelling new move');
+                        setAddingNewMove(false);
+                        setNewMoveData({ name: '', type: 'attack', damage: 0, description: '' });
+                      }}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        background: asModal ? 'rgba(255,255,255,0.1)' : '#6b7280',
+                        border: asModal ? '1px solid rgba(255,255,255,0.3)' : 'none',
+                        borderRadius: '0.5rem',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!newMoveData.name || !newMoveData.name.trim()) {
+                          alert('Please enter a move name');
+                          return;
+                        }
+                        
+                        // Generate unique ID for the new move
+                        const moveId = `${selectedManifest}-${newMoveData.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+                        console.log('[ManifestAdmin] ✅ Adding new move:', moveId, newMoveData);
+                        
+                        // Add to moveEdits
+                        const newMove: MoveEditData = {
+                          id: moveId,
+                          name: newMoveData.name.trim(),
+                          type: newMoveData.type || 'attack',
+                          damage: newMoveData.damage || 0,
+                          description: newMoveData.description || ''
+                        };
+                        
+                        setMoveEdits(prev => ({
+                          ...prev,
+                          [moveId]: newMove
+                        }));
+                        
+                        console.log('[ManifestAdmin] ✅ New move added to moveEdits');
+                        
+                        // Reset form
+                        setAddingNewMove(false);
+                        setNewMoveData({ name: '', type: 'attack', damage: 0, description: '' });
+                      }}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        background: '#10B981',
+                        border: 'none',
+                        borderRadius: '0.5rem',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      Add Move
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(moveEdits).length === 0 && !addingNewMove ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: asModal ? 'white' : '#6b7280' }}>
+                  {loading ? 'Loading moves...' : 'No moves loaded. Click "Edit Moves" to load moves for this manifest.'}
+                </div>
+              ) : (
+                Object.values(moveEdits).map((move) => {
                 const hasOverride = existingOverrides[move.id];
                 const originalMove = MOVE_DAMAGE_VALUES[move.id];
                 
@@ -796,26 +1385,71 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                   <div key={move.id} style={{
                     marginBottom: '1rem',
                     padding: '1rem',
-                    background: hasOverride ? 'rgba(16, 185, 129, 0.2)' : 'rgba(0,0,0,0.3)',
+                    background: hasOverride 
+                      ? (asModal ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.1)')
+                      : (asModal ? 'rgba(0,0,0,0.3)' : '#f9fafb'),
                     borderRadius: '0.5rem',
-                    border: hasOverride ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid rgba(255,255,255,0.1)'
+                    border: hasOverride 
+                      ? (asModal ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid #10b981')
+                      : (asModal ? '1px solid rgba(255,255,255,0.1)' : '1px solid #e5e7eb')
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <h4 style={{ margin: 0, color: '#fbbf24' }}>
-                        {move.name}
-                      </h4>
-                      {hasOverride && (
-                        <span style={{
-                          marginLeft: '0.5rem',
-                          padding: '0.25rem 0.5rem',
-                          background: '#10B981',
-                          color: 'white',
-                          borderRadius: '0.25rem',
-                          fontSize: '0.7rem',
-                          fontWeight: 'bold'
-                        }}>
-                          OVERRIDDEN
-                        </span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <h4 style={{ margin: 0, color: asModal ? '#fbbf24' : '#1f2937' }}>
+                          {move.name}
+                        </h4>
+                        {hasOverride && (
+                          <span style={{
+                            marginLeft: '0.5rem',
+                            padding: '0.25rem 0.5rem',
+                            background: '#10B981',
+                            color: 'white',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold'
+                          }}>
+                            OVERRIDDEN
+                          </span>
+                        )}
+                        {!MOVE_TEMPLATES.find(m => m.name === move.id) && (
+                          <span style={{
+                            marginLeft: '0.5rem',
+                            padding: '0.25rem 0.5rem',
+                            background: '#3b82f6',
+                            color: 'white',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold'
+                          }}>
+                            CUSTOM
+                          </span>
+                        )}
+                      </div>
+                      {!MOVE_TEMPLATES.find(m => m.name === move.id) && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to delete "${move.name}"? This cannot be undone.`)) {
+                              console.log('[ManifestAdmin] 🗑️ Deleting custom move:', move.id);
+                              setMoveEdits(prev => {
+                                const updated = { ...prev };
+                                delete updated[move.id];
+                                return updated;
+                              });
+                            }
+                          }}
+                          style={{
+                            padding: '0.25rem 0.5rem',
+                            background: '#ef4444',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            color: 'white',
+                            cursor: 'pointer',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          🗑️ Delete
+                        </button>
                       )}
                     </div>
                   
@@ -826,15 +1460,18 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                       </label>
                       <input
                         type="text"
-                        value={moveEdits[move.id]?.name || (existingOverrides[move.id] as MoveEditData | undefined)?.name || move.name}
-                        onChange={(e) => handleMoveEdit(move.id, 'name', e.target.value)}
+                        value={moveEdits[move.id]?.name || move.name || ''}
+                        onChange={(e) => {
+                          console.log('[ManifestAdmin] 📝 Name input changed for', move.id, ':', e.target.value);
+                          handleMoveEdit(move.id, 'name', e.target.value);
+                        }}
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: 'rgba(255,255,255,0.1)',
-                          border: '1px solid rgba(255,255,255,0.3)',
+                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: 'white',
+                          color: asModal ? '#f8fafc' : '#111827',
                           fontSize: '0.875rem'
                         }}
                       />
@@ -845,15 +1482,18 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                         Type
                       </label>
                       <select
-                        value={moveEdits[move.id]?.type || 'attack'}
-                        onChange={(e) => handleMoveEdit(move.id, 'type', e.target.value)}
+                        value={moveEdits[move.id]?.type || move.type || 'attack'}
+                        onChange={(e) => {
+                          console.log('[ManifestAdmin] 📝 Type changed for', move.id, ':', e.target.value);
+                          handleMoveEdit(move.id, 'type', e.target.value);
+                        }}
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: 'rgba(255,255,255,0.1)',
-                          border: '1px solid rgba(255,255,255,0.3)',
+                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
+                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: 'white',
+                          color: asModal ? '#f8fafc' : '#111827',
                           fontSize: '0.875rem'
                         }}
                       >
@@ -929,7 +1569,11 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                             }
                             return 0;
                           })()}
-                          onChange={(e) => handleMoveEdit(move.id, 'damage', parseInt(e.target.value) || 0)}
+                          onChange={(e) => {
+                            const newValue = parseInt(e.target.value) || 0;
+                            console.log('[ManifestAdmin] 📝 Damage changed for', move.id, ':', newValue);
+                            handleMoveEdit(move.id, 'damage', newValue);
+                          }}
                           disabled={typeof (moveEdits[move.id]?.damage || move.damage) === 'object'}
                           style={{
                             width: '100%',
@@ -1002,7 +1646,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                     </label>
                     <textarea
                       value={moveEdits[move.id]?.description || (existingOverrides[move.id] as MoveEditData | undefined)?.description || move.description || ''}
-                      onChange={(e) => handleMoveEdit(move.id, 'description', e.target.value)}
+                      onChange={(e) => {
+                        console.log('[ManifestAdmin] 📝 Description changed for', move.id, ':', e.target.value.substring(0, 50) + '...');
+                        handleMoveEdit(move.id, 'description', e.target.value);
+                      }}
                       rows={2}
                       style={{
                         width: '100%',
@@ -1306,7 +1953,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
                           </div>
                         </div>
                 );
-              })}
+              }))}
               
               <div style={{ 
                 display: 'flex', 
@@ -1351,26 +1998,87 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose }) => {
           display: 'flex', 
           justifyContent: 'center', 
           gap: '1rem',
-          marginTop: '2rem'
+          marginTop: '2rem',
+          padding: '1rem',
+          position: 'relative',
+          zIndex: 1000
         }}>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[ManifestAdmin] ✅ Close button clicked!');
+              console.log('[ManifestAdmin] onClose function:', onClose);
+              console.log('[ManifestAdmin] asModal:', asModal);
+              console.log('[ManifestAdmin] typeof onClose:', typeof onClose);
+              try {
+                if (onClose && typeof onClose === 'function') {
+                  console.log('[ManifestAdmin] ✅ Calling onClose function...');
+                  const result = onClose();
+                  console.log('[ManifestAdmin] ✅ onClose called, result:', result);
+                } else {
+                  console.error('[ManifestAdmin] ❌ onClose is not a function or is undefined');
+                  console.error('[ManifestAdmin] onClose value:', onClose);
+                  alert('Close handler is not working. Check console for details.');
+                }
+              } catch (error) {
+                console.error('[ManifestAdmin] ❌ Error calling onClose:', error);
+                alert('Error closing panel: ' + (error as Error).message);
+              }
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[ManifestAdmin] Button mousedown event');
+            }}
             style={{
               padding: '0.75rem 1.5rem',
-              background: 'rgba(255,255,255,0.1)',
-              border: '1px solid rgba(255,255,255,0.3)',
+              background: asModal ? 'rgba(255,255,255,0.1)' : '#6b7280',
+              border: asModal ? '1px solid rgba(255,255,255,0.3)' : 'none',
               borderRadius: '0.5rem',
               color: 'white',
               cursor: 'pointer',
-              fontSize: '1rem'
+              fontSize: '1rem',
+              fontWeight: 'bold',
+              zIndex: 1001,
+              position: 'relative',
+              pointerEvents: 'auto'
             }}
+            type="button"
+            id="manifest-admin-close-button"
           >
-            Close Admin Panel
+            {asModal ? 'Close Admin Panel' : 'Back to Admin Panel'}
           </button>
         </div>
       </div>
-    </div>
-  );
+    );
+
+  if (asModal) {
+    // Only render modal if isOpen is true
+    if (!isOpen) {
+      console.log('[ManifestAdmin] Modal mode but isOpen is false, returning null');
+      return null;
+    }
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '2rem'
+      }}>
+        {content}
+      </div>
+    );
+  }
+
+  return content;
 };
 
 export default ManifestAdmin;

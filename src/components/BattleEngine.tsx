@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { Move } from '../types/battle';
+import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
@@ -25,6 +25,14 @@ import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '.
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
 import { getUserUnlockedSkillsForBattle } from '../utils/battleSkillsService';
+import { SpacesModeState, SpaceId } from '../types/battleSession';
+import SpacesModeUI from './SpacesModeUI';
+import { 
+  applyDamageToSpaceInBattle, 
+  checkBattleEndCondition, 
+  validateSpacesModeTarget,
+  initializeSpacesModeBattle
+} from '../utils/spacesModeBattle';
 
 interface Opponent {
   id: string;
@@ -81,6 +89,8 @@ interface BattleEngineProps {
   maxWaves?: number; // Maximum number of waves (for multi-wave battles)
   customWaves?: Record<string, any[]>; // Wave definitions (e.g., { '2': [enemy1, enemy2] })
   onWaveAdvance?: (newWave: number, newEnemies: Opponent[]) => void; // Callback when wave advances
+  spacesModeState?: SpacesModeState; // Spaces Mode state (for PVP_SPACES_1V1 mode)
+  onSpacesModeStateUpdate?: (state: SpacesModeState) => void; // Callback to update spaces state in Firestore
 }
 
 interface BattleState {
@@ -133,7 +143,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   currentWave: propCurrentWave,
   maxWaves: propMaxWaves,
   customWaves,
-  onWaveAdvance
+  onWaveAdvance,
+  spacesModeState: propSpacesModeState,
+  onSpacesModeStateUpdate
 }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
@@ -164,6 +176,62 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     cooldowns: {} // Initialize cooldowns tracking
   });
 
+  // Spaces Mode state
+  const [spacesModeState, setSpacesModeState] = useState<SpacesModeState | null>(propSpacesModeState || null);
+  const [selectedSpaceTarget, setSelectedSpaceTarget] = useState<{ spaceId: SpaceId; ownerUid: string } | null>(null);
+  // For PvP 1v1, always use Spaces Mode
+  const isSpacesMode = (isPvP && !isMultiplayer) || spacesModeState !== null;
+
+  // Sync spaces state from props
+  useEffect(() => {
+    if (propSpacesModeState) {
+      setSpacesModeState(propSpacesModeState);
+    }
+  }, [propSpacesModeState]);
+
+  // Timer for Spaces Mode
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  
+  useEffect(() => {
+    if (!isSpacesMode || !spacesModeState) {
+      setTimeRemaining(null);
+      return;
+    }
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, spacesModeState.endsAt - now);
+      setTimeRemaining(Math.floor(remaining / 1000));
+
+      // Check for time expiry
+      if (remaining <= 0) {
+        const endCheck = checkBattleEndCondition(spacesModeState);
+        if (endCheck.shouldEnd && currentUser) {
+          const opponentUid = Object.keys(spacesModeState.players).find(uid => uid !== currentUser.uid);
+          if (endCheck.winnerUid === currentUser.uid) {
+            setBattleState(prev => ({
+              ...prev,
+              phase: 'victory',
+              battleLog: [...prev.battleLog, '⏰ Time expired!']
+            }));
+            onBattleEnd('victory', currentUser.uid, opponentUid);
+          } else if (endCheck.winnerUid === opponentUid) {
+            setBattleState(prev => ({
+              ...prev,
+              phase: 'defeat',
+              battleLog: [...prev.battleLog, '⏰ Time expired!']
+            }));
+            onBattleEnd('defeat', opponentUid, currentUser.uid);
+          }
+        }
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isSpacesMode, spacesModeState, currentUser, onBattleEnd]);
+
   // Single opponent state (for single player mode)
   const [opponent, setOpponent] = useState<Opponent>(propOpponent || {
     id: 'opponent_1',
@@ -174,6 +242,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     maxShieldStrength: 100,
     level: 5
   });
+
+  // Initialize Spaces Mode if PvP 1v1 and not already initialized
+  useEffect(() => {
+    if (isPvP && !isMultiplayer && currentUser && opponent && !spacesModeState) {
+      console.log('BattleEngine: Auto-initializing Spaces Mode for PvP 1v1');
+      const currentUserLevel = userLevel || 1;
+      const opponentLevel = opponent.level || 1;
+      const spacesState = initializeSpacesModeBattle(
+        currentUser.uid,
+        currentUserLevel,
+        opponent.id,
+        opponentLevel
+      );
+      setSpacesModeState(spacesState);
+      if (onSpacesModeStateUpdate) {
+        onSpacesModeStateUpdate(spacesState);
+      }
+    }
+  }, [isPvP, isMultiplayer, currentUser, opponent, spacesModeState, onSpacesModeStateUpdate, userLevel]);
 
   // Multiple opponents state (for multiplayer mode)
   const [opponents, setOpponents] = useState<Opponent[]>(propOpponents || []);
@@ -4201,18 +4288,86 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         vaultHealth: newTargetOpponent.vaultHealth
       });
     } else {
-      // For PvP opponents, damage vault health, not PP
-      // Max vault health is always 10% of max PP
-      const maxPP = targetOpponent.maxPP || 1000;
-      const maxVaultHealth = Math.floor(maxPP * 0.1);
-      const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : maxVaultHealth;
-      const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
-      const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
-      newTargetOpponent.vaultHealth = newVaultHealth;
-      newTargetOpponent.maxVaultHealth = maxVaultHealth; // Always 10% of maxPP
-      // Set cooldown if vault health reaches 0
-      if (newVaultHealth === 0 && currentVaultHealth > 0) {
-        // Note: We'll need to update this in Firestore separately
+      // SPACES MODE: Apply damage to spaces instead of vault health
+      if (isSpacesMode && spacesModeState && selectedSpaceTarget && currentUser) {
+        const totalDamage = damage + (shieldDamage || 0);
+        const { updatedState, wasDestroyed, wasMainDestroyed, mainUnlocked } = applyDamageToSpaceInBattle(
+          spacesModeState,
+          selectedSpaceTarget.spaceId,
+          selectedSpaceTarget.ownerUid,
+          totalDamage
+        );
+
+        // Update spaces state
+        setSpacesModeState(updatedState);
+        if (onSpacesModeStateUpdate) {
+          onSpacesModeStateUpdate(updatedState);
+        }
+
+        // Log space damage
+        const spaceName = selectedSpaceTarget.spaceId === 'main' ? 'Main Space' 
+          : selectedSpaceTarget.spaceId === 'subLeft' ? 'Sub Space (Left)' 
+          : 'Sub Space (Right)';
+        newLog.push(`⚔️ ${playerName} attacked ${targetOpponent.name}'s ${spaceName} for ${totalDamage} damage!`);
+
+        // Handle space destruction
+        if (wasDestroyed) {
+          newLog.push(`💥 ${targetOpponent.name}'s ${spaceName} destroyed!`);
+          
+          if (mainUnlocked) {
+            newLog.push(`🔓 Main Space unlocked!`);
+          }
+
+          if (wasMainDestroyed) {
+            // Main destroyed - instant win
+            newLog.push(`🏆 ${playerName} destroyed ${targetOpponent.name}'s Main Space! Victory!`);
+            setBattleState(prev => ({
+              ...prev,
+              phase: 'victory',
+              battleLog: newLog
+            }));
+            onBattleEnd('victory', currentUser.uid, targetOpponent.id);
+            return;
+          }
+        }
+
+        // Check battle end conditions
+        const endCheck = checkBattleEndCondition(updatedState);
+        if (endCheck.shouldEnd) {
+          if (endCheck.winnerUid === currentUser.uid) {
+            setBattleState(prev => ({
+              ...prev,
+              phase: 'victory',
+              battleLog: newLog
+            }));
+            onBattleEnd('victory', currentUser.uid, targetOpponent.id);
+          } else if (endCheck.winnerUid === targetOpponent.id) {
+            setBattleState(prev => ({
+              ...prev,
+              phase: 'defeat',
+              battleLog: newLog
+            }));
+            onBattleEnd('defeat', targetOpponent.id, currentUser.uid);
+          }
+          return;
+        }
+
+        // Clear space target after use
+        setSelectedSpaceTarget(null);
+      } else {
+        // For PvP opponents (non-Spaces Mode), damage vault health, not PP
+        // Max vault health is always 10% of max PP
+        const maxPP = targetOpponent.maxPP || 1000;
+        const maxVaultHealth = Math.floor(maxPP * 0.1);
+        const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : maxVaultHealth;
+        const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
+        const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
+        newTargetOpponent.vaultHealth = newVaultHealth;
+        newTargetOpponent.maxVaultHealth = maxVaultHealth; // Always 10% of maxPP
+        // Set cooldown if vault health reaches 0
+        if (newVaultHealth === 0 && currentVaultHealth > 0) {
+          // Note: We'll need to update this in Firestore separately
+        }
       }
     }
     
@@ -5475,7 +5630,46 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }));
   };
 
+  // Handle space target selection for Spaces Mode
+  const handleSpaceTargetSelect = (spaceId: SpaceId, ownerUid: string) => {
+    if (!isSpacesMode || !spacesModeState || !currentUser || !battleState.selectedMove) {
+      return;
+    }
+
+    // Validate target
+    const validation = validateSpacesModeTarget(
+      spacesModeState,
+      currentUser.uid,
+      spaceId,
+      ownerUid
+    );
+
+    if (!validation.valid) {
+      // Show error toast
+      const newLog = [...battleState.battleLog];
+      newLog.push(`❌ ${validation.reason || 'Invalid target'}`);
+      setBattleState(prev => ({ ...prev, battleLog: newLog }));
+      return;
+    }
+
+    // Set space target
+    setSelectedSpaceTarget({ spaceId, ownerUid });
+    
+    // Also set regular target for compatibility (use ownerUid as targetId)
+    setBattleState(prev => ({
+      ...prev,
+      selectedTarget: ownerUid,
+      phase: 'execution'
+    }));
+  };
+
   const handleTargetSelect = (targetId: string) => {
+    // If Spaces Mode, don't use regular target selection
+    if (isSpacesMode) {
+      console.warn('⚠️ [BattleEngine] Regular target selection disabled in Spaces Mode. Use handleSpaceTargetSelect instead.');
+      return;
+    }
+
     console.log(`🎯 [BattleEngine] handleTargetSelect called with targetId: ${targetId}`, {
       isMultiplayer,
       opponentsCount: opponents.length,
@@ -5726,7 +5920,394 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   return (
     <div style={{ width: '100%', maxWidth: isMultiplayer ? '1400px' : '800px', margin: '0 auto' }}>
-      {isMultiplayer ? (
+      {/* Spaces Mode Layout - Replace BattleArena for PvP 1v1 */}
+      {/* For PvP 1v1 battles, always use Spaces Mode (initialize if needed) */}
+      {isPvP && !isMultiplayer && currentUser && opponent && spacesModeState ? (
+        <div style={{
+          width: '100%',
+          minHeight: '700px',
+          background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #60a5fa 100%)',
+          borderRadius: '1rem',
+          padding: '2rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.5rem',
+          position: 'relative',
+          overflow: 'hidden',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)'
+        }}>
+          {/* Timer */}
+          {timeRemaining !== null && (
+            <div style={{
+              textAlign: 'center',
+              padding: '1rem',
+              background: timeRemaining < 60 
+                ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' 
+                : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+              color: 'white',
+              borderRadius: '0.75rem',
+              fontSize: '1.5rem',
+              fontWeight: 'bold',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              border: '2px solid rgba(255,255,255,0.3)'
+            }}>
+              ⏰ {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+            </div>
+          )}
+          
+          {/* Spaces Panel */}
+          <SpacesModeUI
+            spacesModeState={spacesModeState}
+            currentUserId={currentUser.uid}
+            opponentUserId={opponent.id}
+            onSpaceClick={handleSpaceTargetSelect}
+            selectedTarget={selectedSpaceTarget}
+          />
+
+          {/* Move Selection Panel */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            boxShadow: '0 8px 16px rgba(0,0,0,0.2)'
+          }}>
+            <div style={{
+              fontSize: '1.25rem',
+              fontWeight: 'bold',
+              marginBottom: '1rem',
+              color: '#1f2937',
+              textAlign: 'center'
+            }}>
+              {battleState.selectedMove 
+                ? `Selected: ${battleState.selectedMove.name}` 
+                : 'Select a Move'}
+            </div>
+            
+            {!battleState.selectedMove && (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                gap: '0.75rem'
+              }}>
+                {availableMoves.slice(0, 8).map((move) => (
+                  <button
+                    key={move.id || move.name}
+                    onClick={() => handleMoveSelect(move)}
+                    style={{
+                      padding: '0.75rem',
+                      background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      transition: 'all 0.2s',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                    }}
+                  >
+                    {move.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            
+            {battleState.selectedMove && (() => {
+              const move = battleState.selectedMove;
+              const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
+              
+              // Get base damage - use move.damage if available, otherwise check MOVE_DAMAGE_VALUES
+              let baseDamage = move.damage || 0;
+              if (!baseDamage && move.name) {
+                // Try to get from MOVE_DAMAGE_VALUES synchronously
+                const moveData = MOVE_DAMAGE_VALUES[move.name];
+                if (moveData && moveData.damage) {
+                  baseDamage = moveData.damage;
+                }
+              }
+              const damageRange = baseDamage > 0 ? calculateDamageRange(baseDamage, move.level || 1, effectiveMasteryLevel) : null;
+              
+              // Get base shield boost
+              const baseShieldBoost = move.shieldBoost || 0;
+              const shieldRange = baseShieldBoost > 0 ? calculateShieldBoostRange(baseShieldBoost, move.level || 1, effectiveMasteryLevel) : null;
+              
+              // Get base healing
+              const baseHealing = move.healing || 0;
+              const healingRange = baseHealing > 0 ? calculateHealingRange(baseHealing, move.level || 1, effectiveMasteryLevel) : null;
+              
+              // Get artifact multiplier for elemental moves
+              let artifactMultiplier = 1.0;
+              if (move.category === 'elemental' && equippedArtifacts) {
+                const ringLevel = getElementalRingLevel(equippedArtifacts);
+                artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+              }
+              
+              const manifestBoost = move.category === 'manifest' ? getManifestDamageBoost(equippedArtifacts) : 1.0;
+
+              return (
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1rem',
+                  marginTop: '1rem'
+                }}>
+                  {/* Move Stats */}
+                  <div style={{
+                    background: 'rgba(59, 130, 246, 0.1)',
+                    borderRadius: '0.5rem',
+                    padding: '1rem',
+                    border: '2px solid rgba(59, 130, 246, 0.3)'
+                  }}>
+                    <div style={{
+                      fontSize: '0.875rem',
+                      fontWeight: 'bold',
+                      color: '#1f2937',
+                      marginBottom: '0.75rem',
+                      textAlign: 'center'
+                    }}>
+                      Skill Stats
+                    </div>
+                    
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem'
+                    }}>
+                      {/* Cost */}
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '0.5rem',
+                        background: 'rgba(255,255,255,0.5)',
+                        borderRadius: '0.25rem'
+                      }}>
+                        <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>Cost:</span>
+                        <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'bold' }}>{move.cost} PP</span>
+                      </div>
+
+                      {/* Damage */}
+                      {damageRange && (
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          borderRadius: '0.25rem'
+                        }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>⚔️ Damage:</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.125rem' }}>
+                            <span style={{ fontSize: '0.875rem', color: '#ef4444', fontWeight: 'bold' }}>
+                              {damageRange.min}-{damageRange.max}
+                            </span>
+                            {artifactMultiplier > 1.0 && move.category === 'elemental' && (
+                              <span style={{ fontSize: '0.65rem', color: '#f59e0b' }}>
+                                💍 +{Math.round((artifactMultiplier - 1) * 100)}%
+                              </span>
+                            )}
+                            {manifestBoost > 1.0 && move.category === 'manifest' && (
+                              <span style={{ fontSize: '0.65rem', color: '#8b5cf6' }}>
+                                🪖 +{Math.round((manifestBoost - 1) * 100)}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Shield Boost */}
+                      {shieldRange && (
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          background: 'rgba(59, 130, 246, 0.1)',
+                          borderRadius: '0.25rem'
+                        }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>🛡️ Shield:</span>
+                          <span style={{ fontSize: '0.875rem', color: '#3b82f6', fontWeight: 'bold' }}>
+                            +{shieldRange.min}-{shieldRange.max}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Healing */}
+                      {healingRange && (
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          background: 'rgba(16, 185, 129, 0.1)',
+                          borderRadius: '0.25rem'
+                        }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>💚 Heal:</span>
+                          <span style={{ fontSize: '0.875rem', color: '#10b981', fontWeight: 'bold' }}>
+                            {healingRange.min}-{healingRange.max}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* PP Steal */}
+                      {move.ppSteal && move.ppSteal > 0 && (
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          background: 'rgba(251, 191, 36, 0.1)',
+                          borderRadius: '0.25rem'
+                        }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>💰 PP Steal:</span>
+                          <span style={{ fontSize: '0.875rem', color: '#fbbf24', fontWeight: 'bold' }}>
+                            {move.ppSteal}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Cooldown */}
+                      {move.cooldown && move.cooldown > 0 && (
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          background: 'rgba(107, 114, 128, 0.1)',
+                          borderRadius: '0.25rem'
+                        }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>⏱️ Cooldown:</span>
+                          <span style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>
+                            {move.cooldown} turns
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Description */}
+                      {move.description && (
+                        <div style={{
+                          padding: '0.5rem',
+                          background: 'rgba(255,255,255,0.5)',
+                          borderRadius: '0.25rem',
+                          marginTop: '0.25rem'
+                        }}>
+                          <div style={{
+                            fontSize: '0.7rem',
+                            color: '#6b7280',
+                            fontStyle: 'italic',
+                            lineHeight: '1.4'
+                          }}>
+                            {move.description}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Clear Selection Button */}
+                  <div style={{
+                    display: 'flex',
+                    gap: '1rem',
+                    justifyContent: 'center'
+                  }}>
+                    <button
+                      onClick={() => handleMoveSelect(null)}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        background: '#6b7280',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.5rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Action Buttons */}
+          <div style={{
+            display: 'flex',
+            gap: '1rem',
+            justifyContent: 'center'
+          }}>
+            <button
+              onClick={handleEscape}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+              }}
+            >
+              FORFEIT
+            </button>
+          </div>
+
+          {/* Battle Log for Spaces Mode */}
+          <div style={{
+            background: 'rgba(0, 0, 0, 0.8)',
+            borderRadius: '0.75rem',
+            padding: '1rem',
+            maxHeight: '200px',
+            overflowY: 'auto',
+            fontFamily: 'monospace',
+            fontSize: '0.75rem',
+            color: '#ffffff',
+            border: '2px solid rgba(255,255,255,0.3)'
+          }}>
+            <div style={{ 
+              fontSize: '0.875rem', 
+              fontWeight: 'bold', 
+              marginBottom: '0.5rem', 
+              textAlign: 'center',
+              color: '#fbbf24'
+            }}>
+              📜 BATTLE LOG
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              {battleState.battleLog.map((logEntry, index) => (
+                <div 
+                  key={index}
+                  style={{
+                    padding: '0.25rem 0.5rem',
+                    borderRadius: '0.25rem',
+                    backgroundColor: logEntry.includes('attacked') ? 'rgba(239, 68, 68, 0.2)' : 
+                                   logEntry.includes('destroyed') ? 'rgba(251, 191, 36, 0.2)' :
+                                   logEntry.includes('unlocked') ? 'rgba(34, 197, 94, 0.2)' :
+                                   'rgba(107, 114, 128, 0.2)',
+                    borderLeft: logEntry.includes('attacked') ? '3px solid #ef4444' :
+                               logEntry.includes('destroyed') ? '3px solid #fbbf24' :
+                               logEntry.includes('unlocked') ? '3px solid #22c55e' :
+                               '3px solid #6b7280',
+                    wordWrap: 'break-word'
+                  }}
+                >
+                  {logEntry}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : isMultiplayer ? (
         <MultiplayerBattleArena
           onMoveSelect={handleMoveSelect}
           onTargetSelect={handleTargetSelect}
@@ -5804,8 +6385,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       )}
       
       {/* Battle Status */}
-      {/* Battle Log - Hide in Mindforge mode (Mindforge has its own log) and Multiplayer mode (MultiplayerBattleArena has its own log) */}
-      {!mindforgeMode && !isMultiplayer && (
+      {/* Battle Log - Hide in Mindforge mode (Mindforge has its own log), Multiplayer mode (MultiplayerBattleArena has its own log), and Spaces Mode */}
+      {!mindforgeMode && !isMultiplayer && !isSpacesMode && (
       <div style={{
         marginTop: '1rem',
         padding: '1rem',

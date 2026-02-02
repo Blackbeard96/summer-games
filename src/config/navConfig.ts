@@ -79,12 +79,6 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
-              label: 'Training Grounds',
-              path: '/training-grounds',
-              icon: '🎯',
-              visibility: 'all'
-            },
-            {
               label: 'Live Events',
               path: '/live-events',
               icon: '🎆',
@@ -108,6 +102,12 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               icon: '📚',
               isButton: true,
               onClick: () => (window as any).tutorialTriggers?.showReviewModal?.(),
+              visibility: 'all'
+            },
+            {
+              label: 'Training Grounds',
+              path: '/training-grounds',
+              icon: '🎯',
               visibility: 'all'
             },
             {

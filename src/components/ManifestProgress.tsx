@@ -63,8 +63,8 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
         4: 'Ultimate Strategy'
       },
       'observation': {
-        1: 'Precision Strike',
-        2: 'Memory Shield',
+        1: 'Strike Counter',
+        2: 'Foresight',
         3: 'Perfect Observation',
         4: 'Omniscient View'
       },

@@ -143,11 +143,12 @@ const ClassroomManagement: React.FC = () => {
   const [showClassPPView, setShowClassPPView] = useState<string | null>(null);
   
   // View PP UI state (for sorting and bulk operations)
-  const [ppViewSortMode, setPpViewSortMode] = useState<'firstName' | 'lastName' | 'pp'>('firstName');
+  const [ppViewSortMode, setPpViewSortMode] = useState<'firstName' | 'lastName' | 'pp' | 'level'>('firstName');
   const [ppViewSortDir, setPpViewSortDir] = useState<'asc' | 'desc'>('asc');
   const [ppViewSelectedStudents, setPpViewSelectedStudents] = useState<Set<string>>(new Set());
   const [ppViewBulkPPAmount, setPpViewBulkPPAmount] = useState<number>(0);
   const [ppViewBulkReason, setPpViewBulkReason] = useState<string>('');
+  const [ppViewLevelFilter, setPpViewLevelFilter] = useState<number | null>(null);
   const [ppViewIsApplyingBulk, setPpViewIsApplyingBulk] = useState<boolean>(false);
   
   // In Session states
@@ -2334,6 +2335,7 @@ const ClassroomManagement: React.FC = () => {
                     setPpViewSelectedStudents(new Set());
                     setPpViewBulkPPAmount(0);
                     setPpViewBulkReason('');
+                    setPpViewLevelFilter(null);
                   }}
                   style={{
                     background: 'none',
@@ -2423,17 +2425,35 @@ const ClassroomManagement: React.FC = () => {
                   );
                 }
                 
-                // Filter students
-                const filteredClassStudents = searchStudents(classStudents, searchQuery);
+                // Filter students by search query
+                const searchFilteredStudents = searchStudents(classStudents, searchQuery);
+                
+                // Get all unique levels from class students for filter dropdown
+                const availableLevels = Array.from(new Set(classStudents.map(s => s.level || 1))).sort((a, b) => a - b);
+                
+                // Filter by level if level filter is set
+                const levelFilteredStudents = ppViewLevelFilter !== null
+                  ? searchFilteredStudents.filter(student => (student.level || 1) === ppViewLevelFilter)
+                  : searchFilteredStudents;
                 
                 // Sort students
-                const sortedStudents = [...filteredClassStudents].sort((a, b) => {
+                const sortedStudents = [...levelFilteredStudents].sort((a, b) => {
                   let comparison = 0;
                   
                   if (ppViewSortMode === 'pp') {
                     const ppA = a.powerPoints || 0;
                     const ppB = b.powerPoints || 0;
                     comparison = ppA - ppB;
+                  } else if (ppViewSortMode === 'level') {
+                    const levelA = a.level || 1;
+                    const levelB = b.level || 1;
+                    comparison = levelA - levelB;
+                    // If levels are equal, sort by XP as secondary sort
+                    if (comparison === 0) {
+                      const xpA = a.xp || 0;
+                      const xpB = b.xp || 0;
+                      comparison = xpA - xpB;
+                    }
                   } else if (ppViewSortMode === 'firstName') {
                     const nameA = getNameParts(a.displayName);
                     const nameB = getNameParts(b.displayName);
@@ -2468,14 +2488,16 @@ const ClassroomManagement: React.FC = () => {
                       display: 'flex',
                       justifyContent: 'space-around',
                       alignItems: 'center',
-                      minHeight: '80px'
+                      minHeight: '80px',
+                      flexWrap: 'wrap',
+                      gap: '1rem'
                     }}>
                       <div style={{ textAlign: 'center' }}>
                         <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
-                          {classStudents.length}
+                          {ppViewLevelFilter !== null ? levelFilteredStudents.length : classStudents.length}
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                          Total Students
+                          {ppViewLevelFilter !== null ? `Students (Level ${ppViewLevelFilter})` : 'Total Students'}
                         </div>
                       </div>
                       <div style={{ textAlign: 'center' }}>
@@ -2492,6 +2514,14 @@ const ClassroomManagement: React.FC = () => {
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                           Average PP
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                          {availableLevels.length}
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          Levels ({availableLevels.join(', ')})
                         </div>
                       </div>
                     </div>
@@ -2513,7 +2543,7 @@ const ClassroomManagement: React.FC = () => {
                       </label>
                       <select
                         value={ppViewSortMode}
-                        onChange={(e) => setPpViewSortMode(e.target.value as 'firstName' | 'lastName' | 'pp')}
+                        onChange={(e) => setPpViewSortMode(e.target.value as 'firstName' | 'lastName' | 'pp' | 'level')}
                         style={{
                           padding: '0.5rem 0.75rem',
                           border: '1px solid #d1d5db',
@@ -2525,6 +2555,7 @@ const ClassroomManagement: React.FC = () => {
                       >
                         <option value="firstName">First Name</option>
                         <option value="lastName">Last Name</option>
+                        <option value="level">Level</option>
                         <option value="pp">PP Amount</option>
                       </select>
                       <button
@@ -2544,6 +2575,49 @@ const ClassroomManagement: React.FC = () => {
                       >
                         {ppViewSortDir === 'asc' ? '↑' : '↓'} {ppViewSortDir === 'asc' ? 'Ascending' : 'Descending'}
                       </button>
+                      
+                      <div style={{ marginLeft: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <label style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151' }}>
+                          Filter by Level:
+                        </label>
+                        <select
+                          value={ppViewLevelFilter === null ? '' : ppViewLevelFilter}
+                          onChange={(e) => setPpViewLevelFilter(e.target.value === '' ? null : parseInt(e.target.value))}
+                          style={{
+                            padding: '0.5rem 0.75rem',
+                            border: '1px solid #d1d5db',
+                            borderRadius: '0.375rem',
+                            fontSize: '0.875rem',
+                            backgroundColor: 'white',
+                            cursor: 'pointer',
+                            minWidth: '120px'
+                          }}
+                        >
+                          <option value="">All Levels</option>
+                          {availableLevels.map(level => (
+                            <option key={level} value={level}>
+                              Level {level}
+                            </option>
+                          ))}
+                        </select>
+                        {ppViewLevelFilter !== null && (
+                          <button
+                            onClick={() => setPpViewLevelFilter(null)}
+                            style={{
+                              padding: '0.25rem 0.5rem',
+                              border: '1px solid #d1d5db',
+                              borderRadius: '0.375rem',
+                              fontSize: '0.75rem',
+                              backgroundColor: '#f3f4f6',
+                              cursor: 'pointer',
+                              color: '#6b7280'
+                            }}
+                            title="Clear level filter"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
                     </div>
                     
                     {/* Bulk Selection Header */}

@@ -9,6 +9,8 @@ import { getLevelFromXP } from '../utils/leveling';
 import PvPRewardSpin from './PvPRewardSpin';
 import WaitingRoomModal from './WaitingRoomModal';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import { initializeSpacesModeBattle } from '../utils/spacesModeBattle';
+import { SpacesModeState } from '../types/battleSession';
 
 export type RiskLevel = 'easy' | 'medium' | 'high';
 
@@ -21,6 +23,7 @@ export interface BattleRoom {
   createdAt: any;
   participants: string[];
   maxParticipants: number;
+  spacesModeState?: SpacesModeState;
   hostPhotoURL?: string;
   riskLevel?: RiskLevel;
   riskPercentage?: number; // 10, 20, or 25
@@ -74,6 +77,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [hasIntentionallyLeft, setHasIntentionallyLeft] = useState(false);
+  const [spacesModeState, setSpacesModeState] = useState<SpacesModeState | null>(null);
 
   // Fetch user level and restore battle if user is in one
   useEffect(() => {
@@ -125,6 +129,30 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
             }
             setCurrentRoom(roomData);
             await fetchOpponentData(roomData);
+            
+            // Load spacesModeState from Firestore if it exists
+            const roomDoc = await getDoc(doc(db, 'battleRooms', roomData.id));
+            if (roomDoc.exists()) {
+              const data = roomDoc.data();
+              if (data.spacesModeState) {
+                console.log('PvP Battle: Restoring Spaces Mode state from Firestore');
+                setSpacesModeState(data.spacesModeState as SpacesModeState);
+              } else if (opponent && currentUser) {
+                // Initialize if not exists
+                console.log('PvP Battle: Initializing Spaces Mode state for restored battle');
+                const spacesState = initializeSpacesModeBattle(
+                  currentUser.uid,
+                  userLevel,
+                  opponent.id,
+                  opponent.level
+                );
+                setSpacesModeState(spacesState);
+                await updateDoc(doc(db, 'battleRooms', roomData.id), {
+                  spacesModeState: spacesState
+                });
+              }
+            }
+            
             setShowBattleEngine(true);
           } else {
             console.log('PvP Battle: Not restoring battle - status is', roomData.status, 'or reward spin showing:', showRewardSpin);
@@ -416,7 +444,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
     };
   }, [currentUser, showRewardSpin, showBattleEngine, currentRoom]);
 
-  // Listen for room status changes to detect when opponent leaves
+  // Listen for room status changes and spacesModeState updates
   useEffect(() => {
     if (!currentRoom || !currentUser || !showBattleEngine) return;
     if (hasIntentionallyLeft) return; // Don't check if we intentionally left
@@ -432,6 +460,20 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           if (!isMounted || !docSnapshot.exists()) return;
           
           const updatedRoom = { id: docSnapshot.id, ...docSnapshot.data() } as BattleRoom;
+          
+          // Sync spacesModeState from Firestore
+          if (updatedRoom.spacesModeState && !spacesModeState) {
+            console.log('PvP Battle: Syncing Spaces Mode state from Firestore');
+            setSpacesModeState(updatedRoom.spacesModeState as SpacesModeState);
+          } else if (updatedRoom.spacesModeState && spacesModeState) {
+            // Update if state changed (for opponent's moves)
+            const updatedState = updatedRoom.spacesModeState as SpacesModeState;
+            // Only update if it's different (to avoid unnecessary re-renders)
+            if (JSON.stringify(updatedState) !== JSON.stringify(spacesModeState)) {
+              console.log('PvP Battle: Updating Spaces Mode state from Firestore');
+              setSpacesModeState(updatedState);
+            }
+          }
           
           // Check if room status changed to 'left' and it wasn't us who left
           if (updatedRoom.status === 'left' && updatedRoom.leftBy !== currentUser.uid) {
@@ -463,7 +505,7 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         unsubscribe();
       }
     };
-  }, [currentRoom, currentUser, showBattleEngine, hasIntentionallyLeft, opponent]);
+  }, [currentRoom, currentUser, showBattleEngine, hasIntentionallyLeft, opponent, spacesModeState]);
 
   const createBattleRoom = async (riskLevel: RiskLevel) => {
     if (!currentUser || !vault) return;
@@ -582,6 +624,29 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
         } catch (error) {
           console.error('Error syncing vault PP before battle:', error);
         }
+        
+        // Initialize Spaces Mode for PvP 1v1
+        if (currentUser && opponent) {
+          const spacesState = initializeSpacesModeBattle(
+            currentUser.uid,
+            userLevel,
+            opponent.id,
+            opponent.level
+          );
+          setSpacesModeState(spacesState);
+          
+          // Store spaces state in Firestore battle room
+          try {
+            const roomRef = doc(db, 'battleRooms', updatedRoom.id);
+            await updateDoc(roomRef, {
+              spacesModeState: spacesState
+            });
+            console.log('PvP Battle: Initialized Spaces Mode state');
+          } catch (error) {
+            console.error('Error storing Spaces Mode state:', error);
+          }
+        }
+        
         setShowBattleEngine(true);
         setShowWaitingRoom(false);
         // Notify the room creator that opponent joined (triggers battle for them too)
@@ -741,6 +806,47 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
     // Opponent joined! Set opponent and transition to battle
     setOpponent(opponentData);
     setShowWaitingRoom(false);
+    
+    // Sync vault PP from student PP before starting battle
+    try {
+      await syncVaultPP();
+      console.log('PvP Battle: Synced vault PP from student PP before battle start (host)');
+    } catch (error) {
+      console.error('Error syncing vault PP before battle:', error);
+    }
+    
+    // Initialize Spaces Mode for PvP 1v1 (host side)
+    if (currentUser && opponentData) {
+      // Check if spacesModeState already exists in Firestore
+      if (currentRoom) {
+        try {
+          const roomDoc = await getDoc(doc(db, 'battleRooms', currentRoom.id));
+          if (roomDoc.exists()) {
+            const data = roomDoc.data();
+            if (data.spacesModeState) {
+              console.log('PvP Battle: Loading Spaces Mode state from Firestore (host)');
+              setSpacesModeState(data.spacesModeState as SpacesModeState);
+            } else {
+              // Initialize if not exists
+              console.log('PvP Battle: Initializing Spaces Mode state (host)');
+              const spacesState = initializeSpacesModeBattle(
+                currentUser.uid,
+                userLevel,
+                opponentData.id,
+                opponentData.level
+              );
+              setSpacesModeState(spacesState);
+              await updateDoc(doc(db, 'battleRooms', currentRoom.id), {
+                spacesModeState: spacesState
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error initializing Spaces Mode state:', error);
+        }
+      }
+    }
+    
     setShowBattleEngine(true);
     
     // Update room status to in-progress if needed
@@ -1041,6 +1147,21 @@ const PvPBattle: React.FC<PvPBattleProps> = ({ onBack }) => {
           opponent={opponent || undefined}
           isPvP={true}
           battleRoom={currentRoom}
+          spacesModeState={spacesModeState || undefined}
+          onSpacesModeStateUpdate={async (updatedState) => {
+            // Update spaces state in Firestore
+            if (currentRoom) {
+              try {
+                const roomRef = doc(db, 'battleRooms', currentRoom.id);
+                await updateDoc(roomRef, {
+                  spacesModeState: updatedState
+                });
+                setSpacesModeState(updatedState);
+              } catch (error) {
+                console.error('Error updating Spaces Mode state:', error);
+              }
+            }
+          }}
         />
       </div>
     );

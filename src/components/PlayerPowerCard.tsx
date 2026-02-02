@@ -207,6 +207,8 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
             height: 480,
             margin: '0 auto',
             cursor: 'pointer',
+            position: 'relative',
+            overflow: 'hidden', // Ensure card container doesn't overflow
           }}
           onClick={handleFlip}
           onKeyDown={(e) => {
@@ -243,26 +245,28 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                 boxShadow: '0 8px 32px 0 rgba(31,41,55,0.25)',
                 display: 'flex',
                 flexDirection: 'column',
-                padding: 24,
+                padding: 20,
                 zIndex: 2,
                 transform: 'rotateY(0deg)',
+                overflow: 'hidden', // Ensure nothing overflows the card boundary
+                boxSizing: 'border-box', // Include padding in width/height calculations
+                minHeight: 0, // Allow flex children to shrink
               }}
             >
         {/* Top Row: Name, PP, TM, Level all aligned */}
-        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: 4 }}>
-          {/* First row: Name, PP, TM, Level all on same line */}
-          <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: 6, minWidth: 0, flexShrink: 0, boxSizing: 'border-box', overflow: 'hidden' }}>
+          {/* First row: Name only */}
+          <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 4, marginBottom: 4, minWidth: 0, maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
             {/* Player Name */}
-            <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: 15, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '3px', flex: '1 1 auto', minWidth: 0, maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', display: 'block' }}>
                 {playerData.displayName}
               </span>
               {showSquadAbbreviation && playerData.squadAbbreviation && (
                 <span style={{
-                  fontSize: '16px',
+                  fontSize: '12px',
                   color: '#4f46e5',
                   fontWeight: '600',
-                  marginLeft: '4px',
                   flexShrink: 0
                 }}>
                   [{playerData.squadAbbreviation}]
@@ -271,7 +275,7 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
               {showPPBoost && ppBoostStatus.isActive && (
                 <span 
                   style={{ 
-                    fontSize: '16px',
+                    fontSize: '12px',
                     color: '#f59e0b',
                     fontWeight: 'bold',
                     textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
@@ -284,19 +288,37 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                 </span>
               )}
             </div>
-            {/* PP and TM badges */}
+          </div>
+          {/* Second row: Badges (PP, TM, PL, Level) - Constrained flexbox with wrapping */}
+          <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap',
+            gap: 3, 
+            width: '100%', 
+            alignItems: 'center', 
+            minWidth: 0, 
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+            overflow: 'hidden',
+            justifyContent: 'flex-start'
+          }}>
+            {/* PP badge */}
             <span 
               style={{ 
                 background: '#fbbf24', 
                 color: '#1f2937', 
-                borderRadius: 8, 
-                padding: '2px 10px', 
+                borderRadius: 4, 
+                padding: '1px 4px', 
                 fontWeight: 'bold', 
-                fontSize: 14, 
-                display: 'flex', 
+                fontSize: 9, 
+                display: 'inline-flex', 
                 alignItems: 'center', 
-                gap: '4px',
-                flexShrink: 0
+                justifyContent: 'center',
+                gap: '2px',
+                whiteSpace: 'nowrap',
+                boxSizing: 'border-box',
+                flexShrink: 1,
+                minWidth: 0
               }} 
               title="Power Points"
             >
@@ -304,7 +326,7 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
               {showPPBoost && ppBoostStatus.isActive && (
                 <span 
                   style={{ 
-                    fontSize: '12px',
+                    fontSize: '7px',
                     color: '#f59e0b',
                     fontWeight: 'bold',
                     textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
@@ -316,17 +338,24 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                 </span>
               )}
             </span>
+            {/* TM badge */}
             <span 
               style={{ 
                 background: '#9ca3af', 
                 color: '#ffffff', 
-                borderRadius: 8, 
-                padding: '2px 10px', 
+                borderRadius: 4, 
+                padding: '1px 4px', 
                 fontWeight: 'bold', 
-                fontSize: 14, 
+                fontSize: 9, 
                 border: '1px solid #6b7280', 
                 boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
-                flexShrink: 0
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                whiteSpace: 'nowrap',
+                boxSizing: 'border-box',
+                flexShrink: 1,
+                minWidth: 0
               }}
               title="Truth Metal Shards"
             >
@@ -338,15 +367,19 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                 style={{ 
                   background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)', 
                   color: 'white', 
-                  borderRadius: 8, 
-                  padding: '2px 10px', 
+                  borderRadius: 4, 
+                  padding: '1px 4px', 
                   fontWeight: 'bold', 
-                  fontSize: 14,
+                  fontSize: 9,
                   boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px',
-                  flexShrink: 0
+                  justifyContent: 'center',
+                  gap: '2px',
+                  whiteSpace: 'nowrap',
+                  boxSizing: 'border-box',
+                  flexShrink: 1,
+                  minWidth: 0
                 }}
                 title={playerData.powerBreakdown ? `Base: ${playerData.powerBreakdown.base} | Skills: ${playerData.powerBreakdown.skills} | Artifacts: ${playerData.powerBreakdown.artifacts} | Ascension: ${playerData.powerBreakdown.ascension}` : 'Power Level'}
               >
@@ -357,30 +390,35 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
             <span style={{ 
               background: '#4f46e5', 
               color: 'white', 
-              borderRadius: 8, 
-              padding: '2px 10px', 
+              borderRadius: 4, 
+              padding: '1px 4px', 
               fontWeight: 'bold', 
-              fontSize: 14, 
-              marginLeft: playerData.powerLevel === null || playerData.powerLevel === undefined ? 'auto' : '0',
-              flexShrink: 0
+              fontSize: 9, 
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              whiteSpace: 'nowrap',
+              boxSizing: 'border-box',
+              flexShrink: 1,
+              minWidth: 0
             }}>
               Lv. {playerData.level}
             </span>
           </div>
           {/* Second row: Rarity stars under name */}
-          <div style={{ display: 'flex', alignItems: 'center', marginTop: -4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginTop: 2, flexWrap: 'wrap', width: '100%' }}>
             {Array.from({ length: playerData.rarity }).map((_, i) => (
-              <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
+              <span key={i} style={{ color: '#fbbf24', fontSize: 14, marginRight: 2, flexShrink: 0 }}>★</span>
             ))}
           </div>
         </div>
 
         {/* Level Progress Bar */}
-        <div style={{ margin: '8px 0 12px 0', width: '100%' }}>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>
-            Level Progress: {playerData.xpCurrent} / {playerData.xpRequired} XP
+        <div style={{ margin: '6px 0 10px 0', width: '100%', flexShrink: 0 }}>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Progress: {playerData.xpCurrent} / {playerData.xpRequired} XP
           </div>
-          <div style={{ background: '#e5e7eb', borderRadius: 8, height: 10, width: '100%', overflow: 'hidden' }}>
+          <div style={{ background: '#e5e7eb', borderRadius: 8, height: 8, width: '100%', overflow: 'hidden' }}>
             <div 
               style={{ 
                 width: `${playerData.levelProgressPercent}%`, 
@@ -394,20 +432,21 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
         </div>
 
         {/* Profile Image */}
-        <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', width: '100%', flexShrink: 0, marginBottom: 10 }}>
           {playerData.avatarUrl && playerData.avatarUrl.trim() !== '' ? (
             <img
               key={playerData.avatarUrl}
               src={playerData.avatarUrl}
               alt={`Profile picture of ${playerData.displayName}`}
               style={{
-                width: 120,
-                height: 120,
+                width: 100,
+                height: 100,
                 borderRadius: playerData.cardFrameShape === 'circular' ? '50%' : '0.75rem',
                 objectFit: 'cover',
-                border: `4px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
-                marginBottom: 16,
+                border: `3px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
                 background: '#fff',
+                maxWidth: '100%',
+                maxHeight: '100%',
               }}
               onError={(e) => {
                 // Hide the broken image and show fallback
@@ -421,18 +460,18 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
           <div
             key={`fallback-${playerData.displayName}`}
             style={{
-              width: 120,
-              height: 120,
+              width: 100,
+              height: 100,
               borderRadius: playerData.cardFrameShape === 'circular' ? '50%' : '0.75rem',
-              border: `4px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
-              marginBottom: 16,
+              border: `3px solid ${playerData.cardImageBorderColor || '#a78bfa'}`,
               background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
               display: (playerData.avatarUrl && playerData.avatarUrl.trim() !== '') ? 'none' : 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 48,
+              fontSize: 40,
               color: 'white',
               fontWeight: 'bold',
+              flexShrink: 0,
             }}
           >
             {playerData.displayName.charAt(0).toUpperCase()}
@@ -440,59 +479,68 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
         </div>
 
         {/* Manifest and Element */}
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 20 }}>{manifestIcons[playerData.manifest] || '✨'}</span>
-            <span style={{ fontWeight: 'bold', color: getManifestColor(playerData.manifest), fontSize: 14 }}>
-              Manifest: {playerData.manifest}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, justifyContent: 'center', flexWrap: 'wrap', width: '100%', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <span style={{ fontSize: 16 }}>{manifestIcons[playerData.manifest] || '✨'}</span>
+            <span style={{ fontWeight: 'bold', color: getManifestColor(playerData.manifest), fontSize: 11, whiteSpace: 'nowrap' }}>
+              {playerData.manifest}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 20 }}>{styleIcons[playerData.element] || '🔮'}</span>
-            <span style={{ fontWeight: 'bold', color: getElementColor(playerData.element), fontSize: 14 }}>
-              Element: {playerData.element}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <span style={{ fontSize: 16 }}>{styleIcons[playerData.element] || '🔮'}</span>
+            <span style={{ fontWeight: 'bold', color: getElementColor(playerData.element), fontSize: 11, whiteSpace: 'nowrap' }}>
+              {playerData.element}
             </span>
           </div>
         </div>
 
         {/* Divider */}
-        <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
+        <div style={{ width: '80%', height: 1, background: '#e5e7eb', margin: '8px auto', flexShrink: 0 }} />
 
         {/* Moves Section */}
         {playerData.moves && playerData.moves.length > 0 && (
-          <div style={{ margin: '12px 0', textAlign: 'center' }}>
-            <div style={{ fontWeight: 'bold', color: '#4f46e5', marginBottom: 4 }}>Moves</div>
-            {playerData.moves.map((move, idx) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 18 }}>{move.icon}</span>
-                <span style={{ fontWeight: 'bold' }}>{move.name}</span>
-                <span style={{ color: '#6b7280', fontSize: 14 }}>{move.description}</span>
-              </div>
-            ))}
+          <div style={{ margin: '8px 0', textAlign: 'center', width: '100%', minWidth: 0, maxHeight: '80px', overflowY: 'auto', flexShrink: 1, minHeight: 0 }}>
+            <div style={{ fontWeight: 'bold', color: '#4f46e5', marginBottom: 3, fontSize: 12 }}>Moves</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
+              {playerData.moves.slice(0, 2).map((move, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap', fontSize: 10 }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>{move.icon}</span>
+                  <span style={{ fontWeight: 'bold', fontSize: 11, flexShrink: 0 }}>{move.name}</span>
+                </div>
+              ))}
+              {playerData.moves.length > 2 && (
+                <div style={{ fontSize: 10, color: '#6b7280', fontStyle: 'italic' }}>
+                  +{playerData.moves.length - 2} more
+                </div>
+              )}
+            </div>
           </div>
         )}
         
         {/* Badges Button */}
-        <div style={{ margin: '12px 0', textAlign: 'center' }}>
+        <div style={{ margin: '8px 0 0 0', textAlign: 'center', width: '100%', marginTop: 'auto', flexShrink: 0 }}>
           <button
             onClick={handleBadgeClick}
             style={{
               background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
               color: 'white',
               border: 'none',
-              borderRadius: 12,
-              padding: '12px 20px',
+              borderRadius: 10,
+              padding: '8px 12px',
               fontWeight: 'bold',
-              fontSize: 14,
+              fontSize: 12,
               cursor: 'pointer',
               transition: 'all 0.2s ease',
               boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '8px',
+              gap: '4px',
               width: '100%',
-              margin: '0 auto'
+              margin: '0 auto',
+              whiteSpace: 'nowrap',
+              maxWidth: '100%',
+              boxSizing: 'border-box'
             }}
             onMouseOver={(e) => {
               e.currentTarget.style.transform = 'translateY(-2px)';
@@ -509,7 +557,7 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
         </div>
         
         {/* Flip hint */}
-        <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+        <div style={{ color: '#6b7280', fontSize: 10, marginTop: 6, textAlign: 'center', width: '100%', flexShrink: 0 }}>
           Click to view journey details
         </div>
       </div>
@@ -530,10 +578,13 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
-                padding: 24,
+                padding: 20,
                 transform: 'rotateY(180deg)',
                 zIndex: 1,
                 overflowY: 'auto',
+                overflowX: 'hidden', // Prevent horizontal overflow
+                boxSizing: 'border-box', // Include padding in width/height calculations
+                minHeight: 0, // Allow flex children to shrink
               }}
             >
         {/* Journey Stage Detail View */}
@@ -771,9 +822,10 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 12,
+              gap: 8,
               width: '100%',
-              marginBottom: 16
+              marginBottom: 16,
+              boxSizing: 'border-box'
             }}>
               {Object.entries(journeyStages).map(([key, stage]) => (
                 <button

@@ -524,8 +524,8 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
   
   // Observation Manifest
   {
-    name: 'Precision Strike',
-    description: 'Perfectly aimed attack using enhanced observation',
+    name: 'Strike Counter',
+    description: 'Perfectly timed counter-attack using enhanced observation',
     category: 'manifest',
     type: 'attack',
     manifestType: 'observation',
@@ -540,18 +540,18 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     targetType: 'single',
   },
   {
-    name: 'Memory Shield',
-    description: 'Create a barrier from remembered defensive patterns',
+    name: 'Foresight',
+    description: 'Avoid damage by observing attack patterns and efficiently dodging',
     category: 'manifest',
     type: 'defense',
     manifestType: 'observation',
     level: 1,
     cost: 1,
-    shieldBoost: 17,
+    shieldBoost: 0,
     ppSteal: 0,
-    buffType: 'fortify',
-    buffStrength: 25,
-    duration: 2,
+    buffType: 'dodge',
+    buffStrength: 100,
+    duration: 1,
     cooldown: 3,
     targetType: 'self',
   },
@@ -1194,8 +1194,8 @@ export const MOVE_DAMAGE_VALUES: Record<string, { damage: number }> = {
   'Strategy Matrix': { damage: 0 },
   
   // Manifest Moves (Observation)
-  'Precision Strike': { damage: 13 }, // 13 + 0
-  'Memory Shield': { damage: 0 },
+  'Strike Counter': { damage: 13 }, // 13 + 0
+  'Foresight': { damage: 0 },
   
   // Manifest Moves (Empathy)
   'Emotional Resonance': { damage: 9 }, // 9 + 0
@@ -1993,17 +1993,17 @@ export const MOVE_UPGRADE_TEMPLATES: Record<string, {
   },
   
   // Manifest Moves (Observation)
-  'Precision Strike': {
+  'Strike Counter': {
     level1: { damage: 13, ppSteal: 0, buffStrength: 50 },
     level2: { damage: 19, ppSteal: 5, buffStrength: 60 },
     level3: { damage: 25, ppSteal: 10, buffStrength: 70 },
     level4: { damage: 33, ppSteal: 15, buffStrength: 85 }
   },
-  'Memory Shield': {
-    level1: { shieldBoost: 17, buffStrength: 25 },
-    level2: { shieldBoost: 25, buffStrength: 35 },
-    level3: { shieldBoost: 33, buffStrength: 45 },
-    level4: { shieldBoost: 43, buffStrength: 60 }
+  'Foresight': {
+    level1: { shieldBoost: 0, buffStrength: 100 },
+    level2: { shieldBoost: 0, buffStrength: 100 },
+    level3: { shieldBoost: 0, buffStrength: 100 },
+    level4: { shieldBoost: 0, buffStrength: 100 }
   },
   
   // Manifest Moves (Empathy)

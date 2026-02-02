@@ -40,6 +40,7 @@ interface AuthContextType {
   isAdmin: boolean; // Computed boolean for admin role
   loadingRole: boolean; // Loading state for role fetch
   testAccountData: any | null;
+  activeTestAccountId: string | null; // Currently active test account ID
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -51,6 +52,7 @@ interface AuthContextType {
   deleteUserAccount: () => Promise<void>;
   switchToTestAccount: (testAccountId: string) => Promise<void>;
   switchToAdmin: () => void;
+  getActiveUserId: () => string | null; // Returns active test account ID if in test mode, otherwise auth.uid
 }
 
 const AuthContext = createContext<AuthContextType>({ 
@@ -62,6 +64,7 @@ const AuthContext = createContext<AuthContextType>({
   isAdmin: false,
   loadingRole: true,
   testAccountData: null,
+  activeTestAccountId: null,
   signup: async () => {},
   login: async () => {},
   loginWithGoogle: async () => {},
@@ -72,7 +75,8 @@ const AuthContext = createContext<AuthContextType>({
   updateUserEmail: async () => {},
   deleteUserAccount: async () => {},
   switchToTestAccount: async () => {},
-  switchToAdmin: () => {}
+  switchToAdmin: () => {},
+  getActiveUserId: () => null
 });
 
 export function useAuth() {
@@ -98,6 +102,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
   const [isTestMode, setIsTestMode] = useState(false); // Track if we're in test mode to prevent onAuthStateChanged from overriding
+  const [activeTestAccountId, setActiveTestAccountId] = useState<string | null>(() => {
+    // Try to restore from localStorage on mount
+    return localStorage.getItem('activeTestAccountId');
+  });
 
   // Fetch user role from Firestore (userRoles collection or users.role field)
   const fetchUserRole = useCallback(async (user: User) => {
@@ -433,6 +441,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUserProfile(testUserData as UserProfile);
       setTestAccountData(testStudentData);
       setCurrentRole('test');
+      setActiveTestAccountId(testAccountId);
+      localStorage.setItem('activeTestAccountId', testAccountId);
     } catch (error) {
       console.error('Error switching to test account:', error);
       throw error;
@@ -557,6 +567,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserProfile(profileToRestore);
     setTestAccountData(null);
     setCurrentRole('admin');
+    setActiveTestAccountId(null);
+    localStorage.removeItem('activeTestAccountId');
     
     // Fetch the profile from Firestore to ensure we have the latest data
     if (userToRestore) {
@@ -597,6 +609,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.log('✅ [switchToAdmin] Successfully restored to admin account');
   }, [originalUser, originalProfile]);
 
+  // Get active user ID (returns test account ID if in test mode, otherwise auth.uid)
+  const getActiveUserId = useCallback((): string | null => {
+    if (activeTestAccountId) {
+      return activeTestAccountId;
+    }
+    return currentUser?.uid || null;
+  }, [activeTestAccountId, currentUser]);
+
   // Memoize the context value to prevent unnecessary re-renders
   const value = useMemo(() => ({
     currentUser,
@@ -607,6 +627,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAdmin: isAdminComputed,
     loadingRole,
     testAccountData,
+    activeTestAccountId,
     signup,
     login,
     loginWithGoogle,
@@ -617,7 +638,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateUserEmail,
     deleteUserAccount,
     switchToTestAccount,
-    switchToAdmin
+    switchToAdmin,
+    getActiveUserId
   }), [
     currentUser,
     userProfile,
@@ -627,6 +649,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAdminComputed,
     loadingRole,
     testAccountData,
+    activeTestAccountId,
     signup,
     login,
     loginWithGoogle,
@@ -637,7 +660,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateUserEmail,
     deleteUserAccount,
     switchToTestAccount,
-    switchToAdmin
+    switchToAdmin,
+    getActiveUserId
   ]);
 
   return (

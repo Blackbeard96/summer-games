@@ -292,14 +292,18 @@ const TrainingGroundsAdmin: React.FC = () => {
         imageUrl: questionForm.imageUrl || null,
         options: validOptions,
         correctIndices: correctIndices,
-        // Keep correctIndex for backwards compatibility (use first correct answer if only one)
-        correctIndex: correctIndices.length === 1 ? correctIndices[0] : undefined,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
         pointsPP: questionForm.pointsPP || rewardConfig.basePP,
         pointsXP: questionForm.pointsXP || rewardConfig.baseXP,
         order: questions.length,
       };
+      
+      // Keep correctIndex for backwards compatibility (only if exactly one correct answer)
+      // Firestore doesn't allow undefined values, so we only include it when there's exactly one
+      if (correctIndices.length === 1) {
+        questionData.correctIndex = correctIndices[0];
+      }
       
       // Only include category if it has a value
       if (questionForm.category && questionForm.category.trim()) {

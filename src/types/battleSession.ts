@@ -9,7 +9,7 @@ import { Timestamp } from 'firebase/firestore';
  */
 
 export type BattleStatus = 'lobby' | 'active' | 'complete' | 'defeated';
-export type BattleMode = 'squadUp' | 'islandRaid' | 'pvp' | 'inSession';
+export type BattleMode = 'squadUp' | 'islandRaid' | 'pvp' | 'inSession' | 'PVP_SPACES_1V1';
 
 export interface BattleParticipant {
   uid: string;
@@ -119,5 +119,38 @@ export interface BattleSession {
   
   // Cooldown tracking: [participantId][skillId] = turns remaining
   cooldowns?: { [participantId: string]: { [skillId: string]: number } };
+  
+  // Spaces Mode state (only for PVP_SPACES_1V1 mode)
+  spacesModeState?: SpacesModeState;
+}
+
+// Spaces Mode Types
+export type SpaceId = 'subLeft' | 'main' | 'subRight';
+
+export interface SpaceState {
+  id: SpaceId;
+  ownerUid: string;
+  maxIntegrity: number;
+  integrity: number;
+  maxShield: number;
+  shield: number;
+  destroyed: boolean;
+  locked: boolean; // only applies to main
+}
+
+export interface PlayerSpaces {
+  ownerUid: string;
+  spaces: Record<SpaceId, SpaceState>;
+  destroyedCount: number; // computed (sub destroyed = 1 each, main = 3 points)
+}
+
+export interface SpacesModeState {
+  mode: 'PVP_SPACES_1V1';
+  startedAt: number;
+  endsAt: number;
+  durationSec: number; // e.g., 240 or 300
+  players: Record<string, PlayerSpaces>; // uid -> spaces
+  winnerUid?: string;
+  winReason?: 'MAIN_DESTROYED' | 'SPACE_ADVANTAGE' | 'TIEBREAK' | 'FORFEIT';
 }
 

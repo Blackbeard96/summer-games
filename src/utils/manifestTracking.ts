@@ -218,8 +218,8 @@ const getManifestLevelForMove = (moveName: string, manifestId: string): number |
       4: ['ultimate strategy', 'strategy ultimate', 'ultimate'] // Level 4: Ultimate Strategy
     },
     'observation': {
-      1: ['precision strike', 'strike', 'precision'], // Level 1: Precision Strike
-      2: ['memory shield', 'shield', 'memory'], // Level 2: Memory Shield
+      1: ['strike counter', 'counter', 'strike'], // Level 1: Strike Counter
+      2: ['foresight', 'foresee', 'predict'], // Level 2: Foresight
       3: ['perfect observation', 'observation perfect', 'perfect'], // Level 3: Perfect Observation
       4: ['omniscient view', 'view omniscient', 'omniscient'] // Level 4: Omniscient View
     },

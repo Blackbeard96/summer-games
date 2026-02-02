@@ -14,8 +14,13 @@ service cloud.firestore {
     // Firestore rules have limitations with nested field validation (chapters.challenges),
     // so reset prevention relies on UI/function-level admin checks.
     // Admins can always write (for testing/debugging).
+    // NOTE: PP field updates should ideally be restricted to Cloud Functions only.
+    // For now, we allow users to update their own PP (check-in rewards use transactions).
     match /users/{userId} {
-      allow read, write: if request.auth != null && 
+      allow read: if request.auth != null && 
+        (request.auth.uid == userId || isAdmin());
+      // Allow write but note that PP updates should be done via transactions/Cloud Functions
+      allow write: if request.auth != null && 
         (request.auth.uid == userId || isAdmin());
       
       // Protect rewardClaims subcollection - prevent deletion (idempotency protection)
@@ -82,25 +87,31 @@ service cloud.firestore {
     }
     
     // Test account access - allow admin access to test accounts
-    match /users/test-account-001 {
+    // Support both legacy test-account-001 and new testAccounts collection
+    match /users/{userId} {
+      // Allow admin access to any test account (test-account-*)
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        userId.matches('test-account-.*') &&
+        isAdmin();
     }
     
-    match /students/test-account-001 {
+    match /students/{userId} {
+      // Allow admin access to any test account (test-account-*)
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        userId.matches('test-account-.*') &&
+        isAdmin();
     }
     
-    match /profiles/test-account-001 {
+    match /profiles/{userId} {
+      // Allow admin access to any test account (test-account-*)
       allow read, write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        userId.matches('test-account-.*') &&
+        isAdmin();
+    }
+    
+    // Test Accounts collection - only admins can read/write
+    match /testAccounts/{testAccountId} {
+      allow read, write: if isAdmin();
     }
     
     // Challenge submissions - allow users to read/write their own submissions
@@ -573,6 +584,39 @@ service cloud.firestore {
     // Squads collection - allow authenticated users to read/write
     match /squads/{squadId} {
       allow read, write: if request.auth != null;
+      
+      // Helper function to check if user is a squad member
+      // Note: This checks if the user's UID exists in the members array
+      function isSquadMember() {
+        return request.auth != null && 
+          exists(/databases/$(database)/documents/squads/$(squadId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.members;
+      }
+      
+      // Stream messages subcollection - only squad members can read/write
+      match /streamMessages/{messageId} {
+        allow read: if request.auth != null && isSquadMember();
+        allow create: if request.auth != null && 
+          isSquadMember() &&
+          // For chat messages, senderId must match auth user
+          (request.resource.data.type == 'system' || 
+           (request.resource.data.type == 'chat' && request.resource.data.senderId == request.auth.uid));
+        // Users can only delete their own chat messages
+        allow update, delete: if request.auth != null && 
+          (isSquadMember() && resource.data.senderId == request.auth.uid) ||
+          isAdmin();
+      }
+      
+      // Daily check-ins subcollection - only squad members can read
+      match /dailyCheckins/{dateKey} {
+        allow read: if request.auth != null && isSquadMember();
+        // Only allow creation/update through transactions (client-side for now)
+        // In production, this should be restricted to Cloud Functions only
+        allow create, update: if request.auth != null && isSquadMember();
+        // Prevent deletion
+        allow delete: if false;
+      }
+      allow read, write: if request.auth != null;
     }
     
     // Mindforge battles collection - allow users to create and read their own battles
@@ -598,6 +642,12 @@ service cloud.firestore {
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Admin Settings collection - allow admins to read/write (for move overrides, etc.)
+    match /adminSettings/{settingId} {
+      allow read: if request.auth != null && isAdmin();
+      allow write: if request.auth != null && isAdmin();
     }
     
     // Default rule - deny all other access
