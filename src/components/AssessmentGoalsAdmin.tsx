@@ -10,6 +10,7 @@ import {
 import {
   getClassesByTeacher,
   createAssessment,
+  updateAssessment,
   getAssessmentsByClass,
   getGoalsByAssessment,
   getResultsByAssessment,
@@ -21,14 +22,14 @@ import {
   getPPLedgerEntriesByAssessment
 } from '../utils/assessmentGoalsFirestore';
 import { validateAssessmentConfig } from '../utils/assessmentGoals';
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp, deleteField } from 'firebase/firestore';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import CreateAssessmentForm from './CreateAssessmentForm';
 import AssessmentDashboard from './AssessmentDashboard';
 import PPLedgerView from './PPLedgerView';
 
-type ViewMode = 'list' | 'create' | 'dashboard' | 'ledger';
+type ViewMode = 'list' | 'create' | 'edit' | 'dashboard' | 'ledger';
 
 const AssessmentGoalsAdmin: React.FC = () => {
   const { currentUser } = useAuth();
@@ -76,26 +77,66 @@ const AssessmentGoalsAdmin: React.FC = () => {
     fetchAssessments();
   }, [selectedClassId]);
 
+  const buildAssessmentData = (assessmentData: any, isUpdate: boolean = false) => {
+    const baseAssessment: any = {
+      title: assessmentData.title,
+      type: assessmentData.type,
+      date: Timestamp.fromDate(new Date(assessmentData.date)),
+      maxScore: assessmentData.type === 'habits' ? 100 : (assessmentData.maxScore || 100),
+      isLocked: assessmentData.isLocked || false,
+      rewardTiers: assessmentData.rewardTiers || [],
+      missPenaltyTiers: assessmentData.missPenaltyTiers || [],
+      penaltyCap: assessmentData.penaltyCap || 75,
+      bonusCap: assessmentData.bonusCap || 75,
+    };
+
+    // Only set these fields on create, not update
+    if (!isUpdate) {
+      baseAssessment.classId = selectedClassId;
+      baseAssessment.createdBy = currentUser!.uid;
+      baseAssessment.gradingStatus = 'open';
+      baseAssessment.rewardMode = 'pp';
+    }
+
+    // Only include habitsConfig if it exists and type is 'habits'
+    // Clean up any undefined values inside habitsConfig
+    if (assessmentData.type === 'habits' && assessmentData.habitsConfig) {
+      const cleanedHabitsConfig: any = {};
+      if (assessmentData.habitsConfig.defaultDuration !== undefined) {
+        cleanedHabitsConfig.defaultDuration = assessmentData.habitsConfig.defaultDuration;
+      }
+      if (assessmentData.habitsConfig.defaultRewardPP !== undefined) {
+        cleanedHabitsConfig.defaultRewardPP = assessmentData.habitsConfig.defaultRewardPP;
+      }
+      if (assessmentData.habitsConfig.defaultRewardXP !== undefined) {
+        cleanedHabitsConfig.defaultRewardXP = assessmentData.habitsConfig.defaultRewardXP;
+      }
+      if (assessmentData.habitsConfig.defaultConsequencePP !== undefined) {
+        cleanedHabitsConfig.defaultConsequencePP = assessmentData.habitsConfig.defaultConsequencePP;
+      }
+      if (assessmentData.habitsConfig.defaultConsequenceXP !== undefined) {
+        cleanedHabitsConfig.defaultConsequenceXP = assessmentData.habitsConfig.defaultConsequenceXP;
+      }
+      if (assessmentData.habitsConfig.requireNotesOnCheckIn !== undefined) {
+        cleanedHabitsConfig.requireNotesOnCheckIn = assessmentData.habitsConfig.requireNotesOnCheckIn;
+      }
+      // Only add habitsConfig if it has at least one property
+      if (Object.keys(cleanedHabitsConfig).length > 0) {
+        baseAssessment.habitsConfig = cleanedHabitsConfig;
+      }
+    } else if (isUpdate && assessmentData.type !== 'habits' && selectedAssessment?.habitsConfig) {
+      // If updating and type is not habits, remove habitsConfig if it exists
+      baseAssessment.habitsConfig = deleteField();
+    }
+
+    return baseAssessment;
+  };
+
   const handleCreateAssessment = async (assessmentData: any) => {
     if (!currentUser || !selectedClassId) return;
 
     try {
-      const newAssessment: Omit<Assessment, 'id'> = {
-        classId: selectedClassId,
-        title: assessmentData.title,
-        type: assessmentData.type,
-        date: Timestamp.fromDate(new Date(assessmentData.date)),
-        maxScore: assessmentData.type === 'habits' ? 100 : (assessmentData.maxScore || 100), // Default for habits, not used
-        createdBy: currentUser.uid,
-        isLocked: assessmentData.isLocked || false,
-        gradingStatus: 'open',
-        rewardMode: 'pp',
-        rewardTiers: assessmentData.rewardTiers || [],
-        missPenaltyTiers: assessmentData.missPenaltyTiers || [],
-        penaltyCap: assessmentData.penaltyCap || 75,
-        bonusCap: assessmentData.bonusCap || 75,
-        habitsConfig: assessmentData.habitsConfig
-      };
+      const newAssessment = buildAssessmentData(assessmentData, false) as Omit<Assessment, 'id'>;
 
       const validation = validateAssessmentConfig(newAssessment);
       if (!validation.valid) {
@@ -113,6 +154,40 @@ const AssessmentGoalsAdmin: React.FC = () => {
       console.error('Error creating assessment:', error);
       alert(`Failed to create assessment: ${error.message}`);
     }
+  };
+
+  const handleUpdateAssessment = async (assessmentData: any) => {
+    if (!currentUser || !selectedAssessment) return;
+
+    try {
+      const updates = buildAssessmentData(assessmentData, true);
+
+      // Validate the updated assessment
+      const updatedAssessment = { ...selectedAssessment, ...updates };
+      const validation = validateAssessmentConfig(updatedAssessment);
+      if (!validation.valid) {
+        alert(`Validation errors:\n${validation.errors.join('\n')}`);
+        return;
+      }
+
+      await updateAssessment(selectedAssessment.id, updates);
+      setViewMode('list');
+      setSelectedAssessment(null);
+      
+      // Refresh assessments
+      const updatedAssessments = await getAssessmentsByClass(selectedClassId!);
+      setAssessments(updatedAssessments);
+      
+      alert('✅ Assessment updated successfully!');
+    } catch (error: any) {
+      console.error('Error updating assessment:', error);
+      alert(`Failed to update assessment: ${error.message}`);
+    }
+  };
+
+  const handleEditAssessment = (assessment: Assessment) => {
+    setSelectedAssessment(assessment);
+    setViewMode('edit');
   };
 
   const handleViewDashboard = async (assessment: Assessment) => {
@@ -313,6 +388,21 @@ const AssessmentGoalsAdmin: React.FC = () => {
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button
+                        onClick={() => handleEditAssessment(assessment)}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          background: '#f59e0b',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.5rem',
+                          cursor: 'pointer',
+                          fontSize: '0.875rem'
+                        }}
+                        title="Edit Assessment"
+                      >
+                        ✏️ Edit
+                      </button>
+                      <button
                         onClick={() => handleViewDashboard(assessment)}
                         style={{
                           padding: '0.5rem 1rem',
@@ -400,6 +490,18 @@ const AssessmentGoalsAdmin: React.FC = () => {
           classId={selectedClassId!}
           onSave={handleCreateAssessment}
           onCancel={() => setViewMode('list')}
+        />
+      )}
+
+      {viewMode === 'edit' && selectedAssessment && (
+        <CreateAssessmentForm
+          classId={selectedClassId!}
+          onSave={handleUpdateAssessment}
+          onCancel={() => {
+            setViewMode('list');
+            setSelectedAssessment(null);
+          }}
+          initialData={selectedAssessment}
         />
       )}
 

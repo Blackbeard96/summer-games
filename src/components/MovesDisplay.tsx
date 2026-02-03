@@ -62,6 +62,35 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const { currentUser } = useAuth();
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const [truthMetal, setTruthMetal] = useState<number>(0);
+  const [userManifest, setUserManifest] = useState<string | null>(null);
+
+  // Load user's manifest type
+  useEffect(() => {
+    const loadUserManifest = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const studentData = studentDoc.data();
+          // Get manifest from student data
+          let manifest: string | null = null;
+          if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+            manifest = studentData.manifest.manifestId;
+          } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+            manifest = studentData.manifest;
+          }
+          setUserManifest(manifest);
+          console.log('MovesDisplay: User manifest loaded:', manifest);
+        }
+      } catch (error) {
+        console.error('MovesDisplay: Error loading user manifest:', error);
+      }
+    };
+
+    loadUserManifest();
+  }, [currentUser]);
 
   // Load move overrides when component mounts and periodically refresh
   useEffect(() => {
@@ -243,10 +272,20 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   };
 
   // Filter moves by category and unlocked status - memoized for performance
-  const manifestMoves = useMemo(() => 
-    moves.filter(move => move.category === 'manifest' && move.unlocked),
-    [moves]
-  );
+  // CRITICAL: Only show manifest moves that match the user's actual manifest type
+  const manifestMoves = useMemo(() => {
+    return moves.filter(move => {
+      if (move.category !== 'manifest' || !move.unlocked) return false;
+      // If userManifest is provided, ONLY show moves matching that manifest (strict filtering)
+      if (userManifest) {
+        const moveManifest = move.manifestType?.toLowerCase();
+        const userManifestLower = userManifest.toLowerCase();
+        return moveManifest === userManifestLower;
+      }
+      // If no userManifest provided, show all unlocked manifest moves (fallback for backwards compatibility)
+      return true;
+    });
+  }, [moves, userManifest]);
   
   // Filter elemental moves by player's chosen element - memoized for performance
   const elementalMoves = useMemo(() => {

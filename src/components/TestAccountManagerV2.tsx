@@ -20,6 +20,7 @@ import {
   updateTestAccount,
   getTestAccount,
   migrateExistingTestAccount,
+  fixAllTestAccountManifestSkills,
   TestAccount
 } from '../utils/testAccountService';
 import { TEST_PHASE_PRESETS, getPresetKeys, getPreset } from '../utils/testAccountPresets';
@@ -182,6 +183,26 @@ const TestAccountManagerV2: React.FC<TestAccountManagerV2Props> = ({ isOpen, onC
     } catch (error) {
       console.error('Error resetting test account:', error);
       alert('❌ Failed to reset test account: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFixManifestSkills = async () => {
+    if (!currentUser) return;
+    
+    if (!window.confirm('This will fix manifest skills for ALL test accounts based on their manifest type. Continue?')) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await fixAllTestAccountManifestSkills();
+      alert(`✅ Fixed manifest skills for ${result.fixed} test accounts${result.errors > 0 ? `\n⚠️ ${result.errors} errors occurred` : ''}`);
+      await loadTestAccounts();
+    } catch (error) {
+      console.error('Error fixing manifest skills:', error);
+      alert('❌ Failed to fix manifest skills: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -492,6 +513,23 @@ const TestAccountManagerV2: React.FC<TestAccountManagerV2Props> = ({ isOpen, onC
             }}
           >
             {showCreateForm ? '❌ Cancel' : '➕ Create Test Account'}
+          </button>
+          <button
+            onClick={handleFixManifestSkills}
+            disabled={loading}
+            style={{
+              background: '#f59e0b',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              fontSize: '1rem',
+              opacity: loading ? 0.6 : 1
+            }}
+            title="Fix manifest skills for all test accounts based on their manifest type"
+          >
+            {loading ? '⏳ Fixing...' : '🔧 Fix Manifest Skills'}
           </button>
           <input
             type="text"

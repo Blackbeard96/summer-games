@@ -205,7 +205,9 @@ export async function seedPlayerDataFromPreset(
       return {
         ...template,
         id: moveId,
-        unlocked: isUnlocked
+        unlocked: isUnlocked,
+        currentCooldown: 0,
+        masteryLevel: 1,
       } as Move;
     });
   }
@@ -456,5 +458,98 @@ export async function migrateExistingTestAccount(
   await setDoc(testAccountRef, testAccountData);
 
   console.log(`✅ Migrated test account: ${testAccountId}`);
+}
+
+/**
+ * Fix manifest skills for all test accounts
+ * This ensures that all test accounts have the correct battleMoves initialized
+ * based on their manifest type
+ */
+export async function fixAllTestAccountManifestSkills(): Promise<{ fixed: number; errors: number }> {
+  let fixed = 0;
+  let errors = 0;
+
+  try {
+    // Get all test accounts
+    const testAccounts = await getAllTestAccounts();
+    console.log(`🔧 Fixing manifest skills for ${testAccounts.length} test accounts...`);
+
+    for (const account of testAccounts) {
+      try {
+        const preset = getPreset(account.phaseKey);
+        if (!preset) {
+          console.warn(`⚠️ No preset found for ${account.id} (phaseKey: ${account.phaseKey})`);
+          continue;
+        }
+
+        // Get student data to check manifest
+        const studentRef = doc(db, 'students', account.id);
+        const studentDoc = await getDoc(studentRef);
+        
+        if (!studentDoc.exists()) {
+          console.warn(`⚠️ Student document not found for ${account.id}`);
+          continue;
+        }
+
+        const studentData = studentDoc.data();
+        
+        // Get manifest from student data
+        let userManifest: string | null = null;
+        if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          userManifest = studentData.manifest.manifestId;
+        } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+          userManifest = studentData.manifest;
+        } else if (preset.manifest?.type) {
+          // Fallback to preset manifest if not set in student data
+          userManifest = preset.manifest.type;
+        }
+
+        if (!userManifest) {
+          console.warn(`⚠️ No manifest found for ${account.id}, skipping...`);
+          continue;
+        }
+
+        // Get element from student data or preset
+        const element = studentData.elementalAffinity || 
+                       studentData.manifestationType || 
+                       (preset.manifest?.element ? preset.manifest.element.toLowerCase() : null);
+
+        // Generate correct battle moves
+        const battleMoves: Move[] = MOVE_TEMPLATES.map((template, index) => {
+          const moveId = `move_${index + 1}`;
+          const isUnlocked = template.category === 'system' || 
+            (template.category === 'manifest' && template.manifestType === userManifest) ||
+            (template.category === 'elemental' && element && template.elementalAffinity === element);
+          
+          return {
+            ...template,
+            id: moveId,
+            unlocked: isUnlocked,
+            currentCooldown: 0,
+            masteryLevel: 1,
+          } as Move;
+        });
+
+        // Update battleMoves document
+        const movesRef = doc(db, 'battleMoves', account.id);
+        await setDoc(movesRef, { moves: battleMoves }, { merge: false });
+
+        const manifestCount = battleMoves.filter(m => m.unlocked && m.category === 'manifest').length;
+        const elementalCount = battleMoves.filter(m => m.unlocked && m.category === 'elemental').length;
+        
+        console.log(`✅ Fixed ${account.id}: ${manifestCount} manifest skills, ${elementalCount} elemental skills (manifest: ${userManifest}, element: ${element || 'none'})`);
+        fixed++;
+      } catch (error) {
+        console.error(`❌ Error fixing ${account.id}:`, error);
+        errors++;
+      }
+    }
+
+    console.log(`✅ Fixed manifest skills: ${fixed} accounts, ${errors} errors`);
+    return { fixed, errors };
+  } catch (error) {
+    console.error('❌ Error fixing test account manifest skills:', error);
+    throw error;
+  }
 }
 

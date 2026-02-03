@@ -28,40 +28,61 @@ interface CreateAssessmentFormProps {
   classId: string;
   onSave: (data: any) => void;
   onCancel: () => void;
+  initialData?: any; // Optional: assessment data for editing mode
 }
 
 const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   classId,
   onSave,
-  onCancel
+  onCancel,
+  initialData
 }) => {
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState<'test' | 'exam' | 'quiz' | 'habits'>('test');
-  const [date, setDate] = useState('');
-  const [maxScore, setMaxScore] = useState(100);
-  const [minGoalScore, setMinGoalScore] = useState<number | ''>(0);
-  const [isLocked, setIsLocked] = useState(false);
-  const [bonusCap, setBonusCap] = useState(75);
-  const [penaltyCap, setPenaltyCap] = useState(75);
+  const isEditMode = !!initialData;
   
-  const [rewardTiers, setRewardTiers] = useState<RewardTier[]>([
-    { threshold: 0, bonus: 50 },   // Exact hit - top reward
-    { threshold: 1, bonus: 35 },    // 1 away - Tier 1
-    { threshold: 2, bonus: 20 }     // 2 away - Tier 2
-  ]);
+  // Initialize state from initialData if editing, otherwise use defaults
+  const [title, setTitle] = useState(initialData?.title || '');
+  const [type, setType] = useState<'test' | 'exam' | 'quiz' | 'habits'>(initialData?.type || 'test');
+  const [date, setDate] = useState(initialData?.date ? (initialData.date.toDate ? initialData.date.toDate().toISOString().split('T')[0] : new Date(initialData.date).toISOString().split('T')[0]) : '');
+  const [maxScore, setMaxScore] = useState(initialData?.maxScore || 100);
+  const [minGoalScore, setMinGoalScore] = useState<number | ''>(initialData?.minGoalScore ?? 0);
+  const [isLocked, setIsLocked] = useState(initialData?.isLocked || false);
+  const [bonusCap, setBonusCap] = useState(initialData?.bonusCap || 75);
+  const [penaltyCap, setPenaltyCap] = useState(initialData?.penaltyCap || 75);
   
-  const [missPenaltyTiers, setMissPenaltyTiers] = useState<PenaltyTier[]>([
-    { threshold: 5, penalty: 15 },  // 3-5 away - Penalty Tier 1
-    { threshold: 20, penalty: 50 }   // 6+ away - Penalty Tier 2 (max)
-  ]);
+  const [rewardTiers, setRewardTiers] = useState<RewardTier[]>(
+    initialData?.rewardTiers || [
+      { threshold: 0, bonus: 50 },   // Exact hit - top reward
+      { threshold: 1, bonus: 35 },    // 1 away - Tier 1
+      { threshold: 2, bonus: 20 }     // 2 away - Tier 2
+    ]
+  );
+  
+  const [missPenaltyTiers, setMissPenaltyTiers] = useState<PenaltyTier[]>(
+    initialData?.missPenaltyTiers || [
+      { threshold: 5, penalty: 15 },  // 3-5 away - Penalty Tier 1
+      { threshold: 20, penalty: 50 }   // 6+ away - Penalty Tier 2 (max)
+    ]
+  );
 
   // Habits-specific fields
-  const [defaultDuration, setDefaultDuration] = useState<'1_class' | '1_day' | '3_days' | '1_week'>('1_week');
-  const [defaultRewardPP, setDefaultRewardPP] = useState<number | ''>(50);
-  const [defaultRewardXP, setDefaultRewardXP] = useState<number | ''>(25);
-  const [defaultConsequencePP, setDefaultConsequencePP] = useState<number | ''>(0);
-  const [defaultConsequenceXP, setDefaultConsequenceXP] = useState<number | ''>(0);
-  const [requireNotesOnCheckIn, setRequireNotesOnCheckIn] = useState(false);
+  const [defaultDuration, setDefaultDuration] = useState<'1_class' | '1_day' | '3_days' | '1_week'>(
+    initialData?.habitsConfig?.defaultDuration || '1_week'
+  );
+  const [defaultRewardPP, setDefaultRewardPP] = useState<number | ''>(
+    initialData?.habitsConfig?.defaultRewardPP ?? ''
+  );
+  const [defaultRewardXP, setDefaultRewardXP] = useState<number | ''>(
+    initialData?.habitsConfig?.defaultRewardXP ?? ''
+  );
+  const [defaultConsequencePP, setDefaultConsequencePP] = useState<number | ''>(
+    initialData?.habitsConfig?.defaultConsequencePP ?? ''
+  );
+  const [defaultConsequenceXP, setDefaultConsequenceXP] = useState<number | ''>(
+    initialData?.habitsConfig?.defaultConsequenceXP ?? ''
+  );
+  const [requireNotesOnCheckIn, setRequireNotesOnCheckIn] = useState(
+    initialData?.habitsConfig?.requireNotesOnCheckIn || false
+  );
 
   const addRewardTier = () => {
     setRewardTiers([...rewardTiers, { threshold: 0, bonus: 0 }]);
@@ -147,15 +168,28 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
     };
 
     // Add Habits-specific config if type is habits
+    // Only include fields that have values (Firestore doesn't allow undefined)
     if (type === 'habits') {
-      assessmentData.habitsConfig = {
+      const habitsConfig: any = {
         defaultDuration,
-        defaultRewardPP: defaultRewardPP === '' ? undefined : Number(defaultRewardPP),
-        defaultRewardXP: defaultRewardXP === '' ? undefined : Number(defaultRewardXP),
-        defaultConsequencePP: defaultConsequencePP === '' ? undefined : Number(defaultConsequencePP),
-        defaultConsequenceXP: defaultConsequenceXP === '' ? undefined : Number(defaultConsequenceXP),
         requireNotesOnCheckIn
       };
+      
+      // Only include numeric fields if they have values
+      if (defaultRewardPP !== '') {
+        habitsConfig.defaultRewardPP = Number(defaultRewardPP);
+      }
+      if (defaultRewardXP !== '') {
+        habitsConfig.defaultRewardXP = Number(defaultRewardXP);
+      }
+      if (defaultConsequencePP !== '') {
+        habitsConfig.defaultConsequencePP = Number(defaultConsequencePP);
+      }
+      if (defaultConsequenceXP !== '') {
+        habitsConfig.defaultConsequenceXP = Number(defaultConsequenceXP);
+      }
+      
+      assessmentData.habitsConfig = habitsConfig;
     }
 
     onSave(assessmentData);
@@ -163,7 +197,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
 
   return (
     <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h2>Create Assessment</h2>
+      <h2>{isEditMode ? 'Edit Assessment' : 'Create Assessment'}</h2>
       
       <form onSubmit={handleSubmit}>
         {/* Basic Info */}
@@ -732,7 +766,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               fontWeight: 'bold'
             }}
           >
-            Create Assessment
+            {isEditMode ? 'Update Assessment' : 'Create Assessment'}
           </button>
         </div>
       </form>
