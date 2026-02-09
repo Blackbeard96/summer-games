@@ -202,10 +202,12 @@ const PPChangeApproval: React.FC = () => {
             continue;
           }
 
+          // Create notification with detailed reward information for modal display
           await addDoc(collection(db, 'students', change.studentId, 'notifications'), {
             type: 'pp_change_approved',
             message: `Your Power Points have been updated by ${ppData.changeAmount > 0 ? '+' : ''}${ppData.changeAmount}. New total: ${ppData.finalPP}`,
             changeAmount: ppData.changeAmount,
+            originalPP: ppData.originalPP,
             newTotal: ppData.finalPP,
             scorekeeperName: request.scorekeeperEmail,
             timestamp: serverTimestamp(),

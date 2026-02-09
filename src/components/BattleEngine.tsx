@@ -4134,6 +4134,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // This ensures all clients see the same state updates
     if (isInSession && sessionId && currentUser) {
       try {
+        // CRITICAL: Check if current user is eliminated (prevent eliminated players from acting)
+        const currentPlayerInSession = allies.find(a => a.id === currentUser.uid);
+        // Note: In In-Session mode, eliminated status is stored in session players, not in allies
+        // We'll rely on the move service to validate this, but add a UI-level check here too
+        if (currentPlayerInSession && (currentPlayerInSession as any).eliminated) {
+          console.error('❌ [In-Session Move] Cannot use skill: Player is eliminated');
+          alert('You have been eliminated and cannot perform actions.');
+          setBattleState(prev => ({
+            ...prev,
+            selectedMove: null,
+            selectedTarget: null,
+            phase: 'selection'
+          }));
+          return;
+        }
+        
         // Calculate PP cost (if move has cost property)
         const ppCost = (move.cost || 0);
         

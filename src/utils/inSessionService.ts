@@ -105,18 +105,28 @@ export async function createSession(
       return existingSession.id;
     }
     
+    // CRITICAL: Ensure all required fields are defined (no undefined values)
     const sessionData = {
-      classId,
-      className,
-      teacherId: hostUid, // Keep for backward compatibility
-      hostUid,
-      status: 'live',
-      mode: 'in_session',
-      players: [],
-      battleLog: ['🎆 Live Event Started!'],
+      classId: classId || '',
+      className: className || '',
+      teacherId: hostUid || '', // Keep for backward compatibility
+      hostUid: hostUid || '',
+      status: 'live' as const, // Use 'live' consistently
+      mode: 'in_session' as const,
+      players: [] as SessionPlayer[],
+      battleLog: ['🎆 Live Event Started!'] as string[],
       createdAt: serverTimestamp(),
       startedAt: serverTimestamp()
     };
+
+    // Validate required fields
+    if (!sessionData.classId || !sessionData.hostUid) {
+      debugError('inSessionService', 'Cannot create session: missing required fields', {
+        classId: sessionData.classId,
+        hostUid: sessionData.hostUid
+      });
+      return null;
+    }
     
     const sessionRef = doc(collection(db, 'inSessionRooms'));
     await setDoc(sessionRef, sessionData);
@@ -215,6 +225,16 @@ export async function joinSession(
       const existingPlayerIndex = sessionData.players.findIndex(p => p.userId === player.userId);
       const isNewPlayer = existingPlayerIndex === -1;
       
+      // CRITICAL: Validate player data before adding to array
+      if (!player.userId || typeof player.userId !== 'string') {
+        debugError('inSessionService', 'Invalid player data: userId is required', { player });
+        throw new Error('Player userId is required and must be a string');
+      }
+      if (!player.displayName || typeof player.displayName !== 'string') {
+        debugError('inSessionService', 'Invalid player data: displayName is required', { player });
+        throw new Error('Player displayName is required and must be a string');
+      }
+
       // Update or add player
       const updatedPlayers = [...sessionData.players];
       if (isNewPlayer) {
@@ -231,8 +251,14 @@ export async function joinSession(
       }
       
       // Update battle log only for new players
+      // CRITICAL: Validate battle log message is not undefined
+      const joinMessage = `👋 ${player.displayName || 'Player'} joined the session!`;
+      if (!joinMessage || typeof joinMessage !== 'string') {
+        debugError('inSessionService', 'Invalid join message', { joinMessage, player });
+        throw new Error('Join message must be a valid string');
+      }
       const updatedLog = isNewPlayer 
-        ? [...(sessionData.battleLog || []), `👋 ${player.displayName} joined the session!`]
+        ? [...(sessionData.battleLog || []), joinMessage]
         : sessionData.battleLog || [];
       
       // Update session document
@@ -357,12 +383,17 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
 
 /**
  * Subscribe to session updates
+ * CRITICAL: Ensure cleanup is called to prevent duplicate subscriptions
  */
 export function subscribeToSession(
   sessionId: string,
   callback: (session: InSessionRoom | null) => void
 ): Unsubscribe {
-  debug('inSessionService', `Subscribing to session ${sessionId}`);
+  const DEBUG_SESSION = process.env.REACT_APP_DEBUG_SESSION === 'true';
+  
+  if (DEBUG_SESSION) {
+    console.log(`[Listener] [inSessionService] Subscribing to session ${sessionId}`);
+  }
   
   const sessionRef = doc(db, 'inSessionRooms', sessionId);
   
@@ -375,14 +406,19 @@ export function subscribeToSession(
           ...doc.data()
         } as InSessionRoom;
         
-        debug('inSessionService', `Session update: ${sessionId}`, {
-          status: session.status,
-          playersCount: session.players.length
-        });
+        if (DEBUG_SESSION) {
+          console.log(`[Listener] [inSessionService] Session update: ${sessionId}`, {
+            status: session.status,
+            playersCount: session.players.length,
+            battleLogLength: session.battleLog?.length || 0
+          });
+        }
         
         callback(session);
       } else {
-        debug('inSessionService', `Session ${sessionId} does not exist`);
+        if (DEBUG_SESSION) {
+          console.log(`[Listener] [inSessionService] Session ${sessionId} does not exist`);
+        }
         callback(null);
       }
     },

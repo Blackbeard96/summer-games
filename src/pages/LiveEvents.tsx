@@ -90,14 +90,22 @@ const LiveEvents: React.FC = () => {
       return;
     }
     
-    // Create queries for each chunk
-    const queries = classChunks.map(chunk => 
-      query(
+    // CRITICAL: Query matches session creation status ('live')
+    // Also check 'open' and 'active' for backward compatibility
+    const queries = classChunks.map(chunk => {
+      if (DEBUG_EVENTS) {
+        console.log('🔍 LiveEvents: Creating query for chunk', {
+          chunk,
+          statusFilter: ['open', 'active', 'live'],
+          note: 'Sessions are created with status: "live"'
+        });
+      }
+      return query(
         eventsRef,
         where('classId', 'in', chunk),
         where('status', 'in', ['open', 'active', 'live'])
-      )
-    );
+      );
+    });
     
     // Store results from all queries
     const allEventMaps = new Map<string, LiveEvent>();

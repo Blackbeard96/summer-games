@@ -5,7 +5,8 @@
 
 import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { debug, debugError } from './inSessionDebug';
+import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDebug';
+import { trackElimination } from './inSessionStatsService';
 import type { Move } from '../types/battle';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
@@ -61,7 +62,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
   } = params;
 
   if (DEBUG_IN_SESSION_MOVES) {
-    debug('inSessionMove', `🎯 Applying move: ${move.name} by ${actorName} on ${targetName}`, {
+    debugAction('inSessionMove', `🎯 Applying move: ${move.name} by ${actorName} on ${targetName}`, {
       sessionId,
       actorUid,
       targetUid,
@@ -103,6 +104,14 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
       const actor = players[actorIndex];
       const target = players[targetIndex];
+
+      // CRITICAL: Prevent eliminated players from acting
+      if (actor.eliminated) {
+        throw new Error(`Actor ${actorName} is eliminated and cannot perform actions`);
+      }
+
+      // Note: Eliminated targets can still be targeted (for cleanup/final blows)
+      // But we'll check elimination status after damage is applied
 
       // Ensure we have mutable copies (don't mutate original array elements)
       const actorCopy = { ...actor };
@@ -199,20 +208,65 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         actorCopy.powerPoints = Math.max(0, (actorCopy.powerPoints || 0) - ppCost);
       }
 
+      // Check for elimination (health + shield = 0)
+      const targetTotalHealth = (targetCopy.hp || 0) + (targetCopy.shield || 0);
+      if (targetTotalHealth <= 0 && !targetCopy.eliminated) {
+        targetCopy.eliminated = true;
+        if (DEBUG_IN_SESSION_MOVES) {
+          debug('inSessionMove', `☠️ Target ${targetName} eliminated!`);
+        }
+      }
+
       // Update players array
       const updatedPlayers = [...players];
       updatedPlayers[actorIndex] = actorCopy;
       updatedPlayers[targetIndex] = targetCopy;
 
-      // Add battle log entry
+      // Add battle log entry (validate it's not undefined)
+      if (!battleLogMessage || typeof battleLogMessage !== 'string') {
+        debugError('inSessionMove', `Invalid battleLogMessage: ${battleLogMessage}`, { battleLogMessage });
+        throw new Error('Battle log message is required and must be a string');
+      }
       const updatedBattleLog = [...battleLog, battleLogMessage];
+
+      // Add elimination log entry if target was eliminated
+      let finalBattleLog = updatedBattleLog;
+      const wasEliminated = targetCopy.eliminated && targetTotalHealth <= 0;
+      if (wasEliminated) {
+        const eliminationMessage = `☠️ ${targetName} has been ELIMINATED!`;
+        finalBattleLog = [...updatedBattleLog, eliminationMessage];
+      }
 
       // Update session document
       transaction.update(sessionRef, {
         players: updatedPlayers,
-        battleLog: updatedBattleLog,
+        battleLog: finalBattleLog,
         updatedAt: serverTimestamp()
       });
+
+      if (DEBUG_IN_SESSION_MOVES) {
+        debugSessionWrite('inSessionMove', `💾 Writing move result to Firestore`, {
+          targetHp: targetCopy.hp,
+          targetShield: targetCopy.shield,
+          targetEliminated: targetCopy.eliminated,
+          battleLogLength: finalBattleLog.length
+        });
+      }
+
+      // Track elimination in stats (outside transaction to avoid timeout)
+      if (wasEliminated && actorUid !== targetUid) {
+        // Schedule async tracking (don't await in transaction)
+        Promise.resolve().then(async () => {
+          try {
+            await trackElimination(sessionId, actorUid, targetUid);
+            if (DEBUG_IN_SESSION_MOVES) {
+              debug('inSessionMove', `📊 Elimination tracked: ${actorName} eliminated ${targetName}`);
+            }
+          } catch (trackError) {
+            debugError('inSessionMove', 'Error tracking elimination', trackError);
+          }
+        });
+      }
 
       if (DEBUG_IN_SESSION_MOVES) {
         debug('inSessionMove', `✅ Move applied successfully`, {
@@ -223,7 +277,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           targetPPBefore: players[targetIndex].powerPoints,
           targetPPAfter: targetCopy.powerPoints,
           actorPPBefore: actor.powerPoints + ppCost - (ppStolen > 0 ? ppStolen : 0),
-          actorPPAfter: actorCopy.powerPoints
+          actorPPAfter: actorCopy.powerPoints,
+          wasEliminated
         });
       }
 

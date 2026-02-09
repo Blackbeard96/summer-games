@@ -354,6 +354,10 @@ const BadgeManager: React.FC = () => {
             console.warn(`BadgeManager: Unable to update user doc for ${studentId}`, userUpdateError);
           }
 
+          // Get current student data for accurate PP tracking
+          const currentStudentPP = studentData.powerPoints || 0;
+          const newStudentPP = currentStudentPP + ppReward;
+          
           await addDoc(collection(db, 'students', studentId, 'badgeNotifications'), {
             badgeId: badge.id,
             badgeName: badge.name,
@@ -361,8 +365,19 @@ const BadgeManager: React.FC = () => {
             imageUrl: badge.imageUrl,
             xpReward,
             ppReward,
+            originalPP: currentStudentPP,
+            newPP: newStudentPP,
             awardedAt: serverTimestamp(),
-            read: false
+            read: false,
+            // Include artifact rewards info if any
+            artifactRewards: artifactRewards.length > 0 ? artifactRewards.map((artifactId: string) => {
+              const artifact = availableArtifacts.find(a => a.id === artifactId);
+              return artifact ? {
+                id: artifactId,
+                name: artifact.name,
+                icon: artifact.icon
+              } : null;
+            }).filter(Boolean) : []
           });
 
           // Update local state

@@ -224,11 +224,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     autoJoinSession();
     
     // Subscribe to session updates
+    // CRITICAL: Ensure only one subscription per sessionId to prevent duplication
     const unsubscribe = subscribeToSession(sessionId, (session) => {
       if (!session) {
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
         return;
       }
+      
+      debugThrottle('session-update', 2000, 'inSessionBattle', `Session update received`, {
+        sessionId,
+        playersCount: session.players?.length || 0,
+        battleLogLength: session.battleLog?.length || 0
+      });
       
       const players: SessionPlayer[] = session.players || [];
       

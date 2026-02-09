@@ -99,13 +99,36 @@ const InSessionNotification: React.FC = () => {
         }
 
         // Get all active sessions
+        // CRITICAL: Query matches session creation status ('live')
+        // Also check 'active' for backward compatibility with legacy sessions
         let sessionsSnapshot;
         try {
+          const DEBUG_SESSION = process.env.REACT_APP_DEBUG_SESSION === 'true';
+          if (DEBUG_SESSION) {
+            debug.log('InSessionNotification', '🔍 Session discovery query', {
+              classId: userClassroomsCache,
+              queryStatus: ['active', 'live'],
+              note: 'Sessions are created with status: "live"'
+            });
+          }
+          
           // Check for both 'active' (legacy) and 'live' (new) statuses
           sessionsSnapshot = await getDocs(query(
             collection(db, 'inSessionRooms'),
             where('status', 'in', ['active', 'live'])
           ));
+          
+          if (DEBUG_SESSION) {
+            debug.log('InSessionNotification', '📊 Session discovery results', {
+              totalSessions: sessionsSnapshot.size,
+              sessions: sessionsSnapshot.docs.map(d => ({
+                id: d.id,
+                classId: d.data().classId,
+                status: d.data().status,
+                playersCount: d.data().players?.length || 0
+              }))
+            });
+          }
         } catch (queryError) {
           // Suppress Firestore internal assertion errors
           if (queryError instanceof Error && 

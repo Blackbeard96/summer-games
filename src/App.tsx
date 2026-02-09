@@ -15,7 +15,7 @@ import Banner from './components/Banner';
 import ErrorBoundary from './components/ErrorBoundary';
 import ScorekeeperInterface from './components/ScorekeeperInterface';
 import RequireAdmin from './components/RequireAdmin';
-import BadgeRewardNotifier from './components/BadgeRewardNotifier';
+import RewardNotifier from './components/RewardNotifier';
 import AssessmentGoalsNotifier from './components/AssessmentGoalsNotifier';
 import AssessmentGoalResultNotifier from './components/AssessmentGoalResultNotifier';
 import MilestoneModal from './components/MilestoneModal';
@@ -679,7 +679,7 @@ const AppContent = () => {
       <TutorialManager />
       <InvitationManager />
       <BattleInvitationManager />
-      <BadgeRewardNotifier />
+      <RewardNotifier />
       <AssessmentGoalsNotifier />
       <AssessmentGoalResultNotifier />
       <InSessionNotification />
