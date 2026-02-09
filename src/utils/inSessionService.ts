@@ -202,7 +202,9 @@ export async function joinSession(
     const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
     
     // Use transaction to ensure atomic join
+    // CRITICAL: Firestore transactions require ALL reads before ANY writes
     const result = await runTransaction(db, async (transaction) => {
+      // PHASE 1: ALL READS FIRST (Firestore requirement)
       // Read session document
       const sessionDoc = await transaction.get(sessionRef);
       
@@ -223,6 +225,9 @@ export async function joinSession(
         throw new Error(`Session is not active. Current status: ${sessionData.status}`);
       }
       
+      // Read presence document BEFORE any writes
+      const presenceDoc = await transaction.get(playerPresenceRef);
+      
       // Check if player already exists
       const existingPlayerIndex = sessionData.players.findIndex(p => p.userId === player.userId);
       const isNewPlayer = existingPlayerIndex === -1;
@@ -237,6 +242,7 @@ export async function joinSession(
         throw new Error('Player displayName is required and must be a string');
       }
 
+      // PHASE 2: ALL WRITES AFTER READS
       // Update or add player
       const updatedPlayers = [...sessionData.players];
       if (isNewPlayer) {
@@ -270,8 +276,7 @@ export async function joinSession(
         updatedAt: serverTimestamp()
       });
       
-      // Ensure player presence doc exists
-      const presenceDoc = await transaction.get(playerPresenceRef);
+      // Update presence document (we already read it above)
       if (!presenceDoc.exists()) {
         transaction.set(playerPresenceRef, {
           connected: true,
