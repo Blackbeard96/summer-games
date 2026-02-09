@@ -380,9 +380,15 @@ const InSessionNotification: React.FC = () => {
       const studentData = studentDoc.exists() ? studentDoc.data() : {};
       const userData = userDoc.exists() ? userDoc.data() : {};
 
+      // Ensure displayName is always a valid string
+      const displayName = userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown Player';
+      if (!displayName || typeof displayName !== 'string' || displayName.trim() === '') {
+        throw new Error('Invalid player name. Please update your profile.');
+      }
+
       const newPlayer = {
         userId: currentUser.uid,
-        displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
+        displayName: displayName.trim(),
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerPoints: studentData.powerPoints || 0,
@@ -390,11 +396,26 @@ const InSessionNotification: React.FC = () => {
         movesEarned: 0
       };
 
+      // Validate player data before attempting join
+      if (!newPlayer.userId || typeof newPlayer.userId !== 'string') {
+        throw new Error('Invalid user ID. Please log in again.');
+      }
+
       // Use session service to join (idempotent)
       const { joinSession } = await import('../utils/inSessionService');
-      const joined = await joinSession(activeSession.id, newPlayer);
       
-      if (joined) {
+      console.log('[InSessionNotification] Attempting to join session:', {
+        sessionId: activeSession.id,
+        playerId: newPlayer.userId,
+        playerName: newPlayer.displayName,
+        sessionStatus: activeSession.status,
+        playerLevel: newPlayer.level,
+        playerPP: newPlayer.powerPoints
+      });
+      
+      const result = await joinSession(activeSession.id, newPlayer);
+      
+      if (result.success) {
         debug.log('InSessionNotification', `User ${currentUser.uid} joined session ${activeSession.id}`);
         // Immediately hide notification since user is joining
         setActiveSession(null);
@@ -402,11 +423,18 @@ const InSessionNotification: React.FC = () => {
         // Navigate to session battle view
         navigate(`/live-events/${activeSession.id}`);
       } else {
-        alert('Failed to join live event. Please try again.');
+        console.error('[InSessionNotification] Failed to join session:', {
+          sessionId: activeSession.id,
+          error: result.error,
+          playerId: newPlayer.userId
+        });
+        const errorMessage = result.error || 'Please try again.';
+        alert(`Failed to join live event: ${errorMessage}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       debug.error('InSessionNotification', 'Error joining session', error);
-      alert('Failed to join session. Please try again.');
+      const errorMessage = error?.message || 'An unexpected error occurred. Please try again.';
+      alert(`Failed to join session: ${errorMessage}`);
     } finally {
       setIsJoining(false);
     }

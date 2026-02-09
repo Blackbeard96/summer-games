@@ -25,16 +25,26 @@ interface Student {
   powerPoints?: number;
 }
 
+interface Classroom {
+  id: string;
+  name: string;
+  students?: string[];
+}
+
 const BadgeManager: React.FC = () => {
   const [badges, setBadges] = useState<Badge[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [loading, setLoading] = useState(true);
+  const [classroomsLoading, setClassroomsLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [selectedBadge, setSelectedBadge] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [issuing, setIssuing] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [classSearchQuery, setClassSearchQuery] = useState<string>('');
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [editingBadgeId, setEditingBadgeId] = useState<string | null>(null);
   const [availableArtifacts, setAvailableArtifacts] = useState<Array<{ id: string; name: string; icon: string }>>([]);
 
@@ -79,8 +89,57 @@ const BadgeManager: React.FC = () => {
   useEffect(() => {
     fetchBadges();
     fetchStudents();
+    fetchClassrooms();
     fetchArtifacts();
   }, []);
+
+  // Debug: Log when classrooms state changes
+  useEffect(() => {
+    console.log('[BadgeManager] Classrooms state updated:', {
+      count: classrooms.length,
+      classrooms: classrooms.map(c => ({ id: c.id, name: c.name, studentCount: c.students?.length || 0 }))
+    });
+  }, [classrooms]);
+
+  const fetchClassrooms = async () => {
+    setClassroomsLoading(true);
+    try {
+      console.log('[BadgeManager] Fetching classrooms...');
+      const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
+      console.log('[BadgeManager] Classrooms snapshot size:', classroomsSnapshot.size);
+      
+      const classroomsList = classroomsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        const classroomName = data.name || data.className || doc.id; // Try multiple name fields
+        console.log('[BadgeManager] Classroom:', { 
+          id: doc.id, 
+          name: classroomName, 
+          students: data.students?.length || 0,
+          allFields: Object.keys(data)
+        });
+        return {
+          id: doc.id,
+          name: classroomName, // Fallback to doc.id if name is missing
+          students: data.students || [] // Ensure students is always an array
+        };
+      }) as Classroom[];
+      
+      console.log('[BadgeManager] Classrooms list:', classroomsList);
+      setClassrooms(classroomsList);
+      
+      if (classroomsList.length === 0) {
+        console.warn('[BadgeManager] No classrooms found in database. Check if classrooms collection exists and has documents.');
+      } else {
+        console.log(`[BadgeManager] Successfully loaded ${classroomsList.length} classroom(s)`);
+      }
+    } catch (error) {
+      console.error('[BadgeManager] Error fetching classrooms:', error);
+      // Set empty array on error to prevent UI issues
+      setClassrooms([]);
+    } finally {
+      setClassroomsLoading(false);
+    }
+  };
 
   const fetchArtifacts = () => {
     // Artifacts are defined in Marketplace.tsx - using the same list
@@ -225,6 +284,45 @@ const BadgeManager: React.FC = () => {
         return newSelection;
       });
     }
+  };
+
+  const handleClassSelect = (classId: string) => {
+    if (!classId) {
+      setSelectedClassId('');
+      return;
+    }
+
+    const classroom = classrooms.find(c => c.id === classId);
+    if (!classroom) return;
+
+    setSelectedClassId(classId);
+
+    // Get all student IDs from the selected class
+    const classStudentIds = classroom.students || [];
+
+    // Add all class students to selected students (merge with existing)
+    setSelectedStudents(prev => {
+      const newSelection = [...prev];
+      classStudentIds.forEach(studentId => {
+        if (!newSelection.includes(studentId)) {
+          newSelection.push(studentId);
+        }
+      });
+      return newSelection;
+    });
+  };
+
+  const handleClassDeselect = () => {
+    if (!selectedClassId) return;
+
+    const classroom = classrooms.find(c => c.id === selectedClassId);
+    if (!classroom) return;
+
+    const classStudentIds = classroom.students || [];
+
+    // Remove all class students from selected students
+    setSelectedStudents(prev => prev.filter(id => !classStudentIds.includes(id)));
+    setSelectedClassId('');
   };
 
   const issueBadgeToStudent = async () => {
@@ -765,6 +863,164 @@ const BadgeManager: React.FC = () => {
                 }
                 return rewards.length > 0 ? rewards.join(' • ') : 'No rewards';
               })()}
+            </div>
+          )}
+        </div>
+
+        {/* Class Selection Section */}
+        <div style={{ marginBottom: '1.5rem', padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <label style={{ display: 'block', fontWeight: 'bold' }}>Select by Class (Optional)</label>
+            <button
+              onClick={fetchClassrooms}
+              disabled={classroomsLoading}
+              style={{
+                backgroundColor: classroomsLoading ? '#9ca3af' : '#6366f1',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                padding: '0.375rem 0.75rem',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                cursor: classroomsLoading ? 'not-allowed' : 'pointer'
+              }}
+              title="Refresh classes list"
+            >
+              {classroomsLoading ? 'Loading...' : '🔄 Refresh'}
+            </button>
+          </div>
+          <div style={{ marginBottom: '0.75rem' }}>
+            <input
+              type="text"
+              placeholder="🔍 Search by class name..."
+              value={classSearchQuery}
+              onChange={(e) => setClassSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.5rem 0.75rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '0.375rem',
+                fontSize: '0.875rem',
+                outline: 'none',
+                transition: 'all 0.2s'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#4f46e5';
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#d1d5db';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            />
+          </div>
+          <div style={{ 
+            maxHeight: '150px', 
+            overflowY: 'auto', 
+            border: '1px solid #d1d5db', 
+            borderRadius: '0.375rem', 
+            padding: '0.5rem',
+            backgroundColor: 'white'
+          }}>
+            {(() => {
+              if (classroomsLoading) {
+                return (
+                  <div style={{ padding: '0.5rem', textAlign: 'center', color: '#6b7280', fontSize: '0.875rem' }}>
+                    Loading classes...
+                  </div>
+                );
+              }
+
+              const filteredClassrooms = classrooms.filter(classroom => {
+                if (!classSearchQuery.trim()) return true;
+                const query = classSearchQuery.toLowerCase().trim();
+                const name = (classroom.name || '').toLowerCase();
+                return name.includes(query);
+              });
+
+              if (filteredClassrooms.length === 0) {
+                return (
+                  <div style={{ padding: '0.5rem', textAlign: 'center', color: '#6b7280', fontSize: '0.875rem' }}>
+                    {classSearchQuery.trim() 
+                      ? 'No classes found matching your search' 
+                      : classrooms.length === 0 
+                        ? 'No classes available. Create classes in Classroom Management first.' 
+                        : 'No classes match your search'}
+                  </div>
+                );
+              }
+
+              return filteredClassrooms.map(classroom => {
+                const isSelected = selectedClassId === classroom.id;
+                const studentCount = (classroom.students || []).length;
+                return (
+                  <div
+                    key={classroom.id}
+                    onClick={() => isSelected ? handleClassDeselect() : handleClassSelect(classroom.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.75rem',
+                      marginBottom: '0.25rem',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      backgroundColor: isSelected ? '#eef2ff' : 'white',
+                      border: isSelected ? '2px solid #4f46e5' : '1px solid #e5e7eb',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = 'white';
+                      }
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
+                        {classroom.name}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                        {studentCount} student{studentCount !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                    {isSelected && (
+                      <div style={{ 
+                        color: '#4f46e5', 
+                        fontWeight: 'bold',
+                        fontSize: '0.875rem',
+                        marginLeft: '0.5rem'
+                      }}>
+                        ✓ Selected
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+          </div>
+          {selectedClassId && (
+            <div style={{ marginTop: '0.75rem', fontSize: '0.875rem', color: '#4f46e5', fontWeight: 'bold' }}>
+              ✓ Class selected: {classrooms.find(c => c.id === selectedClassId)?.name}
+              {' '}
+              <button
+                onClick={handleClassDeselect}
+                style={{
+                  color: '#ef4444',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  fontSize: '0.875rem',
+                  marginLeft: '0.5rem'
+                }}
+              >
+                (Deselect)
+              </button>
             </div>
           )}
         </div>

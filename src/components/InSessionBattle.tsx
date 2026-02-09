@@ -207,8 +207,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         };
         
         // Join session (idempotent - safe to call multiple times)
-        const joined = await joinSession(sessionId, newPlayer);
-        if (joined) {
+        const result = await joinSession(sessionId, newPlayer);
+        if (result.success) {
           debug('inSessionBattle', `User ${currentUser.uid} joined session ${sessionId}`);
           
           // Create session loadout snapshot

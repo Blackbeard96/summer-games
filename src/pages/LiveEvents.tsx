@@ -211,9 +211,15 @@ const LiveEvents: React.FC = () => {
       const studentData = studentDoc.exists() ? studentDoc.data() : {};
       const userData = userDoc.exists() ? userDoc.data() : {};
 
+      // Ensure displayName is always a valid string
+      const displayName = userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown Player';
+      if (!displayName || typeof displayName !== 'string' || displayName.trim() === '') {
+        throw new Error('Invalid player name. Please update your profile.');
+      }
+
       const newPlayer = {
         userId: currentUser.uid,
-        displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
+        displayName: displayName.trim(),
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerPoints: studentData.powerPoints || 0,
@@ -221,16 +227,39 @@ const LiveEvents: React.FC = () => {
         movesEarned: 0
       };
 
-      const joined = await joinSession(event.id, newPlayer);
+      // Validate player data before attempting join
+      if (!newPlayer.userId || typeof newPlayer.userId !== 'string') {
+        throw new Error('Invalid user ID. Please log in again.');
+      }
 
-      if (joined) {
+      console.log('[LiveEvents] Attempting to join session:', {
+        sessionId: event.id,
+        playerId: newPlayer.userId,
+        playerName: newPlayer.displayName,
+        eventStatus: event.status,
+        eventClassId: event.classId,
+        playerLevel: newPlayer.level,
+        playerPP: newPlayer.powerPoints
+      });
+
+      const result = await joinSession(event.id, newPlayer);
+
+      if (result.success) {
+        console.log('[LiveEvents] Successfully joined session:', event.id);
         navigate(`/live-events/${event.id}`);
       } else {
-        alert('Failed to join live event. The event may be full or no longer active.');
+        console.error('[LiveEvents] Failed to join session:', {
+          sessionId: event.id,
+          error: result.error,
+          playerId: newPlayer.userId
+        });
+        const errorMessage = result.error || 'The event may be full or no longer active.';
+        alert(`Failed to join live event: ${errorMessage}`);
       }
-    } catch (error) {
-      console.error('Error joining live event:', error);
-      alert('Failed to join live event. Please try again.');
+    } catch (error: any) {
+      console.error('[LiveEvents] Error joining live event:', error);
+      const errorMessage = error?.message || 'An unexpected error occurred. Please try again.';
+      alert(`Failed to join live event: ${errorMessage}`);
     } finally {
       setJoiningEventId(null);
     }

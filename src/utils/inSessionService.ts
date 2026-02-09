@@ -43,7 +43,7 @@ export interface InSessionRoom {
   className: string;
   teacherId: string;
   hostUid: string; // UID of the host (admin who started session)
-  status: 'live' | 'ended';
+  status: 'live' | 'active' | 'ended'; // 'active' for backward compatibility
   mode: 'in_session';
   createdAt: any;
   startedAt?: any;
@@ -180,11 +180,12 @@ export async function getActiveSessionForClass(classId: string): Promise<InSessi
 /**
  * Join a session (idempotent - safe to call multiple times)
  * NOW TRANSACTION-SAFE: Uses Firestore transaction to prevent race conditions
+ * Returns: { success: boolean, error?: string }
  */
 export async function joinSession(
   sessionId: string,
   player: SessionPlayer
-): Promise<boolean> {
+): Promise<{ success: boolean; error?: string }> {
   const DEBUG_JOIN = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                      process.env.REACT_APP_DEBUG === 'true';
   
@@ -214,11 +215,12 @@ export async function joinSession(
       
       const sessionData = sessionDoc.data() as InSessionRoom;
       
-      if (sessionData.status !== 'live') {
+      // Check session status - allow 'live' and 'active' for backward compatibility
+      if (sessionData.status !== 'live' && sessionData.status !== 'active') {
         if (DEBUG_JOIN) {
           debugError('inSessionService', `❌ JOIN FAILED: Session ${sessionId} is not live (status: ${sessionData.status})`);
         }
-        throw new Error(`Session ${sessionId} is not live (status: ${sessionData.status})`);
+        throw new Error(`Session is not active. Current status: ${sessionData.status}`);
       }
       
       // Check if player already exists
@@ -312,19 +314,26 @@ export async function joinSession(
       });
     }
     
-    return true;
+    return { success: true };
   } catch (error: any) {
+    const errorMessage = error?.message || 'Unknown error occurred';
+    const errorCode = error?.code || 'unknown';
+    
     debugError('inSessionService', `❌ JOIN ERROR: Error joining session ${sessionId}`, error);
-    if (DEBUG_JOIN) {
-      console.error('Join error details:', {
-        sessionId,
-        playerId: player.userId,
-        playerName: player.displayName,
-        errorMessage: error?.message,
-        errorCode: error?.code
-      });
-    }
-    return false;
+    console.error('[InSession] Join error details:', {
+      sessionId,
+      playerId: player.userId,
+      playerName: player.displayName,
+      errorMessage,
+      errorCode,
+      errorStack: error?.stack
+    });
+    
+    // Return detailed error information
+    return { 
+      success: false, 
+      error: errorMessage 
+    };
   }
 }
 
