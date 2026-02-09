@@ -21,10 +21,19 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const isHabits = assessment.type === 'habits';
+  const isStoryGoal = assessment.type === 'story-goal';
+  
+  // Debug logging
+  console.log('[SetGoalModal] Assessment type:', assessment.type, 'isHabits:', isHabits, 'isStoryGoal:', isStoryGoal);
   
   // For regular assessments (numeric goals)
   const [goalScore, setGoalScore] = useState<string>(
-    existingGoal ? existingGoal.goalScore.toString() : ''
+    existingGoal ? (existingGoal.goalScore?.toString() || '') : ''
+  );
+  
+  // For Story Goals (text-based, similar to habits)
+  const [textGoal, setTextGoal] = useState<string>(
+    existingGoal?.textGoal || ''
   );
   
   // For Habits assessments (text + duration)
@@ -35,22 +44,37 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
     existingHabitSubmission?.duration || assessment.habitsConfig?.defaultDuration || '1_week'
   );
   
-  // Update form when existingHabitSubmission changes
+  // Evidence field (for Story Goals and Habit Goals)
+  const [evidence, setEvidence] = useState<string>(
+    existingGoal?.evidence || existingHabitSubmission?.evidence || ''
+  );
+  
+  // Update form when existingHabitSubmission or existingGoal changes
   useEffect(() => {
     if (existingHabitSubmission) {
       setHabitText(existingHabitSubmission.habitText);
       setDuration(existingHabitSubmission.duration);
+      setEvidence(existingHabitSubmission.evidence || '');
     }
-  }, [existingHabitSubmission]);
+    if (existingGoal) {
+      setTextGoal(existingGoal.textGoal || '');
+      setEvidence(existingGoal.evidence || '');
+      if (existingGoal.goalScore !== undefined) {
+        setGoalScore(existingGoal.goalScore.toString());
+      }
+    }
+  }, [existingHabitSubmission, existingGoal]);
   
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [savedGoalData, setSavedGoalData] = useState<{
-    type: 'numeric' | 'habit';
+    type: 'numeric' | 'habit' | 'story-goal';
     goalScore?: number;
+    textGoal?: string;
     habitText?: string;
     duration?: HabitDuration;
+    evidence?: string;
   } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -90,7 +114,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             assessment.id,
             currentUser.uid,
             trimmedText,
-            duration
+            duration,
+            evidence.trim() || null
           );
         } else {
           await createHabitSubmission(
@@ -98,7 +123,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             currentUser.uid,
             assessment.classId,
             trimmedText,
-            duration
+            duration,
+            evidence.trim() || null
           );
         }
         
@@ -106,7 +132,37 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         setSavedGoalData({
           type: 'habit',
           habitText: trimmedText,
-          duration
+          duration,
+          evidence: evidence.trim() || undefined
+        });
+      } else if (isStoryGoal) {
+        // Story Goal (text-based, similar to habits)
+        const trimmedText = textGoal.trim();
+        if (trimmedText.length < 3) {
+          setError('Goal description must be at least 3 characters long');
+          setSaving(false);
+          return;
+        }
+        if (trimmedText.length > 500) {
+          setError('Goal description must be 500 characters or less');
+          setSaving(false);
+          return;
+        }
+        
+        await setAssessmentGoal(
+          assessment.id,
+          currentUser.uid,
+          undefined, // No numeric goalScore for Story Goals
+          assessment.classId,
+          evidence.trim() || null,
+          trimmedText // textGoal
+        );
+        
+        // Store saved data for preview
+        setSavedGoalData({
+          type: 'story-goal',
+          textGoal: trimmedText,
+          evidence: evidence.trim() || undefined
         });
       } else {
         // Regular numeric goal
@@ -230,6 +286,37 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                     {savedGoalData.duration ? getDurationLabel(savedGoalData.duration) : 'N/A'}
                   </p>
                 </div>
+                {savedGoalData.evidence && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                      Area of Consistency:
+                    </p>
+                    <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic' }}>
+                      "{savedGoalData.evidence}"
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : savedGoalData.type === 'story-goal' ? (
+              <div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                    Your Goal:
+                  </p>
+                  <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic' }}>
+                    "{savedGoalData.textGoal}"
+                  </p>
+                </div>
+                {savedGoalData.evidence && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                      Area of Consistency:
+                    </p>
+                    <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic' }}>
+                      "{savedGoalData.evidence}"
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <div>
@@ -299,6 +386,26 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
           {assessment.title}
         </p>
+
+        {/* Info for Story Goals */}
+        {isStoryGoal && (
+          <div style={{ 
+            padding: '0.75rem', 
+            background: '#fef3c7', 
+            borderRadius: '0.5rem', 
+            marginBottom: '1rem',
+            fontSize: '0.875rem',
+            color: '#92400e',
+            border: '1px solid #fbbf24'
+          }}>
+            📖 <strong>Story Goal:</strong> Describe your goal and provide evidence of your consistency toward achieving it.
+            {assessment.storyGoal?.prompt && (
+              <div style={{ marginTop: '0.5rem', fontStyle: 'italic' }}>
+                "{assessment.storyGoal.prompt}"
+              </div>
+            )}
+          </div>
+        )}
 
         {assessment.isLocked && (
           <div
@@ -400,34 +507,155 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                 </div>
               </div>
             </>
+          ) : isStoryGoal ? (
+            <>
+              {/* Story Goal (text-based) */}
+              <div style={{ marginBottom: '1rem' }}>
+                <label
+                  htmlFor="textGoal"
+                  style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#92400e' }}
+                >
+                  Describe Your Goal: <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <textarea
+                  id="textGoal"
+                  value={textGoal}
+                  onChange={(e) => setTextGoal(e.target.value)}
+                  disabled={assessment.isLocked || saving}
+                  placeholder="e.g., I will complete all my homework assignments on time, I will participate actively in class discussions..."
+                  minLength={3}
+                  maxLength={500}
+                  rows={4}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '2px solid #fbbf24',
+                    fontSize: '1rem',
+                    fontFamily: 'inherit',
+                    resize: 'vertical',
+                    background: 'white'
+                  }}
+                  required
+                />
+                <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                  {textGoal.length}/500 characters
+                </p>
+              </div>
+            </>
           ) : (
-            <div style={{ marginBottom: '1rem' }}>
+            <>
+              {/* Goal Score field - shown for numeric goals (test/exam/quiz) */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label
+                  htmlFor="goalScore"
+                  style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}
+                >
+                  Goal Score: <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input
+                  id="goalScore"
+                  type="number"
+                  min={assessment.minGoalScore || 0}
+                  max={assessment.maxScore || 100}
+                  step="0.1"
+                  value={goalScore}
+                  onChange={(e) => setGoalScore(e.target.value)}
+                  disabled={assessment.isLocked || saving}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem',
+                    background: 'white'
+                  }}
+                  required
+                />
+                <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                  Maximum score: {assessment.maxScore || 100}
+                  {assessment.minGoalScore !== undefined && assessment.minGoalScore > 0 && (
+                    <span> • Minimum: {assessment.minGoalScore}</span>
+                  )}
+                </p>
+              </div>
+            </>
+          )}
+
+          {/* Area of Consistency field for Story Goals */}
+          {isStoryGoal && (
+            <div style={{ 
+              marginBottom: '1.5rem', 
+              padding: '1rem', 
+              background: '#f0f9ff', 
+              borderRadius: '0.5rem', 
+              border: '2px solid #3b82f6' 
+            }}>
               <label
-                htmlFor="goalScore"
-                style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}
+                htmlFor="evidence"
+                style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e40af' }}
               >
-                Goal Score:
+                Area of Consistency (Optional):
               </label>
-              <input
-                id="goalScore"
-                type="number"
-                min={assessment.minGoalScore || 0}
-                max={assessment.maxScore}
-                step="0.1"
-                value={goalScore}
-                onChange={(e) => setGoalScore(e.target.value)}
+              <textarea
+                id="evidence"
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
                 disabled={assessment.isLocked || saving}
+                placeholder="Describe how you've been consistent with your goal and what evidence you have..."
+                rows={4}
                 style={{
                   width: '100%',
                   padding: '0.75rem',
                   borderRadius: '0.5rem',
-                  border: '1px solid #d1d5db',
-                  fontSize: '1rem'
+                  border: '1px solid #3b82f6',
+                  fontSize: '1rem',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                  background: 'white'
                 }}
-                required
               />
               <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
-                Maximum score: {assessment.maxScore}
+                Share evidence of how you've been working toward your goal consistently.
+              </p>
+            </div>
+          )}
+
+          {/* Area of Consistency field for Habit Goals */}
+          {isHabits && (
+            <div style={{ 
+              marginBottom: '1.5rem', 
+              padding: '1rem', 
+              background: '#f0f9ff', 
+              borderRadius: '0.5rem', 
+              border: '2px solid #3b82f6' 
+            }}>
+              <label
+                htmlFor="evidence"
+                style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e40af' }}
+              >
+                Area of Consistency (Optional):
+              </label>
+              <textarea
+                id="evidence"
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
+                disabled={assessment.isLocked || saving}
+                placeholder="Describe how you've been consistent with your habit and what evidence you have..."
+                rows={4}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #3b82f6',
+                  fontSize: '1rem',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                  background: 'white'
+                }}
+              />
+              <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                Share evidence of how you've been maintaining your habit consistently.
               </p>
             </div>
           )}

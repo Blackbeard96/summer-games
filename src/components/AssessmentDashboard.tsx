@@ -91,9 +91,9 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
           const result = fetchedResults.find(r => r.studentId === student.id);
           const habitSubmission = isHabits ? fetchedHabitSubmissions.find(h => h.studentId === student.id) : undefined;
 
-          // Compute PP change preview if we have goal and result
+          // Compute PP change preview if we have goal and result (only for numeric goals)
           let ppChangePreview: number | undefined;
-          if (goal && result && result.actualScore !== undefined) {
+          if (goal && result && result.actualScore !== undefined && goal.goalScore !== undefined && assessment.type !== 'story-goal') {
             const computation = computePPChange(goal.goalScore, result.actualScore, assessment);
             ppChangePreview = computation.ppChange;
           }

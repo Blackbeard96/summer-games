@@ -21,6 +21,16 @@ const StoryEpisodeBattle: React.FC = () => {
   const { vault, moves, actionCards } = useBattle();
   const navigate = useNavigate();
 
+  // Debug: Log moves availability
+  useEffect(() => {
+    console.log('StoryEpisodeBattle: Moves loaded:', {
+      totalMoves: moves.length,
+      unlockedMoves: moves.filter(m => m.unlocked).length,
+      unlockedMoveNames: moves.filter(m => m.unlocked).map(m => m.name),
+      episodeId: episodeId
+    });
+  }, [moves, episodeId]);
+
   const [episode, setEpisode] = useState(STORY_EPISODES.find(ep => ep.id === episodeId));
   const [boss, setBoss] = useState<BossData | null>(null);
   const [bossHealth, setBossHealth] = useState(0);
@@ -678,38 +688,81 @@ const StoryEpisodeBattle: React.FC = () => {
               <h4 style={{ color: 'white', fontSize: '1rem', marginBottom: '0.5rem' }}>
                 Select Move:
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                {moves.filter(move => move.unlocked).slice(0, 4).map(move => (
-                  <button
-                    key={move.id}
-                    onClick={() => setSelectedMove(move)}
-                    disabled={isBattling || playerEnergy < move.cost}
-                    style={{
-                      background: selectedMove?.id === move.id 
-                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                        : playerEnergy < move.cost
-                          ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'
-                          : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                      color: 'white',
-                      border: 'none',
-                      padding: '0.75rem',
+              {(() => {
+                // CRITICAL FIX: For story battles, always show system moves even if not explicitly unlocked
+                // Also show manifest moves that match the user's manifest
+                const availableMoves = moves.filter(move => {
+                  // System moves should always be available in story battles
+                  if (move.category === 'system') {
+                    return true;
+                  }
+                  // Manifest moves should be available if they match user's manifest OR if unlocked
+                  if (move.category === 'manifest') {
+                    return move.unlocked;
+                  }
+                  // Elemental moves should be available if unlocked
+                  if (move.category === 'elemental') {
+                    return move.unlocked;
+                  }
+                  // Default: only show if unlocked
+                  return move.unlocked;
+                });
+                
+                console.log('StoryEpisodeBattle: Rendering moves - total:', moves.length, 'available:', availableMoves.length, 'episodeId:', episodeId);
+                
+                if (availableMoves.length === 0) {
+                  console.warn('StoryEpisodeBattle: No moves available!', {
+                    totalMoves: moves.length,
+                    allMoves: moves.map(m => ({ name: m.name, unlocked: m.unlocked, category: m.category, id: m.id }))
+                  });
+                  return (
+                    <div style={{ 
+                      padding: '1rem', 
+                      background: 'rgba(239, 68, 68, 0.2)', 
+                      border: '1px solid #ef4444', 
                       borderRadius: '0.5rem',
-                      fontSize: '0.875rem',
-                      fontWeight: 'bold',
-                      cursor: (isBattling || playerEnergy < move.cost) ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.2s',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold' }}>{move.name} [Level {move.masteryLevel}]</div>
-                    <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
-                      {move.cost} Energy
-                      {move.damage && ` • ${move.damage} DMG`}
-                      {move.healing && ` • ${move.healing} HEAL`}
+                      color: 'white'
+                    }}>
+                      ⚠️ No moves available! Please ensure your moves are unlocked in the Battle Arena (Skills & Mastery tab).
                     </div>
-                  </button>
-                ))}
-              </div>
+                  );
+                }
+                
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    {availableMoves.slice(0, 4).map(move => (
+                      <button
+                        key={move.id}
+                        onClick={() => setSelectedMove(move)}
+                        disabled={isBattling || playerEnergy < move.cost}
+                        style={{
+                          background: selectedMove?.id === move.id 
+                            ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                            : playerEnergy < move.cost
+                              ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'
+                              : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                          color: 'white',
+                          border: 'none',
+                          padding: '0.75rem',
+                          borderRadius: '0.5rem',
+                          fontSize: '0.875rem',
+                          fontWeight: 'bold',
+                          cursor: (isBattling || playerEnergy < move.cost) ? 'not-allowed' : 'pointer',
+                          transition: 'all 0.2s',
+                          textAlign: 'left'
+                        }}
+                      >
+                        <div style={{ fontWeight: 'bold' }}>{move.name} [Level {move.masteryLevel}]</div>
+                        <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                          {move.cost} Energy
+                          {move.damage && ` • ${move.damage} DMG`}
+                          {move.healing && ` • ${move.healing} HEAL`}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           )}
 

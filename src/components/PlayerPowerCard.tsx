@@ -262,16 +262,6 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', display: 'block' }}>
                 {playerData.displayName}
               </span>
-              {showSquadAbbreviation && playerData.squadAbbreviation && (
-                <span style={{
-                  fontSize: '12px',
-                  color: '#4f46e5',
-                  fontWeight: '600',
-                  flexShrink: 0
-                }}>
-                  [{playerData.squadAbbreviation}]
-                </span>
-              )}
               {showPPBoost && ppBoostStatus.isActive && (
                 <span 
                   style={{ 
@@ -405,11 +395,21 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
               Lv. {playerData.level}
             </span>
           </div>
-          {/* Second row: Rarity stars under name */}
-          <div style={{ display: 'flex', alignItems: 'center', marginTop: 2, flexWrap: 'wrap', width: '100%' }}>
+          {/* Second row: Rarity stars and Squad Tag on same level */}
+          <div style={{ display: 'flex', alignItems: 'center', marginTop: 2, flexWrap: 'wrap', width: '100%', gap: 6 }}>
             {Array.from({ length: playerData.rarity }).map((_, i) => (
               <span key={i} style={{ color: '#fbbf24', fontSize: 14, marginRight: 2, flexShrink: 0 }}>★</span>
             ))}
+            {showSquadAbbreviation && playerData.squadAbbreviation && (
+              <span style={{
+                fontSize: '12px',
+                color: '#4f46e5',
+                fontWeight: '600',
+                flexShrink: 0
+              }}>
+                [{playerData.squadAbbreviation}]
+              </span>
+            )}
           </div>
         </div>
 

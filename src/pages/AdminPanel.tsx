@@ -1463,13 +1463,59 @@ const AdminPanel: React.FC = () => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
     const newPP = Math.max(0, (student.powerPoints || 0) + delta);
-    const studentRef = doc(db, 'students', studentId);
-    await updateDoc(studentRef, { powerPoints: newPP });
-    setStudents(prev =>
-      prev.map(s =>
-        s.id === studentId ? { ...s, powerPoints: newPP } : s
-      )
-    );
+    
+    try {
+      // Update both students collection AND vaults collection
+      const studentRef = doc(db, 'students', studentId);
+      const vaultRef = doc(db, 'vaults', studentId);
+      
+      // Get vault data to calculate vault health
+      const vaultDoc = await getDoc(vaultRef);
+      const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
+      const maxPP = vaultData?.capacity || 1000;
+      const maxVaultHealth = Math.floor(maxPP * 0.1);
+      const newVaultHealth = Math.min(newPP, maxVaultHealth);
+      
+      // Update both collections in parallel
+      await Promise.all([
+        updateDoc(studentRef, { powerPoints: newPP }),
+        vaultDoc.exists() 
+          ? updateDoc(vaultRef, { 
+              currentPP: newPP,
+              vaultHealth: newVaultHealth
+            })
+          : setDoc(vaultRef, {
+              id: studentId,
+              ownerId: studentId,
+              capacity: maxPP,
+              currentPP: newPP,
+              vaultHealth: newVaultHealth,
+              maxVaultHealth: maxVaultHealth,
+              shieldStrength: 100,
+              maxShieldStrength: 100,
+              overshield: 0,
+              generatorLevel: 1,
+              generatorPendingPP: 0,
+              generatorLastReset: serverTimestamp(),
+              lastUpgrade: serverTimestamp(),
+              debtStatus: false,
+              debtAmount: 0,
+              lastDuesPaid: serverTimestamp(),
+              movesRemaining: 3,
+              maxMovesPerDay: 3,
+              lastMoveReset: serverTimestamp(),
+            })
+      ]);
+      
+      setStudents(prev =>
+        prev.map(s =>
+          s.id === studentId ? { ...s, powerPoints: newPP } : s
+        )
+      );
+    } catch (error) {
+      console.error('Error adjusting Power Points:', error);
+      setRowError(prev => ({ ...prev, [studentId]: 'Failed to adjust PP. Try again.' }));
+    }
   };
 
   // Set Power Points to absolute value
@@ -1477,19 +1523,65 @@ const AdminPanel: React.FC = () => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
     const newPP = Math.max(0, amount);
-    const studentRef = doc(db, 'students', studentId);
-    await updateDoc(studentRef, { powerPoints: newPP });
-    setStudents(prev =>
-      prev.map(s =>
-        s.id === studentId ? { ...s, powerPoints: newPP } : s
-      )
-    );
     
-    // Show success message
-    const studentName = student.displayName || student.id;
-    setBatchMessage(`Successfully set ${studentName}'s Power Points to ${newPP}!`);
-    setShowBatchSuccess(true);
-    setTimeout(() => setShowBatchSuccess(false), 3000);
+    try {
+      // Update both students collection AND vaults collection
+      const studentRef = doc(db, 'students', studentId);
+      const vaultRef = doc(db, 'vaults', studentId);
+      
+      // Get vault data to calculate vault health
+      const vaultDoc = await getDoc(vaultRef);
+      const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
+      const maxPP = vaultData?.capacity || 1000;
+      const maxVaultHealth = Math.floor(maxPP * 0.1);
+      const newVaultHealth = Math.min(newPP, maxVaultHealth);
+      
+      // Update both collections in parallel
+      await Promise.all([
+        updateDoc(studentRef, { powerPoints: newPP }),
+        vaultDoc.exists() 
+          ? updateDoc(vaultRef, { 
+              currentPP: newPP,
+              vaultHealth: newVaultHealth
+            })
+          : setDoc(vaultRef, {
+              id: studentId,
+              ownerId: studentId,
+              capacity: maxPP,
+              currentPP: newPP,
+              vaultHealth: newVaultHealth,
+              maxVaultHealth: maxVaultHealth,
+              shieldStrength: 100,
+              maxShieldStrength: 100,
+              overshield: 0,
+              generatorLevel: 1,
+              generatorPendingPP: 0,
+              generatorLastReset: serverTimestamp(),
+              lastUpgrade: serverTimestamp(),
+              debtStatus: false,
+              debtAmount: 0,
+              lastDuesPaid: serverTimestamp(),
+              movesRemaining: 3,
+              maxMovesPerDay: 3,
+              lastMoveReset: serverTimestamp(),
+            })
+      ]);
+      
+      setStudents(prev =>
+        prev.map(s =>
+          s.id === studentId ? { ...s, powerPoints: newPP } : s
+        )
+      );
+      
+      // Show success message
+      const studentName = student.displayName || student.id;
+      setBatchMessage(`Successfully set ${studentName}'s Power Points to ${newPP}! (Updated both student and vault)`);
+      setShowBatchSuccess(true);
+      setTimeout(() => setShowBatchSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error setting Power Points:', error);
+      setRowError(prev => ({ ...prev, [studentId]: 'Failed to update PP. Try again.' }));
+    }
   };
 
   // Batch Power Points adjustment
@@ -1507,7 +1599,12 @@ const AdminPanel: React.FC = () => {
       const batch = writeBatch(db);
       const updatedStudents: { id: string; newPP: number; oldPP: number }[] = [];
       
-      for (const studentId of selected) {
+      // First, fetch all vault documents to calculate vault health
+      const vaultPromises = selected.map(studentId => getDoc(doc(db, 'vaults', studentId)));
+      const vaultDocs = await Promise.all(vaultPromises);
+      
+      for (let i = 0; i < selected.length; i++) {
+        const studentId = selected[i];
         const student = students.find(s => s.id === studentId);
         if (!student) {
           console.warn(`Student ${studentId} not found in local data`);
@@ -1515,12 +1612,49 @@ const AdminPanel: React.FC = () => {
         }
         
         const oldPP = student.powerPoints || 0;
-        const newPP = oldPP + actualDelta; // Allow negative values
+        const newPP = Math.max(0, oldPP + actualDelta); // Don't allow negative values
         
         console.log(`Updating ${student.displayName}: ${oldPP} → ${newPP} PP`);
         
         const studentRef = doc(db, 'students', studentId);
         batch.update(studentRef, { powerPoints: newPP });
+        
+        // Also update vault
+        const vaultDoc = vaultDocs[i];
+        const vaultRef = doc(db, 'vaults', studentId);
+        const vaultData = vaultDoc.exists() ? vaultDoc.data() : null;
+        const maxPP = vaultData?.capacity || 1000;
+        const maxVaultHealth = Math.floor(maxPP * 0.1);
+        const newVaultHealth = Math.min(newPP, maxVaultHealth);
+        
+        if (vaultDoc.exists()) {
+          batch.update(vaultRef, { 
+            currentPP: newPP,
+            vaultHealth: newVaultHealth
+          });
+        } else {
+          batch.set(vaultRef, {
+            id: studentId,
+            ownerId: studentId,
+            capacity: maxPP,
+            currentPP: newPP,
+            vaultHealth: newVaultHealth,
+            maxVaultHealth: maxVaultHealth,
+            shieldStrength: 100,
+            maxShieldStrength: 100,
+            overshield: 0,
+            generatorLevel: 1,
+            generatorPendingPP: 0,
+            generatorLastReset: serverTimestamp(),
+            lastUpgrade: serverTimestamp(),
+            debtStatus: false,
+            debtAmount: 0,
+            lastDuesPaid: serverTimestamp(),
+            movesRemaining: 3,
+            maxMovesPerDay: 3,
+            lastMoveReset: serverTimestamp(),
+          });
+        }
         
         updatedStudents.push({ id: studentId, newPP, oldPP });
       }
@@ -1530,7 +1664,7 @@ const AdminPanel: React.FC = () => {
         return;
       }
       
-      console.log('Committing batch update...');
+      console.log('Committing batch update (students + vaults)...');
       await batch.commit();
       console.log('Batch update successful!');
       
@@ -1545,7 +1679,7 @@ const AdminPanel: React.FC = () => {
       // Show success message
       const action = actualDelta > 0 ? 'added' : 'removed';
       const absDelta = Math.abs(actualDelta);
-      setBatchMessage(`Successfully ${action} ${absDelta} Power Points to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}!`);
+      setBatchMessage(`Successfully ${action} ${absDelta} Power Points to ${updatedStudents.length} student${updatedStudents.length !== 1 ? 's' : ''}! (Updated both student and vault)`);
       setShowBatchSuccess(true);
       
       // Auto-hide after 3 seconds

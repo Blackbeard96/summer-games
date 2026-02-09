@@ -41,84 +41,119 @@ export function computePPChange(
   const delta = actualScore - goalScore;
   const absDiff = Math.abs(delta);
   
-  // Check if there's a reward tier that matches this difference (1 or 2 points away)
-  // This allows close scores (within 1-2 points) to still get rewards, regardless of direction
-  const matchingRewardTier = findRewardTier(absDiff, assessment.rewardTiers);
-  const isWithinRewardThreshold = matchingRewardTier !== null;
-  
   // Check if actual score meets minimum goal score requirement (if set)
   const minGoalScore = assessment.minGoalScore ?? 0;
   const meetsMinimumRequirement = actualScore >= minGoalScore;
   
-  // Determine outcome
-  // If actualScore >= goalScore, it's always a hit/exceed
-  // If within reward tier threshold (1 or 2 points away) AND meets minimum requirement, treat as hit
-  // Otherwise, it's a miss
+  // Determine outcome and matching tier
+  let matchingRewardTier: RewardTier | undefined;
   let outcome: OutcomeType;
-  if (actualScore >= goalScore) {
-    outcome = actualScore > goalScore ? 'exceed' : 'hit';
-  } else if (isWithinRewardThreshold && meetsMinimumRequirement) {
-    // Within reward tier threshold (1 or 2 points away) and meets minimum - treat as hit
-    outcome = 'hit';
+  let matchingTierLabel: 'Completed' | 'Almost' | 'Attempted' | 'Did not Complete' | undefined;
+  
+  // Check if this is a Story Goal (should use label-based tiers)
+  const isStoryGoal = assessment.type === 'story-goal';
+  const hasLabelBasedTiers = assessment.rewardTiers.some(tier => tier.label !== undefined);
+  
+  if (isStoryGoal && hasLabelBasedTiers) {
+    // Story Goals: Use label-based system
+    if (actualScore >= goalScore) {
+      // Met or exceeded goal
+      matchingTierLabel = 'Completed';
+      outcome = actualScore > goalScore ? 'exceed' : 'hit';
+    } else if (absDiff <= 2 && meetsMinimumRequirement) {
+      // Close but didn't meet (within 2 points and meets minimum)
+      matchingTierLabel = 'Almost';
+      outcome = 'hit';
+    } else if (actualScore > 0 && meetsMinimumRequirement) {
+      // Showed up and attempted but far from goal
+      matchingTierLabel = 'Attempted';
+      outcome = 'miss';
+    } else {
+      // Didn't complete or very low score
+      matchingTierLabel = 'Did not Complete';
+      outcome = 'miss';
+    }
+    
+    // Find the matching reward tier by label
+    matchingRewardTier = assessment.rewardTiers.find(tier => tier.label === matchingTierLabel);
   } else {
-    outcome = 'miss';
+    // Other assessment types: Use threshold-based system
+    if (actualScore >= goalScore) {
+      outcome = actualScore > goalScore ? 'exceed' : 'hit';
+    } else if (absDiff <= 2 && meetsMinimumRequirement) {
+      // Within 2 points and meets minimum - treat as hit
+      outcome = 'hit';
+    } else {
+      outcome = 'miss';
+    }
+    
+    // Find matching tier by threshold
+    const sortedTiers = [...assessment.rewardTiers].sort((a, b) => (a.threshold || 0) - (b.threshold || 0));
+    matchingRewardTier = sortedTiers.find(tier => absDiff <= (tier.threshold || Infinity));
+    if (!matchingRewardTier && sortedTiers.length > 0) {
+      matchingRewardTier = sortedTiers[sortedTiers.length - 1]; // Use worst tier
+    }
   }
   
   let ppChange = 0;
   let tierExplanation = '';
   
-  if (outcome === 'hit' || outcome === 'exceed') {
-    // Award bonus based on reward tiers
-    // Use the matching reward tier based on absolute difference
-    const tier = findRewardTier(absDiff, assessment.rewardTiers);
-    if (tier) {
-      ppChange = tier.bonus;
-      if (absDiff === 0) {
-        tierExplanation = 'Exact hit bonus';
-      } else if (actualScore > goalScore) {
-        tierExplanation = `${absDiff} point(s) over goal - ${tier.threshold} point tier reward`;
+  if (matchingRewardTier) {
+    if (outcome === 'hit' || outcome === 'exceed') {
+      ppChange = matchingRewardTier.bonus;
+      if (isStoryGoal && matchingTierLabel) {
+        tierExplanation = `${matchingTierLabel} - ${matchingRewardTier.bonus} PP reward`;
       } else {
-        tierExplanation = `${absDiff} point(s) under goal (within ${tier.threshold} point tier) - reward applied`;
+        if (absDiff === 0) {
+          tierExplanation = 'Exact hit bonus';
+        } else if (actualScore > goalScore) {
+          tierExplanation = `${absDiff} point(s) over goal - ${matchingRewardTier.threshold} point tier reward`;
+        } else {
+          tierExplanation = `${absDiff} point(s) under goal (within ${matchingRewardTier.threshold} point tier) - reward applied`;
+        }
       }
     } else {
-      // No tier matches, use worst tier but cap by bonusCap
-      const worstTier = assessment.rewardTiers[assessment.rewardTiers.length - 1];
-      ppChange = Math.min(worstTier?.bonus || 0, assessment.bonusCap || 75);
-      tierExplanation = `Bonus (capped at ${assessment.bonusCap})`;
-    }
-    
-    // Apply bonus cap
-    if (assessment.bonusCap) {
-      ppChange = Math.min(ppChange, assessment.bonusCap);
+      // For "Attempted" or "Did not Complete", still use the tier's bonus (which might be 0 or negative)
+      ppChange = matchingRewardTier.bonus;
+      if (isStoryGoal && matchingTierLabel) {
+        tierExplanation = `${matchingTierLabel} - ${ppChange > 0 ? '+' : ''}${ppChange} PP`;
+      } else {
+        tierExplanation = `Miss - ${ppChange > 0 ? '+' : ''}${ppChange} PP`;
+      }
     }
   } else {
-    // Apply penalty based on miss penalty tiers
-    const tier = findPenaltyTier(absDiff, assessment.missPenaltyTiers);
-    if (tier) {
-      ppChange = -tier.penalty; // Negative for penalty
-      tierExplanation = `Within ${tier.threshold} points off (penalty)`;
+    // No matching tier found, use default behavior
+    if (outcome === 'hit' || outcome === 'exceed') {
+      ppChange = 0;
+      tierExplanation = 'No reward tier configured';
     } else {
-      // No tier matches, use worst tier but cap by penaltyCap
-      const worstTier = assessment.missPenaltyTiers[assessment.missPenaltyTiers.length - 1];
-      ppChange = -Math.min(worstTier?.penalty || 0, assessment.penaltyCap || 75);
-      tierExplanation = `Penalty (capped at ${assessment.penaltyCap})`;
+      // Apply penalty based on miss penalty tiers
+      const penaltyTier = findPenaltyTier(absDiff, assessment.missPenaltyTiers);
+      if (penaltyTier) {
+        ppChange = -penaltyTier.penalty; // Negative for penalty
+        tierExplanation = `Within ${penaltyTier.threshold} points off (penalty)`;
+      } else {
+        const worstTier = assessment.missPenaltyTiers[assessment.missPenaltyTiers.length - 1];
+        ppChange = -Math.min(worstTier?.penalty || 0, assessment.penaltyCap || 75);
+        tierExplanation = `Penalty (capped at ${assessment.penaltyCap})`;
+      }
     }
-    
-    // Apply penalty cap
-    if (assessment.penaltyCap) {
-      ppChange = Math.max(ppChange, -assessment.penaltyCap);
-    }
+  }
+  
+  // Apply bonus cap
+  if (assessment.bonusCap && ppChange > 0) {
+    ppChange = Math.min(ppChange, assessment.bonusCap);
+  }
+  
+  // Apply penalty cap
+  if (assessment.penaltyCap && ppChange < 0) {
+    ppChange = Math.max(ppChange, -assessment.penaltyCap);
   }
   
   // Get artifacts for the matching tier
   let artifactsGranted: ArtifactReward[] | undefined;
-  if (outcome === 'hit' || outcome === 'exceed') {
-    // Use the matching reward tier based on absolute difference
-    const tierForArtifacts = findRewardTier(absDiff, assessment.rewardTiers);
-    
-    if (tierForArtifacts && tierForArtifacts.artifacts && tierForArtifacts.artifacts.length > 0) {
-      artifactsGranted = tierForArtifacts.artifacts;
-    }
+  if (matchingRewardTier && matchingRewardTier.artifacts && matchingRewardTier.artifacts.length > 0) {
+    artifactsGranted = matchingRewardTier.artifacts;
   }
 
   return {
@@ -132,23 +167,13 @@ export function computePPChange(
 }
 
 /**
- * Finds the appropriate reward tier for a given absolute difference.
- * Returns the tier with the smallest threshold where absDiff <= threshold.
+ * Finds the appropriate reward tier by label.
+ * This function is kept for backward compatibility but is no longer used
+ * since we now use labels instead of thresholds.
+ * @deprecated Use label-based matching instead
  */
 function findRewardTier(absDiff: number, tiers: RewardTier[]): RewardTier | null {
-  if (!tiers || tiers.length === 0) return null;
-  
-  // Sort tiers by threshold ascending
-  const sortedTiers = [...tiers].sort((a, b) => a.threshold - b.threshold);
-  
-  // Find the smallest threshold where absDiff <= threshold
-  for (const tier of sortedTiers) {
-    if (absDiff <= tier.threshold) {
-      return tier;
-    }
-  }
-  
-  // No tier matches, return null (caller will use worst tier)
+  // This function is deprecated - tier matching is now done by label in computePPChange
   return null;
 }
 
@@ -226,11 +251,21 @@ export function validateAssessmentConfig(assessment: Partial<Assessment>): {
   } else {
     // Check that tiers are valid
     assessment.rewardTiers.forEach((tier, index) => {
-      if (tier.threshold < 0) {
-        errors.push(`Reward tier ${index + 1}: threshold cannot be negative`);
-      }
-      if (tier.bonus < 0) {
-        errors.push(`Reward tier ${index + 1}: bonus cannot be negative`);
+      // Validate label-based tiers (new system)
+      if (tier.label !== undefined) {
+        if (tier.bonus < 0) {
+          errors.push(`Reward tier ${index + 1} (${tier.label}): bonus cannot be negative`);
+        }
+      } else if (tier.threshold !== undefined) {
+        // Validate threshold-based tiers (legacy system)
+        if (tier.threshold < 0) {
+          errors.push(`Reward tier ${index + 1}: threshold cannot be negative`);
+        }
+        if (tier.bonus < 0) {
+          errors.push(`Reward tier ${index + 1}: bonus cannot be negative`);
+        }
+      } else {
+        errors.push(`Reward tier ${index + 1}: must have either a label or threshold`);
       }
     });
   }

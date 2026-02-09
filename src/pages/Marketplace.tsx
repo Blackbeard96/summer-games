@@ -60,13 +60,13 @@ const artifacts: Artifact[] = [
     icon: '🍽️', 
     image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'food',
-    rarity: 'epic'
+    rarity: 'legendary'
   },
   { 
     id: 'forge-token',
     name: 'Forge Token', 
     description: 'Redeem for any custom item you want printed from The Forge (3D Printer)', 
-    price: 1000, 
+    price: 2700, 
     icon: '🛠️', 
     image: '/images/Forge Token.png',
     category: 'special',
@@ -289,7 +289,22 @@ const Marketplace = () => {
       // Check users collection for all artifacts (including used ones)
       const usersRef = doc(db, 'users', currentUser.uid);
       const usersSnap = await getDoc(usersRef);
-      const usersArtifacts = usersSnap.exists() ? usersSnap.data().artifacts || [] : [];
+      const usersArtifactsRaw = usersSnap.exists() ? usersSnap.data().artifacts || [] : [];
+      
+      // Handle artifacts as either array or object
+      let usersArtifacts: any[] = [];
+      if (Array.isArray(usersArtifactsRaw)) {
+        usersArtifacts = usersArtifactsRaw;
+      } else if (typeof usersArtifactsRaw === 'object' && usersArtifactsRaw !== null) {
+        // Convert object format to array format
+        usersArtifacts = Object.values(usersArtifactsRaw).filter((val: any) => {
+          // Filter out purchase metadata entries (those with _purchase suffix)
+          if (typeof val === 'object' && val !== null) {
+            return val.name || val.id; // Keep actual artifact objects
+          }
+          return false;
+        });
+      }
       
       // Count from students inventory (current available items)
       const studentsCount = studentsInventory.filter((item: string) => item === artifactName).length;
@@ -366,7 +381,21 @@ const Marketplace = () => {
         
         // Check for inconsistencies
         const studentsInventory = studentsSnap.exists() ? studentsSnap.data().inventory || [] : [];
-        const usersArtifacts = usersData.artifacts || [];
+        const usersArtifactsRaw = usersData.artifacts || [];
+        
+        // Handle artifacts as either array or object
+        let usersArtifacts: any[] = [];
+        if (Array.isArray(usersArtifactsRaw)) {
+          usersArtifacts = usersArtifactsRaw;
+        } else if (typeof usersArtifactsRaw === 'object' && usersArtifactsRaw !== null) {
+          // Convert object format to array format
+          usersArtifacts = Object.values(usersArtifactsRaw).filter((val: any) => {
+            if (typeof val === 'object' && val !== null) {
+              return val.name || val.id; // Keep actual artifact objects
+            }
+            return false;
+          });
+        }
         
         console.log('=== INCONSISTENCY CHECK ===');
         console.log('Students inventory items:', studentsInventory);
@@ -413,7 +442,21 @@ const Marketplace = () => {
         const usersData = usersSnap.data();
         
         // Get used artifacts from users collection
-        const usedArtifacts = (usersData.artifacts || [])
+        const usersArtifactsRaw = usersData.artifacts || [];
+        let usersArtifactsArray: any[] = [];
+        if (Array.isArray(usersArtifactsRaw)) {
+          usersArtifactsArray = usersArtifactsRaw;
+        } else if (typeof usersArtifactsRaw === 'object' && usersArtifactsRaw !== null) {
+          // Convert object format to array format
+          usersArtifactsArray = Object.values(usersArtifactsRaw).filter((val: any) => {
+            if (typeof val === 'object' && val !== null) {
+              return val.name || val.id; // Keep actual artifact objects
+            }
+            return false;
+          });
+        }
+        
+        const usedArtifacts = usersArtifactsArray
           .filter((artifact: any) => artifact.used)
           .map((artifact: any) => artifact.name);
         
@@ -468,7 +511,21 @@ const Marketplace = () => {
       
       if (studentsSnap.exists() && usersSnap.exists()) {
         const usersData = usersSnap.data();
-        const usersArtifacts = usersData.artifacts || [];
+        const usersArtifactsRaw = usersData.artifacts || [];
+        
+        // Handle artifacts as either array or object
+        let usersArtifacts: any[] = [];
+        if (Array.isArray(usersArtifactsRaw)) {
+          usersArtifacts = usersArtifactsRaw;
+        } else if (typeof usersArtifactsRaw === 'object' && usersArtifactsRaw !== null) {
+          // Convert object format to array format
+          usersArtifacts = Object.values(usersArtifactsRaw).filter((val: any) => {
+            if (typeof val === 'object' && val !== null) {
+              return val.name || val.id; // Keep actual artifact objects
+            }
+            return false;
+          });
+        }
         
         // Get all available artifacts (not used, not pending)
         const availableArtifacts = usersArtifacts
@@ -681,7 +738,22 @@ const Marketplace = () => {
       
       // Check if artifact exists in either collection
       const studentsInventory = currentUserData.inventory || [];
-      const usersArtifacts = currentUsersData.artifacts || [];
+      const usersArtifactsRaw = currentUsersData.artifacts || [];
+      
+      // Handle artifacts as either array or object
+      let usersArtifacts: any[] = [];
+      if (Array.isArray(usersArtifactsRaw)) {
+        usersArtifacts = usersArtifactsRaw;
+      } else if (typeof usersArtifactsRaw === 'object' && usersArtifactsRaw !== null) {
+        // Convert object format to array format
+        usersArtifacts = Object.values(usersArtifactsRaw).filter((val: any) => {
+          // Filter out purchase metadata entries (those with _purchase suffix)
+          if (typeof val === 'object' && val !== null) {
+            return val.name || val.id; // Keep actual artifact objects
+          }
+          return false;
+        });
+      }
       
       // Check if artifact exists in students inventory
       const inStudentsInventory = studentsInventory.includes(artifactName);

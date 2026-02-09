@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, deleteField, onSnapshot, increment } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit, deleteField, onSnapshot, increment } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -67,6 +67,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     rewards: any[];
     xpReward: number;
     ppReward: number;
+    truthMetalReward?: number;
   } | null>(null);
   const [showPortalIntroModal, setShowPortalIntroModal] = useState(false);
   const [showTimuIslandStoryModal, setShowTimuIslandStoryModal] = useState(false);
@@ -1725,43 +1726,65 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
 
         // Find challenge to get rewards
         const challenge = chapter.challenges.find(c => c.id === 'ep1-touch-truth-metal');
-        const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 25;
-        const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 15;
-        const truthMetalReward = challenge?.rewards.find(r => r.type === 'truthMetal')?.value || 0;
-
-        // Apply rewards to both collections
-        const userDocRewards = await getDoc(userRef);
-        const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
-        await updateDoc(userRef, {
-          xp: (userDataRewards.xp || 0) + xpReward,
-          powerPoints: (userDataRewards.powerPoints || 0) + ppReward,
-          truthMetal: (userDataRewards.truthMetal || 0) + truthMetalReward
-        });
-
-        const studentDocRewards = await getDoc(studentRef);
-        if (studentDocRewards.exists()) {
-          const studentDataRewards = studentDocRewards.data();
-          await updateDoc(studentRef, {
-            xp: (studentDataRewards.xp || 0) + xpReward,
-            powerPoints: (studentDataRewards.powerPoints || 0) + ppReward,
-            truthMetal: (studentDataRewards.truthMetal || 0) + truthMetalReward
-          });
-        }
         
-        // Refresh user progress
-        const userDocRefresh = await getDoc(userRef);
-        if (userDocRefresh.exists()) {
-          const userDataRefresh = userDocRefresh.data();
-          setUserProgress(userDataRefresh);
-        }
-
-        // Show reward modal
         if (challenge) {
+          // Use centralized reward granting function
+          const rewardResult = await grantChallengeRewards(
+            currentUser.uid,
+            challenge.id,
+            challenge.rewards,
+            challenge.title
+          );
+
+          if (!rewardResult.success) {
+            console.error(`ChapterDetail: Failed to grant rewards for ${challenge.id}:`, rewardResult.error);
+          } else {
+            console.log(`ChapterDetail: Rewards granted successfully for ${challenge.id}:`, rewardResult.rewardsGranted);
+          }
+
+          // Get reward values for notification and modal
+          const xpReward = rewardResult.rewardsGranted.xp;
+          const ppReward = rewardResult.rewardsGranted.pp;
+          const truthMetalReward = rewardResult.rewardsGranted.truthMetal;
+
+          // Update the notification we just created with correct rewards (including truthMetal)
+          try {
+            const notificationsQuery = query(
+              collection(db, 'students', currentUser.uid, 'notifications'),
+              where('challengeId', '==', 'ep1-touch-truth-metal'),
+              where('read', '==', false),
+              orderBy('timestamp', 'desc'),
+              limit(1)
+            );
+            const notificationsSnapshot = await getDocs(notificationsQuery);
+            if (!notificationsSnapshot.empty) {
+              const notificationDoc = notificationsSnapshot.docs[0];
+              await updateDoc(notificationDoc.ref, {
+                message: `🎉 Truth Metal challenge completed! You defeated Truth and discovered: "${truthRevealed}". You earned +${xpReward} XP, +${ppReward} PP${truthMetalReward > 0 ? `, and +${truthMetalReward} Truth Metal` : ''}!`,
+                xpReward,
+                ppReward,
+                truthMetalReward
+              });
+            }
+          } catch (notifError) {
+            // If notification update fails, it's not critical
+            console.warn('Could not update notification with truthMetal reward:', notifError);
+          }
+          
+          // Refresh user progress
+          const userDocRefresh = await getDoc(userRef);
+          if (userDocRefresh.exists()) {
+            const userDataRefresh = userDocRefresh.data();
+            setUserProgress(userDataRefresh);
+          }
+
+          // Show reward modal
           setRewardModalData({
             challengeTitle: challenge.title,
             rewards: challenge.rewards,
             xpReward,
-            ppReward
+            ppReward,
+            truthMetalReward
           });
           setShowRewardModal(true);
         }
@@ -4802,7 +4825,18 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                       flexShrink: 0,
                       overflow: 'hidden'
                     }}>
-                      {challenge.id === 'ch2-team-formation' ? (
+                      {challenge.id === 'ep1-touch-truth-metal' ? (
+                        <img 
+                          src="/images/Ch1-3_Preview.png" 
+                          alt="Touch Truth Metal Preview"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            borderRadius: '0.5rem'
+                          }}
+                        />
+                      ) : challenge.id === 'ch2-team-formation' ? (
                         <img 
                           src="/images/Ch2-1 _ Preview_Timu Island.png" 
                           alt="Timu Island Preview"

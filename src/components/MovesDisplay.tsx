@@ -64,33 +64,63 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [truthMetal, setTruthMetal] = useState<number>(0);
   const [userManifest, setUserManifest] = useState<string | null>(null);
 
-  // Load user's manifest type
+  // Load user's manifest type from both students and users collections
   useEffect(() => {
     const loadUserManifest = async () => {
       if (!currentUser) return;
       
       try {
+        let manifest: string | null = null;
+        
+        // Try students collection first
         const studentRef = doc(db, 'students', currentUser.uid);
         const studentDoc = await getDoc(studentRef);
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
           // Get manifest from student data
-          let manifest: string | null = null;
           if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
             manifest = studentData.manifest.manifestId;
           } else if (studentData.manifest && typeof studentData.manifest === 'string') {
             manifest = studentData.manifest;
           }
-          setUserManifest(manifest);
-          console.log('MovesDisplay: User manifest loaded:', manifest);
+          console.log('MovesDisplay: Manifest from students collection:', manifest, studentData.manifest);
         }
+        
+        // If no manifest found in students, try users collection as fallback
+        if (!manifest) {
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            if (userData.manifest && typeof userData.manifest === 'object' && userData.manifest.manifestId) {
+              manifest = userData.manifest.manifestId;
+            } else if (userData.manifest && typeof userData.manifest === 'string') {
+              manifest = userData.manifest;
+            } else if (userData.manifestationType) {
+              manifest = userData.manifestationType;
+            }
+            console.log('MovesDisplay: Manifest from users collection:', manifest, userData.manifest);
+          }
+        }
+        
+        setUserManifest(manifest);
+        console.log('MovesDisplay: Final user manifest loaded:', manifest);
+        
+        // Debug: Log all manifest moves to see what we have
+        const allManifestMoves = moves.filter(m => m.category === 'manifest');
+        console.log('MovesDisplay: All manifest moves:', allManifestMoves.map(m => ({
+          name: m.name,
+          manifestType: m.manifestType,
+          unlocked: m.unlocked,
+          category: m.category
+        })));
       } catch (error) {
         console.error('MovesDisplay: Error loading user manifest:', error);
       }
     };
 
     loadUserManifest();
-  }, [currentUser]);
+  }, [currentUser, moves]);
 
   // Load move overrides when component mounts and periodically refresh
   useEffect(() => {
@@ -274,17 +304,38 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   // Filter moves by category and unlocked status - memoized for performance
   // CRITICAL: Only show manifest moves that match the user's actual manifest type
   const manifestMoves = useMemo(() => {
-    return moves.filter(move => {
-      if (move.category !== 'manifest' || !move.unlocked) return false;
+    const filtered = moves.filter(move => {
+      // Only filter by category - show all manifest moves that match user's manifest
+      if (move.category !== 'manifest') {
+        return false;
+      }
+      
       // If userManifest is provided, ONLY show moves matching that manifest (strict filtering)
       if (userManifest) {
         const moveManifest = move.manifestType?.toLowerCase();
         const userManifestLower = userManifest.toLowerCase();
-        return moveManifest === userManifestLower;
+        const matches = moveManifest === userManifestLower;
+        
+        // Log for debugging
+        if (!matches) {
+          console.log(`MovesDisplay: Manifest move filtered out - ${move.name} (manifestType: ${move.manifestType}, userManifest: ${userManifest})`);
+        }
+        
+        return matches;
       }
-      // If no userManifest provided, show all unlocked manifest moves (fallback for backwards compatibility)
+      
+      // If no userManifest provided, show all manifest moves (fallback for backwards compatibility)
       return true;
     });
+    
+    console.log('MovesDisplay: Filtered manifest moves:', {
+      totalMoves: moves.length,
+      manifestMoves: filtered.length,
+      userManifest: userManifest,
+      filteredNames: filtered.map(m => ({ name: m.name, manifestType: m.manifestType, unlocked: m.unlocked }))
+    });
+    
+    return filtered;
   }, [moves, userManifest]);
   
   // Filter elemental moves by player's chosen element - memoized for performance
@@ -457,12 +508,18 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     // Force unlock RR Candy moves if RR Candy is globally unlocked
     // This ensures moves appear in Skill Mastery even if move.unlocked is false
     const isRRCandyMove = move.id?.startsWith('rr-candy-') || move.id?.includes('rr-candy');
-    const effectiveUnlocked = isRRCandyMove && rrCandyStatus.unlocked ? true : move.unlocked;
+    const isManifestMove = move.category === 'manifest';
+    
+    // For manifest moves, always allow upgrading (they're shown regardless of unlock status)
+    // For RR Candy moves, allow if globally unlocked
+    // For other moves, require unlocked status
+    const effectiveUnlocked = isManifestMove ? true : (isRRCandyMove && rrCandyStatus.unlocked ? true : move.unlocked);
     
     // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
     const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
     
     // Check if move can be upgraded (up to level 10)
+    // Manifest moves can always be upgraded if they're shown (they match the user's manifest)
     const canUpgrade = move.masteryLevel < 10 && effectiveUnlocked;
     const canAscend = move.masteryLevel === 5 && effectiveUnlocked;
     
@@ -1557,39 +1614,75 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         })()}
 
         {/* Upgrade Button - Show for levels 1-4 and 6-9 */}
-        {canUpgrade && move.masteryLevel !== 5 && (
+        {canUpgrade && move.masteryLevel !== 5 && onUpgradeMove && (
           <button
-            onClick={() => onUpgradeMove(move.id)}
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('🔄 Upgrade button clicked!', {
+                moveId: move.id,
+                moveName: move.name,
+                masteryLevel: move.masteryLevel,
+                nextLevel: move.masteryLevel + 1,
+                upgradeCost,
+                isManifestMove,
+                isRRCandyMove,
+                effectiveUnlocked,
+                canUpgrade,
+                hasOnUpgradeMove: !!onUpgradeMove,
+                timestamp: new Date().toISOString()
+              });
+              
+              if (!onUpgradeMove) {
+                console.error('❌ onUpgradeMove is not defined!');
+                alert('Upgrade function not available. Please refresh the page.');
+                return;
+              }
+              
+              try {
+                console.log('🔄 Calling onUpgradeMove...');
+                await onUpgradeMove(move.id);
+                console.log('✅ onUpgradeMove completed successfully');
+              } catch (error) {
+                console.error('❌ Error in onUpgradeMove:', error);
+                alert(`Failed to upgrade: ${error instanceof Error ? error.message : 'Unknown error'}`);
+              }
+            }}
             disabled={!canUpgrade}
             style={{
-              background: canUpgrade ? 'rgba(255,255,255,0.95)' : 'rgba(156,163,175,0.8)',
-              color: canUpgrade ? '#374151' : '#6b7280',
-              border: 'none',
+              background: canUpgrade ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'rgba(156,163,175,0.8)',
+              color: canUpgrade ? 'white' : '#6b7280',
+              border: canUpgrade ? '2px solid #10b981' : 'none',
               padding: '1rem',
               borderRadius: '0.75rem',
               cursor: canUpgrade ? 'pointer' : 'not-allowed',
               fontSize: '0.875rem',
               fontWeight: 'bold',
               width: '100%',
+              marginTop: '0.5rem',
               transition: 'all 0.2s',
-              backdropFilter: 'blur(10px)'
+              backdropFilter: 'blur(10px)',
+              boxShadow: canUpgrade ? '0 4px 12px rgba(16, 185, 129, 0.3)' : 'none'
             }}
             onMouseEnter={(e) => {
               if (canUpgrade) {
-                e.currentTarget.style.background = 'rgba(255,255,255,1)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, #059669 0%, #10b981 100%)';
                 e.currentTarget.style.transform = 'scale(1.02)';
+                e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.4)';
               }
             }}
             onMouseLeave={(e) => {
               if (canUpgrade) {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.95)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
                 e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.3)';
               }
             }}
           >
-            {canUpgrade ? `Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP${isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})` : 'Cannot Upgrade'}
+            {canUpgrade ? `⬆️ Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP${isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})` : 'Cannot Upgrade'}
           </button>
         )}
+        
       </div>
     );
   };

@@ -11,7 +11,7 @@ import { Timestamp } from 'firebase/firestore';
 // Core Types
 // ============================================================================
 
-export type AssessmentType = 'test' | 'exam' | 'quiz' | 'habits';
+export type AssessmentType = 'test' | 'exam' | 'quiz' | 'habits' | 'story-goal';
 export type GradingStatus = 'draft' | 'open' | 'graded';
 export type OutcomeType = 'hit' | 'miss' | 'exceed';
 
@@ -38,8 +38,11 @@ export interface ArtifactReward {
   quantity?: number; // Number of artifacts to grant (default: 1)
 }
 
+export type RewardTierLabel = 'Completed' | 'Almost' | 'Attempted' | 'Did not Complete';
+
 export interface RewardTier {
-  threshold: number; // Maximum absolute difference to qualify (e.g., 0 = exact hit, 2 = within 2 points)
+  label?: RewardTierLabel; // Descriptive label for the tier (new system)
+  threshold?: number; // Legacy: numeric threshold (for backward compatibility)
   bonus: number; // PP bonus amount
   artifacts?: ArtifactReward[]; // Optional artifact rewards
 }
@@ -85,6 +88,14 @@ export interface Assessment {
     defaultConsequenceXP?: number; // XP penalty for failure (negative number)
     requireNotesOnCheckIn?: boolean; // Whether check-ins require notes (default: false)
   };
+  
+  // Story Goal-specific configuration (only used when type === 'story-goal')
+  storyGoal?: {
+    stageId: string;        // Canonical stage ID (e.g., 'call-to-adventure')
+    stageLabel: string;     // Display label (e.g., 'Call to Adventure')
+    milestoneTitle?: string; // Optional milestone title (e.g., 'Accept the invite')
+    prompt?: string;        // Optional prompt/notes shown to students
+  };
 }
 
 // ============================================================================
@@ -96,7 +107,9 @@ export interface AssessmentGoal {
   assessmentId: string;
   classId: string;
   studentId: string;
-  goalScore: number;
+  goalScore?: number; // Required for numeric goals (test/exam/quiz), optional for text-based goals
+  textGoal?: string; // Required for Story Goals (text-based), optional for numeric goals
+  evidence?: string | null; // Optional evidence/reflection text for Story Goals and Habit Goals
   createdAt: Timestamp;
   updatedAt: Timestamp;
   locked: boolean; // True when assessment is locked

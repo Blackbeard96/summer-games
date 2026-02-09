@@ -34,7 +34,7 @@ const AssessmentGoalsStudent: React.FC = () => {
   const [showSetGoalModal, setShowSetGoalModal] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState<AssessmentWithGoal | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
-  const [resultModalData, setResultModalData] = useState<{ result: AssessmentResult; assessment: Assessment; goalScore: number } | null>(null);
+  const [resultModalData, setResultModalData] = useState<{ result: AssessmentResult; assessment: Assessment; goalScore?: number; textGoal?: string } | null>(null);
   const [habitSubmissions, setHabitSubmissions] = useState<Map<string, HabitSubmission>>(new Map());
 
   // Fetch classes for current student
@@ -255,9 +255,27 @@ const AssessmentGoalsStudent: React.FC = () => {
                 <div>
                   <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{assessment.title}</h3>
                   <p style={{ margin: 0, color: '#6b7280' }}>
-                    {assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1)} • 
+                    {assessment.type === 'story-goal' ? 'Story Goal' : assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1)} • 
                     Max Score: {assessment.maxScore}
                   </p>
+                  {/* Story Goal Information */}
+                  {assessment.type === 'story-goal' && assessment.storyGoal && (
+                    <div style={{ marginTop: '0.5rem', padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>
+                      <p style={{ margin: 0, fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
+                        🎭 Hero's Journey: {assessment.storyGoal.stageLabel}
+                      </p>
+                      {assessment.storyGoal.milestoneTitle && (
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#78350f', marginBottom: '0.25rem' }}>
+                          Milestone: {assessment.storyGoal.milestoneTitle}
+                        </p>
+                      )}
+                      {assessment.storyGoal.prompt && (
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#78350f', fontStyle: 'italic', marginTop: '0.25rem' }}>
+                          {assessment.storyGoal.prompt}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div>{getStatusBadge(assessment)}</div>
               </div>
@@ -295,10 +313,24 @@ const AssessmentGoalsStudent: React.FC = () => {
                   </p>
                 </div>
               ) : assessment.goal ? (
-                <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '0.5rem', border: '2px solid #3b82f6' }}>
-                  <p style={{ margin: 0, fontWeight: 'bold', color: '#3b82f6' }}>
-                    ✅ Your Goal: {assessment.goal.goalScore} / {assessment.maxScore}
+                <div style={{ marginBottom: '1rem', padding: '1rem', background: assessment.type === 'story-goal' ? '#fef3c7' : '#f9fafb', borderRadius: '0.5rem', border: `2px solid ${assessment.type === 'story-goal' ? '#fbbf24' : '#3b82f6'}` }}>
+                  <p style={{ margin: 0, fontWeight: 'bold', color: assessment.type === 'story-goal' ? '#92400e' : '#3b82f6', marginBottom: assessment.type === 'story-goal' && assessment.goal.textGoal ? '0.5rem' : '0' }}>
+                    ✅ Your Goal: {assessment.type === 'story-goal' && assessment.goal.textGoal ? (
+                      <span style={{ fontWeight: 'normal', fontStyle: 'italic' }}>"{assessment.goal.textGoal}"</span>
+                    ) : (
+                      `${assessment.goal.goalScore} / ${assessment.maxScore}`
+                    )}
                   </p>
+                  {assessment.type === 'story-goal' && assessment.goal.evidence && (
+                    <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #fbbf24' }}>
+                      <p style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
+                        Area of Consistency:
+                      </p>
+                      <p style={{ margin: 0, fontSize: '0.875rem', color: '#78350f', fontStyle: 'italic' }}>
+                        "{assessment.goal.evidence}"
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 !assessment.isLocked && (
@@ -352,6 +384,7 @@ const AssessmentGoalsStudent: React.FC = () => {
           result={resultModalData.result}
           assessment={resultModalData.assessment}
           goalScore={resultModalData.goalScore}
+          textGoal={resultModalData.textGoal}
           onClose={() => {
             setShowResultModal(false);
             setResultModalData(null);

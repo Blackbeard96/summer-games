@@ -5,7 +5,8 @@ import { formatOutcome, formatPPChange } from '../utils/assessmentGoals';
 interface AssessmentResultModalProps {
   result: AssessmentResult;
   assessment: Assessment;
-  goalScore: number;
+  goalScore?: number;
+  textGoal?: string;
   onClose: () => void;
 }
 
@@ -13,8 +14,10 @@ const AssessmentResultModal: React.FC<AssessmentResultModalProps> = ({
   result,
   assessment,
   goalScore,
+  textGoal,
   onClose
 }) => {
+  const isStoryGoal = assessment.type === 'story-goal';
   const outcome = result.outcome || 'miss';
   const ppChange = result.ppChange || 0;
   const actualScore = result.actualScore;
@@ -76,48 +79,68 @@ const AssessmentResultModal: React.FC<AssessmentResultModalProps> = ({
             marginBottom: '1.5rem'
           }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-            <div>
-              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+          {isStoryGoal && textGoal ? (
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
                 Your Goal
               </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: textColor }}>
-                {goalScore} / {assessment.maxScore}
+              <div style={{ 
+                padding: '1rem', 
+                background: '#fef3c7', 
+                borderRadius: '0.5rem', 
+                border: '1px solid #fbbf24',
+                color: '#78350f',
+                fontStyle: 'italic'
+              }}>
+                "{textGoal}"
               </div>
             </div>
-            <div>
-              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                Actual Score
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                    Your Goal
+                  </div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: textColor }}>
+                    {goalScore} / {assessment.maxScore}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+                    Actual Score
+                  </div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: textColor }}>
+                    {actualScore} / {assessment.maxScore}
+                  </div>
+                </div>
               </div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: textColor }}>
-                {actualScore} / {assessment.maxScore}
-              </div>
-            </div>
-          </div>
 
-          <div style={{ borderTop: `1px solid ${borderColor}`, paddingTop: '1rem', marginTop: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Difference:</span>
-              <span style={{ 
-                fontSize: '1.25rem', 
-                fontWeight: 'bold',
-                color: delta >= 0 ? '#10b981' : '#ef4444'
-              }}>
-                {delta > 0 ? '+' : ''}{delta} points
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Outcome:</span>
-              <span style={{ 
-                fontSize: '1.125rem', 
-                fontWeight: 'bold',
-                color: textColor,
-                textTransform: 'capitalize'
-              }}>
-                {formatOutcome(outcome)}
-              </span>
-            </div>
-          </div>
+              <div style={{ borderTop: `1px solid ${borderColor}`, paddingTop: '1rem', marginTop: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Difference:</span>
+                  <span style={{ 
+                    fontSize: '1.25rem', 
+                    fontWeight: 'bold',
+                    color: delta >= 0 ? '#10b981' : '#ef4444'
+                  }}>
+                    {delta > 0 ? '+' : ''}{delta} points
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Outcome:</span>
+                  <span style={{ 
+                    fontSize: '1.125rem', 
+                    fontWeight: 'bold',
+                    color: textColor,
+                    textTransform: 'capitalize'
+                  }}>
+                    {formatOutcome(outcome)}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div

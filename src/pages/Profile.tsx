@@ -1691,7 +1691,7 @@ const Profile = () => {
                   fontSize: '0.875rem',
                   color: '#6b7280'
                 }}>
-                  {userData.artifacts.filter((a: any) => !a.used && !a.pending && !isEquippableArtifact(a)).length} Available • {userData.artifacts.filter((a: any) => a.pending).length} In Use • {userData.artifacts.filter((a: any) => a.used).length} Used
+                  {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => !a.used && !a.pending && !isEquippableArtifact(a)).length : 0} Available • {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => a.pending).length : 0} In Use • {Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => a.used).length : 0} Used
                 </div>
               )}
             </div>
@@ -1708,12 +1708,12 @@ const Profile = () => {
                 }).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
-                      Available Artifacts ({userData.artifacts.filter((a: any) => {
+                      Available Artifacts ({Array.isArray(userData?.artifacts) ? userData.artifacts.filter((a: any) => {
                         const enhanced = enhanceLegacyItem(a);
                         return !enhanced.used && 
                                !isEquippableArtifact(a) && 
                                !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
-                      }).length})
+                      }).length : 0})
                     </h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                       {userData.artifacts.filter((artifact: any) => {

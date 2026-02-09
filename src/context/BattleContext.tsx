@@ -275,20 +275,25 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setVault(newVault);
         } else {
           const existingVaultData = vaultDoc.data();
-          console.log('BattleContext: Existing vault PP:', existingVaultData.currentPP, 'Player PP:', playerPP);
+          const vaultCurrentPP = existingVaultData.currentPP || 0;
+          console.log('BattleContext: Existing vault PP:', vaultCurrentPP, 'Player PP:', playerPP);
+          
+          // CRITICAL FIX: If vault PP is 0 or significantly lower than student PP, sync from student PP
+          // This handles cases where admin set PP in students collection but vault wasn't updated
+          // If vault PP is 0, always use student PP. Otherwise, use the higher value to preserve generator earnings
+          const finalPP = vaultCurrentPP === 0 ? playerPP : Math.max(playerPP, vaultCurrentPP);
           
           // Migrate existing vault to include new move tracking fields and generator
           // Max vault health is always 10% of max PP (capacity is the max PP)
           const maxPPForHealth = existingVaultData.capacity || 1000;
-          const currentPP = existingVaultData.currentPP || playerPP;
           const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(maxPPForHealth);
           // Current vault health: if 0/undefined and player has enough PP, set to max health
           // Otherwise, cap at current PP if PP < max health
-          const vaultHealth = calculateCurrentVaultHealth(maxPPForHealth, currentPP, existingVaultData.vaultHealth);
+          const vaultHealth = calculateCurrentVaultHealth(maxPPForHealth, finalPP, existingVaultData.vaultHealth);
           
           // If health is 0 but should be max, update it
           if ((existingVaultData.vaultHealth === undefined || existingVaultData.vaultHealth === null || existingVaultData.vaultHealth === 0) && 
-              currentPP >= maxVaultHealth && vaultHealth !== existingVaultData.vaultHealth) {
+              finalPP >= maxVaultHealth && vaultHealth !== existingVaultData.vaultHealth) {
             await updateDoc(vaultRef, {
               vaultHealth: vaultHealth,
               maxVaultHealth: maxVaultHealth
@@ -297,6 +302,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           
           const existingVault: Vault = {
             ...existingVaultData,
+            currentPP: finalPP, // Use synced PP value
             vaultHealth: vaultHealth,
             maxVaultHealth: maxVaultHealth,
             movesRemaining: existingVaultData.movesRemaining || BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
@@ -318,7 +324,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // Check and generate generator resources if needed
           updatedVault = checkAndGenerateGeneratorResources(updatedVault);
           
-          // Always update vault PP to match player's current PP
+          // Always update vault PP to match player's current PP if they differ
           // Max vault health is always 10% of max PP (capacity is the max PP)
           // Current vault health is capped at current PP if PP < max health
           // UNLESS health was just restored (within last 5 seconds) - then preserve restored health
@@ -338,7 +344,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           }
           
-          let correctVaultHealth = calculateCurrentVaultHealth(maxPPForCorrectHealth, playerPP, updatedVault.vaultHealth);
+          let correctVaultHealth = calculateCurrentVaultHealth(maxPPForCorrectHealth, finalPP, updatedVault.vaultHealth);
           
           // If health was recently restored, preserve the restored value instead of recalculating
           if (wasRecentlyRestored && updatedVault.vaultHealth && updatedVault.vaultHealth > correctVaultHealth) {
@@ -346,14 +352,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.log('BattleContext: Preserving recently restored vault health:', correctVaultHealth);
           }
           
-          if (existingVault.currentPP !== playerPP || updatedVault.vaultHealth !== correctVaultHealth ||
+          // Check if vault PP needs to be synced (compare against actual vault data, not computed value)
+          const needsPPSync = vaultCurrentPP !== finalPP;
+          
+          if (needsPPSync || updatedVault.vaultHealth !== correctVaultHealth ||
               updatedVault.movesRemaining !== existingVault.movesRemaining || 
               updatedVault.generatorPendingPP !== existingVault.generatorPendingPP || 
               updatedVault.shieldStrength !== existingVault.shieldStrength) {
-            console.log('BattleContext: Syncing vault PP from', existingVault.currentPP, 'to', playerPP);
+            console.log('BattleContext: Syncing vault PP from', vaultCurrentPP, 'to', finalPP);
             console.log(`BattleContext: Updating vault health to ${correctVaultHealth}/${updatedVault.maxVaultHealth}`);
             const updatePayload: any = { 
-              currentPP: playerPP,
+              currentPP: finalPP,
               vaultHealth: correctVaultHealth,
               movesRemaining: updatedVault.movesRemaining,
               lastMoveReset: updatedVault.lastMoveReset,
@@ -374,7 +383,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             await updateDoc(vaultRef, updatePayload);
             setVault({ 
               ...updatedVault, 
-              currentPP: playerPP,
+              currentPP: finalPP,
               vaultHealth: correctVaultHealth // Update local state
             });
           } else {
@@ -730,18 +739,68 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         console.error('Error initializing battle data:', err);
         
+        // CRITICAL FIX: Even on error, try to fetch student PP and sync it
+        let fallbackPP = 0;
+        try {
+          const studentRef = doc(db, 'students', currentUser.uid);
+          const studentDoc = await getDoc(studentRef);
+          if (studentDoc.exists()) {
+            const studentData = studentDoc.data();
+            fallbackPP = studentData.powerPoints || 0;
+            console.log('BattleContext: Error recovery - fetched student PP:', fallbackPP);
+            
+            // Try to update vault with student PP
+            const vaultRef = doc(db, 'vaults', currentUser.uid);
+            const vaultDoc = await getDoc(vaultRef);
+            const maxVaultHealth = Math.floor(1000 * 0.1);
+            const vaultHealth = Math.min(fallbackPP, maxVaultHealth);
+            
+            if (vaultDoc.exists()) {
+              await updateDoc(vaultRef, {
+                currentPP: fallbackPP,
+                vaultHealth: vaultHealth
+              });
+            } else {
+              await setDoc(vaultRef, {
+                id: currentUser.uid,
+                ownerId: currentUser.uid,
+                capacity: 1000,
+                currentPP: fallbackPP,
+                vaultHealth: vaultHealth,
+                maxVaultHealth: maxVaultHealth,
+                shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+                maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+                overshield: 0,
+                generatorLevel: 1,
+                generatorPendingPP: 0,
+                generatorLastReset: serverTimestamp(),
+                lastUpgrade: serverTimestamp(),
+                debtStatus: false,
+                debtAmount: 0,
+                lastDuesPaid: serverTimestamp(),
+                movesRemaining: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
+                maxMovesPerDay: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
+                lastMoveReset: serverTimestamp(),
+              });
+            }
+            console.log('BattleContext: Successfully synced PP in error recovery');
+          }
+        } catch (syncError) {
+          console.error('BattleContext: Error syncing PP in error recovery:', syncError);
+        }
+        
         // TEMPORARY FIX: Don't show error to user for Firestore assertion errors
         // These are internal Firebase issues, not user-facing problems
         if (err instanceof Error && err.message.includes('INTERNAL ASSERTION FAILED')) {
-          console.warn('BattleContext: Firestore internal assertion error - using defaults');
-          // Set default values silently
+          console.warn('BattleContext: Firestore internal assertion error - using defaults with synced PP');
+          // Set default values silently, but use synced PP
           const maxVaultHealth = Math.floor(1000 * 0.1);
           const defaultVault: Vault = {
             id: currentUser.uid,
             ownerId: currentUser.uid,
             capacity: 1000,
-            currentPP: 0,
-            vaultHealth: Math.min(0, maxVaultHealth), // 0 PP means 0 vault health
+            currentPP: fallbackPP,
+            vaultHealth: Math.min(fallbackPP, maxVaultHealth),
             maxVaultHealth: maxVaultHealth,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
             maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
@@ -764,14 +823,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         setError('Failed to initialize battle data. Please refresh the page or try again later.');
         
-        // Set default values to prevent complete failure
+        // Set default values to prevent complete failure, but use synced PP
         const maxVaultHealth = Math.floor(1000 * 0.1);
         const defaultVault: Vault = {
           id: currentUser.uid,
           ownerId: currentUser.uid,
           capacity: 1000,
-          currentPP: 0,
-          vaultHealth: Math.min(0, maxVaultHealth), // 0 PP means 0 vault health
+          currentPP: fallbackPP,
+          vaultHealth: Math.min(fallbackPP, maxVaultHealth),
           maxVaultHealth: maxVaultHealth,
           shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
           maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
@@ -809,6 +868,51 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     initializeBattleData();
   }, [currentUser]);
+
+  // CRITICAL FIX: Additional PP sync effect that runs after initialization
+  // This ensures PP is synced even if initialization had errors
+  useEffect(() => {
+    if (!currentUser || !vault) return;
+
+    const syncPPFromStudent = async () => {
+      try {
+        // Get student PP
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+        
+        // If vault PP is 0 but student has PP, sync it
+        if (vault.currentPP === 0 && studentPP > 0) {
+          console.log('BattleContext: PP Sync Effect - Syncing PP from', vault.currentPP, 'to', studentPP);
+          
+          const vaultRef = doc(db, 'vaults', currentUser.uid);
+          const maxPP = vault.capacity || 1000;
+          const maxVaultHealth = Math.floor(maxPP * 0.1);
+          const newVaultHealth = Math.min(studentPP, maxVaultHealth);
+          
+          await updateDoc(vaultRef, {
+            currentPP: studentPP,
+            vaultHealth: newVaultHealth
+          });
+          
+          // Update local state
+          setVault(prevVault => prevVault ? {
+            ...prevVault,
+            currentPP: studentPP,
+            vaultHealth: newVaultHealth
+          } : null);
+          
+          console.log('BattleContext: PP Sync Effect - Successfully synced PP to', studentPP);
+        }
+      } catch (error) {
+        console.error('BattleContext: PP Sync Effect - Error syncing PP:', error);
+      }
+    };
+
+    // Run sync after a short delay to ensure vault state is set
+    const timeoutId = setTimeout(syncPPFromStudent, 500);
+    return () => clearTimeout(timeoutId);
+  }, [currentUser, vault]);
 
   // Listen for vault updates and sync with player PP
   useEffect(() => {
@@ -2319,12 +2423,27 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const upgradeMove = async (moveId: string) => {
-    if (!currentUser || !vault) return;
+    console.log('🔄 upgradeMove called:', { moveId, hasCurrentUser: !!currentUser, hasVault: !!vault, movesCount: moves.length });
+    
+    if (!currentUser || !vault) {
+      console.error('❌ upgradeMove: Missing currentUser or vault', { currentUser: !!currentUser, vault: !!vault });
+      setError('Cannot upgrade: User or vault not loaded');
+      return;
+    }
     
     try {
       const move = moves.find(m => m.id === moveId);
-      if (!move || move.masteryLevel >= 10) {
-        setError('Move cannot be upgraded');
+      console.log('🔍 upgradeMove: Found move:', { moveId, move: move ? { name: move.name, masteryLevel: move.masteryLevel } : null });
+      
+      if (!move) {
+        console.error('❌ upgradeMove: Move not found', moveId);
+        setError('Move not found');
+        return;
+      }
+      
+      if (move.masteryLevel >= 10) {
+        console.error('❌ upgradeMove: Move already at max level', { moveId, masteryLevel: move.masteryLevel });
+        setError('Move cannot be upgraded (already at max level)');
         return;
       }
 
@@ -2368,10 +2487,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Check if player has enough PP
+      console.log('💰 upgradeMove: Checking PP', { upgradeCost, currentPP: vault.currentPP, hasEnough: vault.currentPP >= upgradeCost });
       if (vault.currentPP < upgradeCost) {
-        setError(`Not enough PP. Need ${upgradeCost} PP to upgrade.`);
+        console.error('❌ upgradeMove: Insufficient PP', { upgradeCost, currentPP: vault.currentPP });
+        setError(`Insufficient PP! Need ${upgradeCost}, have ${vault.currentPP}`);
         return;
       }
+      
+      console.log('✅ upgradeMove: All checks passed, proceeding with upgrade...');
 
       // For RR Candy moves, check Truth Metal Shard requirement (level - 1 shards)
       let requiredShards = 0;
@@ -2440,7 +2563,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // This allows upgrades to compound correctly
       const updatedMoves = moves.map(m => {
         if (m.id === moveId) {
-          const updatedMove = { 
+          const updatedMove: any = { 
             ...m, 
             masteryLevel: newLevel
           };
@@ -2454,32 +2577,52 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
           if (baseDamage > 0) {
             updatedMove.damage = Math.floor(baseDamage * damageBoostMultiplier);
+          } else {
+            // Remove undefined or 0 damage to avoid Firestore errors
+            delete updatedMove.damage;
           }
           
           // Apply boost to shieldBoost - use current value as base
           if (m.shieldBoost && m.shieldBoost > 0) {
             updatedMove.shieldBoost = Math.floor(m.shieldBoost * damageBoostMultiplier);
+          } else {
+            delete updatedMove.shieldBoost;
           }
           
           // Apply boost to healing - use current value as base
           if (m.healing && m.healing > 0) {
             updatedMove.healing = Math.floor(m.healing * damageBoostMultiplier);
+          } else {
+            delete updatedMove.healing;
           }
           
           // Apply boost to ppSteal - use current value as base
           if (m.ppSteal && m.ppSteal > 0) {
             updatedMove.ppSteal = Math.floor(m.ppSteal * damageBoostMultiplier);
+          } else {
+            delete updatedMove.ppSteal;
           }
           
           // Apply boost to debuffStrength - use current value as base
           if (m.debuffStrength && m.debuffStrength > 0) {
             updatedMove.debuffStrength = Math.floor(m.debuffStrength * damageBoostMultiplier);
+          } else {
+            delete updatedMove.debuffStrength;
           }
           
           // Apply boost to buffStrength - use current value as base
           if (m.buffStrength && m.buffStrength > 0) {
             updatedMove.buffStrength = Math.floor(m.buffStrength * damageBoostMultiplier);
+          } else {
+            delete updatedMove.buffStrength;
           }
+          
+          // Remove any undefined values to prevent Firestore errors
+          Object.keys(updatedMove).forEach(key => {
+            if (updatedMove[key] === undefined) {
+              delete updatedMove[key];
+            }
+          });
           
           console.log(`Upgrading ${m.name} from level ${m.masteryLevel} to ${newLevel}:`, {
             oldDamage: m.damage,
@@ -2491,15 +2634,35 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           
           return updatedMove;
         }
-        return m;
+        // Also clean undefined values from other moves to prevent issues
+        const cleanedMove: any = { ...m };
+        Object.keys(cleanedMove).forEach(key => {
+          if (cleanedMove[key] === undefined) {
+            delete cleanedMove[key];
+          }
+        });
+        return cleanedMove;
       });
 
       // Update moves in database FIRST, then update local state
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
-      await updateDoc(movesRef, { 
-        moves: updatedMoves,
-        lastUpdated: serverTimestamp()
-      });
+      
+      // Check if document exists, if not create it
+      const movesDoc = await getDoc(movesRef);
+      if (movesDoc.exists()) {
+        await updateDoc(movesRef, { 
+          moves: updatedMoves,
+          lastUpdated: serverTimestamp()
+        });
+      } else {
+        // Document doesn't exist, create it
+        console.log('BattleContext: battleMoves document does not exist, creating it for', currentUser.uid);
+        await setDoc(movesRef, {
+          moves: updatedMoves,
+          lastUpdated: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
+      }
       
       // Update local state AFTER Firestore update completes
       setMoves([...updatedMoves]); // Create new array to trigger React re-render
@@ -2602,8 +2765,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Don't throw - power level recalculation is non-critical
       }
     } catch (err) {
-      console.error('Error upgrading move:', err);
-      setError('Failed to upgrade move');
+      console.error('❌ Error upgrading move:', err);
+      console.error('❌ Error details:', {
+        moveId,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      setError(`Failed to upgrade move: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      alert(`❌ Failed to upgrade move: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 

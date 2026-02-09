@@ -34,13 +34,14 @@ import {
   computePPChange
 } from './assessmentGoals';
 import { arrayUnion, runTransaction } from 'firebase/firestore';
+import { updateHeroJourneyProgress } from './heroJourneyProgress';
 
 // Artifact lookup data (matches Marketplace.tsx artifacts list)
 const ARTIFACT_LOOKUP: { [key: string]: { description: string; icon: string; image: string; category: 'time' | 'protection' | 'food' | 'special'; rarity: 'common' | 'rare' | 'epic' | 'legendary' } } = {
   'checkin-free': { description: 'Skip the next check-in requirement', icon: '🎫', image: '/images/Get-Out-of-Check-in-Free.png', category: 'protection', rarity: 'common' },
   'shield': { description: 'Block the next incoming attack on your vault', icon: '🛡️', image: '/images/Shield Item.jpeg', category: 'protection', rarity: 'common' },
   'health-potion-25': { description: 'Restore 25 HP to your vault health', icon: '🧪', image: '/images/Health Potion - 25.png', category: 'protection', rarity: 'common' },
-  'lunch-mosley': { description: 'Enjoy a special lunch with Mr. Mosley', icon: '🍽️', image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2', category: 'food', rarity: 'epic' },
+  'lunch-mosley': { description: 'Enjoy a special lunch with Mr. Mosley', icon: '🍽️', image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2', category: 'food', rarity: 'legendary' },
   'forge-token': { description: 'Redeem for any custom item you want printed from The Forge (3D Printer)', icon: '🛠️', image: '/images/Forge Token.png', category: 'special', rarity: 'legendary' },
   'uxp-credit-1': { description: 'Credit to be added to any non-assessment assignment', icon: '📕', image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2', category: 'special', rarity: 'common' },
   'uxp-credit': { description: 'Credit to be added to any non-assessment assignment', icon: '📚', image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2', category: 'special', rarity: 'common' },
@@ -257,30 +258,40 @@ export async function deleteAssessment(
 export async function setAssessmentGoal(
   assessmentId: string,
   studentId: string,
-  goalScore: number,
-  classId: string
+  goalScore: number | undefined,
+  classId: string,
+  evidence?: string | null,
+  textGoal?: string
 ): Promise<void> {
   const goalId = generateGoalId(assessmentId, studentId);
   const goalRef = doc(db, 'assessmentGoals', goalId);
+  
+  // Check if goal already exists to determine if we should increment numGoalsSet
+  const existingGoal = await getDoc(goalRef);
+  const isNewGoal = !existingGoal.exists();
   
   const goalData: AssessmentGoal = {
     id: goalId,
     assessmentId,
     classId,
     studentId,
-    goalScore,
-    createdAt: Timestamp.now(),
+    ...(goalScore !== undefined && { goalScore }),
+    ...(textGoal !== undefined && { textGoal }),
+    evidence: evidence || null,
+    createdAt: existingGoal.exists() ? existingGoal.data().createdAt : Timestamp.now(),
     updatedAt: Timestamp.now(),
     locked: false
   };
   
   await setDoc(goalRef, goalData);
   
-  // Increment numGoalsSet on assessment
-  const assessmentRef = doc(db, 'assessments', assessmentId);
-  await updateDoc(assessmentRef, {
-    numGoalsSet: increment(1)
-  });
+  // Increment numGoalsSet on assessment only if this is a new goal
+  if (isNewGoal) {
+    const assessmentRef = doc(db, 'assessments', assessmentId);
+    await updateDoc(assessmentRef, {
+      numGoalsSet: increment(1)
+    });
+  }
 }
 
 /**
@@ -349,13 +360,18 @@ export async function setAssessmentResult(
   
   let artifactsGranted: ArtifactReward[] | undefined;
   
-  if (goal) {
+  if (goal && goal.goalScore !== undefined && assessment.type !== 'story-goal') {
+    // Only compute PP change for numeric goals (not Story Goals which are text-based)
     const computation = computePPChange(goal.goalScore, actualScore, assessment);
     computedDelta = computation.delta;
     computedAbsDiff = computation.absDiff;
     outcome = computation.outcome;
     ppChange = computation.ppChange;
     artifactsGranted = computation.artifactsGranted;
+  } else if (goal && assessment.type === 'story-goal') {
+    // For Story Goals, we might want to handle completion differently
+    // For now, we'll skip numeric computation - Story Goals completion is handled via Hero's Journey
+    // If you want to add PP rewards for Story Goals, you can add that logic here
   }
   
   const resultData: any = {
@@ -823,6 +839,25 @@ export async function applyAssessmentResults(assessmentId: string): Promise<{
         artifactsCount: artifactsGranted.length,
         artifacts: artifactsGranted.map(a => a.artifactName)
       });
+
+      // Update Hero's Journey progress if this is a Story Goal and the student succeeded
+      if (assessmentData?.type === 'story-goal' && 
+          (result.outcome === 'hit' || result.outcome === 'exceed')) {
+        try {
+          // Get the full assessment object
+          const fullAssessment: Assessment = {
+            id: assessmentId,
+            ...assessmentData
+          } as Assessment;
+
+          await updateHeroJourneyProgress(result.studentId, fullAssessment);
+          console.log(`✅ Updated Hero's Journey progress for student ${result.studentId}`);
+        } catch (journeyError: any) {
+          console.error(`⚠️ Failed to update Hero's Journey progress for student ${result.studentId}:`, journeyError);
+          // Don't fail the whole operation if journey update fails
+          // Just log the error
+        }
+      }
       
       appliedCount++;
       
@@ -867,7 +902,8 @@ export async function createHabitSubmission(
   studentId: string,
   classId: string,
   habitText: string,
-  duration: HabitDuration
+  duration: HabitDuration,
+  evidence?: string | null
 ): Promise<void> {
   const submissionId = generateHabitSubmissionId(assessmentId, studentId);
   const submissionRef = doc(db, 'habitSubmissions', submissionId);
@@ -898,7 +934,7 @@ export async function createHabitSubmission(
     rewardApplied: false,
     consequenceApplied: false,
     // New status-based fields
-    evidence: null,
+    evidence: evidence || null,
     // verification is optional and should not be included if undefined
     ppImpact: 0, // Will be computed when status changes
     applied: false,
@@ -941,7 +977,8 @@ export async function updateHabitSubmissionGoal(
   assessmentId: string,
   studentId: string,
   habitText: string,
-  duration: HabitDuration
+  duration: HabitDuration,
+  evidence?: string | null
 ): Promise<void> {
   const submissionId = generateHabitSubmissionId(assessmentId, studentId);
   const submissionRef = doc(db, 'habitSubmissions', submissionId);
@@ -970,6 +1007,7 @@ export async function updateHabitSubmissionGoal(
     duration,
     endAt,
     requiredCheckIns,
+    evidence: evidence !== undefined ? evidence : existingSubmission.evidence,
     updatedAt: Timestamp.now()
   });
 }

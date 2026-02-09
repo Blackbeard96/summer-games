@@ -120,43 +120,76 @@ const AssessmentGoalsAdmin: React.FC = () => {
       if (assessmentData.habitsConfig.requireNotesOnCheckIn !== undefined) {
         cleanedHabitsConfig.requireNotesOnCheckIn = assessmentData.habitsConfig.requireNotesOnCheckIn;
       }
-      // Only add habitsConfig if it has at least one property
-      if (Object.keys(cleanedHabitsConfig).length > 0) {
-        baseAssessment.habitsConfig = cleanedHabitsConfig;
+        // Only add habitsConfig if it has at least one property
+        if (Object.keys(cleanedHabitsConfig).length > 0) {
+          baseAssessment.habitsConfig = cleanedHabitsConfig;
+        }
+      } else if (isUpdate && assessmentData.type !== 'habits' && selectedAssessment?.habitsConfig) {
+        // If updating and type is not habits, remove habitsConfig if it exists
+        baseAssessment.habitsConfig = deleteField();
       }
-    } else if (isUpdate && assessmentData.type !== 'habits' && selectedAssessment?.habitsConfig) {
-      // If updating and type is not habits, remove habitsConfig if it exists
-      baseAssessment.habitsConfig = deleteField();
-    }
 
-    return baseAssessment;
+      // Handle Story Goal config
+      if (assessmentData.type === 'story-goal' && assessmentData.storyGoal) {
+        baseAssessment.storyGoal = assessmentData.storyGoal;
+      } else if (isUpdate && assessmentData.type !== 'story-goal' && selectedAssessment?.storyGoal) {
+        // If updating and type is not story-goal, remove storyGoal if it exists
+        baseAssessment.storyGoal = deleteField();
+      }
+
+      return baseAssessment;
   };
 
-  const handleCreateAssessment = async (assessmentData: any) => {
-    if (!currentUser || !selectedClassId) return;
+  const handleCreateAssessment = async (assessmentData: any, selectedClassIds?: string[]) => {
+    if (!currentUser) return;
+
+    // Use selectedClassIds if provided (multi-class mode), otherwise fall back to selectedClassId
+    const classIdsToUse = selectedClassIds && selectedClassIds.length > 0 
+      ? selectedClassIds 
+      : (selectedClassId ? [selectedClassId] : []);
+
+    if (classIdsToUse.length === 0) {
+      alert('Please select at least one class');
+      return;
+    }
 
     try {
-      const newAssessment = buildAssessmentData(assessmentData, false) as Omit<Assessment, 'id'>;
-
-      const validation = validateAssessmentConfig(newAssessment);
+      // Validate the assessment data once
+      const baseAssessment = buildAssessmentData(assessmentData, false);
+      const validation = validateAssessmentConfig(baseAssessment);
       if (!validation.valid) {
         alert(`Validation errors:\n${validation.errors.join('\n')}`);
         return;
       }
 
-      await createAssessment(newAssessment);
+      // Create assessment for each selected class
+      const createPromises = classIdsToUse.map(async (classId) => {
+        const newAssessment = {
+          ...baseAssessment,
+          classId
+        } as Omit<Assessment, 'id'>;
+        
+        return await createAssessment(newAssessment);
+      });
+
+      await Promise.all(createPromises);
+      
       setViewMode('list');
       
-      // Refresh assessments
-      const updatedAssessments = await getAssessmentsByClass(selectedClassId);
-      setAssessments(updatedAssessments);
+      // Refresh assessments for the currently selected class
+      if (selectedClassId) {
+        const updatedAssessments = await getAssessmentsByClass(selectedClassId);
+        setAssessments(updatedAssessments);
+      }
+
+      alert(`Successfully created assessment in ${classIdsToUse.length} class${classIdsToUse.length > 1 ? 'es' : ''}!`);
     } catch (error: any) {
       console.error('Error creating assessment:', error);
       alert(`Failed to create assessment: ${error.message}`);
     }
   };
 
-  const handleUpdateAssessment = async (assessmentData: any) => {
+  const handleUpdateAssessment = async (assessmentData: any, selectedClassIds?: string[]) => {
     if (!currentUser || !selectedAssessment) return;
 
     try {
@@ -487,7 +520,7 @@ const AssessmentGoalsAdmin: React.FC = () => {
 
       {viewMode === 'create' && (
         <CreateAssessmentForm
-          classId={selectedClassId!}
+          classes={classes.map(c => ({ id: c.id, name: c.name }))}
           onSave={handleCreateAssessment}
           onCancel={() => setViewMode('list')}
         />

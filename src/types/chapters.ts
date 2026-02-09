@@ -201,6 +201,7 @@ export const CHAPTERS: Chapter[] = [
         rewards: [
           { type: 'xp', value: 30, description: 'Truth Metal touched XP' },
           { type: 'pp', value: 100, description: 'Truth Metal touched PP' },
+          { type: 'truthMetal', value: 1, description: '1 Truth Metal currency' },
           { type: 'artifact', value: 'truth_metal_currency', description: 'Truth Metal currency unlocked' }
         ],
         isCompleted: false
