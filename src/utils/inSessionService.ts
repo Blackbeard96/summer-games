@@ -197,12 +197,54 @@ export async function joinSession(
     });
   }
   
+  // Declare refs outside try block so they're accessible in catch block
+  const sessionRef = doc(db, 'inSessionRooms', sessionId);
+  const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
+  
   try {
-    const sessionRef = doc(db, 'inSessionRooms', sessionId);
-    const playerPresenceRef = doc(db, 'inSessionRooms', sessionId, 'players', player.userId);
+    
+    // Quick check: If player is already in session, return success immediately (idempotent)
+    // This prevents unnecessary transaction conflicts
+    try {
+      const quickCheck = await getDoc(sessionRef);
+      if (quickCheck.exists()) {
+        const quickData = quickCheck.data() as InSessionRoom;
+        const alreadyInSession = quickData.players?.some(p => p.userId === player.userId) || false;
+        if (alreadyInSession) {
+          if (DEBUG_JOIN) {
+            debug('inSessionService', `✅ Player ${player.userId} already in session, skipping join`);
+          }
+          // Still update presence to show they're connected
+          try {
+            await updateDoc(playerPresenceRef, {
+              connected: true,
+              lastSeenAt: serverTimestamp()
+            });
+          } catch (presenceError) {
+            // If presence doc doesn't exist, create it
+            try {
+              await setDoc(playerPresenceRef, {
+                connected: true,
+                lastSeenAt: serverTimestamp(),
+                joinedAt: serverTimestamp()
+              });
+            } catch (setError) {
+              // Ignore - presence is optional
+            }
+          }
+          return { success: true };
+        }
+      }
+    } catch (quickCheckError) {
+      // Continue with full transaction if quick check fails
+      if (DEBUG_JOIN) {
+        debug('inSessionService', 'Quick check failed, proceeding with transaction', quickCheckError);
+      }
+    }
     
     // Use transaction to ensure atomic join
     // CRITICAL: Firestore transactions require ALL reads before ANY writes
+    // Firestore will automatically retry on failed-precondition errors
     const result = await runTransaction(db, async (transaction) => {
       // PHASE 1: ALL READS FIRST (Firestore requirement)
       // Read session document
@@ -333,6 +375,34 @@ export async function joinSession(
       errorCode,
       errorStack: error?.stack
     });
+    
+    // If it's a failed-precondition error, the transaction was retried but still failed
+    // This usually means the document is being updated too frequently
+    // Check if player actually got added despite the error
+    if (errorCode === 'failed-precondition') {
+      try {
+        const checkDoc = await getDoc(sessionRef);
+        if (checkDoc.exists()) {
+          const checkData = checkDoc.data() as InSessionRoom;
+          const playerInSession = checkData.players?.some(p => p.userId === player.userId) || false;
+          if (playerInSession) {
+            console.log('[InSession] Player was added despite transaction error - join succeeded');
+            // Update presence anyway
+            try {
+              await updateDoc(playerPresenceRef, {
+                connected: true,
+                lastSeenAt: serverTimestamp()
+              });
+            } catch (presenceError) {
+              // Ignore presence errors
+            }
+            return { success: true };
+          }
+        }
+      } catch (checkError) {
+        // Ignore check errors
+      }
+    }
     
     // Return detailed error information
     return { 

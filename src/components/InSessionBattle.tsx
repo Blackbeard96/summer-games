@@ -174,9 +174,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
     debug('inSessionBattle', `Setting up session subscription for ${sessionId}`);
     
+    // Track if join is in progress to prevent duplicate attempts
+    let joinInProgress = false;
+    
     // Auto-join the session if user is not already in it (idempotent)
     const autoJoinSession = async () => {
+      // Prevent duplicate join attempts
+      if (joinInProgress) {
+        debug('inSessionBattle', 'Join already in progress, skipping duplicate attempt');
+        return;
+      }
+      
       try {
+        joinInProgress = true;
+        
+        // Quick check: Is user already in session?
+        const sessionRef = doc(db, 'inSessionRooms', sessionId);
+        const sessionDoc = await getDoc(sessionRef);
+        if (sessionDoc.exists()) {
+          const sessionData = sessionDoc.data();
+          const alreadyInSession = sessionData.players?.some((p: any) => p.userId === currentUser.uid) || false;
+          if (alreadyInSession) {
+            debug('inSessionBattle', `User ${currentUser.uid} already in session, skipping join`);
+            joinInProgress = false;
+            return;
+          }
+        }
+        
         // Get user data for join
         const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
@@ -214,9 +238,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           // Create session loadout snapshot
           const userElement = studentData.elementalAffinity;
           await createSessionLoadout(sessionId, currentUser.uid, userElement);
+        } else {
+          debugError('inSessionBattle', `Failed to join session: ${result.error}`);
         }
       } catch (error) {
         debugError('inSessionBattle', `Error auto-joining session`, error);
+      } finally {
+        joinInProgress = false;
       }
     };
     
