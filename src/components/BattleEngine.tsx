@@ -4133,6 +4133,27 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // IN-SESSION MODE: Apply move via authoritative Firestore transaction
     // This ensures all clients see the same state updates
     if (isInSession && sessionId && currentUser) {
+      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                 process.env.REACT_APP_DEBUG === 'true';
+      
+      if (DEBUG_LIVE_EVENTS) {
+        console.log('[BattleEngine] 🚀 IN-SESSION MOVE EXECUTION START:', {
+          sessionId,
+          actorUid: currentUser.uid,
+          actorName: playerName,
+          targetUid: targetOpponent.id,
+          targetName: targetOpponent.name,
+          moveName: overriddenMoveName,
+          moveId: move.id,
+          damage,
+          shieldDamage,
+          healing: playerHealing,
+          shieldBoost: playerShieldBoost,
+          ppStolen,
+          ppCost: move.cost || 0
+        });
+      }
+      
       try {
         // CRITICAL: Check if current user is eliminated (prevent eliminated players from acting)
         const currentPlayerInSession = allies.find(a => a.id === currentUser.uid);
@@ -4156,6 +4177,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Get the latest battle log message (should be the last one we added)
         const battleLogMessage = newLog[newLog.length - 1] || `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}`;
         
+        if (DEBUG_LIVE_EVENTS) {
+          console.log('[BattleEngine] 📝 Calling applyInSessionMove with:', {
+            sessionId,
+            actorUid: currentUser.uid,
+            targetUid: targetOpponent.id,
+            moveName: move.name,
+            damage,
+            shieldDamage,
+            ppCost,
+            battleLogMessage
+          });
+        }
+        
         // Import and call the authoritative move service
         const { applyInSessionMove } = await import('../utils/inSessionMoveService');
         
@@ -4177,6 +4211,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ppCost,
           battleLogMessage
         });
+        
+        if (DEBUG_LIVE_EVENTS) {
+          console.log('[BattleEngine] 📥 applyInSessionMove result:', moveResult);
+        }
         
         if (moveResult.success) {
           // Track skill usage for stats
@@ -4253,12 +4291,41 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           console.log('✅ [In-Session Move] Move applied via Firestore transaction:', moveResult);
           return; // Exit early - don't apply local updates
         } else {
-          console.error('❌ [In-Session Move] Failed to apply move:', moveResult.message);
-          // Fall through to local updates as fallback (though this shouldn't happen)
+          const errorMsg = moveResult.message || 'Unknown error';
+          console.error('❌ [In-Session Move] Failed to apply move:', errorMsg);
+          
+          // Show user-facing error
+          alert(`Failed to use skill: ${errorMsg}`);
+          
+          // Reset selection so user can try again
+          setBattleState(prev => ({
+            ...prev,
+            selectedMove: null,
+            selectedTarget: null,
+            phase: 'selection'
+          }));
+          return; // Don't fall through - the move failed
         }
-      } catch (error) {
+      } catch (error: any) {
+        const errorMsg = error?.message || 'An unexpected error occurred';
         console.error('❌ [In-Session Move] Error applying move:', error);
-        // Fall through to local updates as fallback
+        console.error('❌ [In-Session Move] Error details:', {
+          errorCode: error?.code,
+          errorMessage: errorMsg,
+          errorStack: error?.stack
+        });
+        
+        // Show user-facing error
+        alert(`Error using skill: ${errorMsg}`);
+        
+        // Reset selection so user can try again
+        setBattleState(prev => ({
+          ...prev,
+          selectedMove: null,
+          selectedTarget: null,
+          phase: 'selection'
+        }));
+        return; // Don't fall through - the move failed
       }
     }
     
@@ -5718,16 +5785,27 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
+      // CRITICAL: In-Session mode always goes directly to execution (no turn order needed)
       // In true multiplayer mode, keep phase as 'selection' until turn order is calculated
       // For single-player with AI, go directly to execution
-      const newPhase = (isMultiplayer && !isSinglePlayerWithAI && !prev.turnOrder) ? 'selection' : 'execution';
-      console.log(`🎯 [Target Select] Setting target ${targetId}, phase: ${newPhase}`, {
-        multiplayer: isMultiplayer,
-        isSinglePlayerWithAI,
-        hasTurnOrder: !!prev.turnOrder,
-        humanPlayers,
-        totalAllies: allies.length
-      });
+      const newPhase = isInSession 
+        ? 'execution' // In-Session: always execute immediately
+        : (isMultiplayer && !isSinglePlayerWithAI && !prev.turnOrder) ? 'selection' : 'execution';
+      
+      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                 process.env.REACT_APP_DEBUG === 'true';
+      
+      if (DEBUG_LIVE_EVENTS || isInSession) {
+        console.log(`🎯 [Target Select] Setting target ${targetId}, phase: ${newPhase}`, {
+          isInSession,
+          sessionId,
+          multiplayer: isMultiplayer,
+          isSinglePlayerWithAI,
+          hasTurnOrder: !!prev.turnOrder,
+          humanPlayers,
+          totalAllies: allies.length
+        });
+      }
       return {
         ...prev,
         selectedTarget: targetId,
@@ -5738,9 +5816,32 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Execute move when both move and target are selected
   // In multiplayer mode, don't execute immediately - wait for turn order calculation
-  // EXCEPT: For single-player battles with AI allies (like Chapter 2-5), execute immediately
+  // EXCEPT: For single-player battles with AI allies (like Chapter 2-5) OR In-Session mode, execute immediately
   useEffect(() => {
     if (battleState.phase === 'execution' && battleState.selectedMove && battleState.selectedTarget) {
+      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                 process.env.REACT_APP_DEBUG === 'true';
+      
+      if (DEBUG_LIVE_EVENTS || isInSession) {
+        console.log('[BattleEngine] 🚀 EXECUTION TRIGGERED:', {
+          phase: battleState.phase,
+          selectedMove: battleState.selectedMove?.name,
+          selectedTarget: battleState.selectedTarget,
+          isInSession,
+          sessionId,
+          isMultiplayer
+        });
+      }
+      
+      // CRITICAL: In-Session mode always executes immediately (no turn order)
+      if (isInSession) {
+        if (DEBUG_LIVE_EVENTS) {
+          console.log('[BattleEngine] ✅ In-Session mode - executing immediately');
+        }
+        executePlayerMove();
+        return;
+      }
+      
       // Check if this is a single-player battle with AI allies (not true multiplayer)
       // If there's only one human player and the rest are AI, execute immediately
       const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
@@ -5757,26 +5858,66 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       executePlayerMove();
     }
-  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer, allies, currentUser]);
+  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer, allies, currentUser, isInSession, sessionId]);
 
   // Listen for external move selection events (for In Session mode)
   useEffect(() => {
+    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                               process.env.REACT_APP_DEBUG === 'true';
+    
     const handleExternalMoveSelect = (event: CustomEvent) => {
       const { move, targetId } = event.detail;
+      
+      if (DEBUG_LIVE_EVENTS) {
+        console.log('[BattleEngine] 📥 Received inSessionMoveSelect event:', {
+          move: move ? { id: move.id, name: move.name, type: move.type } : null,
+          targetId,
+          isInSession,
+          sessionId,
+          currentUserId: currentUser?.uid
+        });
+      }
+      
       if (move && targetId) {
+        if (DEBUG_LIVE_EVENTS) {
+          console.log('[BattleEngine] ✅ Processing move selection:', {
+            moveName: move.name,
+            targetId,
+            isInSession,
+            hasSessionId: !!sessionId
+          });
+        }
+        
         handleMoveSelect(move);
         // Small delay to ensure move is set before selecting target
         setTimeout(() => {
+          if (DEBUG_LIVE_EVENTS) {
+            console.log('[BattleEngine] 🎯 Selecting target after delay:', targetId);
+          }
           handleTargetSelect(targetId);
         }, 100);
+      } else {
+        if (DEBUG_LIVE_EVENTS) {
+          console.warn('[BattleEngine] ⚠️ Invalid event data:', { move, targetId });
+        }
       }
     };
 
+    if (DEBUG_LIVE_EVENTS) {
+      console.log('[BattleEngine] 👂 Setting up inSessionMoveSelect listener', {
+        isInSession,
+        sessionId
+      });
+    }
+    
     window.addEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
     return () => {
+      if (DEBUG_LIVE_EVENTS) {
+        console.log('[BattleEngine] 🧹 Cleaning up inSessionMoveSelect listener');
+      }
       window.removeEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
     };
-  }, [handleMoveSelect, handleTargetSelect]);
+  }, [handleMoveSelect, handleTargetSelect, isInSession, sessionId, currentUser]);
 
   // Handle battle end (non-PvP battles only - PvP battles call onBattleEnd immediately)
   useEffect(() => {

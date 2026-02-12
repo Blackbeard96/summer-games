@@ -4771,7 +4771,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const usersSnap = await getDoc(usersRef);
       if (usersSnap.exists()) {
         const usersData = usersSnap.data();
-        const currentArtifacts = usersData.artifacts || [];
+        const currentArtifactsRaw = usersData.artifacts || [];
+        
+        // Handle artifacts as either array or object
+        let currentArtifacts: any[] = [];
+        if (Array.isArray(currentArtifactsRaw)) {
+          currentArtifacts = currentArtifactsRaw;
+        } else if (typeof currentArtifactsRaw === 'object' && currentArtifactsRaw !== null) {
+          // Convert object format to array format
+          currentArtifacts = Object.values(currentArtifactsRaw).filter((val: any) => {
+            // Filter out purchase metadata entries (those with _purchase suffix)
+            if (typeof val === 'object' && val !== null) {
+              return val.name || val.id; // Keep actual artifact objects
+            }
+            return false;
+          });
+        }
+        
         let foundOne = false;
         const updatedArtifacts = currentArtifacts.map((artifact: any) => {
           if (foundOne) return artifact;

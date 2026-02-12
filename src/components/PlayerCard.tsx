@@ -337,21 +337,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
           >
             {/* Top Row: Name, PP, TM, Level all aligned */}
             <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: 4 }}>
-              {/* First row: Name, PP, TM, Level all on same line */}
-              <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-                {/* Player Name */}
-                <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {name}
-                  {squadAbbreviation && (
-                    <span style={{
-                      fontSize: '16px',
-                      color: '#4f46e5',
-                      fontWeight: '600',
-                      marginLeft: '4px'
-                    }}>
-                      [{squadAbbreviation}]
-                    </span>
-                  )}
+              {/* First row: Name, PP, TM, Lv badges */}
+              <div style={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: 4 }}>
+                {/* Player Name - full width */}
+                <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'left', lineHeight: 1.2, display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                   {ppBoostStatus.isActive && (
                     <span 
                       style={{ 
@@ -359,7 +349,8 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                         color: '#f59e0b',
                         fontWeight: 'bold',
                         textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
-                        animation: 'pulse 2s infinite'
+                        animation: 'pulse 2s infinite',
+                        flexShrink: 0
                       }}
                       title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
                     >
@@ -367,61 +358,81 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                     </span>
                   )}
                 </div>
-                {/* PP and TM badges */}
-                <span 
-                  style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, display: 'flex', alignItems: 'center', gap: '4px' }} 
-                  title="Power Points"
-                >
-                  PP: {powerPoints}
-                  {ppBoostStatus.isActive && (
-                    <span 
-                      style={{ 
-                        fontSize: '12px',
-                        color: '#f59e0b',
-                        fontWeight: 'bold',
-                        textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
-                        animation: 'pulse 2s infinite'
-                      }}
-                      title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
-                    >
-                      ×2
-                    </span>
-                  )}
-                </span>
-                <span 
-                  style={{ background: '#9ca3af', color: '#ffffff', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, border: '1px solid #6b7280', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }}
-                  title="Truth Metal Shards"
-                >
-                  TM: {truthMetal}
-                </span>
-                {/* Power Level badge */}
+                {/* PP, TM, Lv badges - on same row as name */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>
+                  <span 
+                    style={{ background: '#fbbf24', color: '#1f2937', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }} 
+                    title="Power Points"
+                  >
+                    PP: {powerPoints}
+                    {ppBoostStatus.isActive && (
+                      <span 
+                        style={{ 
+                          fontSize: '10px',
+                          color: '#f59e0b',
+                          fontWeight: 'bold',
+                          textShadow: '0 0 4px rgba(245, 158, 11, 0.5)',
+                          animation: 'pulse 2s infinite'
+                        }}
+                        title={`⚡ Double PP Boost Active! (${ppBoostStatus.timeRemaining} remaining)`}
+                      >
+                        ×2
+                      </span>
+                    )}
+                  </span>
+                  <span 
+                    style={{ background: '#9ca3af', color: '#ffffff', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, border: '1px solid #6b7280', boxShadow: '0 1px 2px rgba(0,0,0,0.2)', whiteSpace: 'nowrap' }}
+                    title="Truth Metal Shards"
+                  >
+                    TM: {truthMetal}
+                  </span>
+                  {/* Level badge */}
+                  <span style={{ background: '#4f46e5', color: 'white', borderRadius: 6, padding: '2px 8px', fontWeight: 'bold', fontSize: 12, whiteSpace: 'nowrap' }}>Lv. {level}</span>
+                </div>
+              </div>
+              {/* Second row: Rarity stars, Squad tag, and Power Level (aligned with PP above) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: -4 }}>
+                {/* Rarity stars */}
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  {Array.from({ length: rarity }).map((_, i) => (
+                    <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
+                  ))}
+                </div>
+                {/* Squad tag */}
+                {squadAbbreviation && (
+                  <span style={{
+                    fontSize: '14px',
+                    color: '#4f46e5',
+                    fontWeight: '600',
+                    background: 'rgba(79, 70, 229, 0.1)',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    border: '1px solid rgba(79, 70, 229, 0.3)'
+                  }}>
+                    [{squadAbbreviation}]
+                  </span>
+                )}
+                {/* Power Level badge - aligned with PP above (same column position) */}
                 {powerLevel !== null && (
                   <span 
                     style={{ 
                       background: 'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)', 
                       color: 'white', 
-                      borderRadius: 8, 
-                      padding: '2px 10px', 
+                      borderRadius: 6, 
+                      padding: '2px 8px', 
                       fontWeight: 'bold', 
-                      fontSize: 14,
+                      fontSize: 12,
                       boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '4px'
+                      gap: '2px',
+                      whiteSpace: 'nowrap'
                     }}
                     title={powerBreakdown ? `Base: ${powerBreakdown.base} | Skills: ${powerBreakdown.skills} | Artifacts: ${powerBreakdown.artifacts} | Ascension: ${powerBreakdown.ascension}` : 'Power Level'}
                   >
                     ⚡ PL: {powerLevel}
                   </span>
                 )}
-                {/* Level badge */}
-                <span style={{ background: '#4f46e5', color: 'white', borderRadius: 8, padding: '2px 10px', fontWeight: 'bold', fontSize: 14, marginLeft: powerLevel === null ? 'auto' : '0' }}>Lv. {level}</span>
-              </div>
-              {/* Second row: Rarity stars under name */}
-              <div style={{ display: 'flex', alignItems: 'center', marginTop: -4 }}>
-                {Array.from({ length: rarity }).map((_, i) => (
-                  <span key={i} style={{ color: '#fbbf24', fontSize: 16, marginRight: 2 }}>★</span>
-                ))}
               </div>
             </div>
 

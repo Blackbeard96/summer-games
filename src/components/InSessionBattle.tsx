@@ -1120,11 +1120,37 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           // Allow targeting ALL players (including those not in session)
           if (selectedMove && student.id !== currentUser?.uid) {
             e.stopPropagation(); // Prevent event bubbling
+            
+            const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                     process.env.REACT_APP_DEBUG === 'true';
+            
+            if (DEBUG_LIVE_EVENTS) {
+              console.log('[InSessionBattle] 🎯 TARGET CLICKED:', {
+                targetId: student.id,
+                targetName: student.displayName,
+                selectedMove: {
+                  id: selectedMove.id,
+                  name: selectedMove.name,
+                  type: selectedMove.type,
+                  cost: selectedMove.cost,
+                  category: selectedMove.category
+                },
+                actorUid: currentUser?.uid,
+                sessionId: sessionId
+              });
+            }
+            
             setSelectedTarget(student.id);
             // Dispatch custom event to trigger BattleEngine move execution
+            const eventDetail = { move: selectedMove, targetId: student.id };
             window.dispatchEvent(new CustomEvent('inSessionMoveSelect', {
-              detail: { move: selectedMove, targetId: student.id }
+              detail: eventDetail
             }));
+            
+            if (DEBUG_LIVE_EVENTS) {
+              console.log('[InSessionBattle] 📤 Dispatched inSessionMoveSelect event:', eventDetail);
+            }
+            
             // Clear selection after dispatching
             setSelectedMove(null);
             setSelectedTarget(null);
@@ -2236,6 +2262,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 <button
                                   key={move.id}
                                   onClick={() => {
+                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                                             process.env.REACT_APP_DEBUG === 'true';
+                                    
+                                    if (DEBUG_LIVE_EVENTS) {
+                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (Elemental):', {
+                                        skillId: move.id,
+                                        skillName: move.name,
+                                        skillType: move.type,
+                                        category: move.category,
+                                        cost: move.cost,
+                                        cooldown: move.cooldown,
+                                        actorUid: currentUser?.uid,
+                                        sessionId: sessionId
+                                      });
+                                    }
+                                    
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}
@@ -2385,6 +2427,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 <button
                                   key={move.id}
                                   onClick={() => {
+                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                                             process.env.REACT_APP_DEBUG === 'true';
+                                    
+                                    if (DEBUG_LIVE_EVENTS) {
+                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (RR Candy):', {
+                                        skillId: move.id,
+                                        skillName: move.name,
+                                        skillType: move.type,
+                                        category: move.category,
+                                        cost: move.cost,
+                                        cooldown: move.cooldown,
+                                        actorUid: currentUser?.uid,
+                                        sessionId: sessionId
+                                      });
+                                    }
+                                    
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}
@@ -2529,6 +2587,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 <button
                                   key={move.id}
                                   onClick={() => {
+                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                                             process.env.REACT_APP_DEBUG === 'true';
+                                    
+                                    if (DEBUG_LIVE_EVENTS) {
+                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (Manifest):', {
+                                        skillId: move.id,
+                                        skillName: move.name,
+                                        skillType: move.type,
+                                        category: move.category,
+                                        cost: move.cost,
+                                        cooldown: move.cooldown,
+                                        actorUid: currentUser?.uid,
+                                        sessionId: sessionId
+                                      });
+                                    }
+                                    
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}

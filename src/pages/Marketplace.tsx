@@ -930,7 +930,22 @@ const Marketplace = () => {
           // Update users collection artifacts array
           if (freshUsersSnap.exists()) {
             const freshUsersData = freshUsersSnap.data();
-            const freshArtifacts = freshUsersData.artifacts || [];
+            const freshArtifactsRaw = freshUsersData.artifacts || [];
+            
+            // Handle artifacts as either array or object
+            let freshArtifacts: any[] = [];
+            if (Array.isArray(freshArtifactsRaw)) {
+              freshArtifacts = freshArtifactsRaw;
+            } else if (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null) {
+              // Convert object format to array format
+              freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) => {
+                // Filter out purchase metadata entries (those with _purchase suffix)
+                if (typeof val === 'object' && val !== null) {
+                  return val.name || val.id; // Keep actual artifact objects
+                }
+                return false;
+              });
+            }
             
             let foundOne = false;
             const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
@@ -1070,7 +1085,22 @@ const Marketplace = () => {
         // Update users collection artifacts array
         if (freshUsersSnap.exists()) {
           const freshUsersData = freshUsersSnap.data();
-          const freshArtifacts = freshUsersData.artifacts || [];
+          const freshArtifactsRaw = freshUsersData.artifacts || [];
+          
+          // Handle artifacts as either array or object
+          let freshArtifacts: any[] = [];
+          if (Array.isArray(freshArtifactsRaw)) {
+            freshArtifacts = freshArtifactsRaw;
+          } else if (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null) {
+            // Convert object format to array format
+            freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) => {
+              // Filter out purchase metadata entries (those with _purchase suffix)
+              if (typeof val === 'object' && val !== null) {
+                return val.name || val.id; // Keep actual artifact objects
+              }
+              return false;
+            });
+          }
           
           // Find the FIRST unused artifact with this name and mark only that one as used
           let foundOne = false;

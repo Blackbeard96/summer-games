@@ -61,22 +61,35 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     battleLogMessage
   } = params;
 
-  if (DEBUG_IN_SESSION_MOVES) {
-    debugAction('inSessionMove', `🎯 Applying move: ${move.name} by ${actorName} on ${targetName}`, {
+  const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                             process.env.REACT_APP_DEBUG === 'true';
+
+  if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
+    console.log('[applyInSessionMove] 🎯 SUBMIT ACTION CALLED:', {
       sessionId,
       actorUid,
+      actorName,
       targetUid,
+      targetName,
+      moveId: move.id,
+      moveName: move.name,
+      moveType: move.type,
       damage,
       shieldDamage,
       healing,
       shieldBoost,
       ppStolen,
-      ppCost
+      ppCost,
+      battleLogMessage
     });
   }
 
   try {
     const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    
+    if (DEBUG_LIVE_EVENTS) {
+      console.log('[applyInSessionMove] 📍 Firestore path:', `inSessionRooms/${sessionId}`);
+    }
     
     const result = await runTransaction(db, async (transaction) => {
       // Read session document
@@ -244,12 +257,15 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         updatedAt: serverTimestamp()
       });
 
-      if (DEBUG_IN_SESSION_MOVES) {
-        debugSessionWrite('inSessionMove', `💾 Writing move result to Firestore`, {
+      if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
+        console.log('[applyInSessionMove] 💾 FIRESTORE WRITE ATTEMPT:', {
+          sessionId,
+          path: `inSessionRooms/${sessionId}`,
           targetHp: targetCopy.hp,
           targetShield: targetCopy.shield,
           targetEliminated: targetCopy.eliminated,
-          battleLogLength: finalBattleLog.length
+          battleLogLength: finalBattleLog.length,
+          playersCount: updatedPlayers.length
         });
       }
 
@@ -295,8 +311,28 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       };
     });
 
+    if (DEBUG_LIVE_EVENTS) {
+      console.log('[applyInSessionMove] ✅ FIRESTORE WRITE SUCCESS:', {
+        sessionId,
+        success: result.success,
+        message: result.message
+      });
+    }
+
     return result;
   } catch (error: any) {
+    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                               process.env.REACT_APP_DEBUG === 'true';
+    
+    if (DEBUG_LIVE_EVENTS) {
+      console.error('[applyInSessionMove] ❌ FIRESTORE WRITE ERROR:', {
+        sessionId,
+        errorCode: error?.code,
+        errorMessage: error?.message,
+        errorStack: error?.stack
+      });
+    }
+    
     debugError('inSessionMove', `Error applying move: ${move.name}`, error);
     return {
       success: false,

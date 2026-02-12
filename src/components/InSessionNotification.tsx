@@ -34,6 +34,7 @@ const InSessionNotification: React.FC = () => {
   const [isInSession, setIsInSession] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
   const previousSessionIdRef = useRef<string | null>(null); // Track previous session ID to prevent unnecessary updates
+  const previousMembershipRef = useRef<boolean | null>(null); // Track previous membership state to prevent flickering
 
   // Get user's classrooms and listen for active sessions
   useEffect(() => {
@@ -207,7 +208,7 @@ const InSessionNotification: React.FC = () => {
               return bTime - aTime;
             })[0];
 
-            // Check if user is in the session players list
+            // Check if user is in the session players list (STABLE CHECK - use actual Firestore data)
             const userInSession = latestSession.players?.some(p => p.userId === userId) || false;
             
             // Check if user is actively viewing the session page
@@ -215,6 +216,9 @@ const InSessionNotification: React.FC = () => {
             const isOnSessionPage = location.pathname.startsWith(`/live-events/${latestSession.id}`) || location.pathname.startsWith(`/in-session/${latestSession.id}`);
             const activeViewers = latestSession.activeViewers || [];
             const userIsInActiveViewers = activeViewers.includes(userId);
+            
+            // STABLE MEMBERSHIP CHECK: Use ref to track previous membership state to prevent flickering
+            const isMembershipStable = previousMembershipRef.current === null || previousMembershipRef.current === userInSession;
             
             debug.group('InSessionNotification', 'Session Check');
             debug.log('InSessionNotification', 'Session details', {
@@ -229,7 +233,10 @@ const InSessionNotification: React.FC = () => {
               activeViewersCount: activeViewers.length,
               currentUserId: userId,
               playerIds: latestSession.players?.map((p: any) => p.userId) || [],
-              activeViewerIds: activeViewers
+              activeViewerIds: activeViewers,
+              previousSessionId: previousSessionIdRef.current,
+              isMembershipStable,
+              previousMembership: previousMembershipRef.current
             });
             
             setIsInSession(userInSession);
@@ -237,45 +244,63 @@ const InSessionNotification: React.FC = () => {
             // PRIMARY RULE: If user is on the session page OR actively viewing the session, ALWAYS hide the notification
             // This prevents the notification from flickering or reappearing when the user is already viewing the session
             if (isOnSessionPage || userIsInActiveViewers) {
-              debug.log('InSessionNotification', '❌ Hiding notification - user is in session', {
+              debug.log('InSessionNotification', '❌ Hiding notification - user is on session page', {
                 isOnSessionPage,
                 userIsInActiveViewers,
                 currentPath: location.pathname
               });
               debug.groupEnd();
+              // Update refs to track state
+              previousSessionIdRef.current = latestSession.id;
+              previousMembershipRef.current = userInSession;
               // Only clear if we had a session before (prevents unnecessary state updates)
-              if (previousSessionIdRef.current !== null) {
-                previousSessionIdRef.current = null;
+              if (activeSession !== null) {
                 setActiveSession(null);
               }
               return; // Exit early - don't check anything else
             }
 
-            // SECONDARY RULES: Only show notification if user is NOT on the session page and NOT actively viewing
-            // Show notification if:
-            // 1. User is NOT in the session players list (hasn't joined) - show "Join Session"
-            // 2. User is in the session but NOT on the session page (left the session view) - show "Rejoin Session"
-            // Only update state if the session ID actually changed (prevents flickering)
-            if (previousSessionIdRef.current !== latestSession.id) {
+            // STABLE LOGIC: Only update notification if:
+            // 1. Session ID changed, OR
+            // 2. Membership status changed AND is stable (not flickering)
+            const sessionIdChanged = previousSessionIdRef.current !== latestSession.id;
+            const membershipChanged = previousMembershipRef.current !== userInSession;
+            const shouldUpdate = sessionIdChanged || (membershipChanged && isMembershipStable);
+
+            if (shouldUpdate) {
               if (!userInSession) {
                 // User hasn't joined the session - show notification to join
                 debug.log('InSessionNotification', '✅ Showing join notification - user not in session', {
                   sessionId: latestSession.id,
                   userId,
-                  playerIds: latestSession.players?.map((p: any) => p.userId) || []
+                  playerIds: latestSession.players?.map((p: any) => p.userId) || [],
+                  reason: sessionIdChanged ? 'sessionId changed' : 'membership changed'
                 });
                 debug.groupEnd();
                 previousSessionIdRef.current = latestSession.id;
+                previousMembershipRef.current = userInSession;
                 setActiveSession(latestSession);
               } else {
                 // User is in session but NOT on the session page - show notification to rejoin
-                debug.log('InSessionNotification', '✅ Showing rejoin notification - user not on session page');
+                debug.log('InSessionNotification', '✅ Showing rejoin notification - user not on session page', {
+                  sessionId: latestSession.id,
+                  reason: sessionIdChanged ? 'sessionId changed' : 'membership changed'
+                });
                 debug.groupEnd();
                 previousSessionIdRef.current = latestSession.id;
+                previousMembershipRef.current = userInSession;
                 setActiveSession(latestSession);
               }
+            } else {
+              // State is stable - don't update (prevents flickering)
+              debug.log('InSessionNotification', '⏸️ Skipping update - state is stable', {
+                sessionId: latestSession.id,
+                previousSessionId: previousSessionIdRef.current,
+                userInSession,
+                previousMembership: previousMembershipRef.current
+              });
+              debug.groupEnd();
             }
-            // If session ID hasn't changed, don't update state (keeps notification stable)
           } else {
             debug.log('InSessionNotification', 'No sessions found for user classrooms');
             debug.groupEnd();

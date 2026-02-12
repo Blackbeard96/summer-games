@@ -1623,8 +1623,29 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     try {
       const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
       
-      // Get current battle room state for reference (to preserve other properties)
-      const currentBattleRoomEnemies = battleRoom.enemies || [];
+      // CRITICAL FIX: Read current enemy state from Firestore to avoid using stale cached data
+      // This ensures we use the most up-to-date health values, not potentially stale battleRoom.enemies
+      let currentBattleRoomEnemies: IslandRaidEnemy[] = [];
+      try {
+        const battleRoomDoc = await getDoc(battleRoomRef);
+        if (battleRoomDoc.exists()) {
+          currentBattleRoomEnemies = (battleRoomDoc.data().enemies || []) as IslandRaidEnemy[];
+          console.log('🏝️ IslandRaidBattle: Read current enemies from Firestore:', currentBattleRoomEnemies.map(e => ({
+            id: e.id,
+            name: e.name,
+            health: e.health,
+            maxHealth: e.maxHealth
+          })));
+        } else {
+          // Fallback to cached battleRoom if Firestore read fails
+          currentBattleRoomEnemies = battleRoom.enemies || [];
+          console.warn('🏝️ IslandRaidBattle: Battle room not found in Firestore, using cached enemies');
+        }
+      } catch (error) {
+        console.error('🏝️ IslandRaidBattle: Error reading current enemies from Firestore:', error);
+        // Fallback to cached battleRoom if Firestore read fails
+        currentBattleRoomEnemies = battleRoom.enemies || [];
+      }
       
       console.log('🏝️ IslandRaidBattle: handleOpponentsUpdate called with', updatedOpponents.length, 'opponents');
       console.log('🏝️ IslandRaidBattle: Current wave:', waveNumber, 'BattleRoom wave:', battleRoom?.waveNumber);
@@ -1650,11 +1671,20 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         const originalEnemy = currentBattleRoomEnemies.find((e: IslandRaidEnemy) => e.id === opp.id);
         
         // Use updated health/shields from opponent (this is the authoritative source from BattleEngine)
-        // Priority: vaultHealth (Island Raid) > health > original health
-        const updatedHealth = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.health !== undefined ? opp.health : (originalEnemy?.health || 100));
+        // CRITICAL FIX: Do NOT fall back to originalEnemy.health - that would reset health to full!
+        // Only use values from opp (BattleEngine update), or if missing, use current Firestore value
+        // Priority: vaultHealth (Island Raid) > health > current Firestore health (NOT original full health)
+        const currentFirestoreHealth = originalEnemy?.health !== undefined ? originalEnemy.health : 100;
+        const updatedHealth = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.health !== undefined ? opp.health : currentFirestoreHealth);
         const updatedMaxHealth = opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxHealth !== undefined ? opp.maxHealth : (originalEnemy?.maxHealth || 100));
-        const updatedShield = opp.shieldStrength !== undefined ? opp.shieldStrength : (originalEnemy?.shieldStrength || 0);
+        const currentFirestoreShield = originalEnemy?.shieldStrength !== undefined ? originalEnemy.shieldStrength : 0;
+        const updatedShield = opp.shieldStrength !== undefined ? opp.shieldStrength : currentFirestoreShield;
         const updatedMaxShield = opp.maxShieldStrength !== undefined ? opp.maxShieldStrength : (originalEnemy?.maxShieldStrength || 0);
+        
+        // Log if we're using fallback values (shouldn't happen in normal flow)
+        if (opp.vaultHealth === undefined && opp.health === undefined) {
+          console.warn(`⚠️ IslandRaidBattle: No health value in opponent update for ${opp.name} (${opp.id}), using Firestore value: ${currentFirestoreHealth}`);
+        }
         
         // Preserve all other properties from original enemy
         return {
