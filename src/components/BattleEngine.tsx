@@ -23,6 +23,8 @@ import BattleAnimations from './BattleAnimations';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { createLiveFeedMilestone } from '../services/liveFeed';
+import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
 import { getUserUnlockedSkillsForBattle } from '../utils/battleSkillsService';
 import { SpacesModeState, SpaceId } from '../types/battleSession';
@@ -3401,6 +3403,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [isMultiplayer, battleState.phase, battleState.isPlayerTurn, battleState.turnOrder, battleState.selectedTarget, currentUser, allies, opponents]);
 
   const executePlayerMove = useCallback(async () => {
+    // Detect Island Raid mode once at the start (has gameId but not isInSession)
+    const isIslandRaid = !!gameId && !isInSession;
+    
+    // Instrument: Action submit called
+    const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
+    const mode = detectBattleMode({ isInSession, sessionId, gameId, battleId: undefined, isIslandRaid, isVaultSiege: false });
+    battleDebug('action-submit', {
+      mode,
+      sessionId,
+      gameId,
+      battleId: undefined,
+      actorUid: currentUser?.uid,
+      skillId: battleState.selectedMove?.id,
+      moveId: battleState.selectedMove?.id,
+      targetUid: battleState.selectedTarget || undefined,
+      cost: battleState.selectedMove?.cost,
+      cooldown: battleState.selectedMove?.cooldown,
+      phase: battleState.phase
+    });
     if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
 
     const move = battleState.selectedMove;
@@ -3410,14 +3431,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
     
     // In true multiplayer, wait for all participants to select moves before executing
-    // EXCEPT in In Session mode or single-player with AI, where moves execute immediately
-    if (isMultiplayer && !isInSession && !isSinglePlayerWithAI) {
+    // EXCEPT in In Session mode, Island Raid mode, or single-player with AI, where moves execute immediately
+    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) {
       // Just store the move - execution will happen when turn order is calculated
+      battleDebug('mode-gating', {
+        mode: detectBattleMode({ isInSession, sessionId, gameId, battleId: undefined, isIslandRaid, isVaultSiege: false }),
+        sessionId,
+        gameId,
+        isMultiplayer,
+        isInSession,
+        isIslandRaid,
+        isSinglePlayerWithAI,
+        reason: 'Waiting for turn order calculation'
+      });
       return;
     }
     
-    // In In Session mode, single player mode, or single-player with AI, execute immediately
-    console.log('✅ [executePlayerMove] Executing move immediately', { isSinglePlayerWithAI, isInSession, isMultiplayer });
+    // In In Session mode, Island Raid mode, single player mode, or single-player with AI, execute immediately
+    console.log('✅ [executePlayerMove] Executing move immediately', { isSinglePlayerWithAI, isInSession, isIslandRaid, isMultiplayer, gameId });
     // Start animation
     setBattleState(prev => ({
       ...prev,
@@ -3427,7 +3458,28 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession, allies, currentUser]);
 
   const handleAnimationComplete = async () => {
-    if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
+    // ALWAYS log animation complete (critical for debugging)
+    console.log('🎬 [BattleEngine] ANIMATION COMPLETE:', {
+      hasSelectedMove: !!battleState.selectedMove,
+      selectedMove: battleState.selectedMove?.name,
+      selectedMoveId: battleState.selectedMove?.id,
+      hasSelectedTarget: !!battleState.selectedTarget,
+      selectedTarget: battleState.selectedTarget,
+      hasVault: !!vault,
+      isInSession,
+      sessionId,
+      gameId,
+      timestamp: new Date().toISOString()
+    });
+    
+    if (!battleState.selectedMove || !battleState.selectedTarget || !vault) {
+      console.warn('⚠️ [BattleEngine] Animation complete but missing requirements:', {
+        hasSelectedMove: !!battleState.selectedMove,
+        hasSelectedTarget: !!battleState.selectedTarget,
+        hasVault: !!vault
+      });
+      return;
+    }
 
     // Find the target opponent based on selectedTarget ID
     // For multiplayer, search in opponents array. For single player, use opponent.
@@ -4133,11 +4185,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // IN-SESSION MODE: Apply move via authoritative Firestore transaction
     // This ensures all clients see the same state updates
     if (isInSession && sessionId && currentUser) {
-      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+      // ALWAYS log move execution start (critical for debugging) - concise
+      console.log('🚀 [BattleEngine] ⚡ EXECUTION START ⚡', overriddenMoveName, '→', targetOpponent.name, '| Dmg:', damage || 0, '| Shield:', shieldDamage || 0, '| Heal:', playerHealing || 0, '| Cost:', move.cost || 0);
+      
+      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
+                                 process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
       
-      if (DEBUG_LIVE_EVENTS) {
-        console.log('[BattleEngine] 🚀 IN-SESSION MOVE EXECUTION START:', {
+      // Stage C: Action submission invoked
+      // Get traceId from event detail if available, or generate new one
+      const traceId = (window as any).__currentLiveEventTraceId || null;
+      if (traceId) {
+        const { traceStage, writeDebugAction } = await import('../utils/liveEventDebug');
+        traceStage('submitted', traceId, 'Action submission invoked', {
           sessionId,
           actorUid: currentUser.uid,
           actorName: playerName,
@@ -4151,7 +4211,33 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           shieldBoost: playerShieldBoost,
           ppStolen,
           ppCost: move.cost || 0
-        });
+        }, { file: 'BattleEngine.tsx', line: 4187 });
+        
+        // Write debug mirror
+        // Note: We need classId and eventId - these might not be available here
+        // We'll get them from sessionId lookup or pass them through
+        const classId = (window as any).__currentLiveEventClassId;
+        const eventId = (window as any).__currentLiveEventEventId;
+        if (classId && eventId) {
+          await writeDebugAction(classId, eventId, traceId, 'submitted', {
+            actorUid: currentUser.uid,
+            targetUid: targetOpponent.id,
+            skillId: move.id,
+            skillName: move.name,
+            paths: {
+              actionPath: `inSessionRooms/${sessionId}`,
+              statePath: `inSessionRooms/${sessionId}/players`
+            },
+            metadata: {
+              damage,
+              shieldDamage,
+              healing: playerHealing,
+              shieldBoost: playerShieldBoost,
+              ppStolen,
+              ppCost: move.cost || 0
+            }
+          });
+        }
       }
       
       try {
@@ -4174,8 +4260,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Calculate PP cost (if move has cost property)
         const ppCost = (move.cost || 0);
         
-        // Get the latest battle log message (should be the last one we added)
-        const battleLogMessage = newLog[newLog.length - 1] || `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}`;
+        // Ensure we have a battle log message
+        // If no log message was added (e.g., for moves without damage), create one
+        let battleLogMessage = newLog[newLog.length - 1];
+        if (!battleLogMessage || typeof battleLogMessage !== 'string') {
+          // Create a default message based on move type
+          if (damage > 0 || shieldDamage > 0) {
+            const healthLabel = checkIsCPUOpponent(targetOpponent) ? 'health' : 'vault health';
+            if (shieldDamage > 0 && damage > 0) {
+              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${damage - shieldDamage} to ${healthLabel})!`;
+            } else if (shieldDamage > 0) {
+              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields!`;
+            } else {
+              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage to ${healthLabel}!`;
+            }
+          } else if (playerHealing > 0) {
+            battleLogMessage = `💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP!`;
+          } else if (playerShieldBoost > 0) {
+            battleLogMessage = `🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}!`;
+          } else {
+            battleLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}!`;
+          }
+          // Add it to newLog so it's included in the local state update
+          newLog.push(battleLogMessage);
+        }
         
         if (DEBUG_LIVE_EVENTS) {
           console.log('[BattleEngine] 📝 Calling applyInSessionMove with:', {
@@ -4185,8 +4293,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             moveName: move.name,
             damage,
             shieldDamage,
+            healing: playerHealing,
+            shieldBoost: playerShieldBoost,
+            ppStolen,
             ppCost,
-            battleLogMessage
+            battleLogMessage,
+            newLogLength: newLog.length
           });
         }
         
@@ -4196,6 +4308,44 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // For In-Session, pass damage values as calculated
         // damage = total damage, shieldDamage = amount that will be absorbed by shield
         // The service will apply: shield first, then remaining damage to health
+        // CRITICAL: Ensure we have valid values (at least 0, not undefined)
+        const finalDamage = damage || 0;
+        const finalShieldDamage = shieldDamage || 0;
+        const finalHealing = playerHealing || 0;
+        const finalShieldBoost = playerShieldBoost || 0;
+        const finalPPStolen = ppStolen || 0;
+        
+        if (DEBUG_LIVE_EVENTS) {
+          console.log('[BattleEngine] 🎯 Final values for applyInSessionMove:', {
+            damage: finalDamage,
+            shieldDamage: finalShieldDamage,
+            healing: finalHealing,
+            shieldBoost: finalShieldBoost,
+            ppStolen: finalPPStolen,
+            ppCost,
+            battleLogMessage
+          });
+        }
+        
+        // ALWAYS log move execution attempt (critical for debugging)
+        console.log('🚀 [In-Session Move] EXECUTING MOVE:', {
+          sessionId,
+          actorUid: currentUser.uid,
+          actorName: playerName,
+          targetUid: targetOpponent.id,
+          targetName: targetOpponent.name,
+          moveId: move.id,
+          moveName: move.name,
+          damage: finalDamage,
+          shieldDamage: finalShieldDamage,
+          healing: finalHealing,
+          shieldBoost: finalShieldBoost,
+          ppStolen: finalPPStolen,
+          ppCost,
+          battleLogMessage,
+          timestamp: new Date().toISOString()
+        });
+        
         const moveResult = await applyInSessionMove({
           sessionId,
           actorUid: currentUser.uid,
@@ -4203,20 +4353,38 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           targetUid: targetOpponent.id,
           targetName: targetOpponent.name,
           move,
-          damage: damage, // Total damage
-          shieldDamage: shieldDamage, // Amount absorbed by shield (for special moves or normal calculation)
-          healing: playerHealing,
-          shieldBoost: playerShieldBoost,
-          ppStolen,
+          damage: finalDamage, // Total damage
+          shieldDamage: finalShieldDamage, // Amount absorbed by shield (for special moves or normal calculation)
+          healing: finalHealing,
+          shieldBoost: finalShieldBoost,
+          ppStolen: finalPPStolen,
           ppCost,
           battleLogMessage
         });
         
-        if (DEBUG_LIVE_EVENTS) {
-          console.log('[BattleEngine] 📥 applyInSessionMove result:', moveResult);
+        // ALWAYS log result (critical for debugging) - concise
+        if (!moveResult.success) {
+          console.error('❌ [In-Session Move] ⚠️ MOVE FAILED', move.name, '→', targetOpponent.name, '| Error:', moveResult.message);
+          alert(`Failed to execute move: ${moveResult.message}`);
+          return;
         }
         
+        const hpChange = moveResult.stateChanges ? `${moveResult.stateChanges.targetHpBefore} → ${moveResult.stateChanges.targetHpAfter}` : 'N/A';
+        console.log('✅ [In-Session Move] ⚡ SUCCESS ⚡', move.name, '→', targetOpponent.name, '| Dmg:', moveResult.damage, '| HP:', hpChange, '| Waiting for subscription...');
+        
         if (moveResult.success) {
+          console.log('✅ [In-Session Move] Move result success:', {
+            success: moveResult.success,
+            message: moveResult.message,
+            battleLogEntry: moveResult.battleLogEntry,
+            damage: moveResult.damage,
+            shieldDamage: moveResult.shieldDamage,
+            healing: moveResult.healing,
+            shieldBoost: moveResult.shieldBoost,
+            ppStolen: moveResult.ppStolen,
+            ppCost: moveResult.ppCost
+          });
+          
           // Track skill usage for stats
           if (sessionId && currentUser?.uid) {
             try {
@@ -4263,6 +4431,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           // Move applied successfully via Firestore transaction
           // The session listener in InSessionBattle will update local state
           // We just need to update the battle log state so it propagates
+          console.log('✅ [In-Session Move] Success! Updating local state. Battle log length:', newLog.length);
           setBattleState(prev => ({
             ...prev,
             battleLog: newLog,
@@ -4273,9 +4442,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             phase: 'selection'
           }));
           
-          // Update battle log via callback
+          // Update battle log via callback (this should trigger InSessionBattle to update)
           if (onBattleLogUpdate) {
+            console.log('✅ [In-Session Move] Calling onBattleLogUpdate with', newLog.length, 'entries');
             onBattleLogUpdate(newLog);
+          } else {
+            console.warn('⚠️ [In-Session Move] onBattleLogUpdate callback not provided!');
           }
           
           // Set skill cooldown locally (will be synced via session state if needed)
@@ -4292,7 +4464,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           return; // Exit early - don't apply local updates
         } else {
           const errorMsg = moveResult.message || 'Unknown error';
-          console.error('❌ [In-Session Move] Failed to apply move:', errorMsg);
+          // ALWAYS log failures (critical for debugging)
+          console.error('❌ [In-Session Move] FAILED TO APPLY MOVE:', {
+            error: errorMsg,
+            sessionId,
+            actorUid: currentUser.uid,
+            targetUid: targetOpponent.id,
+            moveId: move.id,
+            moveName: move.name,
+            damage: finalDamage,
+            shieldDamage: finalShieldDamage,
+            timestamp: new Date().toISOString()
+          });
           
           // Show user-facing error
           alert(`Failed to use skill: ${errorMsg}`);
@@ -4308,11 +4491,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       } catch (error: any) {
         const errorMsg = error?.message || 'An unexpected error occurred';
-        console.error('❌ [In-Session Move] Error applying move:', error);
-        console.error('❌ [In-Session Move] Error details:', {
+        // ALWAYS log errors (critical for debugging)
+        console.error('❌ [In-Session Move] EXCEPTION CAUGHT:', {
+          error: errorMsg,
           errorCode: error?.code,
-          errorMessage: errorMsg,
-          errorStack: error?.stack
+          errorStack: error?.stack,
+          sessionId,
+          actorUid: currentUser.uid,
+          targetUid: targetOpponent.id,
+          moveId: move.id,
+          moveName: move.name,
+          timestamp: new Date().toISOString(),
+          fullError: error
         });
         
         // Show user-facing error
@@ -4883,6 +5073,35 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         updateChallengeProgressByType(currentUser.uid, 'win_battle', 1).catch(err => 
           console.error('Error updating daily challenge progress:', err)
         );
+      }
+
+      // Create Live Feed post for battle win (if privacy settings allow)
+      if (currentUser) {
+        try {
+          const eventType = isPvP ? 'pvp_win' : 'battle_win';
+          const shouldShare = await shouldShareEvent(currentUser.uid, eventType);
+          if (shouldShare) {
+            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+            const studentData = studentDoc.exists() ? studentDoc.data() : null;
+            const playerLevel = studentData ? getLevelFromXP(studentData.xp || 0) : undefined;
+            
+            await createLiveFeedMilestone(
+              currentUser.uid,
+              currentUser.displayName || 'Unknown',
+              currentUser.photoURL || undefined,
+              studentData?.role || undefined,
+              playerLevel,
+              eventType,
+              {
+                opponentName: targetOpponent.name,
+                modeName: isPvP ? 'PvP Battle' : 'Battle Arena'
+              },
+              `${eventType}_${currentUser.uid}_${targetOpponent.id}_${Date.now()}`
+            );
+          }
+        } catch (error) {
+          console.error('Error creating Live Feed post for battle win:', error);
+        }
       }
       
       if (isPvP) {
@@ -5705,6 +5924,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   const handleMoveSelect = (move: Move | null) => {
+    // Instrument: Skill clicked
+    (async () => {
+      const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
+      const isIslandRaid = !!gameId && !isInSession;
+      const mode = detectBattleMode({ isInSession, sessionId, gameId, battleId: undefined, isIslandRaid, isVaultSiege: false });
+      battleDebug('skill-click', {
+        mode,
+        sessionId,
+        actorUid: currentUser?.uid,
+        skillId: move?.id,
+        moveId: move?.id,
+        cost: move?.cost,
+        cooldown: move?.cooldown,
+        moveName: move?.name
+      });
+    })();
+    
     setBattleState(prev => ({
       ...prev,
       selectedMove: move,
@@ -5747,6 +5983,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   const handleTargetSelect = (targetId: string) => {
+    // ALWAYS log target selection (critical for debugging)
+    console.log('🎯 [BattleEngine] TARGET SELECTED:', {
+      targetId,
+      selectedMove: battleState.selectedMove?.name,
+      selectedMoveId: battleState.selectedMove?.id,
+      isInSession,
+      sessionId,
+      gameId,
+      phase: battleState.phase,
+      timestamp: new Date().toISOString()
+    });
+    
     // If Spaces Mode, don't use regular target selection
     if (isSpacesMode) {
       console.warn('⚠️ [BattleEngine] Regular target selection disabled in Spaces Mode. Use handleSpaceTargetSelect instead.');
@@ -5780,25 +6028,42 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     console.log(`✅ [BattleEngine] Valid target selected: ${targetId}`);
     
+    // Instrument: Target clicked
+    (async () => {
+      const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
+      const isIslandRaid = !!gameId && !isInSession;
+      const mode = detectBattleMode({ isInSession, sessionId, gameId, battleId: undefined, isIslandRaid, isVaultSiege: false });
+      battleDebug('target-click', {
+        mode,
+        sessionId,
+        targetUid: targetId,
+        targetId,
+        selectedSkillId: battleState.selectedMove?.id,
+        selectedMoveId: battleState.selectedMove?.id
+      });
+    })();
+    
     setBattleState(prev => {
       // Check if this is single-player with AI allies (like Chapter 2-5)
       const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
-      // CRITICAL: In-Session mode always goes directly to execution (no turn order needed)
+      // CRITICAL: In-Session mode and Island Raid mode always go directly to execution (no turn order needed)
       // In true multiplayer mode, keep phase as 'selection' until turn order is calculated
       // For single-player with AI, go directly to execution
-      const newPhase = isInSession 
-        ? 'execution' // In-Session: always execute immediately
+      const isIslandRaidForTarget = !!gameId && !isInSession;
+      const newPhase = (isInSession || isIslandRaidForTarget)
+        ? 'execution' // In-Session/Island Raid: always execute immediately
         : (isMultiplayer && !isSinglePlayerWithAI && !prev.turnOrder) ? 'selection' : 'execution';
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
-      
-      if (DEBUG_LIVE_EVENTS || isInSession) {
+      if (DEBUG_LIVE_EVENTS || isInSession || isIslandRaidForTarget) {
         console.log(`🎯 [Target Select] Setting target ${targetId}, phase: ${newPhase}`, {
           isInSession,
+          isIslandRaid: isIslandRaidForTarget,
           sessionId,
+          gameId,
           multiplayer: isMultiplayer,
           isSinglePlayerWithAI,
           hasTurnOrder: !!prev.turnOrder,
@@ -5833,10 +6098,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         });
       }
       
-      // CRITICAL: In-Session mode always executes immediately (no turn order)
-      if (isInSession) {
-        if (DEBUG_LIVE_EVENTS) {
-          console.log('[BattleEngine] ✅ In-Session mode - executing immediately');
+      // CRITICAL: In-Session mode and Island Raid mode always execute immediately (no turn order)
+      const isIslandRaidForEffect = !!gameId && !isInSession;
+      if (isInSession || isIslandRaidForEffect) {
+        if (DEBUG_LIVE_EVENTS || isIslandRaidForEffect) {
+          console.log('[BattleEngine] ✅ Executing immediately', { isInSession, isIslandRaid: isIslandRaidForEffect, gameId });
         }
         executePlayerMove();
         return;
@@ -5866,12 +6132,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                                process.env.REACT_APP_DEBUG === 'true';
     
     const handleExternalMoveSelect = (event: CustomEvent) => {
-      const { move, targetId } = event.detail;
+      // ALWAYS log event receipt (critical - must see this)
+      const { move, targetId, traceId, classId, eventId } = event.detail || {};
+      console.log('📥 [BattleEngine] ⚡ RECEIVED EVENT ⚡', move?.name || 'NO_MOVE', '→', targetId?.substring(0, 8) || 'NO_TARGET', '| TraceId:', traceId || 'NONE');
       
       if (DEBUG_LIVE_EVENTS) {
         console.log('[BattleEngine] 📥 Received inSessionMoveSelect event:', {
           move: move ? { id: move.id, name: move.name, type: move.type } : null,
           targetId,
+          traceId,
           isInSession,
           sessionId,
           currentUserId: currentUser?.uid
@@ -5879,8 +6148,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       
       if (move && targetId) {
+        // Store traceId from event detail for use in action submission
+        if (traceId) {
+          (window as any).__currentLiveEventTraceId = traceId;
+        }
+        
+        // Also store classId and eventId if available
+        if (classId) (window as any).__currentLiveEventClassId = classId;
+        if (eventId) (window as any).__currentLiveEventEventId = eventId;
+        
         if (DEBUG_LIVE_EVENTS) {
           console.log('[BattleEngine] ✅ Processing move selection:', {
+            traceId,
             moveName: move.name,
             targetId,
             isInSession,

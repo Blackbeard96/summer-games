@@ -30,14 +30,8 @@ const TestAccountManager: React.FC<TestAccountManagerProps> = ({ isOpen, onClose
   const [testResults, setTestResults] = useState<any>(null);
   const [adminOverride, setAdminOverride] = useState(false);
 
-  // Check if current user is admin
-  const isAdmin = adminOverride || 
-                  currentUser?.email === 'eddymosley@compscihigh.org' || 
-                  currentUser?.email === 'admin@mstgames.net' ||
-                  currentUser?.email === 'edm21179@gmail.com' ||
-                  currentUser?.email?.includes('eddymosley') ||
-                  currentUser?.email?.includes('admin') ||
-                  currentUser?.email?.includes('mstgames');
+  // Check if current user is admin - Only Yondaime has access
+  const isAdmin = adminOverride || currentUser?.email === 'edm21179@gmail.com';
 
   useEffect(() => {
     if (isOpen && isAdmin) {

@@ -12,6 +12,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import { MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { MOVE_TEMPLATES, ACTION_CARD_TEMPLATES } from '../types/battle';
+import { fixBlackbeardManifestAndSkills, findPlayerByName, fixPlayerManifestAndSkills } from '../utils/fixPlayerManifestAndSkills';
 import { useLevelUp } from '../context/LevelUpContext';
 import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
@@ -2511,6 +2512,43 @@ const AdminPanel: React.FC = () => {
             }}
           >
             Fix Yondaime's Chapter
+          </button>
+          <button
+            onClick={async () => {
+              if (!window.confirm('Fix Blackbeard\'s manifest and skill levels?\n\nThis will:\n- Set manifest to Gaming (Level 4)\n- Unlock all manifest levels\n- Recalculate power level\n\nContinue?')) {
+                return;
+              }
+              
+              try {
+                const result = await fixBlackbeardManifestAndSkills('gaming', 4);
+                alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+                if (result.success) {
+                  // Refresh students list
+                  const studentsSnapshot = await getDocs(collection(db, 'students'));
+                  const studentsList = studentsSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                  })) as Student[];
+                  setStudents(studentsList);
+                  setFilteredStudents(studentsList);
+                }
+              } catch (error) {
+                alert('Error: ' + (error instanceof Error ? error.message : 'Unknown error'));
+              }
+            }}
+            style={{
+              backgroundColor: '#10b981',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              marginLeft: '0.5rem'
+            }}
+          >
+            Fix Blackbeard's Manifest & Skills
           </button>
         </div>
       </div>

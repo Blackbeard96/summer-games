@@ -155,16 +155,41 @@ const Dashboard = () => {
     const manifest = MANIFESTS.find(m => m.id === manifestId);
     if (!manifest) return;
 
+    // CRITICAL FIX: Preserve existing manifest data (level, xp, unlockedLevels) when changing manifest
+    // Only reset to defaults if this is the first time selecting a manifest
+    const existingManifest = playerManifest;
+    const isFirstTimeSelection = !existingManifest || !existingManifest.manifestId;
+    
     const newPlayerManifest: PlayerManifest = {
       manifestId,
-      currentLevel: 1,
-      xp: 0,
+      // Preserve existing level and xp if manifest already exists, otherwise use defaults
+      currentLevel: existingManifest?.currentLevel || 1,
+      xp: existingManifest?.xp || 0,
       catalyst: manifest.catalyst,
-      veil: 'Fear of inadequacy',
+      // Preserve existing veil if manifest exists, otherwise use default
+      veil: existingManifest?.veil || 'Fear of inadequacy',
       signatureMove: manifest.signatureMove,
-      unlockedLevels: [1],
-      lastAscension: serverTimestamp()
+      // Preserve existing unlocked levels if manifest exists, otherwise use default
+      unlockedLevels: existingManifest?.unlockedLevels || [1],
+      // Only update lastAscension if this is a new manifest selection
+      lastAscension: isFirstTimeSelection ? serverTimestamp() : (existingManifest?.lastAscension || serverTimestamp()),
+      // Preserve existing usage tracking
+      abilityUsage: existingManifest?.abilityUsage || {},
+      moveUsage: existingManifest?.moveUsage || {},
+      unclaimedMilestones: existingManifest?.unclaimedMilestones || {}
     };
+
+    // Warn user if they're changing an existing manifest (not first time)
+    if (!isFirstTimeSelection && existingManifest.manifestId !== manifestId) {
+      const confirmChange = window.confirm(
+        `⚠️ Warning: You are changing your manifest from "${MANIFESTS.find(m => m.id === existingManifest.manifestId)?.name || existingManifest.manifestId}" to "${manifest.name}".\n\n` +
+        `Your current level (${existingManifest.currentLevel}), XP (${existingManifest.xp}), and unlocked levels will be preserved.\n\n` +
+        `Continue?`
+      );
+      if (!confirmChange) {
+        return;
+      }
+    }
 
     try {
       // Save to students collection (primary) using setDoc with merge to handle missing documents

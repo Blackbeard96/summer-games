@@ -171,13 +171,8 @@ const ClassroomManagement: React.FC = () => {
       const isAdminFromAuthContext = isAdminFromAuth;
       
       // Also check email-based admin directly (as additional check)
-      const isAdminByEmail = currentUser.email === 'eddymosley@compscihigh.org' || 
-                             currentUser.email === 'admin@mstgames.net' ||
-                             currentUser.email === 'edm21179@gmail.com' ||
-                             currentUser.email === 'eddymosley9@gmail.com' ||
-                             currentUser.email?.includes('eddymosley') ||
-                             currentUser.email?.includes('admin') ||
-                             currentUser.email?.includes('mstgames');
+      // Only Yondaime has admin access
+      const isAdminByEmail = currentUser.email === 'edm21179@gmail.com';
       
       try {
         const roleDoc = await getDoc(doc(db, 'userRoles', currentUser.uid));

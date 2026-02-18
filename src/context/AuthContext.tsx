@@ -363,19 +363,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await deleteUser(currentUser);
   }, [currentUser]);
 
-  // Check if current user is admin (computed from role or legacy email check)
+  // Check if current user is admin - Only Yondaime has access
   const isAdminComputed = useMemo(() => {
     if (role === 'admin') return true;
     
-    // Legacy fallback: check email if role not loaded yet
+    // Fallback: check email if role not loaded yet - Only Yondaime
     if (!currentUser || loadingRole) return false;
     
-    return currentUser.email === 'eddymosley@compscihigh.org' || 
-           currentUser.email === 'admin@mstgames.net' ||
-           currentUser.email === 'edm21179@gmail.com' ||
-           (currentUser.email?.includes('eddymosley') ?? false) ||
-           (currentUser.email?.includes('admin') ?? false) ||
-           (currentUser.email?.includes('mstgames') ?? false);
+    // Only Yondaime's email is allowed
+    return currentUser.email === 'edm21179@gmail.com';
   }, [role, currentUser, loadingRole]);
 
   // Switch to test account

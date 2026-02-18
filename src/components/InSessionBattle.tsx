@@ -51,6 +51,7 @@ import {
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
 import SessionSummaryModal from './SessionSummaryModal';
 import { SessionSummary } from '../types/inSessionStats';
+import LiveEventDebugOverlay from './LiveEventDebugOverlay';
 
 interface Student {
   id: string;
@@ -105,6 +106,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [selectedMove, setSelectedMove] = useState<any>(null);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [currentTraceId, setCurrentTraceId] = useState<string | null>(null);
   const [activeViewers, setActiveViewers] = useState<string[]>([]);
   const [presenceMap, setPresenceMap] = useState<Map<string, { connected: boolean; lastSeenAt: any }>>(new Map());
   const battleEngineRef = useRef<{ selectMove: (move: any) => void; selectTarget: (targetId: string) => void } | null>(null);
@@ -251,18 +253,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     // Auto-join on mount
     autoJoinSession();
     
-    // Subscribe to session updates
-    // CRITICAL: Ensure only one subscription per sessionId to prevent duplication
-    const unsubscribe = subscribeToSession(sessionId, (session) => {
+      // Subscribe to session updates
+      // CRITICAL: Ensure only one subscription per sessionId to prevent duplication
+      const unsubscribe = subscribeToSession(sessionId, (session) => {
+        // Dispatch subscription health update
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('liveEventSubscriptionUpdate', {
+            detail: { 
+              type: 'session', 
+              connected: true, 
+              lastUpdate: new Date().toISOString() 
+            }
+          }));
+        }
       if (!session) {
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
         return;
       }
       
-      debugThrottle('session-update', 2000, 'inSessionBattle', `Session update received`, {
+      const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                 process.env.REACT_APP_DEBUG === 'true';
+      
+      // Throttle session update logs to reduce noise (only log every 5 seconds)
+      debugThrottle('session-update', 5000, 'inSessionBattle', `Session update received`, {
         sessionId,
         playersCount: session.players?.length || 0,
-        battleLogLength: session.battleLog?.length || 0
+        battleLogLength: session.battleLog?.length || 0,
+        lastLogEntry: session.battleLog?.[session.battleLog.length - 1] || 'none'
       });
       
       const players: SessionPlayer[] = session.players || [];
@@ -280,11 +297,50 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         return player;
       });
       
+      // ALWAYS log player state changes (critical for debugging)
+      updatedPlayers.forEach(player => {
+        const oldPlayer = sessionPlayers.find(p => p.userId === player.userId);
+        if (oldPlayer && (oldPlayer.hp !== player.hp || oldPlayer.shield !== player.shield || oldPlayer.powerPoints !== player.powerPoints)) {
+          const changes = [];
+          if (oldPlayer.hp !== player.hp) changes.push(`HP: ${oldPlayer.hp} → ${player.hp}`);
+          if (oldPlayer.shield !== player.shield) changes.push(`Shield: ${oldPlayer.shield} → ${player.shield}`);
+          if (oldPlayer.powerPoints !== player.powerPoints) changes.push(`PP: ${oldPlayer.powerPoints} → ${player.powerPoints}`);
+          console.log(`🔄 [Session Update] ⚡ STATE CHANGED ⚡`, player.displayName, '|', changes.join(' | '));
+          
+          // Dispatch state update event for debug overlay
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('liveEventStateUpdate', {
+              detail: { playerId: player.userId }
+            }));
+          }
+        }
+      });
+      
       setSessionPlayers(updatedPlayers);
       
       // Update battle log
       if (session.battleLog && Array.isArray(session.battleLog)) {
+        const oldLogLength = battleLog.length;
+        const newLogLength = session.battleLog.length;
+        // ALWAYS log battle log updates (critical for debugging)
+        if (newLogLength > oldLogLength) {
+          console.log(`📝 [Session Update] BATTLE LOG UPDATED:`, {
+            oldLength: oldLogLength,
+            newLength: newLogLength,
+            newEntries: session.battleLog.slice(oldLogLength),
+            sessionId,
+            timestamp: new Date().toISOString()
+          });
+        } else if (newLogLength < oldLogLength) {
+          console.warn(`⚠️ [Session Update] Battle log length DECREASED: ${oldLogLength} → ${newLogLength}`);
+        }
         setBattleLog(session.battleLog);
+      } else {
+        console.warn('⚠️ [Session Update] Battle log missing or invalid:', {
+          hasBattleLog: !!session.battleLog,
+          isArray: Array.isArray(session.battleLog),
+          sessionId
+        });
       }
       
       // Update active viewers (if still using array for backward compatibility)
@@ -1115,17 +1171,58 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     return (
       <div
         key={student.id}
-        onClick={(e) => {
+        onClick={async (e) => {
           // If a move is selected, use this player as target
           // Allow targeting ALL players (including those not in session)
           if (selectedMove && student.id !== currentUser?.uid) {
+            // ALWAYS log target click (critical - must see this)
+            console.log('🎯 [InSessionBattle] ⚡ TARGET CLICKED ⚡', student.displayName, '| Move:', selectedMove?.name, '| TraceId:', currentTraceId || 'NEW');
+            
             e.stopPropagation(); // Prevent event bubbling
             
-            const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+            const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
+                                     process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                      process.env.REACT_APP_DEBUG === 'true';
+            
+            // Stage B: Target clicked - Use existing traceId or generate new one
+            const { generateTraceId, traceStage, writeDebugAction } = await import('../utils/liveEventDebug');
+            const traceId = currentTraceId || generateTraceId();
+            if (!currentTraceId) {
+              setCurrentTraceId(traceId);
+            }
+            
+            console.log('🎯 [InSessionBattle] Using traceId:', traceId);
+            
+            traceStage('targeted', traceId, 'Target clicked', {
+              targetId: student.id,
+              targetName: student.displayName,
+              selectedMove: {
+                id: selectedMove.id,
+                name: selectedMove.name,
+                type: selectedMove.type,
+                cost: selectedMove.cost,
+                category: selectedMove.category
+              },
+              actorUid: currentUser?.uid,
+              sessionId: sessionId
+            }, { file: 'InSessionBattle.tsx', line: 1158 });
+            
+            // Write debug mirror
+            if (classId && sessionId) {
+              await writeDebugAction(classId, sessionId, traceId, 'targeted', {
+                actorUid: currentUser?.uid || '',
+                targetUid: student.id,
+                skillId: selectedMove.id,
+                skillName: selectedMove.name,
+                metadata: {
+                  targetName: student.displayName
+                }
+              });
+            }
             
             if (DEBUG_LIVE_EVENTS) {
               console.log('[InSessionBattle] 🎯 TARGET CLICKED:', {
+                traceId,
                 targetId: student.id,
                 targetName: student.displayName,
                 selectedMove: {
@@ -1142,18 +1239,28 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             
             setSelectedTarget(student.id);
             // Dispatch custom event to trigger BattleEngine move execution
-            const eventDetail = { move: selectedMove, targetId: student.id };
+            // Include traceId, classId, and eventId in event detail
+            const eventDetail = { 
+              move: selectedMove, 
+              targetId: student.id, 
+              traceId,
+              classId,
+              eventId: sessionId // Using sessionId as eventId for now
+            };
+            
+            // ALWAYS log event dispatch (critical - must see this)
+            console.log('📤 [InSessionBattle] ⚡ DISPATCHING EVENT ⚡', selectedMove?.name, '→', student.displayName, '| TraceId:', traceId);
+            
             window.dispatchEvent(new CustomEvent('inSessionMoveSelect', {
               detail: eventDetail
             }));
             
-            if (DEBUG_LIVE_EVENTS) {
-              console.log('[InSessionBattle] 📤 Dispatched inSessionMoveSelect event:', eventDetail);
-            }
+            console.log('📤 [InSessionBattle] Event dispatched ✓');
             
             // Clear selection after dispatching
             setSelectedMove(null);
             setSelectedTarget(null);
+            setCurrentTraceId(null);
           }
         }}
         style={{
@@ -1606,14 +1713,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   };
 
   return (
-    <div style={{ 
-      padding: '1rem',
-      maxWidth: '1600px',
-      margin: '0 auto',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '1rem'
-    }}>
+    <>
+      <LiveEventDebugOverlay
+        sessionId={sessionId}
+        classId={classId}
+        eventId={sessionId}
+        selectedSkillId={selectedMove?.id}
+        selectedTargetUid={selectedTarget || undefined}
+      />
+      <div style={{ 
+        padding: '1rem',
+        maxWidth: '1600px',
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1rem'
+      }}>
       {/* Header */}
       <div style={{
         background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
@@ -2586,12 +2701,51 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               return (
                                 <button
                                   key={move.id}
-                                  onClick={() => {
-                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                                  onClick={async () => {
+                                    // ALWAYS log skill click (critical - must see this)
+                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| Cost:', move.cost, '| Actor:', currentUser?.uid?.substring(0, 8));
+                                    
+                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
+                                                             process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                                              process.env.REACT_APP_DEBUG === 'true';
+                                    
+                                    // Stage A: Skill selected - Generate traceId
+                                    const { generateTraceId, traceStage, writeDebugAction } = await import('../utils/liveEventDebug');
+                                    const traceId = generateTraceId();
+                                    setCurrentTraceId(traceId);
+                                    
+                                    console.log('🎮 [InSessionBattle] TraceId:', traceId);
+                                    
+                                    traceStage('selected', traceId, 'Skill selected', {
+                                      skillId: move.id,
+                                      skillName: move.name,
+                                      skillType: move.type,
+                                      category: move.category,
+                                      cost: move.cost,
+                                      cooldown: move.cooldown,
+                                      actorUid: currentUser?.uid,
+                                      sessionId: sessionId
+                                    }, { file: 'InSessionBattle.tsx', line: 2629 });
+                                    
+                                    // Write debug mirror
+                                    if (classId && sessionId) {
+                                      await writeDebugAction(classId, sessionId, traceId, 'selected', {
+                                        actorUid: currentUser?.uid || '',
+                                        targetUid: '', // Not selected yet
+                                        skillId: move.id,
+                                        skillName: move.name,
+                                        metadata: {
+                                          skillType: move.type,
+                                          category: move.category,
+                                          cost: move.cost,
+                                          cooldown: move.cooldown
+                                        }
+                                      });
+                                    }
                                     
                                     if (DEBUG_LIVE_EVENTS) {
                                       console.log('[InSessionBattle] 🎮 SKILL CLICKED (Manifest):', {
+                                        traceId,
                                         skillId: move.id,
                                         skillName: move.name,
                                         skillType: move.type,
@@ -2801,6 +2955,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           />
         )}
     </div>
+    </>
   );
 };
 

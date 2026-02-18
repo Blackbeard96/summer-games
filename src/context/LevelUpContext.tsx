@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getLevelFromXP } from '../utils/leveling';
 import LevelUpNotification from '../components/LevelUpNotification';
+import { createLiveFeedMilestone } from '../services/liveFeed';
 
 interface LevelUpContextType {
   showLevelUpNotification: (currentXP: number, previousXP: number) => void;
@@ -38,9 +39,9 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
     if (!currentUser) return;
 
     const userRef = doc(db, 'students', currentUser.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
-      if (doc.exists()) {
-        const userData = doc.data();
+    const unsubscribe = onSnapshot(userRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const userData = docSnapshot.data();
         const newXP = userData.xp || 0;
         const newLevel = getLevelFromXP(newXP);
         
@@ -75,6 +76,36 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
             } catch (plError) {
               console.error('Error recalculating power level after level up:', plError);
               // Don't throw - power level recalculation is non-critical
+            }
+          })();
+
+          // Create milestone event for level up
+          (async () => {
+            try {
+              const userRef = doc(db, 'users', currentUser.uid);
+              const userDoc = await getDoc(userRef);
+              const userData = userDoc.exists() ? userDoc.data() : null;
+              const displayName = userData?.displayName || currentUser.displayName || 'Unknown';
+              const photoURL = userData?.photoURL || currentUser.photoURL || undefined;
+              const role = userData?.role || undefined;
+
+              await createLiveFeedMilestone(
+                currentUser.uid,
+                displayName,
+                photoURL,
+                role,
+                newLevel,
+                'level_up',
+                {
+                  newLevel,
+                  previousLevel: previousLevelRef.current,
+                  xp: newXP
+                },
+                `level_${newLevel}` // Use deterministic refId
+              );
+            } catch (milestoneError) {
+              console.error('Error creating level up milestone:', milestoneError);
+              // Don't fail level up if milestone creation fails
             }
           })();
         } else {

@@ -701,14 +701,8 @@ const ScorekeeperInterface: React.FC = () => {
     );
   }
 
-  // Check if current user is admin based on email (fallback method)
-  const isAdminByEmail = currentUser?.email === 'eddymosley@compscihigh.org' || 
-                         currentUser?.email === 'admin@mstgames.net' ||
-                         currentUser?.email === 'edm21179@gmail.com' ||
-                         currentUser?.email === 'eddymosley9@gmail.com' ||
-                         currentUser?.email?.includes('eddymosley') ||
-                         currentUser?.email?.includes('admin') ||
-                         currentUser?.email?.includes('mstgames');
+  // Check if current user is admin - Only Yondaime has access
+  const isAdminByEmail = currentUser?.email === 'edm21179@gmail.com';
 
   // Debug logging for access control
   console.log('🔍 ScorekeeperInterface Access Check:', {

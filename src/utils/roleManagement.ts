@@ -73,18 +73,10 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
       return true;
     }
     
-    // Fallback: Check specific admin emails (exact matches only, not substring)
-    // REMOVED: Domain-based admin check - too broad, causes all users from these domains to be admins
+    // Fallback: Check specific admin email - Only Yondaime has access
     if (userEmail) {
-      const adminEmails = [
-        'eddymosley@compscihigh.org',
-        'admin@mstgames.net',
-        'edm21179@gmail.com',
-        'eddymosley9@gmail.com'
-      ];
-      
-      // Check exact match ONLY - no domain-based checks
-      if (adminEmails.includes(userEmail)) {
+      // Only Yondaime's email is allowed
+      if (userEmail === 'edm21179@gmail.com') {
         return true;
       }
     }
@@ -92,18 +84,10 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
     return false;
   } catch (error) {
     console.error('Error checking admin status:', error);
-    // On error, fall back to email check only
-    // REMOVED: Domain-based admin check - too broad, causes all users from these domains to be admins
+    // On error, fall back to email check only - Only Yondaime has access
     if (userEmail) {
-      const adminEmails = [
-        'eddymosley@compscihigh.org',
-        'admin@mstgames.net',
-        'edm21179@gmail.com',
-        'eddymosley9@gmail.com'
-      ];
-      
-      // Check exact match ONLY - no domain-based checks
-      if (adminEmails.includes(userEmail)) {
+      // Only Yondaime's email is allowed
+      if (userEmail === 'edm21179@gmail.com') {
         return true;
       }
     }

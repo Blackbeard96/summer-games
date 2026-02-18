@@ -21,6 +21,9 @@ import {
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { createLiveFeedMilestone } from '../services/liveFeed';
+import { shouldShareEvent } from '../services/liveFeedPrivacy';
+import { getLevelFromXP } from '../utils/leveling';
 import { 
   Vault, 
   Move, 
@@ -48,6 +51,7 @@ import {
   shouldShowModalToday,
   getCurrentUTCDayStart
 } from '../utils/generatorEarnings';
+import VaultUpgradeModal, { VaultUpgradeData } from '../components/VaultUpgradeModal';
 
 interface BattleContextType {
   // Vault Management
@@ -179,6 +183,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [vaultUpgradeModalData, setVaultUpgradeModalData] = useState<VaultUpgradeData | null>(null);
+  const [showVaultUpgradeModal, setShowVaultUpgradeModal] = useState(false);
 
   // Clear success message after 3 seconds
   useEffect(() => {
@@ -245,7 +251,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         if (!vaultDoc.exists()) {
           // Create new vault with player's current PP
-          const initialCapacity = 1000;
+          const { getCapacity, getMaxShields } = await import('../utils/vaultEconomy');
+          const initialCapacityLevel = 1;
+          const initialShieldLevel = 1;
+          const initialGeneratorLevel = 1;
+          const initialCapacity = getCapacity(initialCapacityLevel);
+          const initialMaxShields = getMaxShields(initialShieldLevel);
           const maxVaultHealth = Math.floor(initialCapacity * 0.1); // 10% of max PP
           // Vault health starts at max health if player has enough PP, otherwise at current PP
           const initialVaultHealth = playerPP >= maxVaultHealth ? maxVaultHealth : Math.min(playerPP, maxVaultHealth);
@@ -257,9 +268,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             vaultHealth: initialVaultHealth,
             maxVaultHealth: maxVaultHealth,
             shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-            maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
+            maxShieldStrength: initialMaxShields,
             overshield: 0,
-            generatorLevel: 1,
+            generatorLevel: initialGeneratorLevel,
             generatorPendingPP: 0,
             generatorLastReset: new Date(),
             lastUpgrade: new Date(),
@@ -269,6 +280,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             movesRemaining: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             maxMovesPerDay: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             lastMoveReset: new Date(),
+            capacityLevel: initialCapacityLevel,
+            shieldLevel: initialShieldLevel,
           };
           logger.battle.debug('Creating new vault with PP:', playerPP);
           await setDoc(vaultRef, newVault);
@@ -283,9 +296,52 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // If vault PP is 0, always use student PP. Otherwise, use the higher value to preserve generator earnings
           const finalPP = vaultCurrentPP === 0 ? playerPP : Math.max(playerPP, vaultCurrentPP);
           
+          // MIGRATION: Infer levels from existing data if not present
+          const { 
+            inferCapacityLevel, 
+            inferShieldLevel, 
+            inferGeneratorLevel,
+            getCapacity,
+            getMaxShields,
+            getGeneratorPPPerDay
+          } = await import('../utils/vaultEconomy');
+          
+          let capacityLevel = existingVaultData.capacityLevel;
+          let shieldLevel = existingVaultData.shieldLevel;
+          let generatorLevel = existingVaultData.generatorLevel || 1;
+          
+          // Infer capacity level if missing
+          if (!capacityLevel && existingVaultData.capacity) {
+            capacityLevel = inferCapacityLevel(existingVaultData.capacity);
+            console.log(`[Vault Migration] Inferred capacityLevel: ${capacityLevel} from capacity: ${existingVaultData.capacity}`);
+          } else if (!capacityLevel) {
+            capacityLevel = 1;
+          }
+          
+          // Infer shield level if missing
+          if (!shieldLevel && existingVaultData.maxShieldStrength) {
+            shieldLevel = inferShieldLevel(existingVaultData.maxShieldStrength);
+            console.log(`[Vault Migration] Inferred shieldLevel: ${shieldLevel} from maxShieldStrength: ${existingVaultData.maxShieldStrength}`);
+          } else if (!shieldLevel) {
+            shieldLevel = 1;
+          }
+          
+          // Infer generator level if missing
+          if (!generatorLevel && existingVaultData.generatorPPPerDay) {
+            generatorLevel = inferGeneratorLevel(existingVaultData.generatorPPPerDay);
+            console.log(`[Vault Migration] Inferred generatorLevel: ${generatorLevel} from generatorPPPerDay: ${existingVaultData.generatorPPPerDay}`);
+          } else if (!generatorLevel) {
+            generatorLevel = 1;
+          }
+          
+          // Recalculate derived values from levels to ensure consistency
+          const calculatedCapacity = getCapacity(capacityLevel);
+          const calculatedMaxShields = getMaxShields(shieldLevel);
+          const calculatedGenPP = getGeneratorPPPerDay(generatorLevel);
+          
           // Migrate existing vault to include new move tracking fields and generator
           // Max vault health is always 10% of max PP (capacity is the max PP)
-          const maxPPForHealth = existingVaultData.capacity || 1000;
+          const maxPPForHealth = calculatedCapacity;
           const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(maxPPForHealth);
           // Current vault health: if 0/undefined and player has enough PP, set to max health
           // Otherwise, cap at current PP if PP < max health
@@ -302,6 +358,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           
           const existingVault: Vault = {
             ...existingVaultData,
+            capacity: calculatedCapacity, // Update to calculated value
+            maxShieldStrength: calculatedMaxShields, // Update to calculated value
             currentPP: finalPP, // Use synced PP value
             vaultHealth: vaultHealth,
             maxVaultHealth: maxVaultHealth,
@@ -309,11 +367,32 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             maxMovesPerDay: existingVaultData.maxMovesPerDay || BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
             lastMoveReset: existingVaultData.lastMoveReset || new Date(),
             // Migrate from firewall to generator if needed
-            generatorLevel: existingVaultData.generatorLevel || 1,
+            generatorLevel: generatorLevel,
             generatorPendingPP: existingVaultData.generatorPendingPP || 0,
             generatorLastReset: existingVaultData.generatorLastReset || existingVaultData.lastMoveReset || new Date(),
             generatorUpgrades: existingVaultData.generatorUpgrades || 0,
-          } as Vault;
+            // Store levels for new economy system
+            capacityLevel: capacityLevel,
+            shieldLevel: shieldLevel,
+          } as Vault & { capacityLevel: number; shieldLevel: number };
+          
+          // Update Firestore with inferred levels and recalculated values if needed
+          const needsMigration = 
+            !existingVaultData.capacityLevel || 
+            !existingVaultData.shieldLevel ||
+            existingVaultData.capacity !== calculatedCapacity ||
+            existingVaultData.maxShieldStrength !== calculatedMaxShields;
+          
+          if (needsMigration) {
+            console.log('[Vault Migration] Updating vault with inferred levels and recalculated values');
+            await updateDoc(vaultRef, {
+              capacityLevel: capacityLevel,
+              shieldLevel: shieldLevel,
+              capacity: calculatedCapacity,
+              maxShieldStrength: calculatedMaxShields,
+              maxVaultHealth: Math.floor(calculatedCapacity * 0.1)
+            });
+          }
           
           // Check and reset daily moves if needed
           let updatedVault = checkAndResetDailyMoves(existingVault);
@@ -852,7 +931,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           id: `move_${index + 1}`,
           unlocked: template.category === 'system' || 
                     (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === 'fire') || 
-                    (template.category === 'manifest' && template.manifestType === 'reading'), // Default to reading for fallback
+                    false, // Manifest moves should NOT be auto-unlocked here - they should be unlocked based on user's actual manifest
           currentCooldown: 0,
           masteryLevel: 1,
         })));
@@ -1402,165 +1481,294 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const upgradeVaultCapacity = async () => {
     if (!currentUser || !vault) return;
     
-    // Calculate upgrade count (default to 0 if not set)
-    const upgradeCount = vault.capacityUpgrades || 0;
-    // Base price is 200, doubles for each upgrade: 200 * (2 ^ upgradeCount)
-    const basePrice = 200;
-    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
-    
-    if (vault.currentPP < upgradeCost) {
-      setError(`Insufficient PP for capacity upgrade. Need ${upgradeCost} PP.`);
-      return;
-    }
-    
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const newCapacity = vault.capacity + 200;
-      const newPP = vault.currentPP - upgradeCost;
-      const newUpgradeCount = upgradeCount + 1;
-      const newMaxVaultHealth = Math.floor(newCapacity * 0.1); // 10% of max PP
-      // Vault health should be min of current PP and new max vault health
-      const newVaultHealth = Math.min(newPP, newMaxVaultHealth);
+      const { 
+        getCapacity, 
+        getCapacityUpgradeCost 
+      } = await import('../utils/vaultEconomy');
       
-      await updateDoc(vaultRef, {
-        capacity: newCapacity,
-        currentPP: newPP,
-        maxVaultHealth: newMaxVaultHealth,
-        vaultHealth: newVaultHealth,
-        capacityUpgrades: newUpgradeCount
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Store values for modal (calculated inside transaction)
+      let oldCapacityLevel = 1;
+      let newCapacityLevel = 1;
+      let oldCapacity = 0;
+      let newCapacity = 0;
+      let upgradeCost = 0;
+      
+      await runTransaction(db, async (transaction) => {
+        // Read current state
+        const vaultDoc = await transaction.get(vaultRef);
+        const studentDoc = await transaction.get(studentRef);
+        
+        if (!vaultDoc.exists()) {
+          throw new Error('Vault not found');
+        }
+        
+        const vaultData = vaultDoc.data();
+        oldCapacityLevel = vaultData.capacityLevel || 1;
+        const currentPP = vaultData.currentPP || 0;
+        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        
+        // Calculate old and new values using formulas
+        oldCapacity = getCapacity(oldCapacityLevel);
+        upgradeCost = getCapacityUpgradeCost(oldCapacityLevel);
+        
+        // Validate affordability
+        if (actualPP < upgradeCost) {
+          throw new Error(`Insufficient PP for capacity upgrade. Need ${upgradeCost} PP, have ${actualPP} PP.`);
+        }
+        
+        // Calculate new values
+        newCapacityLevel = oldCapacityLevel + 1;
+        newCapacity = getCapacity(newCapacityLevel);
+        const newPP = actualPP - upgradeCost;
+        const newMaxVaultHealth = Math.floor(newCapacity * 0.1);
+        const newVaultHealth = Math.min(newPP, newMaxVaultHealth);
+        
+        // Validate cost doesn't exceed 75% of current capacity (should never happen, but safety check)
+        const maxAllowedCost = Math.floor(0.75 * oldCapacity);
+        if (upgradeCost > maxAllowedCost) {
+          console.warn(`[Vault Economy] Cost ${upgradeCost} exceeds 75% of capacity ${oldCapacity}. This should not happen!`);
+        }
+        
+        // Write updates
+        transaction.update(vaultRef, {
+          capacityLevel: newCapacityLevel,
+          capacity: newCapacity,
+          currentPP: newPP,
+          maxVaultHealth: newMaxVaultHealth,
+          vaultHealth: newVaultHealth,
+          lastUpgrade: serverTimestamp()
+        });
+        
+        transaction.update(studentRef, {
+          powerPoints: newPP
+        });
       });
       
-      // Also update student PP
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, { powerPoints: newPP });
+      // Refresh vault data
+      await refreshVaultData();
       
-      setVault(prevVault => prevVault ? { 
-        ...prevVault, 
-        capacity: newCapacity,
-        currentPP: newPP,
-        maxVaultHealth: newMaxVaultHealth,
-        vaultHealth: newVaultHealth,
-        capacityUpgrades: newUpgradeCount
-      } : null);
+      // Show upgrade modal with accurate values from transaction
+      setVaultUpgradeModalData({
+        type: 'capacity',
+        oldLevel: oldCapacityLevel,
+        newLevel: newCapacityLevel,
+        oldValue: oldCapacity,
+        newValue: newCapacity,
+        cost: upgradeCost,
+        unit: 'PP'
+      });
+      setShowVaultUpgradeModal(true);
       
-      setSuccess(`Vault capacity upgraded! +200 PP capacity (Cost: ${upgradeCost} PP)`);
-    } catch (error) {
+      setSuccess(`Vault capacity upgraded to Level ${newCapacityLevel}! ${oldCapacity} → ${newCapacity} PP (+${newCapacity - oldCapacity} capacity) (Cost: ${upgradeCost} PP)`);
+    } catch (error: any) {
       console.error('Error upgrading vault capacity:', error);
-      setError('Failed to upgrade vault capacity');
+      setError(error.message || 'Failed to upgrade vault capacity');
     }
   };
 
   const upgradeVaultShields = async () => {
     if (!currentUser || !vault) return;
     
-    // Calculate upgrade count (default to 0 if not set)
-    const upgradeCount = vault.shieldUpgrades || 0;
-    // Base price is 75, doubles for each upgrade: 75 * (2 ^ upgradeCount)
-    const basePrice = 75;
-    const upgradeCost = basePrice * Math.pow(2, upgradeCount);
-    
-    if (vault.currentPP < upgradeCost) {
-      setError(`Insufficient PP for shield upgrade. Need ${upgradeCost} PP.`);
-      return;
-    }
-    
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const newMaxShields = vault.maxShieldStrength + 25;
-      const newPP = vault.currentPP - upgradeCost;
-      const newUpgradeCount = upgradeCount + 1;
+      const { 
+        getMaxShields, 
+        getShieldUpgradeCost,
+        getCapacity
+      } = await import('../utils/vaultEconomy');
       
-      await updateDoc(vaultRef, {
-        maxShieldStrength: newMaxShields,
-        currentPP: newPP,
-        shieldUpgrades: newUpgradeCount
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Store values for modal (calculated inside transaction)
+      let oldShieldLevel = 1;
+      let newShieldLevel = 1;
+      let oldMaxShields = 0;
+      let newMaxShields = 0;
+      let upgradeCost = 0;
+      
+      await runTransaction(db, async (transaction) => {
+        // Read current state
+        const vaultDoc = await transaction.get(vaultRef);
+        const studentDoc = await transaction.get(studentRef);
+        
+        if (!vaultDoc.exists()) {
+          throw new Error('Vault not found');
+        }
+        
+        const vaultData = vaultDoc.data();
+        oldShieldLevel = vaultData.shieldLevel || 1;
+        const currentPP = vaultData.currentPP || 0;
+        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        
+        // Calculate old and new values using formulas
+        oldMaxShields = getMaxShields(oldShieldLevel);
+        upgradeCost = getShieldUpgradeCost(oldShieldLevel);
+        
+        // Validate affordability
+        if (actualPP < upgradeCost) {
+          throw new Error(`Insufficient PP for shield upgrade. Need ${upgradeCost} PP, have ${actualPP} PP.`);
+        }
+        
+        // Calculate new values
+        newShieldLevel = oldShieldLevel + 1;
+        newMaxShields = getMaxShields(newShieldLevel);
+        const newPP = actualPP - upgradeCost;
+        
+        // Validate cost doesn't exceed 75% of current capacity
+        const currentCapacityLevel = vaultData.capacityLevel || 1;
+        const currentCapacity = getCapacity(currentCapacityLevel);
+        const maxAllowedCost = Math.floor(0.75 * currentCapacity);
+        if (upgradeCost > maxAllowedCost) {
+          console.warn(`[Vault Economy] Shield cost ${upgradeCost} exceeds 75% of capacity ${currentCapacity}. This should not happen!`);
+        }
+        
+        // Write updates
+        transaction.update(vaultRef, {
+          shieldLevel: newShieldLevel,
+          maxShieldStrength: newMaxShields,
+          currentPP: newPP,
+          lastUpgrade: serverTimestamp()
+        });
+        
+        transaction.update(studentRef, {
+          powerPoints: newPP
+        });
       });
       
-      // Also update student PP
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, { powerPoints: newPP });
+      // Refresh vault data
+      await refreshVaultData();
       
-      setVault(prevVault => prevVault ? { 
-        ...prevVault, 
-        maxShieldStrength: newMaxShields,
-        currentPP: newPP,
-        shieldUpgrades: newUpgradeCount
-      } : null);
+      // Show upgrade modal with accurate values from transaction
+      setVaultUpgradeModalData({
+        type: 'shields',
+        oldLevel: oldShieldLevel,
+        newLevel: newShieldLevel,
+        oldValue: oldMaxShields,
+        newValue: newMaxShields,
+        cost: upgradeCost,
+        unit: 'Shields'
+      });
+      setShowVaultUpgradeModal(true);
       
-      setSuccess(`Vault shields upgraded! +25 max shield strength (Cost: ${upgradeCost} PP)`);
-    } catch (error) {
+      setSuccess(`Vault shields upgraded to Level ${newShieldLevel}! ${oldMaxShields} → ${newMaxShields} Shields (+${newMaxShields - oldMaxShields} shields) (Cost: ${upgradeCost} PP)`);
+    } catch (error: any) {
       console.error('Error upgrading vault shields:', error);
-      setError('Failed to upgrade vault shields');
+      setError(error.message || 'Failed to upgrade vault shields');
     }
   };
 
   // Calculate generator production rates based on level
-  // Generous scaling: L1: 10, L2: 25, L3: 45, L4: 70, L5: 100, L6+: +100 per level
+  // Uses new economy formulas
   const getGeneratorRates = (level: number) => {
-    if (level <= 1) {
-      return { ppPerDay: 10, shieldsPerDay: 10 };
-    }
-    if (level === 2) {
-      return { ppPerDay: 25, shieldsPerDay: 25 };
-    }
-    if (level === 3) {
-      return { ppPerDay: 45, shieldsPerDay: 45 };
-    }
-    if (level === 4) {
-      return { ppPerDay: 70, shieldsPerDay: 70 };
-    }
-    if (level === 5) {
-      return { ppPerDay: 100, shieldsPerDay: 100 };
-    }
-    // Level 6+: 100 + (level - 5) * 100
+    const { getGeneratorPPPerDay, getGeneratorShieldsPerDay } = require('../utils/vaultEconomy');
     return {
-      ppPerDay: 100 + (level - 5) * 100,
-      shieldsPerDay: 100 + (level - 5) * 100
+      ppPerDay: getGeneratorPPPerDay(level),
+      shieldsPerDay: getGeneratorShieldsPerDay(level)
     };
   };
 
   const upgradeGenerator = async () => {
     if (!currentUser || !vault) return;
     
-    // Calculate upgrade count (default to 0 if not set)
-    const upgradeCount = vault.generatorUpgrades || 0;
-    // Base price is 250, adds 250 for each upgrade: 250 + (250 * upgradeCount)
-    const basePrice = 250;
-    const upgradeCost = basePrice + (basePrice * upgradeCount);
-    
-    if (vault.currentPP < upgradeCost) {
-      setError(`Insufficient PP for generator upgrade. Need ${upgradeCost} PP.`);
-      return;
-    }
-    
     try {
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const newGeneratorLevel = (vault.generatorLevel || 1) + 1;
-      const newPP = vault.currentPP - upgradeCost;
-      const newUpgradeCount = upgradeCount + 1;
-      const rates = getGeneratorRates(newGeneratorLevel);
+      const { 
+        getGeneratorPPPerDay, 
+        getGeneratorShieldsPerDay,
+        getGeneratorUpgradeCost,
+        getCapacity
+      } = await import('../utils/vaultEconomy');
       
-      await updateDoc(vaultRef, {
-        generatorLevel: newGeneratorLevel,
-        currentPP: newPP,
-        generatorUpgrades: newUpgradeCount
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const studentRef = doc(db, 'students', currentUser.uid);
+      
+      // Store values for modal (calculated inside transaction)
+      let oldGeneratorLevel = 1;
+      let newGeneratorLevel = 1;
+      let oldPPPerDay = 0;
+      let newPPPerDay = 0;
+      let oldShieldsPerDay = 0;
+      let newShieldsPerDay = 0;
+      let upgradeCost = 0;
+      
+      await runTransaction(db, async (transaction) => {
+        // Read current state
+        const vaultDoc = await transaction.get(vaultRef);
+        const studentDoc = await transaction.get(studentRef);
+        
+        if (!vaultDoc.exists()) {
+          throw new Error('Vault not found');
+        }
+        
+        const vaultData = vaultDoc.data();
+        oldGeneratorLevel = vaultData.generatorLevel || 1;
+        const currentCapacityLevel = vaultData.capacityLevel || 1;
+        const currentPP = vaultData.currentPP || 0;
+        const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
+        const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        
+        // Calculate old and new values using formulas
+        oldPPPerDay = getGeneratorPPPerDay(oldGeneratorLevel);
+        oldShieldsPerDay = getGeneratorShieldsPerDay(oldGeneratorLevel);
+        upgradeCost = getGeneratorUpgradeCost(currentCapacityLevel);
+        
+        // Validate affordability
+        if (actualPP < upgradeCost) {
+          throw new Error(`Insufficient PP for generator upgrade. Need ${upgradeCost} PP, have ${actualPP} PP.`);
+        }
+        
+        // Calculate new values
+        newGeneratorLevel = oldGeneratorLevel + 1;
+        newPPPerDay = getGeneratorPPPerDay(newGeneratorLevel);
+        newShieldsPerDay = getGeneratorShieldsPerDay(newGeneratorLevel);
+        const newPP = actualPP - upgradeCost;
+        
+        // Validate cost doesn't exceed 75% of current capacity
+        const currentCapacity = getCapacity(currentCapacityLevel);
+        const maxAllowedCost = Math.floor(0.75 * currentCapacity);
+        if (upgradeCost > maxAllowedCost) {
+          console.warn(`[Vault Economy] Generator cost ${upgradeCost} exceeds 75% of capacity ${currentCapacity}. This should not happen!`);
+        }
+        
+        // Write updates
+        transaction.update(vaultRef, {
+          generatorLevel: newGeneratorLevel,
+          currentPP: newPP,
+          lastUpgrade: serverTimestamp()
+        });
+        
+        transaction.update(studentRef, {
+          powerPoints: newPP
+        });
       });
       
-      // Also update student PP
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, { powerPoints: newPP });
+      // Refresh vault data
+      await refreshVaultData();
       
-      setVault(prevVault => prevVault ? { 
-        ...prevVault, 
-        generatorLevel: newGeneratorLevel,
-        currentPP: newPP,
-        generatorUpgrades: newUpgradeCount
-      } : null);
+      // Show upgrade modal with accurate values from transaction
+      setVaultUpgradeModalData({
+        type: 'generator',
+        oldLevel: oldGeneratorLevel,
+        newLevel: newGeneratorLevel,
+        oldValue: oldPPPerDay,
+        newValue: newPPPerDay,
+        oldValueSecondary: oldShieldsPerDay,
+        newValueSecondary: newShieldsPerDay,
+        cost: upgradeCost,
+        unit: 'PP/day',
+        unitSecondary: 'Shields/day'
+      });
+      setShowVaultUpgradeModal(true);
       
-      setSuccess(`Generator upgraded to Level ${newGeneratorLevel}! Now generates ${rates.ppPerDay} PP/day and ${rates.shieldsPerDay} Shields/day (Cost: ${upgradeCost} PP)`);
-    } catch (error) {
+      setSuccess(`Generator upgraded to Level ${newGeneratorLevel}! ${oldPPPerDay} → ${newPPPerDay} PP/day (+${newPPPerDay - oldPPPerDay}), ${oldShieldsPerDay} → ${newShieldsPerDay} Shields/day (+${newShieldsPerDay - oldShieldsPerDay}) (Cost: ${upgradeCost} PP)`);
+    } catch (error: any) {
       console.error('Error upgrading generator:', error);
-      setError('Failed to upgrade generator');
+      setError(error.message || 'Failed to upgrade generator');
     }
   };
 
@@ -2249,15 +2457,36 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       console.log('Resetting moves with element-specific filtering for element:', userElement);
       
+      // Get user's actual manifest from student data - DO NOT default to 'reading'
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      let userManifest: string | null = null;
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          userManifest = studentData.manifest.manifestId;
+        } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+          userManifest = studentData.manifest;
+        }
+      }
+      
+      if (!userManifest) {
+        console.warn('BattleContext: No manifest found for user, cannot reset manifest moves. Skipping move reset.');
+        setError('Cannot reset moves: No manifest found. Please select a manifest first.');
+        return;
+      }
+      
+      console.log('BattleContext: Resetting moves for manifest:', userManifest);
+      
       const movesRef = doc(db, 'battleMoves', currentUser.uid);
       
-      // Create new moves with correct element filtering
+      // Create new moves with correct element and manifest filtering
       const newMoves: Move[] = MOVE_TEMPLATES.map((template, index) => ({
         ...template,
         id: `move_${index + 1}`,
         unlocked: template.category === 'system' || 
                   (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === userElement) || 
-                  (template.category === 'manifest' && template.manifestType === 'reading'), // Default to reading for fallback
+                  (template.category === 'manifest' && template.manifestType === userManifest), // Use actual user manifest
         currentCooldown: 0,
         masteryLevel: 1,
       }));
@@ -2265,7 +2494,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await setDoc(movesRef, { moves: newMoves });
       setMoves(newMoves);
       
-      console.log('Successfully reset moves with element-specific filtering for element:', userElement);
+      console.log('Successfully reset moves with element-specific filtering for element:', userElement, 'and manifest:', userManifest);
     } catch (err) {
       console.error('Error resetting moves:', err);
       setError('Failed to reset moves');
@@ -2279,11 +2508,26 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       console.log('Applying element filter to existing moves for element:', userElement);
       
-      // Get user's manifest from student data
+      // Get user's manifest from student data - DO NOT default to 'reading'
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
-      const userManifest = studentDoc.exists() ? 
-        (studentDoc.data().manifest?.manifestId || studentDoc.data().manifestationType || 'reading') : 'reading';
+      let userManifest: string | null = null;
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
+          userManifest = studentData.manifest.manifestId;
+        } else if (studentData.manifest && typeof studentData.manifest === 'string') {
+          userManifest = studentData.manifest;
+        } else if (studentData.manifestationType) {
+          userManifest = studentData.manifestationType;
+        }
+      }
+      
+      if (!userManifest) {
+        console.warn('BattleContext: No manifest found for user, cannot filter manifest moves.');
+        // Don't filter manifest moves if no manifest found - preserve existing state
+        userManifest = null;
+      }
       
       console.log('BattleContext: User manifest for filtering:', userManifest);
       
@@ -2301,9 +2545,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return { ...move, unlocked: shouldUnlock };
         } else if (move.category === 'manifest') {
           // If already unlocked, keep it unlocked (preserve state)
-          // Otherwise, unlock if it matches user's manifest
-          const shouldUnlock = move.unlocked || move.manifestType === userManifest;
-          console.log(`BattleContext: Move ${move.name} (${move.manifestType}) - already unlocked: ${move.unlocked}, should unlock: ${shouldUnlock}`);
+          // Otherwise, unlock if it matches user's manifest (only if manifest is known)
+          // If no manifest found, preserve existing unlocked state
+          const shouldUnlock = move.unlocked || (userManifest ? move.manifestType === userManifest : false);
+          console.log(`BattleContext: Move ${move.name} (${move.manifestType}) - already unlocked: ${move.unlocked}, userManifest: ${userManifest}, should unlock: ${shouldUnlock}`);
           return { ...move, unlocked: shouldUnlock };
         }
         return move;
@@ -4158,11 +4403,27 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
       }
 
-      // Track daily challenge: Attack Vault (if any damage was done or attack was attempted)
-      if (currentUser && (ppStolen > 0 || shieldDamage > 0 || (selectedMove || selectedCard))) {
+      // Track daily challenge: Attack Vault (always track if attack was attempted, regardless of damage)
+      if (currentUser && (selectedMove || selectedCard)) {
+        console.log('🎯 [Daily Challenge] Tracking vault attack:', {
+          userId: currentUser.uid,
+          moveId: selectedMove?.id,
+          moveName: selectedMove?.name,
+          cardId: selectedCard?.id,
+          cardName: selectedCard?.name,
+          ppStolen,
+          shieldDamage,
+          timestamp: new Date().toISOString()
+        });
         updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch(err => 
-          console.error('Error updating daily challenge progress:', err)
+          console.error('❌ [Daily Challenge] Error updating daily challenge progress:', err)
         );
+      } else {
+        console.warn('⚠️ [Daily Challenge] Vault attack not tracked - missing user or move/card:', {
+          hasUser: !!currentUser,
+          hasMove: !!selectedMove,
+          hasCard: !!selectedCard
+        });
       }
       
       // Track daily challenge: Earn PP (if PP was stolen)
@@ -4245,6 +4506,63 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Add minimum XP for successful attacks with no damage
       if (ppStolen === 0 && shieldDamage === 0 && !overshieldAbsorbed && (selectedMove || selectedCard)) {
         totalXpGained += 1;
+      }
+
+      // Create Live Feed post for attacker (if privacy settings allow)
+      if (currentUser && (ppStolen > 0 || shieldDamage > 0)) {
+        try {
+          const shouldShare = await shouldShareEvent(currentUser.uid, 'vault_attack');
+          if (shouldShare) {
+            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+            const studentData = studentDoc.exists() ? studentDoc.data() : null;
+            const attackerLevel = studentData ? getLevelFromXP(studentData.xp || 0) : undefined;
+            
+            await createLiveFeedMilestone(
+              currentUser.uid,
+              currentUser.displayName || 'Unknown',
+              currentUser.photoURL || undefined,
+              studentData?.role || undefined,
+              attackerLevel,
+              'vault_attack',
+              {
+                targetName: targetName,
+                ppStolen: ppStolen,
+                shieldDamage: shieldDamage,
+                xpGained: totalXpGained
+              },
+              `vault_attack_${currentUser.uid}_${targetUserId}_${Date.now()}`
+            );
+          }
+        } catch (error) {
+          console.error('Error creating Live Feed post for vault attack:', error);
+        }
+      }
+
+      // Create Live Feed post for defender (if privacy settings allow)
+      try {
+        const targetStudentDoc = await getDoc(doc(db, 'students', targetUserId));
+        const targetStudentData = targetStudentDoc.exists() ? targetStudentDoc.data() : null;
+        const defenderLevel = targetStudentData ? getLevelFromXP(targetStudentData.xp || 0) : undefined;
+        const shouldShare = await shouldShareEvent(targetUserId, 'vault_defense');
+        
+        if (shouldShare) {
+          await createLiveFeedMilestone(
+            targetUserId,
+            targetStudentData?.displayName || targetName,
+            targetStudentData?.photoURL || undefined,
+            targetStudentData?.role || undefined,
+            defenderLevel,
+            'vault_defense',
+            {
+              attackerName: currentUser.displayName || 'Unknown',
+              ppStolen: ppStolen,
+              shieldDamage: shieldDamage
+            },
+            `vault_defense_${targetUserId}_${currentUser.uid}_${Date.now()}`
+          );
+        }
+      } catch (error) {
+        console.error('Error creating Live Feed post for vault defense:', error);
       }
 
       // Return the attack results
@@ -4889,6 +5207,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   return (
     <BattleContext.Provider value={value}>
       {children}
+      <VaultUpgradeModal
+        isOpen={showVaultUpgradeModal}
+        onClose={() => {
+          setShowVaultUpgradeModal(false);
+          setVaultUpgradeModalData(null);
+        }}
+        upgradeData={vaultUpgradeModalData}
+      />
     </BattleContext.Provider>
   );
 }; 

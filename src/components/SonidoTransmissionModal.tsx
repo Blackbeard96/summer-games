@@ -4,6 +4,9 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import IslandRaidBattle from './IslandRaidBattle';
+import { createLiveFeedMilestone } from '../services/liveFeed';
+import { shouldShareEvent } from '../services/liveFeedPrivacy';
+import { getLevelFromXP } from '../utils/leveling';
 
 interface SonidoTransmissionModalProps {
   isOpen: boolean;
@@ -28,8 +31,36 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   const battleWonRef = useRef(false); // Track if battle was actually won
 
   // Define handleComplete early so it can be used in useEffect dependencies
-  const handleComplete = useCallback(() => {
+  const handleComplete = useCallback(async () => {
     console.log('✅ SonidoTransmissionModal: handleComplete called - marking chapter complete and closing modal');
+    
+    // Create Live Feed post for chapter completion (if privacy settings allow)
+    if (currentUser) {
+      try {
+        const shouldShare = await shouldShareEvent(currentUser.uid, 'chapter_complete');
+        if (shouldShare) {
+          const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+          const studentData = studentDoc.exists() ? studentDoc.data() : null;
+          const playerLevel = studentData ? getLevelFromXP(studentData.xp || 0) : undefined;
+          
+          await createLiveFeedMilestone(
+            currentUser.uid,
+            currentUser.displayName || 'Unknown',
+            currentUser.photoURL || undefined,
+            studentData?.role || undefined,
+            playerLevel,
+            'chapter_complete',
+            {
+              chapterName: 'Chapter 2-4'
+            },
+            `chapter_complete_${currentUser.uid}_ch2-4_${Date.now()}`
+          );
+        }
+      } catch (error) {
+        console.error('Error creating Live Feed post for chapter completion:', error);
+      }
+    }
+    
     // Pass the selected candy choice to the completion handler if needed
     onComplete();
     // Close the modal after completion handler is called
@@ -37,7 +68,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
     setTimeout(() => {
       onClose();
     }, 100);
-  }, [onComplete, onClose]);
+  }, [onComplete, onClose, currentUser]);
 
   // Reset to first scene when modal opens
   useEffect(() => {

@@ -76,20 +76,15 @@ const NavBar = memo(() => {
   const navigate = useNavigate();
   console.log('🎯 NavBar component rendered - currentUser:', currentUser?.email, 'currentRole:', currentRole, 'role:', role, 'isAdmin:', isAdminUser);
   
-  // Function to grant admin access
+  // Function to grant admin access - Only Yondaime has access
   const grantAdminAccess = async () => {
     if (!currentUser) {
       alert('You must be logged in to grant admin access.');
       return;
     }
     
-    // Check if user email matches admin criteria
-    const isAdminEmail = currentUser.email === 'eddymosley@compscihigh.org' || 
-                        currentUser.email === 'admin@mstgames.net' ||
-                        currentUser.email === 'edm21179@gmail.com' ||
-                        currentUser.email?.includes('eddymosley') ||
-                        currentUser.email?.includes('admin') ||
-                        currentUser.email?.includes('mstgames');
+    // Only Yondaime's email is allowed
+    const isAdminEmail = currentUser.email === 'edm21179@gmail.com';
     
     if (!isAdminEmail) {
       alert('Your email does not match admin criteria. Contact an administrator for access.');
@@ -1042,13 +1037,8 @@ const NavBar = memo(() => {
             <>
               {/* Admin Mode Indicator / Grant Access Button */}
               {(() => {
-                // Check if user email matches admin criteria (even if role isn't set yet)
-                const isAdminEmail = currentUser?.email === 'eddymosley@compscihigh.org' || 
-                                    currentUser?.email === 'admin@mstgames.net' ||
-                                    currentUser?.email === 'edm21179@gmail.com' ||
-                                    currentUser?.email?.includes('eddymosley') ||
-                                    currentUser?.email?.includes('admin') ||
-                                    currentUser?.email?.includes('mstgames');
+                // Only Yondaime's email is allowed to see the Admin button
+                const isAdminEmail = currentUser?.email === 'edm21179@gmail.com';
                 
                 if (isAdminEmail) {
                   // Show clickable button for all admin-eligible users (whether role is set or not)

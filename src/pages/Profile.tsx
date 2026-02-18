@@ -387,7 +387,16 @@ const Profile = () => {
         setUserData(mergedUserData);
         setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
         setBio(userDataFromDB.bio || '');
-        setManifest(userDataFromDB.manifest || 'None');
+        // Extract manifestId correctly - handle both object and string formats
+        let manifestId = 'None';
+        if (userDataFromDB.manifest) {
+          if (typeof userDataFromDB.manifest === 'object' && userDataFromDB.manifest.manifestId) {
+            manifestId = userDataFromDB.manifest.manifestId;
+          } else if (typeof userDataFromDB.manifest === 'string') {
+            manifestId = userDataFromDB.manifest;
+          }
+        }
+        setManifest(manifestId);
         setStyle(displayElement);
         setRarity(rarityValue);
         setCardBgColor(userDataFromDB.cardBgColor || '#e0e7ff');
@@ -760,20 +769,54 @@ const Profile = () => {
     const manifest = MANIFESTS.find(m => m.id === manifestId);
     if (!manifest) return;
 
+    // CRITICAL FIX: Preserve existing manifest data (level, xp, unlockedLevels) when changing manifest
+    // Only reset to defaults if this is the first time selecting a manifest
+    const existingManifest = playerManifest;
+    const isFirstTimeSelection = !existingManifest || !existingManifest.manifestId;
+    
     const newPlayerManifest: PlayerManifest = {
       manifestId,
-      currentLevel: 1,
-      xp: 0,
+      // Preserve existing level and xp if manifest already exists, otherwise use defaults
+      currentLevel: existingManifest?.currentLevel || 1,
+      xp: existingManifest?.xp || 0,
       catalyst: manifest.catalyst,
-      veil: 'Fear of inadequacy', // Default veil
+      // Preserve existing veil if manifest exists, otherwise use default
+      veil: existingManifest?.veil || 'Fear of inadequacy',
       signatureMove: manifest.signatureMove,
-      unlockedLevels: [1],
-      lastAscension: serverTimestamp()
+      // Preserve existing unlocked levels if manifest exists, otherwise use default
+      unlockedLevels: existingManifest?.unlockedLevels || [1],
+      // Only update lastAscension if this is a new manifest selection
+      lastAscension: isFirstTimeSelection ? serverTimestamp() : (existingManifest?.lastAscension || serverTimestamp()),
+      // Preserve existing usage tracking
+      abilityUsage: existingManifest?.abilityUsage || {},
+      moveUsage: existingManifest?.moveUsage || {},
+      unclaimedMilestones: existingManifest?.unclaimedMilestones || {}
     };
+
+    // Warn user if they're changing an existing manifest (not first time)
+    if (!isFirstTimeSelection && existingManifest.manifestId !== manifestId) {
+      const confirmChange = window.confirm(
+        `⚠️ Warning: You are changing your manifest from "${MANIFESTS.find(m => m.id === existingManifest.manifestId)?.name || existingManifest.manifestId}" to "${manifest.name}".\n\n` +
+        `Your current level (${existingManifest.currentLevel}), XP (${existingManifest.xp}), and unlocked levels will be preserved.\n\n` +
+        `Continue?`
+      );
+      if (!confirmChange) {
+        return;
+      }
+    }
 
     try {
       const userRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(userRef, { manifest: newPlayerManifest });
+      // Use setDoc with merge to ensure we don't accidentally overwrite other fields
+      await setDoc(userRef, { manifest: newPlayerManifest }, { merge: true });
+      
+      // Also update users collection for consistency
+      const usersRef = doc(db, 'users', currentUser.uid);
+      const usersDoc = await getDoc(usersRef);
+      if (usersDoc.exists()) {
+        await setDoc(usersRef, { manifest: newPlayerManifest }, { merge: true });
+      }
+      
       setPlayerManifest(newPlayerManifest);
       setUserData((prev: any) => ({ ...prev, manifest: newPlayerManifest }));
       setShowManifestSelection(false);

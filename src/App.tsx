@@ -204,13 +204,8 @@ const ProtectedAdminRoute = () => {
     return <PageLoader />;
   }
   
-  // Check if current user is admin (same logic as other components)
-  const isAdmin = currentUser?.email === 'eddymosley@compscihigh.org' || 
-                  currentUser?.email === 'admin@mstgames.net' ||
-                  currentUser?.email === 'edm21179@gmail.com' ||
-                  currentUser?.email?.includes('eddymosley') ||
-                  currentUser?.email?.includes('admin') ||
-                  currentUser?.email?.includes('mstgames');
+  // Check if current user is admin - Only Yondaime has access
+  const isAdmin = currentUser?.email === 'edm21179@gmail.com';
   
   if (!currentUser) {
     return <Navigate to="/login" replace />;

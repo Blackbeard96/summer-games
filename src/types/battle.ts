@@ -23,9 +23,11 @@ export interface Vault {
   movesRemaining: number; // Daily moves remaining
   maxMovesPerDay: number; // Maximum moves per day
   lastMoveReset: Date; // When moves were last reset
-  capacityUpgrades?: number; // Number of capacity upgrades purchased
-  shieldUpgrades?: number; // Number of shield upgrades purchased
-  generatorUpgrades?: number; // Number of generator upgrades purchased
+  capacityUpgrades?: number; // Number of capacity upgrades purchased (deprecated - use capacityLevel)
+  shieldUpgrades?: number; // Number of shield upgrades purchased (deprecated - use shieldLevel)
+  generatorUpgrades?: number; // Number of generator upgrades purchased (deprecated - use generatorLevel)
+  capacityLevel?: number; // Current capacity level (starts at 1) - NEW ECONOMY SYSTEM
+  shieldLevel?: number; // Current shield level (starts at 1) - NEW ECONOMY SYSTEM
 }
 
 export interface Move {

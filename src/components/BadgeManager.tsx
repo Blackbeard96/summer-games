@@ -456,6 +456,40 @@ const BadgeManager: React.FC = () => {
           const currentStudentPP = studentData.powerPoints || 0;
           const newStudentPP = currentStudentPP + ppReward;
           
+          // Create milestone event for badge earning
+          try {
+            const { createLiveFeedMilestone } = await import('../services/liveFeed');
+            const { getLevelFromXP } = await import('../utils/leveling');
+            const studentData = await getDoc(doc(db, 'students', studentId));
+            const userData = await getDoc(doc(db, 'users', studentId));
+            
+            if (studentData.exists() && userData.exists()) {
+              const student = studentData.data();
+              const user = userData.data();
+              const xp = student.xp || 0;
+              const level = getLevelFromXP(xp);
+              
+              await createLiveFeedMilestone(
+                studentId,
+                user.displayName || 'Unknown',
+                user.photoURL || undefined,
+                user.role || undefined,
+                level,
+                'badge_earned',
+                {
+                  badgeName: badge.name,
+                  badgeId: badge.id,
+                  xpReward,
+                  ppReward
+                },
+                badge.id // Use badge ID as refId for deduplication
+              );
+            }
+          } catch (milestoneError) {
+            console.error('Error creating badge milestone:', milestoneError);
+            // Don't fail badge award if milestone creation fails
+          }
+
           await addDoc(collection(db, 'students', studentId, 'badgeNotifications'), {
             badgeId: badge.id,
             badgeName: badge.name,

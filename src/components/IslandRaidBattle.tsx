@@ -12,6 +12,8 @@ import LuzIntroCutscene from './LuzIntroCutscene';
 import KonIntroCutscene from './KonIntroCutscene';
 import Ch24ConclusionCutscene from './Ch24ConclusionCutscene';
 import { debug } from '../utils/debug';
+import { createLiveFeedMilestone } from '../services/liveFeed';
+import { shouldShareEvent } from '../services/liveFeedPrivacy';
 
 interface IslandRaidBattleProps {
   gameId: string;
@@ -1417,6 +1419,30 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               const studentData = studentDoc.data();
               const islandRaidCompletions = studentData.islandRaidCompletions || {};
               const isFirstCompletion = !islandRaidCompletions[difficultyKey];
+              
+              // Create Live Feed post for Island Raid completion (if privacy settings allow)
+              try {
+                const shouldShare = await shouldShareEvent(currentUser.uid, 'raid_complete');
+                if (shouldShare) {
+                  const playerLevel = getLevelFromXP(studentData.xp || 0);
+                  
+                  await createLiveFeedMilestone(
+                    currentUser.uid,
+                    currentUser.displayName || 'Unknown',
+                    currentUser.photoURL || undefined,
+                    studentData.role || undefined,
+                    playerLevel,
+                    'raid_complete',
+                    {
+                      waveNumber: battleRoom.maxWaves || 5,
+                      difficulty: difficulty || 'normal'
+                    },
+                    `raid_complete_${currentUser.uid}_${gameId}_${Date.now()}`
+                  );
+                }
+              } catch (error) {
+                console.error('Error creating Live Feed post for Island Raid completion:', error);
+              }
               
               if (isFirstCompletion) {
                 // Show first completion rewards

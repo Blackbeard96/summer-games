@@ -167,7 +167,7 @@ const DailyChallenges: React.FC = () => {
 
     try {
       setLoading(true);
-      const today = getTodayDateString();
+      const today = getTodayDateStringEastern();
 
       // Check if player has challenges assigned for today
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');

@@ -128,15 +128,13 @@ export const updateChallengeProgressByType = async (
   challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
   amount: number = 1
 ) => {
-  // Layer A: Event trigger logging
-  if (DEBUG_DAILY) {
-    console.log('[Daily Challenge] 🎯 EVENT TRIGGER:', {
-      userId,
-      challengeType,
-      amount,
-      timestamp: new Date().toISOString()
-    });
-  }
+  // ALWAYS log event trigger (critical for debugging)
+  console.log('[Daily Challenge] 🎯 EVENT TRIGGER:', {
+    userId,
+    challengeType,
+    amount,
+    timestamp: new Date().toISOString()
+  });
 
   try {
     // First, get player's current challenges
@@ -151,20 +149,17 @@ export const updateChallengeProgressByType = async (
     const data = playerChallengesDoc.data();
     const today = getTodayDateStringEastern();
 
-    // Layer B: Daily-progress update function logging
-    if (DEBUG_DAILY) {
-      console.log('[Daily Challenge] 📅 Date check:', {
-        assignedDate: data.assignedDate,
-        today,
-        matches: data.assignedDate === today,
-        docPath: `students/${userId}/dailyChallenges/current`
-      });
-    }
+    // ALWAYS log date check (critical for debugging)
+    console.log('[Daily Challenge] 📅 Date check:', {
+      assignedDate: data.assignedDate,
+      today,
+      matches: data.assignedDate === today,
+      docPath: `students/${userId}/dailyChallenges/current`
+    });
 
     if (data.assignedDate !== today) {
-      if (DEBUG_DAILY) {
-        console.warn('[Daily Challenge] ⚠️ Challenges are not for today. Assigned date:', data.assignedDate, 'Today:', today);
-      }
+      // ALWAYS log date mismatch (critical for debugging)
+      console.warn('[Daily Challenge] ⚠️ Challenges are not for today. Assigned date:', data.assignedDate, 'Today:', today);
       return;
     }
 
@@ -286,6 +281,7 @@ export const updateChallengeProgressByType = async (
         const normalizedStoredType = storedType.toLowerCase().trim();
         const normalizedChallengeType = challengeType.toLowerCase().trim();
         
+        // ALWAYS log challenge matching (critical for debugging)
         console.log('[Daily Challenge] 🔍 Checking challenge:', {
           challengeId: challenge.challengeId,
           storedType,
@@ -295,7 +291,8 @@ export const updateChallengeProgressByType = async (
           matches: normalizedStoredType === normalizedChallengeType,
           completed: challenge.completed,
           currentProgress: challenge.progress,
-          target: challengeTarget
+          target: challengeTarget,
+          challengeDetails: challengeDetails[challenge.challengeId]
         });
         
         if (normalizedStoredType === normalizedChallengeType && !challenge.completed) {
@@ -330,6 +327,21 @@ export const updateChallengeProgressByType = async (
       });
 
       if (hasUpdates) {
+        // ALWAYS log Firestore write (critical for debugging)
+        console.log('[Daily Challenge] 💾 WRITING TO FIRESTORE:', {
+          userId,
+          challengeType,
+          challengesToUpdate: updatedChallenges.filter((c, idx) => {
+            const original = currentChallenges[idx];
+            return (c.progress !== original.progress) || (c.completed !== original.completed);
+          }).map(c => ({
+            challengeId: c.challengeId,
+            progress: c.progress,
+            completed: c.completed
+          })),
+          timestamp: new Date().toISOString()
+        });
+        
         // Layer C: Firestore write result logging
         transaction.update(playerChallengesRef, {
           challenges: updatedChallenges,
@@ -345,9 +357,26 @@ export const updateChallengeProgressByType = async (
           }))
         });
       } else {
-        console.warn('[Daily Challenge] ⚠️ No matching challenges found for type:', challengeType, {
-          availableTypes: currentChallenges.map(c => c.type || challengeDetails[c.challengeId]?.type),
-          challengeIds: currentChallenges.map(c => c.challengeId)
+        // ALWAYS log when no matches found (critical for debugging)
+        const availableTypes = currentChallenges.map(c => ({
+          challengeId: c.challengeId,
+          storedType: c.type,
+          detailsType: challengeDetails[c.challengeId]?.type,
+          finalType: c.type || challengeDetails[c.challengeId]?.type,
+          normalizedFinalType: (c.type || challengeDetails[c.challengeId]?.type || '').toLowerCase().trim(),
+          completed: c.completed
+        }));
+        
+        console.warn('[Daily Challenge] ⚠️ NO MATCHING CHALLENGES FOUND:', {
+          requestedType: challengeType,
+          normalizedRequestedType: challengeType.toLowerCase().trim(),
+          availableChallenges: availableTypes,
+          challengeIds: currentChallenges.map(c => c.challengeId),
+          matchAttempts: availableTypes.map(a => ({
+            challengeId: a.challengeId,
+            matches: a.normalizedFinalType === challengeType.toLowerCase().trim(),
+            reason: a.completed ? 'already completed' : (a.normalizedFinalType === challengeType.toLowerCase().trim() ? 'should match' : 'type mismatch')
+          }))
         });
       }
     });

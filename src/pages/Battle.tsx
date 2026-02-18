@@ -1000,66 +1000,85 @@ const Battle: React.FC = () => {
                   Increase your vault's PP storage capacity for better resource management
                 </p>
                 
-                {/* Current Stats */}
-                <div style={{ 
-                  background: 'rgba(255,255,255,0.8)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Capacity</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#059669' }}>
-                    {vault?.capacity || 1000} PP
-                  </div>
-                </div>
-                
-                {/* Improvement Preview */}
-                <div style={{ 
-                  background: 'rgba(5, 150, 105, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem',
-                  border: '1px solid rgba(5, 150, 105, 0.2)'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#059669', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                    ⬆️ After Upgrade
-                  </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#059669' }}>
-                    {(vault?.capacity || 1000) + 200} PP
-                  </div>
-                  <div style={{ fontSize: '0.875rem', color: '#059669' }}>
-                    +200 PP capacity
-                  </div>
-                </div>
-                
-                <button 
-                  onClick={upgradeVaultCapacity}
-                  style={{
-                    background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                    color: 'white',
-                    border: 'none',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    cursor: 'pointer',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    width: '100%',
-                    transition: 'all 0.2s'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(5, 150, 105, 0.3)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}>
-                  💰 Upgrade ({(() => {
-                    const upgradeCount = vault?.capacityUpgrades || 0;
-                    const basePrice = 200;
-                    return basePrice * Math.pow(2, upgradeCount);
-                  })()} PP)
-                </button>
+                {(() => {
+                  const { getCapacity, getCapacityUpgradeCost } = require('../utils/vaultEconomy');
+                  const currentLevel = vault?.capacityLevel || 1;
+                  const currentCapacity = getCapacity(currentLevel);
+                  const nextCapacity = getCapacity(currentLevel + 1);
+                  const upgradeCost = getCapacityUpgradeCost(currentLevel);
+                  const canAfford = (vault?.currentPP || 0) >= upgradeCost;
+                  
+                  return (
+                    <>
+                      {/* Current Stats */}
+                      <div style={{ 
+                        background: 'rgba(255,255,255,0.8)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Capacity</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#059669' }}>
+                          {currentCapacity} PP
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                          Level {currentLevel}
+                        </div>
+                      </div>
+                      
+                      {/* Improvement Preview */}
+                      <div style={{ 
+                        background: 'rgba(5, 150, 105, 0.1)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem',
+                        border: '1px solid rgba(5, 150, 105, 0.2)'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#059669', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                          ⬆️ After Upgrade
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#059669' }}>
+                          {nextCapacity} PP
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#059669' }}>
+                          +{nextCapacity - currentCapacity} PP capacity
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={upgradeVaultCapacity}
+                        disabled={!canAfford}
+                        style={{
+                          background: canAfford ? 'linear-gradient(135deg, #059669 0%, #047857 100%)' : '#9ca3af',
+                          color: 'white',
+                          border: 'none',
+                          padding: '1rem 1.5rem',
+                          borderRadius: '0.75rem',
+                          cursor: canAfford ? 'pointer' : 'not-allowed',
+                          fontSize: '1rem',
+                          fontWeight: 'bold',
+                          width: '100%',
+                          transition: 'all 0.2s',
+                          opacity: canAfford ? 1 : 0.6
+                        }}
+                        onMouseEnter={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 8px 15px rgba(5, 150, 105, 0.3)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }
+                        }}>
+                        💰 Upgrade ({upgradeCost} PP)
+                        {!canAfford && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.9 }}>Insufficient PP</div>}
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
               
               <div style={{ 
@@ -1090,66 +1109,85 @@ const Battle: React.FC = () => {
                   Strengthen your vault's defensive shields for better protection
                 </p>
                 
-                {/* Current Stats */}
-                <div style={{ 
-                  background: 'rgba(255,255,255,0.8)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Max Shields</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>
-                    {vault?.maxShieldStrength || 50} Shields
-                  </div>
-                </div>
-                
-                {/* Improvement Preview */}
-                <div style={{ 
-                  background: 'rgba(37, 99, 235, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem',
-                  border: '1px solid rgba(37, 99, 235, 0.2)'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#2563eb', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                    ⬆️ After Upgrade
-                  </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#2563eb' }}>
-                    {(vault?.maxShieldStrength || 50) + 25} Shields
-                  </div>
-                  <div style={{ fontSize: '0.875rem', color: '#2563eb' }}>
-                    +25 max shield strength
-                  </div>
-                </div>
-                
-                <button 
-                  onClick={upgradeVaultShields}
-                  style={{
-                    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                    color: 'white',
-                    border: 'none',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    cursor: 'pointer',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    width: '100%',
-                    transition: 'all 0.2s'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(37, 99, 235, 0.3)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}>
-                  🛡️ Upgrade ({(() => {
-                    const upgradeCount = vault?.shieldUpgrades || 0;
-                    const basePrice = 75;
-                    return basePrice * Math.pow(2, upgradeCount);
-                  })()} PP)
-                </button>
+                {(() => {
+                  const { getMaxShields, getShieldUpgradeCost } = require('../utils/vaultEconomy');
+                  const currentLevel = vault?.shieldLevel || 1;
+                  const currentMaxShields = getMaxShields(currentLevel);
+                  const nextMaxShields = getMaxShields(currentLevel + 1);
+                  const upgradeCost = getShieldUpgradeCost(currentLevel);
+                  const canAfford = (vault?.currentPP || 0) >= upgradeCost;
+                  
+                  return (
+                    <>
+                      {/* Current Stats */}
+                      <div style={{ 
+                        background: 'rgba(255,255,255,0.8)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Max Shields</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>
+                          {currentMaxShields} Shields
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                          Level {currentLevel}
+                        </div>
+                      </div>
+                      
+                      {/* Improvement Preview */}
+                      <div style={{ 
+                        background: 'rgba(37, 99, 235, 0.1)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem',
+                        border: '1px solid rgba(37, 99, 235, 0.2)'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#2563eb', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                          ⬆️ After Upgrade
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#2563eb' }}>
+                          {nextMaxShields} Shields
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#2563eb' }}>
+                          +{nextMaxShields - currentMaxShields} max shield strength
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={upgradeVaultShields}
+                        disabled={!canAfford}
+                        style={{
+                          background: canAfford ? 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' : '#9ca3af',
+                          color: 'white',
+                          border: 'none',
+                          padding: '1rem 1.5rem',
+                          borderRadius: '0.75rem',
+                          cursor: canAfford ? 'pointer' : 'not-allowed',
+                          fontSize: '1rem',
+                          fontWeight: 'bold',
+                          width: '100%',
+                          transition: 'all 0.2s',
+                          opacity: canAfford ? 1 : 0.6
+                        }}
+                        onMouseEnter={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 8px 15px rgba(37, 99, 235, 0.3)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }
+                        }}>
+                        🛡️ Upgrade ({upgradeCost} PP)
+                        {!canAfford && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.9 }}>Insufficient PP</div>}
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
               
               <div style={{ 
@@ -1180,92 +1218,96 @@ const Battle: React.FC = () => {
                   Passively generates Power Points and Shield Strength over time
                 </p>
                 
-                {/* Current Stats */}
-                <div style={{ 
-                  background: 'rgba(255,255,255,0.8)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Level</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
-                    Level {vault?.generatorLevel || 1}
-                  </div>
-                  {(() => {
-                    const rates = getGeneratorRates(vault?.generatorLevel || 1);
-                    return (
-                      <>
+                {(() => {
+                  const { getGeneratorPPPerDay, getGeneratorShieldsPerDay, getGeneratorUpgradeCost } = require('../utils/vaultEconomy');
+                  const currentLevel = vault?.generatorLevel || 1;
+                  const currentPPPerDay = getGeneratorPPPerDay(currentLevel);
+                  const currentShieldsPerDay = getGeneratorShieldsPerDay(currentLevel);
+                  const nextPPPerDay = getGeneratorPPPerDay(currentLevel + 1);
+                  const nextShieldsPerDay = getGeneratorShieldsPerDay(currentLevel + 1);
+                  const upgradeCost = getGeneratorUpgradeCost(vault?.capacityLevel || 1);
+                  const canAfford = (vault?.currentPP || 0) >= upgradeCost;
+                  
+                  return (
+                    <>
+                      {/* Current Stats */}
+                      <div style={{ 
+                        background: 'rgba(255,255,255,0.8)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>Current Level</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                          Level {currentLevel}
+                        </div>
                         <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
-                          ⚡ {rates.ppPerDay} PP/day
+                          ⚡ {currentPPPerDay} PP/day
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                          🛡️ {rates.shieldsPerDay} Shields/day
+                          🛡️ {currentShieldsPerDay} Shields/day
                         </div>
-                      </>
-                    );
-                  })()}
-                </div>
-                
-                {/* Improvement Preview */}
-                <div style={{ 
-                  background: 'rgba(245, 158, 11, 0.1)',
-                  padding: '1rem',
-                  borderRadius: '0.75rem',
-                  marginBottom: '1rem',
-                  border: '1px solid rgba(245, 158, 11, 0.2)'
-                }}>
-                  <div style={{ fontSize: '0.875rem', color: '#f59e0b', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                    ⬆️ After Upgrade
-                  </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>
-                    Level {(vault?.generatorLevel || 1) + 1}
-                  </div>
-                  {(() => {
-                    const nextRates = getGeneratorRates((vault?.generatorLevel || 1) + 1);
-                    return (
-                      <>
-                        <div style={{ fontSize: '0.875rem', color: '#f59e0b' }}>
-                          ⚡ {nextRates.ppPerDay} PP/day (+{nextRates.ppPerDay - getGeneratorRates(vault?.generatorLevel || 1).ppPerDay})
+                      </div>
+                      
+                      {/* Improvement Preview */}
+                      <div style={{ 
+                        background: 'rgba(245, 158, 11, 0.1)',
+                        padding: '1rem',
+                        borderRadius: '0.75rem',
+                        marginBottom: '1rem',
+                        border: '1px solid rgba(245, 158, 11, 0.2)'
+                      }}>
+                        <div style={{ fontSize: '0.875rem', color: '#f59e0b', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                          ⬆️ After Upgrade
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                          Level {currentLevel + 1}
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#f59e0b' }}>
-                          🛡️ {nextRates.shieldsPerDay} Shields/day (+{nextRates.shieldsPerDay - getGeneratorRates(vault?.generatorLevel || 1).shieldsPerDay})
+                          ⚡ {nextPPPerDay} PP/day (+{nextPPPerDay - currentPPPerDay})
                         </div>
-                      </>
-                    );
-                  })()}
-                </div>
-                
-                <button 
-                  onClick={upgradeGenerator}
-                  style={{
-                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                    color: 'white',
-                    border: 'none',
-                    padding: '1rem 1.5rem',
-                    borderRadius: '0.75rem',
-                    cursor: 'pointer',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    width: '100%',
-                    transform: 'translateY(0)',
-                    boxShadow: 'none',
-                    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    willChange: 'transform, box-shadow'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 15px rgba(245, 158, 11, 0.3)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}>
-                  ⚡ Upgrade Generator ({(() => {
-                    const upgradeCount = vault?.generatorUpgrades || 0;
-                    const basePrice = 250;
-                    return basePrice + (basePrice * upgradeCount);
-                  })()} PP)
-                </button>
+                        <div style={{ fontSize: '0.875rem', color: '#f59e0b' }}>
+                          🛡️ {nextShieldsPerDay} Shields/day (+{nextShieldsPerDay - currentShieldsPerDay})
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={upgradeGenerator}
+                        disabled={!canAfford}
+                        style={{
+                          background: canAfford ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#9ca3af',
+                          color: 'white',
+                          border: 'none',
+                          padding: '1rem 1.5rem',
+                          borderRadius: '0.75rem',
+                          cursor: canAfford ? 'pointer' : 'not-allowed',
+                          fontSize: '1rem',
+                          fontWeight: 'bold',
+                          width: '100%',
+                          transform: 'translateY(0)',
+                          boxShadow: 'none',
+                          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                          willChange: 'transform, box-shadow',
+                          opacity: canAfford ? 1 : 0.6
+                        }}
+                        onMouseEnter={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 8px 15px rgba(245, 158, 11, 0.3)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (canAfford) {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }
+                        }}>
+                        ⚡ Upgrade Generator ({upgradeCost} PP)
+                        {!canAfford && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.9 }}>Insufficient PP</div>}
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             </div>
             

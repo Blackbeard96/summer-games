@@ -1,12 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if user is admin
+    // Helper function to check if user is admin - Only Yondaime has access
     function isAdmin() {
       return request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        request.auth.token.email == 'edm21179@gmail.com';
     }
     
     // Users collection - allow users to read/write their own documents
@@ -53,10 +51,7 @@ service cloud.firestore {
     // Students collection - allow users to read/write their own documents
     match /students/{userId} {
       allow read, write: if request.auth != null && 
-        (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.uid == userId || isAdmin());
     }
     
     // Students collection - allow scorekeepers to read all students
@@ -71,10 +66,7 @@ service cloud.firestore {
     // Profiles collection - allow users to read/write their own profile
     match /profiles/{userId} {
       allow read, write: if request.auth != null && 
-        (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+        (request.auth.uid == userId || isAdmin());
     }
     
     // Profiles collection - allow scorekeepers to read all profiles
@@ -648,6 +640,40 @@ service cloud.firestore {
     match /adminSettings/{settingId} {
       allow read: if request.auth != null && isAdmin();
       allow write: if request.auth != null && isAdmin();
+    }
+    
+    // Live Feed Posts collection - global feed for all authenticated users
+    match /liveFeedPosts/{postId} {
+      // Allow read for all authenticated users
+      allow read: if request.auth != null;
+      
+      // Allow create for authenticated users
+      allow create: if request.auth != null &&
+        request.resource.data.createdBy.uid == request.auth.uid &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 240 &&
+        request.resource.data.type in ['post', 'milestone'] &&
+        request.resource.data.visibility == 'global';
+      
+      // Allow delete/update only for own posts (not milestones)
+      allow update, delete: if request.auth != null &&
+        resource.data.type == 'post' &&
+        resource.data.createdBy.uid == request.auth.uid;
+      
+      // Reactions subcollection
+      match /reactions/{reactionUserId} {
+        // Allow read for all authenticated users
+        allow read: if request.auth != null;
+        
+        // Allow create/update if user is creating their own reaction
+        allow create, update: if request.auth != null &&
+          reactionUserId == request.auth.uid &&
+          request.resource.data.uid == request.auth.uid;
+        
+        // Allow delete only own reactions
+        allow delete: if request.auth != null &&
+          reactionUserId == request.auth.uid;
+      }
     }
     
     // Default rule - deny all other access

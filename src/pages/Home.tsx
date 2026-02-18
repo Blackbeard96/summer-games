@@ -7,7 +7,11 @@ import { db } from '../firebase';
 import { getLevelFromXP } from '../utils/leveling';
 import BattlePass from '../components/BattlePass';
 import Season0IntroModal from '../components/Season0IntroModal';
-import DailyChallenges from '../components/DailyChallenges';
+import DailyChallengesCompact from '../components/DailyChallengesCompact';
+import LiveFeedCard from '../components/LiveFeedCard';
+import LiveFeedPrivacySettings from '../components/LiveFeedPrivacySettings';
+import BattlePassCompactCard from '../components/BattlePassCompactCard';
+import QuickLinksRow from '../components/QuickLinksRow';
 import { useJourneyStatus } from '../hooks/useJourneyStatus';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
@@ -113,18 +117,50 @@ const Home: React.FC = () => {
 
 
   return (
-    <div style={{ 
-      minHeight: '100vh',
-      width: '100%',
-      backgroundImage: 'url(/images/MST%20BKG.png)',
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-      backgroundAttachment: 'fixed',
-      backgroundRepeat: 'no-repeat',
-      position: 'relative',
-      paddingTop: '2rem',
-      paddingBottom: '2rem'
-    }}>
+    <>
+      <style>{`
+        /* Desktop: 3 columns (25% / 50% / 25%) */
+        @media (min-width: 1024px) {
+          .home-main-grid {
+            grid-template-columns: 1fr 2fr 1fr !important;
+          }
+        }
+        
+        /* Tablet: Live Feed full width on top, Daily Challenges + Battle Pass side-by-side below */
+        @media (min-width: 768px) and (max-width: 1023px) {
+          .home-main-grid {
+            grid-template-columns: 1fr 1fr !important;
+          }
+          .home-live-feed {
+            grid-column: 1 / -1 !important;
+            margin-bottom: 1.5rem;
+          }
+        }
+        
+        /* Mobile: Stacked vertically */
+        @media (max-width: 767px) {
+          .home-main-grid {
+            grid-template-columns: 1fr !important;
+          }
+          .home-daily-challenges,
+          .home-live-feed,
+          .home-battle-pass {
+            margin-bottom: 1.5rem;
+          }
+        }
+      `}</style>
+      <div style={{ 
+        minHeight: '100vh',
+        width: '100%',
+        backgroundImage: 'url(/images/MST%20BKG.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundAttachment: 'fixed',
+        backgroundRepeat: 'no-repeat',
+        position: 'relative',
+        paddingTop: '2rem',
+        paddingBottom: '2rem'
+      }}>
       <div style={{ 
         maxWidth: '1200px', 
         margin: '0 auto', 
@@ -138,7 +174,7 @@ const Home: React.FC = () => {
         color: 'white',
         padding: '2rem',
         borderRadius: '1rem',
-        marginBottom: '2rem',
+        marginBottom: '1.5rem',
         textAlign: 'center',
         position: 'relative'
       }}>
@@ -178,365 +214,38 @@ const Home: React.FC = () => {
         </button>
       </div>
 
-      {/* Daily Challenges Section */}
-      <div style={{
-        background: 'white',
-        border: '2px solid #e5e7eb',
-        borderRadius: '1rem',
-        padding: '1.5rem',
-        marginBottom: '2rem'
-      }}>
-        <DailyChallenges />
-      </div>
+      {/* Quick Links Row */}
+      <QuickLinksRow />
 
-      {/* Main Action Buttons - Big Rectangular Billboards */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: '2rem',
-        marginBottom: '2rem'
-      }}>
-        {/* Battle Pass Button */}
-        <div
-          onClick={() => setShowBattlePass(true)}
-          style={{
-            background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-            border: '3px solid #a78bfa',
-            borderRadius: '1rem',
-            padding: '3rem 2rem',
-            cursor: 'pointer',
-            transition: 'all 0.3s',
-            position: 'relative',
-            overflow: 'hidden',
-            minHeight: '200px',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            boxShadow: '0 10px 30px rgba(139, 92, 246, 0.3)'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-5px)';
-            e.currentTarget.style.boxShadow = '0 15px 40px rgba(139, 92, 246, 0.4)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 10px 30px rgba(139, 92, 246, 0.3)';
-          }}
-        >
-          <div style={{ textAlign: 'center', width: '100%' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🎁</div>
-            <h2 style={{
-              color: 'white',
-              fontSize: '2.5rem',
-              fontWeight: 'bold',
-              marginBottom: '0.5rem',
-              textShadow: '2px 2px 4px rgba(0, 0, 0, 0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '2px'
-            }}>
-              BATTLE PASS
-            </h2>
-            <p style={{
-              color: 'white',
-              fontSize: '1.125rem',
-              textShadow: '1px 1px 2px rgba(0, 0, 0, 0.3)',
-              opacity: 0.95,
-              marginBottom: '1rem'
-            }}>
-              Season 0 - Unlock Rewards
-            </p>
-            
-            {/* Progress Bar */}
-            {(() => {
-              const currentTier = battlePassTier;
-              const nextTier = currentTier < season0Tiers.length ? currentTier + 1 : season0Tiers.length;
-              const currentTierXP = currentTier > 0 ? season0Tiers[currentTier - 1].requiredXP : 0;
-              const nextTierXP = nextTier <= season0Tiers.length ? season0Tiers[nextTier - 1].requiredXP : season0Tiers[season0Tiers.length - 1].requiredXP;
-              const xpInCurrentTier = battlePassXP - currentTierXP;
-              const xpNeededForNextTier = nextTierXP - currentTierXP;
-              const progressPercent = xpNeededForNextTier > 0 ? Math.min(100, (xpInCurrentTier / xpNeededForNextTier) * 100) : 100;
-              
-              return (
-                <div style={{ width: '100%', maxWidth: '300px', margin: '0 auto' }}>
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.875rem',
-                    color: 'white',
-                    textShadow: '1px 1px 2px rgba(0, 0, 0, 0.5)'
-                  }}>
-                    <span>Tier {currentTier} / {season0Tiers.length}</span>
-                    <span>{xpInCurrentTier} / {xpNeededForNextTier} XP</span>
-                  </div>
-                  <div style={{
-                    width: '100%',
-                    height: '8px',
-                    background: 'rgba(255, 255, 255, 0.3)',
-                    borderRadius: '4px',
-                    overflow: 'hidden',
-                    border: '1px solid rgba(255, 255, 255, 0.5)'
-                  }}>
-                    <div style={{
-                      width: `${progressPercent}%`,
-                      height: '100%',
-                      background: 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%)',
-                      borderRadius: '4px',
-                      transition: 'width 0.3s ease',
-                      boxShadow: '0 0 10px rgba(251, 191, 36, 0.5)'
-                    }} />
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
+      {/* Main 3-Column Grid */}
+      <div 
+        className="home-main-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: '1.5rem',
+          marginBottom: '2rem'
+        }}
+      >
+        {/* Left Column: Daily Challenges */}
+        <div className="home-daily-challenges">
+          <DailyChallengesCompact />
         </div>
 
-        {/* Player's Journey Button */}
-        <div
-          style={{
-            background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-            border: '3px solid #60a5fa',
-            borderRadius: '1rem',
-            padding: '3rem 2rem',
-            transition: 'all 0.3s',
-            position: 'relative',
-            overflow: 'hidden',
-            minHeight: '200px',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            boxShadow: '0 10px 30px rgba(59, 130, 246, 0.3)'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-5px)';
-            e.currentTarget.style.boxShadow = '0 15px 40px rgba(59, 130, 246, 0.4)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 10px 30px rgba(59, 130, 246, 0.3)';
-          }}
-        >
-          <div style={{ textAlign: 'center', width: '100%' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>📖</div>
-            <h2 style={{
-              color: 'white',
-              fontSize: '2.5rem',
-              fontWeight: 'bold',
-              marginBottom: '0.5rem',
-              textShadow: '2px 2px 4px rgba(0, 0, 0, 0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '2px'
-            }}>
-              PLAYER'S JOURNEY
-            </h2>
-            <p style={{
-              color: 'white',
-              fontSize: '1.125rem',
-              textShadow: '1px 1px 2px rgba(0, 0, 0, 0.3)',
-              opacity: 0.95,
-              marginBottom: '1rem'
-            }}>
-              {journeyStatus.isCaughtUp ? 'You\'re caught up — more coming soon!' : 'Begin Your Story'}
-            </p>
-            
-            {/* Progress Display */}
-            {journeyStatus.currentChapterNumber !== null && (
-              <div style={{ width: '100%', maxWidth: '300px', margin: '0 auto', marginBottom: '1rem' }}>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '0.5rem',
-                  fontSize: '0.875rem',
-                  color: 'white',
-                  textShadow: '1px 1px 2px rgba(0, 0, 0, 0.5)'
-                }}>
-                  <span>
-                    Chapter {journeyStatus.currentChapterNumber}
-                    {journeyStatus.nextChallenge && ` - ${journeyStatus.nextChallenge.title}`}
-                  </span>
-                  <span>{Math.round(journeyStatus.chapterProgressPercent)}%</span>
-                </div>
-                <div style={{
-                  width: '100%',
-                  height: '8px',
-                  background: 'rgba(255, 255, 255, 0.3)',
-                  borderRadius: '4px',
-                  overflow: 'hidden',
-                  border: '1px solid rgba(255, 255, 255, 0.5)'
-                }}>
-                  <div style={{
-                    width: `${journeyStatus.chapterProgressPercent}%`,
-                    height: '100%',
-                    background: 'linear-gradient(90deg, #60a5fa 0%, #3b82f6 100%)',
-                    borderRadius: '4px',
-                    transition: 'width 0.3s ease',
-                    boxShadow: '0 0 10px rgba(96, 165, 250, 0.5)'
-                  }} />
-                </div>
-                {journeyStatus.nextChallenge && (
-                  <div style={{
-                    fontSize: '0.75rem',
-                    color: 'white',
-                    textShadow: '1px 1px 2px rgba(0, 0, 0, 0.5)',
-                    marginTop: '0.5rem',
-                    opacity: 0.9
-                  }}>
-                    Next: {journeyStatus.nextChallenge.title}
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {/* Continue Journey Button */}
-            <button
-              onClick={() => {
-                if (journeyStatus.nextChallenge) {
-                  // Deep-link to next challenge
-                  navigate(`/chapters?focus=${journeyStatus.nextChallenge.challengeId}&chapter=${journeyStatus.nextChallenge.chapterId}`);
-                } else {
-                  // No next challenge - just go to chapters page
-                  navigate('/chapters');
-                }
-              }}
-              disabled={journeyStatus.isCaughtUp}
-              style={{
-                padding: '0.75rem 1.5rem',
-                background: journeyStatus.isCaughtUp ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.9)',
-                color: journeyStatus.isCaughtUp ? 'rgba(255, 255, 255, 0.7)' : '#3b82f6',
-                border: '2px solid rgba(255, 255, 255, 0.5)',
-                borderRadius: '0.5rem',
-                cursor: journeyStatus.isCaughtUp ? 'not-allowed' : 'pointer',
-                fontSize: '1rem',
-                fontWeight: 'bold',
-                textShadow: journeyStatus.isCaughtUp ? 'none' : '1px 1px 2px rgba(0, 0, 0, 0.2)',
-                transition: 'all 0.2s',
-                marginTop: '0.5rem'
-              }}
-              onMouseEnter={(e) => {
-                if (!journeyStatus.isCaughtUp) {
-                  e.currentTarget.style.background = 'white';
-                  e.currentTarget.style.transform = 'scale(1.05)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!journeyStatus.isCaughtUp) {
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.9)';
-                  e.currentTarget.style.transform = 'scale(1)';
-                }
-              }}
-            >
-              {journeyStatus.isCaughtUp ? 'View Journey' : 'Continue Journey'}
-            </button>
-          </div>
+        {/* Center Column: Live Feed + Privacy Settings */}
+        <div className="home-live-feed" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <LiveFeedCard />
+          <LiveFeedPrivacySettings />
         </div>
 
-        {/* Battle Arena Button */}
-        <div
-          onClick={() => navigate('/battle')}
-          style={{
-            background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-            border: '3px solid #f59e0b',
-            borderRadius: '1rem',
-            padding: '3rem 2rem',
-            cursor: 'pointer',
-            transition: 'all 0.3s',
-            position: 'relative',
-            overflow: 'hidden',
-            minHeight: '200px',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            boxShadow: '0 10px 30px rgba(239, 68, 68, 0.3)'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-5px)';
-            e.currentTarget.style.boxShadow = '0 15px 40px rgba(239, 68, 68, 0.4)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 10px 30px rgba(239, 68, 68, 0.3)';
-          }}
-        >
-          <div style={{ textAlign: 'center', width: '100%' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>⚔️</div>
-            <h2 style={{
-              color: 'white',
-              fontSize: '2.5rem',
-              fontWeight: 'bold',
-              marginBottom: '0.5rem',
-              textShadow: '2px 2px 4px rgba(0, 0, 0, 0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '2px'
-            }}>
-              BATTLE ARENA
-            </h2>
-            <p style={{
-              color: 'white',
-              fontSize: '1.125rem',
-              textShadow: '1px 1px 2px rgba(0, 0, 0, 0.3)',
-              opacity: 0.95
-            }}>
-              Enter the Arena
-            </p>
-          </div>
-        </div>
-
-        {/* MST MKT Button */}
-        <div
-          onClick={() => navigate('/marketplace')}
-          style={{
-            background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-            border: '3px solid #fbbf24',
-            borderRadius: '1rem',
-            padding: '3rem 2rem',
-            cursor: 'pointer',
-            transition: 'all 0.3s',
-            position: 'relative',
-            overflow: 'hidden',
-            minHeight: '200px',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            boxShadow: '0 10px 30px rgba(245, 158, 11, 0.3)'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-5px)';
-            e.currentTarget.style.boxShadow = '0 15px 40px rgba(245, 158, 11, 0.4)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 10px 30px rgba(245, 158, 11, 0.3)';
-          }}
-        >
-          <div style={{ textAlign: 'center', width: '100%' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🛒</div>
-            <h2 style={{
-              color: 'white',
-              fontSize: '2.5rem',
-              fontWeight: 'bold',
-              marginBottom: '0.5rem',
-              textShadow: '2px 2px 4px rgba(0, 0, 0, 0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '2px'
-            }}>
-              MST MKT
-            </h2>
-            <p style={{
-              color: 'white',
-              fontSize: '1.125rem',
-              textShadow: '1px 1px 2px rgba(0, 0, 0, 0.3)',
-              opacity: 0.95
-            }}>
-              Artifact Marketplace
-            </p>
-          </div>
+        {/* Right Column: Battle Pass */}
+        <div className="home-battle-pass">
+          <BattlePassCompactCard
+            currentTier={battlePassTier}
+            maxTier={season0Tiers.length}
+            totalXP={battlePassXP}
+            onViewRewards={() => setShowBattlePass(true)}
+          />
         </div>
       </div>
 
@@ -580,6 +289,7 @@ const Home: React.FC = () => {
       />
       </div>
     </div>
+    </>
   );
 };
 
