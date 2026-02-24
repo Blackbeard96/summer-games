@@ -146,6 +146,9 @@ const NavBar = memo(() => {
   // Track which dropdown is open (by item path)
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Track which dropdown child is showing a sub-menu (e.g. Battle Arena → Vault Mastery / Skills & Mastery)
+  const [openSubDropdown, setOpenSubDropdown] = useState<string | null>(null);
+  const subDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [pendingAssessmentGoals, setPendingAssessmentGoals] = useState(0);
   const [activeLiveEventsCount, setActiveLiveEventsCount] = useState(0);
   
@@ -907,6 +910,11 @@ const NavBar = memo(() => {
                     // Add delay before hiding dropdown (300ms gives time to move back)
                     dropdownTimeoutRef.current = setTimeout(() => {
                       setOpenDropdown(null);
+                      setOpenSubDropdown(null);
+                      if (subDropdownTimeoutRef.current) {
+                        clearTimeout(subDropdownTimeoutRef.current);
+                        subDropdownTimeoutRef.current = null;
+                      }
                       dropdownTimeoutRef.current = null;
                     }, 300);
                   }}
@@ -917,6 +925,9 @@ const NavBar = memo(() => {
                       if (subItem.visibility === 'admin' && effectiveRole !== 'admin') return null;
                       if (subItem.visibility === 'scorekeeper' && effectiveRole !== 'scorekeeper' && !hasScorekeeperRole) return null;
                       
+                      const subItemKey = `${item.path}-${subItem.label}`;
+                      const hasSubChildren = subItem.children && subItem.children.length > 0;
+
                       return subItem.isButton ? (
                         <button
                           key={subItem.path || subItem.label}
@@ -971,6 +982,94 @@ const NavBar = memo(() => {
                             </span>
                           )}
                         </button>
+                      ) : hasSubChildren ? (
+                        <div
+                          key={subItemKey}
+                          style={{
+                            position: 'relative',
+                            padding: '0.75rem 1rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: 'white',
+                            cursor: 'default',
+                            transition: 'background-color 0.2s'
+                          }}
+                          onMouseEnter={() => {
+                            if (subDropdownTimeoutRef.current) {
+                              clearTimeout(subDropdownTimeoutRef.current);
+                              subDropdownTimeoutRef.current = null;
+                            }
+                            setOpenSubDropdown(subItemKey);
+                          }}
+                          onMouseLeave={() => {
+                            subDropdownTimeoutRef.current = setTimeout(() => {
+                              setOpenSubDropdown(null);
+                              subDropdownTimeoutRef.current = null;
+                            }, 200);
+                          }}
+                        >
+                          {subItem.icon && <span>{subItem.icon}</span>}
+                          <span>{subItem.label}</span>
+                          <span style={{ marginLeft: 'auto', fontSize: '0.75rem' }}>▶</span>
+                          {/* Sub-dropdown (Vault Mastery, Skills & Mastery) */}
+                          {openSubDropdown === subItemKey && subItem.children && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                left: '100%',
+                                top: 0,
+                                marginLeft: '2px',
+                                backgroundColor: '#1f2937',
+                                borderRadius: '0.5rem',
+                                boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+                                border: '1px solid #374151',
+                                zIndex: 1002,
+                                minWidth: '180px',
+                                padding: '0.5rem 0'
+                              }}
+                              onMouseEnter={() => {
+                                if (subDropdownTimeoutRef.current) {
+                                  clearTimeout(subDropdownTimeoutRef.current);
+                                  subDropdownTimeoutRef.current = null;
+                                }
+                                setOpenSubDropdown(subItemKey);
+                              }}
+                              onMouseLeave={() => {
+                                subDropdownTimeoutRef.current = setTimeout(() => {
+                                  setOpenSubDropdown(null);
+                                  subDropdownTimeoutRef.current = null;
+                                }, 200);
+                              }}
+                            >
+                              {subItem.children.map((nest) => {
+                                if (nest.visibility === 'admin' && effectiveRole !== 'admin') return null;
+                                if (nest.visibility === 'scorekeeper' && effectiveRole !== 'scorekeeper' && !hasScorekeeperRole) return null;
+                                return (
+                                  <Link
+                                    key={nest.path || nest.label}
+                                    to={nest.to || nest.path || '#'}
+                                    onClick={() => { setOpenDropdown(null); setOpenSubDropdown(null); }}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.5rem',
+                                      color: 'white',
+                                      textDecoration: 'none',
+                                      padding: '0.6rem 1rem',
+                                      transition: 'background-color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  >
+                                    {nest.icon && <span>{nest.icon}</span>}
+                                    <span>{nest.label}</span>
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <Link
                           key={subItem.path || subItem.label}

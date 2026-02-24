@@ -647,13 +647,14 @@ service cloud.firestore {
       // Allow read for all authenticated users
       allow read: if request.auth != null;
       
-      // Allow create for authenticated users
+      // Allow create: user creates their own post, OR admin creates a milestone (e.g. badge awarded to student)
       allow create: if request.auth != null &&
-        request.resource.data.createdBy.uid == request.auth.uid &&
         request.resource.data.text is string &&
         request.resource.data.text.size() <= 240 &&
         request.resource.data.type in ['post', 'milestone'] &&
-        request.resource.data.visibility == 'global';
+        request.resource.data.visibility == 'global' &&
+        (request.resource.data.createdBy.uid == request.auth.uid ||
+          (request.resource.data.type == 'milestone' && isAdmin()));
       
       // Allow delete/update only for own posts (not milestones)
       allow update, delete: if request.auth != null &&

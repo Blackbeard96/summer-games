@@ -70,7 +70,11 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               label: 'Battle Arena',
               path: '/battle',
               icon: '⚔️',
-              visibility: 'all'
+              visibility: 'all',
+              children: [
+                { label: 'Vault Mastery', path: '/battle#vault', icon: '🏦', visibility: 'all' },
+                { label: 'Skills & Mastery', path: '/battle#moves', icon: '⚔️', visibility: 'all' }
+              ]
             },
             {
               label: 'Island Raid',

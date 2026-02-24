@@ -19,6 +19,8 @@ interface Badge {
   criteria?: string;
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   category: 'challenge' | 'achievement' | 'special' | 'admin';
+  xpReward?: number;
+  ppReward?: number;
 }
 
 // Badge awarding utility function
@@ -64,8 +66,33 @@ const awardBadgeForChallenge = async (userId: string, challengeName: string) => 
             await updateDoc(studentRef, {
               badges: [...currentBadges, newBadgeEntry]
             });
-            
-            // Badge awarded successfully
+
+            // Post badge earned to Live Feed
+            try {
+              const { createLiveFeedMilestone } = await import('../services/liveFeed');
+              const { getLevelFromXP } = await import('../utils/leveling');
+              const userSnap = await getDoc(doc(db, 'users', userId));
+              const userData = userSnap.exists() ? userSnap.data() : {};
+              const xp = studentData.xp || 0;
+              const level = getLevelFromXP(xp);
+              await createLiveFeedMilestone(
+                userId,
+                userData.displayName || 'Unknown',
+                userData.photoURL || undefined,
+                userData.role || undefined,
+                level,
+                'badge_earned',
+                {
+                  badgeName: badge.name,
+                  badgeId: badge.id,
+                  xpReward: badge.xpReward ?? 0,
+                  ppReward: badge.ppReward ?? 0
+                },
+                badge.id
+              );
+            } catch (milestoneError) {
+              console.error('Error creating badge Live Feed milestone:', milestoneError);
+            }
           }
         }
       }
