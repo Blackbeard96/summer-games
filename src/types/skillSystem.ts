@@ -105,7 +105,8 @@ export interface SkillUpgrade {
 }
 
 export interface PlayerSkillState {
-  unlockedNodeIds: string[]; // Array of unlocked node IDs from skill tree
+  unlockedNodeIds: string[]; // Array of unlocked node IDs from skill tree (legacy)
+  learnedNodeIds?: string[]; // Array of learned Universal Law node IDs (new system)
   equippedSkillIds: string[]; // Array of equipped skill IDs (max 3)
   skillUpgrades: Record<string, SkillUpgrade>; // Map of skillId -> upgrade state
   

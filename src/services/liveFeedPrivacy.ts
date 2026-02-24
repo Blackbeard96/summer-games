@@ -8,6 +8,7 @@ export interface LiveFeedPrivacySettings {
   shareRaidCompletions: boolean; // When player completes an Island Raid
   sharePvPWins: boolean; // When player wins a PvP battle
   shareChapterCompletions: boolean; // When player completes a chapter
+  shareMissionEvents: boolean; // When player accepts/completes missions
   updatedAt?: any;
 }
 
@@ -17,7 +18,8 @@ const DEFAULT_SETTINGS: LiveFeedPrivacySettings = {
   shareBattleWins: true,
   shareRaidCompletions: true,
   sharePvPWins: true,
-  shareChapterCompletions: true
+  shareChapterCompletions: true,
+  shareMissionEvents: true
 };
 
 /**
@@ -39,7 +41,8 @@ export async function getLiveFeedPrivacySettings(userId: string): Promise<LiveFe
         shareBattleWins: data.shareBattleWins !== undefined ? data.shareBattleWins : DEFAULT_SETTINGS.shareBattleWins,
         shareRaidCompletions: data.shareRaidCompletions !== undefined ? data.shareRaidCompletions : DEFAULT_SETTINGS.shareRaidCompletions,
         sharePvPWins: data.sharePvPWins !== undefined ? data.sharePvPWins : DEFAULT_SETTINGS.sharePvPWins,
-        shareChapterCompletions: data.shareChapterCompletions !== undefined ? data.shareChapterCompletions : DEFAULT_SETTINGS.shareChapterCompletions
+        shareChapterCompletions: data.shareChapterCompletions !== undefined ? data.shareChapterCompletions : DEFAULT_SETTINGS.shareChapterCompletions,
+        shareMissionEvents: data.shareMissionEvents !== undefined ? data.shareMissionEvents : DEFAULT_SETTINGS.shareMissionEvents
       };
     }
     
@@ -80,7 +83,7 @@ export async function updateLiveFeedPrivacySettings(
  */
 export async function shouldShareEvent(
   userId: string,
-  eventType: 'vault_attack' | 'vault_defense' | 'battle_win' | 'raid_complete' | 'pvp_win' | 'chapter_complete'
+  eventType: 'vault_attack' | 'vault_defense' | 'battle_win' | 'raid_complete' | 'pvp_win' | 'chapter_complete' | 'mission_accept' | 'mission_complete'
 ): Promise<boolean> {
   const settings = await getLiveFeedPrivacySettings(userId);
   
@@ -97,6 +100,9 @@ export async function shouldShareEvent(
       return settings.sharePvPWins;
     case 'chapter_complete':
       return settings.shareChapterCompletions;
+    case 'mission_accept':
+    case 'mission_complete':
+      return settings.shareMissionEvents;
     default:
       return false;
   }

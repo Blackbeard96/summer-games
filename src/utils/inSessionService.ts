@@ -114,7 +114,7 @@ export async function createSession(
       status: 'live' as const, // Use 'live' consistently
       mode: 'in_session' as const,
       players: [] as SessionPlayer[],
-      battleLog: ['🎆 Live Event Started!'] as string[],
+      battleLog: [`🎉 Live Event is now active for ${className || 'this class'}! Join the battle in the arena.`] as string[],
       createdAt: serverTimestamp(),
       startedAt: serverTimestamp()
     };
@@ -445,12 +445,16 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
     // Finalize session stats before ending
     const playerIds = sessionData.players.map((p: SessionPlayer) => p.userId);
     const summary = await finalizeSessionStats(sessionId, playerIds);
-    
-    // Finalize session
+
+    const endedLogEntry = '🏁 Session ended by host. Thanks for playing!';
+    const updatedBattleLog = [...(sessionData.battleLog || []), endedLogEntry];
+
+    // Finalize session and update battle log so all players see it ended
     await updateDoc(sessionRef, {
       status: 'ended',
       endedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
+      updatedAt: serverTimestamp(),
+      battleLog: updatedBattleLog
     });
     
     debug('inSessionService', `Session ${sessionId} ended by ${hostUid} (${isHost ? 'host' : isAdmin ? 'admin' : 'global host'})`, {
@@ -461,6 +465,44 @@ export async function endSession(sessionId: string, hostUid: string, userEmail?:
     return true;
   } catch (error) {
     debugError('inSessionService', `Error ending session ${sessionId}`, error);
+    return false;
+  }
+}
+
+/**
+ * Leave a session (remove current user from players; does not end the session)
+ * Any player can leave. Only admins/hosts can end the session.
+ */
+export async function leaveSession(sessionId: string, userId: string, displayName?: string): Promise<boolean> {
+  try {
+    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    const sessionDoc = await getDoc(sessionRef);
+
+    if (!sessionDoc.exists()) {
+      debugError('inSessionService', `Session ${sessionId} does not exist`);
+      return false;
+    }
+
+    const sessionData = sessionDoc.data() as InSessionRoom;
+    if (sessionData.status !== 'live' && sessionData.status !== 'active') {
+      debug('inSessionService', `Session ${sessionId} is not live (status: ${sessionData.status}), treat as left`);
+      return true;
+    }
+
+    const updatedPlayers = (sessionData.players || []).filter(p => p.userId !== userId);
+    const leftMessage = `👋 ${displayName || 'A player'} left the session.`;
+    const updatedLog = [...(sessionData.battleLog || []), leftMessage];
+
+    await updateDoc(sessionRef, {
+      players: updatedPlayers,
+      battleLog: updatedLog,
+      updatedAt: serverTimestamp()
+    });
+
+    debug('inSessionService', `User ${userId} left session ${sessionId}`);
+    return true;
+  } catch (error) {
+    debugError('inSessionService', `Error leaving session ${sessionId}`, error);
     return false;
   }
 }
@@ -507,6 +549,15 @@ export function subscribeToSession(
       }
     },
     (error) => {
+      // Suppress Firestore internal assertion errors (known Firefox issue)
+      if (error instanceof Error && 
+          (error.message?.includes('INTERNAL ASSERTION FAILED') || 
+           error.message?.includes('Unexpected state') ||
+           error.message?.includes('400'))) {
+        console.warn(`[inSessionService] Firestore error suppressed for session ${sessionId}:`, error.message);
+        // Don't call callback(null) on these errors - keep existing session state
+        return;
+      }
       debugError('inSessionService', 'Error in session subscription', error);
       callback(null);
     }

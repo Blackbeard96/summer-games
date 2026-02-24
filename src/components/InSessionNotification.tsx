@@ -150,15 +150,16 @@ const InSessionNotification: React.FC = () => {
             ...doc.data()
           } as InSessionRoom));
 
-          debug.groupCollapsed('InSessionNotification', `All Active Sessions (${allSessions.length})`);
-          debug.log('InSessionNotification', 'Session details', allSessions.map(s => ({
-            id: s.id,
-            classId: s.classId,
-            className: s.className,
-            playersCount: s.players?.length || 0,
-            playerIds: s.players?.map((p: any) => p.userId) || []
-          })));
-          debug.groupEnd();
+          // Throttle group creation to prevent infinite nesting
+          debug.throttle('all-active-sessions-group', 2000, 'InSessionNotification', `All Active Sessions (${allSessions.length})`, {
+            sessions: allSessions.map(s => ({
+              id: s.id,
+              classId: s.classId,
+              className: s.className,
+              playersCount: s.players?.length || 0,
+              playerIds: s.players?.map((p: any) => p.userId) || []
+            }))
+          });
 
           // Filter to sessions in user's classrooms
           // If user has no classrooms in cache, check all sessions (fallback for data inconsistency)
@@ -187,8 +188,8 @@ const InSessionNotification: React.FC = () => {
             userSessions = allSessions;
           }
 
-          debug.groupCollapsed('InSessionNotification', `User Sessions (${userSessions.length})`);
-          debug.log('InSessionNotification', 'User sessions (filtered)', {
+          // Throttle group creation to prevent infinite nesting
+          debug.throttle('user-sessions-group', 2000, 'InSessionNotification', `User Sessions (${userSessions.length})`, {
             userSessions: userSessions.map(s => ({
               id: s.id,
               classId: s.classId,
@@ -201,7 +202,12 @@ const InSessionNotification: React.FC = () => {
           });
 
           if (userSessions.length > 0) {
-            // Get the most recently started session
+            // Check if user is on ANY of their class's live event session pages (not just the "latest" one)
+            const pathMatch = location.pathname.match(/^\/live-events\/([^/]+)/) || location.pathname.match(/^\/in-session\/([^/]+)/);
+            const pathSessionId = pathMatch?.[1] || null;
+            const isOnSessionPage = pathSessionId != null && userSessions.some(s => s.id === pathSessionId);
+
+            // Get the most recently started session (for showing join/rejoin when notification is visible)
             const latestSession = userSessions.sort((a, b) => {
               const aTime = a.startedAt?.toMillis?.() || 0;
               const bTime = b.startedAt?.toMillis?.() || 0;
@@ -210,23 +216,20 @@ const InSessionNotification: React.FC = () => {
 
             // Check if user is in the session players list (STABLE CHECK - use actual Firestore data)
             const userInSession = latestSession.players?.some(p => p.userId === userId) || false;
-            
-            // Check if user is actively viewing the session page
-            // This is the PRIMARY check - if user is on the session page, hide notification
-            const isOnSessionPage = location.pathname.startsWith(`/live-events/${latestSession.id}`) || location.pathname.startsWith(`/in-session/${latestSession.id}`);
             const activeViewers = latestSession.activeViewers || [];
             const userIsInActiveViewers = activeViewers.includes(userId);
-            
+
             // STABLE MEMBERSHIP CHECK: Use ref to track previous membership state to prevent flickering
             const isMembershipStable = previousMembershipRef.current === null || previousMembershipRef.current === userInSession;
-            
-            debug.group('InSessionNotification', 'Session Check');
-            debug.log('InSessionNotification', 'Session details', {
+
+            // Use throttled log instead of group to prevent nesting
+            debug.throttle('session-check', 2000, 'InSessionNotification', 'Session Check', {
               sessionId: latestSession.id,
               className: latestSession.className,
               classId: latestSession.classId,
               userInSession,
               isOnSessionPage,
+              pathSessionId,
               userIsInActiveViewers,
               currentPath: location.pathname,
               playersCount: latestSession.players?.length || 0,
@@ -238,26 +241,24 @@ const InSessionNotification: React.FC = () => {
               isMembershipStable,
               previousMembership: previousMembershipRef.current
             });
-            
+
             setIsInSession(userInSession);
 
-            // PRIMARY RULE: If user is on the session page OR actively viewing the session, ALWAYS hide the notification
-            // This prevents the notification from flickering or reappearing when the user is already viewing the session
+            // PRIMARY RULE: If user is on the session page (viewing ANY of their class's live events) OR actively viewing, hide the notification
+            // Once a player is in a Live Event (on the session page), the pop-up reminder goes away
             if (isOnSessionPage || userIsInActiveViewers) {
-              debug.log('InSessionNotification', '❌ Hiding notification - user is on session page', {
+              debug.log('InSessionNotification', 'Hiding notification - user is on session page or in active viewers', {
                 isOnSessionPage,
+                pathSessionId,
                 userIsInActiveViewers,
                 currentPath: location.pathname
               });
-              debug.groupEnd();
-              // Update refs to track state
               previousSessionIdRef.current = latestSession.id;
               previousMembershipRef.current = userInSession;
-              // Only clear if we had a session before (prevents unnecessary state updates)
               if (activeSession !== null) {
                 setActiveSession(null);
               }
-              return; // Exit early - don't check anything else
+              return;
             }
 
             // STABLE LOGIC: Only update notification if:
@@ -276,7 +277,6 @@ const InSessionNotification: React.FC = () => {
                   playerIds: latestSession.players?.map((p: any) => p.userId) || [],
                   reason: sessionIdChanged ? 'sessionId changed' : 'membership changed'
                 });
-                debug.groupEnd();
                 previousSessionIdRef.current = latestSession.id;
                 previousMembershipRef.current = userInSession;
                 setActiveSession(latestSession);
@@ -286,7 +286,6 @@ const InSessionNotification: React.FC = () => {
                   sessionId: latestSession.id,
                   reason: sessionIdChanged ? 'sessionId changed' : 'membership changed'
                 });
-                debug.groupEnd();
                 previousSessionIdRef.current = latestSession.id;
                 previousMembershipRef.current = userInSession;
                 setActiveSession(latestSession);
@@ -299,11 +298,9 @@ const InSessionNotification: React.FC = () => {
                 userInSession,
                 previousMembership: previousMembershipRef.current
               });
-              debug.groupEnd();
             }
           } else {
             debug.log('InSessionNotification', 'No sessions found for user classrooms');
-            debug.groupEnd();
             // Only clear if we had a session before (prevents unnecessary state updates)
             if (previousSessionIdRef.current !== null) {
               previousSessionIdRef.current = null;

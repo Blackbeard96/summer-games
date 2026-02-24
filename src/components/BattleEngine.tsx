@@ -151,6 +151,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { vault, moves, updateVault, refreshVaultData } = useBattle();
+  
+  // ALWAYS log when BattleEngine mounts (critical for debugging)
+  useEffect(() => {
+    console.log('🚀 [BattleEngine] MOUNTED', {
+      isInSession,
+      sessionId: sessionId || 'NONE',
+      isMultiplayer,
+      isPvP,
+      hasCurrentUser: !!currentUser,
+      userId: currentUser?.uid?.substring(0, 8) || 'NONE'
+    });
+  }, []); // Only run on mount
+  
   const [userLevel, setUserLevel] = useState(1);
   const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
@@ -286,6 +299,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const waveTransitioningRef = useRef(false);
   // Ref to track internal updates to prevent circular sync with props
   const isInternalUpdateRef = useRef(false);
+  // Ref to track when we're syncing from props (to prevent notifying parent)
+  const isSyncingFromPropsRef = useRef(false);
   
   // Update wave state from props
   useEffect(() => {
@@ -900,16 +915,46 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         health: opp.vaultHealth !== undefined ? opp.vaultHealth : opp.currentPP,
         shield: opp.shieldStrength
       })));
+      // Mark that we're syncing from props to prevent notifying parent
+      isSyncingFromPropsRef.current = true;
       setOpponents(propOpponents);
+      // Clear flag after state update
+      setTimeout(() => {
+        isSyncingFromPropsRef.current = false;
+      }, 50);
     } else if (hasLocalDamage) {
       console.log('🔄 [BattleEngine] Skipping sync - local state has more recent damage');
     }
   }, [propOpponents]);
 
   // Notify parent of opponents updates via useEffect (prevents React error from setState during render)
+  // CRITICAL FIX: Only notify when change is from BattleEngine's own calculations, not from prop syncs
+  // This prevents circular updates where listener syncs props → BattleEngine syncs → calls onOpponentsUpdate → writes to Firestore → listener syncs again
   useEffect(() => {
     if (isMultiplayer && onOpponentsUpdate && opponents.length > 0) {
-      onOpponentsUpdate(opponents);
+      // CRITICAL: Skip if we're syncing from props - don't notify parent
+      // This prevents the circular update loop:
+      // 1. BattleEngine calculates damage → updates opponents → calls onOpponentsUpdate (correct)
+      // 2. IslandRaidBattle writes to Firestore
+      // 3. Listener syncs from Firestore → updates opponents props → BattleEngine syncs from props
+      // 4. useEffect fires → would call onOpponentsUpdate with synced data (WRONG - causes loop)
+      if (isSyncingFromPropsRef.current) {
+        console.log('🔄 [BattleEngine] Skipping onOpponentsUpdate - change from prop sync, not internal calculation');
+        return;
+      }
+      
+      // Only notify if this is an internal update (from BattleEngine's own calculations)
+      // The isInternalUpdateRef is set when BattleEngine applies damage/effects
+      if (isInternalUpdateRef.current) {
+        // Clear the flag - we're about to notify
+        isInternalUpdateRef.current = false;
+        onOpponentsUpdate(opponents);
+      } else {
+        // This is neither a prop sync nor an internal update - might be initial load or other change
+        // Only notify on initial load (when opponents first become available)
+        // Don't notify on every change to avoid loops
+        console.log('🔄 [BattleEngine] Skipping onOpponentsUpdate - not an internal update or prop sync');
+      }
     }
   }, [opponents, isMultiplayer, onOpponentsUpdate]);
 
@@ -1633,7 +1678,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Also store in Firestore for Island Raid battles (so other players can see it)
       // Check if we're in an Island Raid by checking if opponents have vaultHealth (Island Raid enemies use vaultHealth)
-      const isIslandRaid = opponents.length > 0 && opponents[0].vaultHealth !== undefined;
+      // CRITICAL: Use same detection logic as executePlayerMove - gameId exists AND not in session
+      const isIslandRaid = !!gameId && !isInSession;
       if (isIslandRaid && gameId) {
         const storeMoveInFirestore = async () => {
           try {
@@ -2894,77 +2940,51 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
           
           if (targetId && targetInOpponents) {
-            // For Ice Golems and other CPU opponents, use currentPP as health
-            // For Island Raid enemies, use vaultHealth
-            const updatedOpponent = {
-              ...target,
-              shieldStrength: newTargetShield
-            };
-            
-            if (target.vaultHealth !== undefined) {
-              // Island Raid enemy or CPU opponent with vaultHealth set - use vaultHealth
-              updatedOpponent.vaultHealth = newTargetHealth;
-              updatedOpponent.maxVaultHealth = targetMaxHealth;
-              
-              // CRITICAL FIX: For CPU opponents that have vaultHealth set (like Chapter 2-5 zombies),
-              // also update currentPP to keep them in sync for UI consistency
-              const isCPUOpponent = checkIsCPUOpponent(target);
-              if (isCPUOpponent) {
-                updatedOpponent.currentPP = newTargetHealth;
-              }
-            } else {
-              // CPU opponent (like Ice Golems) - use currentPP as health
-              updatedOpponent.currentPP = newTargetHealth;
-            }
-            
-            // Set isDefeated flag when health and shield reach 0
-            const finalHealth = updatedOpponent.vaultHealth !== undefined 
-              ? updatedOpponent.vaultHealth 
-              : updatedOpponent.currentPP;
-            const finalShield = updatedOpponent.shieldStrength;
-            
-            if (finalHealth <= 0 && finalShield <= 0) {
-              // Check if enemy was just defeated (wasn't defeated before)
-              const wasAlreadyDefeated = target.isDefeated === true;
-              updatedOpponent.isDefeated = true;
-              updatedOpponent.defeatedAt = new Date();
-              console.log(`💀 [BattleEngine] Enemy ${targetName} (${targetId}) is now defeated - health=${finalHealth}, shield=${finalShield}`);
-              
-              // Track daily challenge: Defeat Enemies (only if enemy wasn't already defeated)
-              // This works for both single-wave and multi-wave battles (Island Raid)
-              if (!wasAlreadyDefeated && currentUser) {
-                console.log(`🎯 [Daily Challenge] Tracking enemy defeat: ${targetName}`);
-                updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err => 
-                  console.error('Error updating daily challenge progress for enemy defeat:', err)
-                );
-              }
-            } else {
-              // Clear defeat flag if enemy is healed
-              updatedOpponent.isDefeated = false;
-              updatedOpponent.defeatedAt = undefined;
-            }
-            
-            console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${targetHealth} → ${newTargetHealth}, shield ${target.shieldStrength} → ${newTargetShield}, isDefeated=${updatedOpponent.isDefeated}`);
-            
-            // Update opponents state
+            // Apply damage from LATEST state (prev) so Island Raid enemy stats don't fluctuate
             setOpponents(prev => {
-              // Check if target exists in prev array
-              const targetExists = prev.some(opp => opp.id === targetId);
-              if (!targetExists) {
+              const current = prev.find(opp => opp.id === targetId);
+              if (!current) {
                 console.error(`❌ [BattleEngine] Target ${targetName} (${targetId}) not in opponents array when updating!`, {
-                  targetId,
-                  targetName,
-                  prevOpponents: prev.map(o => ({ id: o.id, name: o.name, waveNumber: o.waveNumber }))
+                  targetId, targetName, prevOpponents: prev.map(o => ({ id: o.id, name: o.name, waveNumber: o.waveNumber }))
                 });
-                // Still return prev to avoid breaking state, but log the error
                 return prev;
               }
+              const currentHealth = current.vaultHealth !== undefined ? current.vaultHealth : (current.currentPP ?? 0);
+              const currentShield = current.shieldStrength ?? 0;
+              const newTargetShieldFromPrev = Math.max(0, currentShield - targetShieldDamage);
+              const newTargetHealthFromPrev = Math.max(0, currentHealth - targetHealthDamage);
+              const updatedOpponent = { ...current, shieldStrength: newTargetShieldFromPrev };
+              if (current.vaultHealth !== undefined) {
+                updatedOpponent.vaultHealth = newTargetHealthFromPrev;
+                updatedOpponent.maxVaultHealth = current.maxVaultHealth ?? targetMaxHealth;
+                if (checkIsCPUOpponent(current)) updatedOpponent.currentPP = newTargetHealthFromPrev;
+              } else {
+                updatedOpponent.currentPP = newTargetHealthFromPrev;
+              }
+              const finalHealth = updatedOpponent.vaultHealth !== undefined ? updatedOpponent.vaultHealth : updatedOpponent.currentPP;
+              const finalShield = updatedOpponent.shieldStrength;
+              updatedOpponent.isDefeated = (finalHealth ?? 0) <= 0 && (finalShield ?? 0) <= 0;
+              if (updatedOpponent.isDefeated) {
+                (updatedOpponent as any).defeatedAt = new Date();
+                const wasAlreadyDefeated = current.isDefeated === true;
+                console.log(`💀 [BattleEngine] Enemy ${targetName} (${targetId}) is now defeated - health=${finalHealth}, shield=${finalShield}`);
+                if (!wasAlreadyDefeated && currentUser) {
+                  updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err =>
+                    console.error('Error updating daily challenge progress for enemy defeat:', err)
+                  );
+                }
+              } else {
+                updatedOpponent.isDefeated = false;
+                (updatedOpponent as any).defeatedAt = undefined;
+              }
+              console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${currentHealth} → ${newTargetHealthFromPrev}, shield ${currentShield} → ${newTargetShieldFromPrev}, isDefeated=${updatedOpponent.isDefeated}`);
+              const updated = prev.map(opp => opp.id === targetId ? updatedOpponent : opp);
               
-              const updated = prev.map(opp => 
-                opp.id === targetId ? updatedOpponent : opp
-              );
+              console.log(`✅ [BattleEngine] Opponents updated. Target ${targetName} health: ${currentHealth} → ${newTargetHealthFromPrev}`);
               
-              console.log(`✅ [BattleEngine] Opponents updated. Target ${targetName} health: ${targetHealth} → ${newTargetHealth}`);
+              // CRITICAL: Mark as internal update BEFORE calling onOpponentsUpdate
+              // This prevents the useEffect from also calling onOpponentsUpdate with potentially stale data
+              isInternalUpdateRef.current = true;
               
               // CRITICAL: Immediately notify parent of opponent updates for Island Raid battles
               // This ensures damage is reflected immediately, especially for Wave 3+ enemies
@@ -2973,17 +2993,32 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 // Use requestAnimationFrame to ensure state update completes first
                 requestAnimationFrame(() => {
                   setTimeout(() => {
-                    console.log(`📤 [BattleEngine] Calling onOpponentsUpdate with ${updated.length} opponents after damage to ${targetName}`, {
+                    console.log(`📤 [BattleEngine] Direct call to onOpponentsUpdate (player move) with ${updated.length} opponents after damage to ${targetName}`, {
                       updatedOpponent: {
                         id: updatedOpponent.id,
                         name: updatedOpponent.name,
                         vaultHealth: updatedOpponent.vaultHealth,
                         shieldStrength: updatedOpponent.shieldStrength
-                      }
+                      },
+                      allOpponents: updated.map(opp => ({
+                        id: opp.id,
+                        name: opp.name,
+                        vaultHealth: opp.vaultHealth,
+                        shieldStrength: opp.shieldStrength
+                      }))
                     });
                     onOpponentsUpdate(updated);
+                    // Clear flag after notifying
+                    setTimeout(() => {
+                      isInternalUpdateRef.current = false;
+                    }, 100);
                   }, 0);
                 });
+              } else {
+                // Clear flag if not notifying
+                setTimeout(() => {
+                  isInternalUpdateRef.current = false;
+                }, 100);
               }
               
               return updated;
@@ -3039,17 +3074,23 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }));
         } else {
           // Non-damage move (heal, shield boost, etc.)
-          if (target) {
-            // Check what type of move this is for better logging
+          if (target || (isPlayerMove && (playerMove.shieldBoost || playerMove.healing))) {
+            // Defensive moves (shield boost, self-heal) always affect the player - log and target the player
+            const isDefensiveSelfMove = isPlayerMove && (playerMove.shieldBoost || playerMove.healing);
+            const effectiveTargetName = isDefensiveSelfMove ? playerName : (target?.name ?? 'Unknown');
             let logMessage = '';
             if (playerMove.healing) {
-              logMessage = `💚 ${playerName} used skill ${playerMove.name} to heal ${target.name}!`;
+              logMessage = isDefensiveSelfMove
+                ? `💚 ${playerName} used skill ${playerMove.name} to heal themselves!`
+                : `💚 ${playerName} used skill ${playerMove.name} to heal ${effectiveTargetName}!`;
             } else if (playerMove.shieldBoost) {
-              logMessage = `🛡️ ${playerName} used skill ${playerMove.name} to boost ${target.name}'s shields!`;
+              logMessage = isDefensiveSelfMove
+                ? `🛡️ ${playerName} used skill ${playerMove.name} to boost their shields!`
+                : `🛡️ ${playerName} used skill ${playerMove.name} to boost ${effectiveTargetName}'s shields!`;
             } else if (playerMove.ppSteal) {
-              logMessage = `⚡ ${playerName} used skill ${playerMove.name} to steal PP from ${target.name}!`;
+              logMessage = `⚡ ${playerName} used skill ${playerMove.name} to steal PP from ${effectiveTargetName}!`;
             } else {
-              logMessage = `⚔️ ${playerName} used skill ${playerMove.name} on ${target.name}!`;
+              logMessage = `⚔️ ${playerName} used skill ${playerMove.name} on ${effectiveTargetName}!`;
             }
             
             console.log(`📝 [Player Move] Adding to battle log: ${logMessage}`);
@@ -3353,16 +3394,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // If we're in execution phase but turn order hasn't been calculated yet, reset to selection
       // This can happen when a player joins mid-battle
-      // EXCEPT: For single-player with AI allies, we don't need turn order - execute immediately
+      // EXCEPT: For single-player with AI allies, In-Session mode, and Island Raid mode - they execute immediately
       const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
       const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
+      const isIslandRaid = !!gameId && !isInSession; // Use consistent detection logic
       
-      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0 && !isSinglePlayerWithAI) {
+      // CRITICAL: Don't reset phase in In-Session mode or Island Raid mode - they execute immediately
+      if (battleState.phase === 'execution' && !battleState.turnOrder && allies.length > 0 && !isSinglePlayerWithAI && !isInSession && !isIslandRaid) {
         console.log('BattleEngine: In execution phase without turn order, resetting to selection phase', {
           phase: battleState.phase,
           hasTurnOrder: !!battleState.turnOrder,
           alliesCount: allies.length,
-          isSinglePlayerWithAI
+          isSinglePlayerWithAI,
+          isInSession,
+          isIslandRaid
         });
         setBattleState(prev => ({
           ...prev,
@@ -3481,17 +3526,34 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       return;
     }
 
+    const moveForTarget = battleState.selectedMove;
+    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing);
+
     // Find the target opponent based on selectedTarget ID
-    // For multiplayer, search in opponents array. For single player, use opponent.
+    // Defensive moves (shield boost, healing) always target the player - allow 'self' or player id
     console.log(`🎯 [handleAnimationComplete] Looking for target: ${battleState.selectedTarget}`, {
       isMultiplayer,
+      isDefensiveMove,
       opponentsCount: opponents.length,
       opponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name })),
       selectedMove: battleState.selectedMove?.name
     });
-    
+
     let targetOpponent: Opponent;
-    if (isMultiplayer && opponents.length > 0) {
+    if (isDefensiveMove && (battleState.selectedTarget === 'self' || battleState.selectedTarget === currentUser?.uid)) {
+      // Defensive move targeting self - use placeholder so rest of flow runs; effect applies to player vault
+      // Use inline display name only (playerName is declared later in this function)
+      const selfName = currentUser?.displayName ?? 'Player';
+      targetOpponent = {
+        id: currentUser!.uid,
+        name: selfName,
+        currentPP: 0,
+        maxPP: 100,
+        shieldStrength: 0,
+        isDefeated: false
+      } as Opponent;
+      console.log(`✅ [handleAnimationComplete] Defensive move - targeting self (${selfName})`);
+    } else if (isMultiplayer && opponents.length > 0) {
       const found = opponents.find(opp => opp.id === battleState.selectedTarget);
       if (!found) {
         console.error('❌ [handleAnimationComplete] Target opponent not found:', {
@@ -4260,29 +4322,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Calculate PP cost (if move has cost property)
         const ppCost = (move.cost || 0);
         
-        // Ensure we have a battle log message
-        // If no log message was added (e.g., for moves without damage), create one
-        let battleLogMessage = newLog[newLog.length - 1];
-        if (!battleLogMessage || typeof battleLogMessage !== 'string') {
-          // Create a default message based on move type
-          if (damage > 0 || shieldDamage > 0) {
-            const healthLabel = checkIsCPUOpponent(targetOpponent) ? 'health' : 'vault health';
-            if (shieldDamage > 0 && damage > 0) {
-              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${damage - shieldDamage} to ${healthLabel})!`;
-            } else if (shieldDamage > 0) {
-              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields!`;
-            } else {
-              battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage to ${healthLabel}!`;
-            }
-          } else if (playerHealing > 0) {
-            battleLogMessage = `💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP!`;
-          } else if (playerShieldBoost > 0) {
-            battleLogMessage = `🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}!`;
+        // In-Session: Always build the skill/attack message explicitly for the battle log.
+        // (newLog may end with a status-effect line like "X is now affected by burn!" so we must not use last entry.)
+        const healthLabel = checkIsCPUOpponent(targetOpponent) ? 'health' : 'vault health';
+        let battleLogMessage: string;
+        if (damage > 0 || shieldDamage > 0) {
+          if (shieldDamage > 0 && damage > 0) {
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${damage - shieldDamage} to ${healthLabel})!`;
+          } else if (shieldDamage > 0) {
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields!`;
           } else {
-            battleLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}!`;
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage to ${healthLabel}!`;
           }
-          // Add it to newLog so it's included in the local state update
-          newLog.push(battleLogMessage);
+        } else if (playerHealing > 0) {
+          battleLogMessage = `💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP!`;
+        } else if (playerShieldBoost > 0) {
+          battleLogMessage = `🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}!`;
+        } else {
+          battleLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}!`;
         }
         
         if (DEBUG_LIVE_EVENTS) {
@@ -4327,13 +4384,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           });
         }
         
+        // Defensive moves (shield boost, healing) always apply to the player - pass actor as target so service applies to self
+        const effectiveTargetUid = (move.shieldBoost || move.healing) ? currentUser.uid : targetOpponent.id;
+        const effectiveTargetName = (move.shieldBoost || move.healing) ? playerName : targetOpponent.name;
+
         // ALWAYS log move execution attempt (critical for debugging)
         console.log('🚀 [In-Session Move] EXECUTING MOVE:', {
           sessionId,
           actorUid: currentUser.uid,
           actorName: playerName,
-          targetUid: targetOpponent.id,
-          targetName: targetOpponent.name,
+          targetUid: effectiveTargetUid,
+          targetName: effectiveTargetName,
           moveId: move.id,
           moveName: move.name,
           damage: finalDamage,
@@ -4345,13 +4406,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           battleLogMessage,
           timestamp: new Date().toISOString()
         });
-        
+
         const moveResult = await applyInSessionMove({
           sessionId,
           actorUid: currentUser.uid,
           actorName: playerName,
-          targetUid: targetOpponent.id,
-          targetName: targetOpponent.name,
+          targetUid: effectiveTargetUid,
+          targetName: effectiveTargetName,
           move,
           damage: finalDamage, // Total damage
           shieldDamage: finalShieldDamage, // Amount absorbed by shield (for special moves or normal calculation)
@@ -4405,14 +4466,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               );
               
               // Track damage dealt (only if damage was dealt)
+              // NOTE: This runs AFTER the main transaction to avoid transaction conflicts
+              // The main transaction already updated player state, this is just for stats
+              // Run in background - don't block on stats tracking
               if (totalDamage > 0) {
-                await trackDamage(
+                trackDamage(
                   sessionId,
                   currentUser.uid,
                   targetOpponent.id,
                   damage, // Health damage
                   shieldDamage || 0 // Shield damage
-                );
+                ).catch(error => {
+                  // Log but don't fail - stats tracking is non-critical
+                  console.warn('⚠️ [In-Session Stats] Failed to track damage (non-critical):', error);
+                });
               }
               
               console.log('✅ [In-Session Stats] Skill usage and damage tracked:', {
@@ -4519,14 +4586,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
     }
     
-    // Update target opponent stats IMMEDIATELY for real-time display
-    // (Skip this for In-Session mode - state comes from Firestore)
-    const newTargetOpponent = { ...targetOpponent };
-    newTargetOpponent.shieldStrength = Math.max(0, targetOpponent.shieldStrength - shieldDamage);
-    
-    // Check if this is a CPU opponent (they use currentPP as health)
+    // Update target opponent stats - use LATEST state from prev so attacks register accurately and stats don't fluctuate
     const isCPUOpponent = checkIsCPUOpponent(targetOpponent);
-    
+    const healthDamage = Math.max(0, (damage - shieldDamage) + (ppStolen || 0));
+
     console.log('🎯 [handleAnimationComplete] Applying damage to target:', {
       targetId: targetOpponent.id,
       targetName: targetOpponent.name,
@@ -4534,35 +4597,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       damage,
       shieldDamage,
       ppStolen,
-      currentPP: targetOpponent.currentPP,
-      maxPP: targetOpponent.maxPP,
-      vaultHealth: targetOpponent.vaultHealth,
-      shieldStrength: targetOpponent.shieldStrength
+      healthDamage
     });
-    
-    if (isCPUOpponent) {
-      // For CPU opponents, currentPP is their health
-      const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
-      const oldHealth = targetOpponent.currentPP;
-      newTargetOpponent.currentPP = Math.max(0, targetOpponent.currentPP - healthDamage);
-      
-      // CRITICAL FIX: Also update vaultHealth if it exists (for UI consistency)
-      // Some CPU opponents (like Chapter 2-5 zombies) have vaultHealth set for display purposes
-      // We need to keep vaultHealth in sync with currentPP so the UI updates correctly
-      if (targetOpponent.vaultHealth !== undefined) {
-        newTargetOpponent.vaultHealth = newTargetOpponent.currentPP;
-        newTargetOpponent.maxVaultHealth = targetOpponent.maxVaultHealth || targetOpponent.maxPP;
-      }
-      
-      console.log('✅ [handleAnimationComplete] CPU opponent damage applied:', {
-        oldHealth,
-        healthDamage,
-        newHealth: newTargetOpponent.currentPP,
-        vaultHealth: newTargetOpponent.vaultHealth
-      });
-    } else {
-      // SPACES MODE: Apply damage to spaces instead of vault health
-      if (isSpacesMode && spacesModeState && selectedSpaceTarget && currentUser) {
+
+    // SPACES MODE: Apply damage to spaces instead of vault health (unchanged - uses targetOpponent)
+    if (!isCPUOpponent && isSpacesMode && spacesModeState && selectedSpaceTarget && currentUser) {
         const totalDamage = damage + (shieldDamage || 0);
         const { updatedState, wasDestroyed, wasMainDestroyed, mainUnlocked } = applyDamageToSpaceInBattle(
           spacesModeState,
@@ -4627,94 +4666,81 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
         // Clear space target after use
         setSelectedSpaceTarget(null);
-      } else {
-        // For PvP opponents (non-Spaces Mode), damage vault health, not PP
-        // Max vault health is always 10% of max PP
-        const maxPP = targetOpponent.maxPP || 1000;
-        const maxVaultHealth = Math.floor(maxPP * 0.1);
-        const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : maxVaultHealth;
-        const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
-        const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
-        newTargetOpponent.vaultHealth = newVaultHealth;
-        newTargetOpponent.maxVaultHealth = maxVaultHealth; // Always 10% of maxPP
-        // Set cooldown if vault health reaches 0
-        if (newVaultHealth === 0 && currentVaultHealth > 0) {
-          // Note: We'll need to update this in Firestore separately
-        }
-      }
     }
-    
-    // Update opponent state based on mode
+
+    // Apply damage from LATEST state so Island Raid enemy stats don't fluctuate and attacks register accurately
+    const applyDamageToCurrent = (current: typeof targetOpponent) => {
+      const newShield = Math.max(0, (current.shieldStrength || 0) - shieldDamage);
+      if (isCPUOpponent) {
+        const newHealth = Math.max(0, (current.currentPP ?? 0) - healthDamage);
+        const next = { ...current, shieldStrength: newShield, currentPP: newHealth };
+        if (current.vaultHealth !== undefined) {
+          next.vaultHealth = newHealth;
+          next.maxVaultHealth = current.maxVaultHealth || current.maxPP;
+        }
+        return next;
+      }
+      const currentHealth = current.vaultHealth !== undefined ? current.vaultHealth : (current.currentPP ?? 0);
+      const newHealth = Math.max(0, currentHealth - healthDamage);
+      const maxVaultHealth = current.maxVaultHealth ?? Math.floor((current.maxPP || 1000) * 0.1);
+      const next = { ...current, shieldStrength: newShield, vaultHealth: newHealth, maxVaultHealth };
+      if (current.vaultHealth === undefined) next.currentPP = newHealth;
+      return next;
+    };
+
+    let newTargetOpponent: typeof targetOpponent;
     if (isMultiplayer) {
-      // Update the target opponent in the opponents array
       setOpponents(prev => {
-        const updated = prev.map(opp => 
-          opp.id === targetOpponent.id ? newTargetOpponent : opp
-        );
-        // Mark as internal update to prevent circular sync with props
+        const current = prev.find(opp => opp.id === targetOpponent.id);
+        if (!current) return prev;
+        const computed = applyDamageToCurrent(current);
+        computed.isDefeated = ((computed.vaultHealth ?? computed.currentPP) ?? 0) <= 0 && (computed.shieldStrength ?? 0) <= 0;
+        if (computed.isDefeated) (computed as any).defeatedAt = new Date();
+        const updated = prev.map(opp => opp.id === targetOpponent.id ? computed : opp);
         isInternalUpdateRef.current = true;
-        // Also update callbacks if provided - use the updated array, not the old one
         if (onOpponentsUpdate) {
-          // Use setTimeout to ensure state update has been processed
           setTimeout(() => {
             console.log(`📤 [BattleEngine] Calling onOpponentsUpdate after damage - target: ${targetOpponent.name}`, {
-              updatedOpponent: {
-                id: newTargetOpponent.id,
-                name: newTargetOpponent.name,
-                currentPP: newTargetOpponent.currentPP,
-                vaultHealth: newTargetOpponent.vaultHealth,
-                shieldStrength: newTargetOpponent.shieldStrength,
-                isDefeated: newTargetOpponent.isDefeated
-              }
+              updatedOpponent: { id: computed.id, name: computed.name, vaultHealth: computed.vaultHealth, shieldStrength: computed.shieldStrength, isDefeated: computed.isDefeated }
             });
             onOpponentsUpdate(updated);
-            // Clear the internal update flag after notifying parent
-            setTimeout(() => {
-              isInternalUpdateRef.current = false;
-            }, 100);
+            setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
           }, 0);
-        } else {
-          // Clear the flag immediately if no callback
-          setTimeout(() => {
-            isInternalUpdateRef.current = false;
-          }, 100);
-        }
+        } else setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
         return updated;
       });
+      newTargetOpponent = applyDamageToCurrent(targetOpponent);
+      newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
     } else {
-      // Single player mode - update single opponent
+      newTargetOpponent = applyDamageToCurrent(targetOpponent);
+      newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
+      if (newTargetOpponent.isDefeated) (newTargetOpponent as any).defeatedAt = new Date();
       setOpponent(newTargetOpponent);
     }
-    
+
     // Check if Terra reaches 50% health and trigger awakened state
     if (onTerraAwakened && !isTerraAwakened && !terraAwakenedTriggeredRef.current && targetOpponent.name?.toLowerCase().includes('terra')) {
-      const healthPercentage = (newTargetOpponent.currentPP / newTargetOpponent.maxPP) * 100;
+      const healthPercentage = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) / ((newTargetOpponent.maxVaultHealth ?? newTargetOpponent.maxPP) || 1) * 100;
       if (healthPercentage <= 50) {
         terraAwakenedTriggeredRef.current = true;
         onTerraAwakened();
       }
     }
-    
-    // In Mindforge mode, notify parent component of opponent update
+
     if (mindforgeMode && onOpponentUpdate) {
       onOpponentUpdate(newTargetOpponent);
     }
-    
-    // Update opponent's vault and student documents in Firestore immediately
+
     if (isPvP && targetOpponent.id) {
       try {
         const opponentVaultRef = doc(db, 'vaults', targetOpponent.id);
         const opponentVaultDoc = await getDoc(opponentVaultRef);
-        
         if (opponentVaultDoc.exists()) {
           const vaultData = opponentVaultDoc.data();
-          // Max vault health is always 10% of max PP
           const maxPP = targetOpponent.maxPP || 1000;
           const maxVaultHealth = Math.floor(maxPP * 0.1);
           const currentVaultHealth = targetOpponent.vaultHealth !== undefined ? targetOpponent.vaultHealth : (vaultData.vaultHealth || maxVaultHealth);
-          const healthDamage = Math.max(0, (damage - shieldDamage) + ppStolen);
           const newVaultHealth = Math.max(0, currentVaultHealth - healthDamage);
-          
           const updateData: any = {
             shieldStrength: newTargetOpponent.shieldStrength,
             vaultHealth: newVaultHealth
@@ -5941,11 +5967,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     })();
     
+    const isDefensiveMove = !!(move?.shieldBoost || move?.healing);
+    const isIslandRaidOrSession = !!gameId && !isInSession || !!sessionId;
     setBattleState(prev => ({
       ...prev,
       selectedMove: move,
-      selectedTarget: move ? prev.selectedTarget : null, // Clear target if move is cleared
-      phase: move ? prev.phase : 'selection' // Return to selection phase if move is cleared
+      selectedTarget: move
+        ? (isDefensiveMove && currentUser?.uid ? currentUser.uid : prev.selectedTarget)
+        : null,
+      phase: move ? (isDefensiveMove && isIslandRaidOrSession ? 'execution' : prev.phase) : 'selection'
     }));
   };
 
@@ -6011,11 +6041,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // Validate target ID exists in current opponents or allies
-    // In single player mode, check single opponent. In multiplayer mode, check opponents array.
-    const isValidTarget = isMultiplayer
-      ? (opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
-      : (opponent.id === targetId || opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId));
-    
+    // Defensive moves (shield boost, healing) can target 'self' or the current player
+    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing);
+    const isSelfTarget = targetId === 'self' || targetId === currentUser?.uid;
+    const isValidTarget = (isDefensiveMove && isSelfTarget) || (
+      isMultiplayer
+        ? (opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
+        : (opponent.id === targetId || opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
+    );
+    // Normalize 'self' to current user id for storage so handleAnimationComplete can recognize it
+    const targetToStore = (targetId === 'self' && currentUser?.uid) ? currentUser.uid : targetId;
+
     if (!isValidTarget) {
       console.warn(`⚠️ [Target Select] Invalid target ID: ${targetId}. Available targets:`, {
         isMultiplayer,
@@ -6073,7 +6109,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       return {
         ...prev,
-        selectedTarget: targetId,
+        selectedTarget: targetToStore,
         phase: newPhase
       };
     });
@@ -6128,72 +6164,76 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Listen for external move selection events (for In Session mode)
   useEffect(() => {
-    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
-                               process.env.REACT_APP_DEBUG === 'true';
+    // ALWAYS set up listener if isInSession is true OR if sessionId exists (defensive)
+    // This ensures the listener is active even if isInSession prop is delayed
+    const shouldListen = isInSession || !!sessionId;
+    
+    // ALWAYS log listener setup (critical for debugging)
+    console.log('👂 [BattleEngine] Setting up inSessionMoveSelect listener', {
+      isInSession,
+      sessionId: sessionId || 'NONE',
+      shouldListen,
+      currentUserId: currentUser?.uid?.substring(0, 8) || 'NONE'
+    });
+    
+    if (!shouldListen) {
+      console.log('⚠️ [BattleEngine] Listener NOT set up - isInSession=false and no sessionId');
+      return;
+    }
     
     const handleExternalMoveSelect = (event: CustomEvent) => {
       // ALWAYS log event receipt (critical - must see this)
       const { move, targetId, traceId, classId, eventId } = event.detail || {};
       console.log('📥 [BattleEngine] ⚡ RECEIVED EVENT ⚡', move?.name || 'NO_MOVE', '→', targetId?.substring(0, 8) || 'NO_TARGET', '| TraceId:', traceId || 'NONE');
       
-      if (DEBUG_LIVE_EVENTS) {
-        console.log('[BattleEngine] 📥 Received inSessionMoveSelect event:', {
-          move: move ? { id: move.id, name: move.name, type: move.type } : null,
-          targetId,
-          traceId,
-          isInSession,
-          sessionId,
-          currentUserId: currentUser?.uid
+      if (!move || !targetId) {
+        console.warn('⚠️ [BattleEngine] Invalid event data - missing move or targetId', {
+          hasMove: !!move,
+          hasTargetId: !!targetId,
+          moveName: move?.name,
+          targetId: targetId?.substring(0, 8)
         });
+        return;
       }
       
-      if (move && targetId) {
-        // Store traceId from event detail for use in action submission
-        if (traceId) {
-          (window as any).__currentLiveEventTraceId = traceId;
-        }
-        
-        // Also store classId and eventId if available
-        if (classId) (window as any).__currentLiveEventClassId = classId;
-        if (eventId) (window as any).__currentLiveEventEventId = eventId;
-        
-        if (DEBUG_LIVE_EVENTS) {
-          console.log('[BattleEngine] ✅ Processing move selection:', {
-            traceId,
-            moveName: move.name,
-            targetId,
-            isInSession,
-            hasSessionId: !!sessionId
-          });
-        }
-        
-        handleMoveSelect(move);
-        // Small delay to ensure move is set before selecting target
-        setTimeout(() => {
-          if (DEBUG_LIVE_EVENTS) {
-            console.log('[BattleEngine] 🎯 Selecting target after delay:', targetId);
-          }
-          handleTargetSelect(targetId);
-        }, 100);
-      } else {
-        if (DEBUG_LIVE_EVENTS) {
-          console.warn('[BattleEngine] ⚠️ Invalid event data:', { move, targetId });
-        }
+      // Store traceId from event detail for use in action submission
+      if (traceId) {
+        (window as any).__currentLiveEventTraceId = traceId;
+        console.log('💾 [BattleEngine] Stored traceId:', traceId);
       }
-    };
-
-    if (DEBUG_LIVE_EVENTS) {
-      console.log('[BattleEngine] 👂 Setting up inSessionMoveSelect listener', {
+      
+      // Also store classId and eventId if available
+      if (classId) {
+        (window as any).__currentLiveEventClassId = classId;
+        console.log('💾 [BattleEngine] Stored classId:', classId);
+      }
+      if (eventId) {
+        (window as any).__currentLiveEventEventId = eventId;
+        console.log('💾 [BattleEngine] Stored eventId:', eventId);
+      }
+      
+      console.log('✅ [BattleEngine] Processing move selection:', {
+        moveName: move.name,
+        moveId: move.id,
+        targetId: targetId.substring(0, 8),
+        traceId: traceId || 'NONE',
         isInSession,
-        sessionId
+        hasSessionId: !!sessionId
       });
-    }
+      
+      handleMoveSelect(move);
+      // Small delay to ensure move is set before selecting target
+      setTimeout(() => {
+        console.log('🎯 [BattleEngine] Selecting target after delay:', targetId.substring(0, 8));
+        handleTargetSelect(targetId);
+      }, 100);
+    };
     
     window.addEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
+    console.log('✅ [BattleEngine] Event listener registered');
+    
     return () => {
-      if (DEBUG_LIVE_EVENTS) {
-        console.log('[BattleEngine] 🧹 Cleaning up inSessionMoveSelect listener');
-      }
+      console.log('🧹 [BattleEngine] Cleaning up inSessionMoveSelect listener');
       window.removeEventListener('inSessionMoveSelect', handleExternalMoveSelect as EventListener);
     };
   }, [handleMoveSelect, handleTargetSelect, isInSession, sessionId, currentUser]);

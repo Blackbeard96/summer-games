@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
@@ -8,7 +9,7 @@ import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getLevelFromXP } from '../utils/leveling';
 import { getUserSquadAbbreviations } from '../utils/squadUtils';
-import { isUserScorekeeper, isUserAdmin } from '../utils/roleManagement';
+import { isUserScorekeeper, isUserAdmin, canEndLiveEventSession } from '../utils/roleManagement';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { getMoveDamageSync } from '../utils/moveOverrides';
@@ -17,6 +18,7 @@ import {
   subscribeToSession, 
   joinSession, 
   endSession, 
+  leaveSession,
   getSession,
   canHostSession,
   isGlobalHost,
@@ -94,6 +96,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   students,
   onEndSession
 }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { vault, refreshVaultData, moves } = useBattle();
   const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
@@ -203,27 +206,40 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }
         }
         
-        // Get user data for join
+        // Get user and vault data for join (use vault for accurate max HP/shield from upgrades)
         const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        const vaultDoc = await getDoc(vaultRef);
         
         const studentData = studentDoc.exists() ? studentDoc.data() : {};
         const userData = userDoc.exists() ? userDoc.data() : {};
+        const vaultData = vaultDoc.exists() ? vaultDoc.data() : {};
         
-        // Initialize hp/shield based on player stats
-        // HP = 10 * level (minimum 100)
         const playerLevel = studentData.level || getLevelFromXP(studentData.xp || 0) || 1;
-        const maxHp = Math.max(100, playerLevel * 10);
-        const hp = maxHp; // Start at full HP
-        const maxShield = 100; // Default shield capacity
-        const shield = maxShield; // Start at full shield
-        
+        const capacity = vaultData.capacity || studentData.powerPoints || 1000;
+        // Max HP: vault uses 10% of capacity; minimum 100, or level * 10
+        const maxHp = Math.max(100, Math.floor(Number(capacity) * 0.1), playerLevel * 10);
+        // Current HP: use vault's current vault health so session matches Vault Management / Battle Arena
+        const currentVaultHp = vaultData.vaultHealth !== undefined
+          ? Math.min(vaultData.vaultHealth, maxHp, vaultData.currentPP ?? maxHp)
+          : maxHp;
+        const hp = currentVaultHp;
+        // Max Shield: from vault upgrades (maxShieldStrength) so it reflects player upgrades
+        const maxShield = Math.max(100, Number(vaultData.maxShieldStrength) || 100);
+        // Current Shield: use vault's current shield so session matches Vault Management / Battle Arena
+        const shield = (vaultData.shieldStrength !== undefined && vaultData.shieldStrength !== null)
+          ? Math.min(vaultData.shieldStrength, maxShield)
+          : maxShield;
+        // PP from vault so it matches Vault Management
+        const powerPoints = vaultData.currentPP ?? studentData.powerPoints ?? 0;
+
         const newPlayer: ServiceSessionPlayer = {
           userId: currentUser.uid,
           displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
           photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
           level: playerLevel,
-          powerPoints: studentData.powerPoints || 0,
+          powerPoints,
           participationCount: 0,
           movesEarned: 0,
           hp,
@@ -284,6 +300,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       
       const players: SessionPlayer[] = session.players || [];
       
+      // CRITICAL: Log raw players array from Firestore to verify transaction wrote correctly
+      if (DEBUG_LIVE_EVENTS) {
+        console.log('📥 [Session Update] Raw players from Firestore:', players.map(p => ({
+          userId: p.userId.substring(0, 8) + '...',
+          name: p.displayName,
+          hp: p.hp,
+          shield: p.shield,
+          pp: p.powerPoints
+        })));
+      }
+      
       // Update player names from userProfiles (source of truth)
       const updatedPlayers = players.map((player) => {
         const latestProfile = userProfiles.get(player.userId);
@@ -297,25 +324,52 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         return player;
       });
       
-      // ALWAYS log player state changes (critical for debugging)
+      // ALWAYS log player state changes (critical for debugging) - enhanced
       updatedPlayers.forEach(player => {
         const oldPlayer = sessionPlayers.find(p => p.userId === player.userId);
-        if (oldPlayer && (oldPlayer.hp !== player.hp || oldPlayer.shield !== player.shield || oldPlayer.powerPoints !== player.powerPoints)) {
+        if (oldPlayer) {
           const changes = [];
-          if (oldPlayer.hp !== player.hp) changes.push(`HP: ${oldPlayer.hp} → ${player.hp}`);
-          if (oldPlayer.shield !== player.shield) changes.push(`Shield: ${oldPlayer.shield} → ${player.shield}`);
-          if (oldPlayer.powerPoints !== player.powerPoints) changes.push(`PP: ${oldPlayer.powerPoints} → ${player.powerPoints}`);
-          console.log(`🔄 [Session Update] ⚡ STATE CHANGED ⚡`, player.displayName, '|', changes.join(' | '));
+          const oldHp = oldPlayer.hp ?? 0;
+          const newHp = player.hp ?? 0;
+          const oldShield = oldPlayer.shield ?? 0;
+          const newShield = player.shield ?? 0;
+          const oldPp = oldPlayer.powerPoints ?? 0;
+          const newPp = player.powerPoints ?? 0;
           
-          // Dispatch state update event for debug overlay
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('liveEventStateUpdate', {
-              detail: { playerId: player.userId }
-            }));
+          if (oldHp !== newHp) changes.push(`HP: ${oldHp} → ${newHp} (Δ${newHp - oldHp})`);
+          if (oldShield !== newShield) changes.push(`Shield: ${oldShield} → ${newShield} (Δ${newShield - oldShield})`);
+          if (oldPp !== newPp) changes.push(`PP: ${oldPp} → ${newPp} (Δ${newPp - oldPp})`);
+          
+          if (changes.length > 0) {
+            console.log(`🔄 [Session Update] ⚡ STATE CHANGED ⚡`, player.displayName, '|', changes.join(' | '));
+            
+            // Dispatch state update event for debug overlay
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('liveEventStateUpdate', {
+                detail: { playerId: player.userId }
+              }));
+            }
+          } else if (DEBUG_LIVE_EVENTS) {
+            // Log even when no changes to verify subscription is working
+            console.log(`📊 [Session Update] No changes for ${player.displayName}:`, {
+              hp: player.hp,
+              shield: player.shield,
+              pp: player.powerPoints
+            });
+          }
+        } else {
+          // New player joined
+          if (DEBUG_LIVE_EVENTS) {
+            console.log(`🆕 [Session Update] New player detected: ${player.displayName}`, {
+              hp: player.hp,
+              shield: player.shield,
+              pp: player.powerPoints
+            });
           }
         }
       });
       
+      // CRITICAL: Update React state - this triggers UI re-render
       setSessionPlayers(updatedPlayers);
       
       // Update battle log
@@ -405,18 +459,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           if (vaultDoc.exists()) {
             const vaultData = vaultDoc.data();
             const student = students.find(s => s.id === player.userId);
-            const currentPP = student?.powerPoints || player.powerPoints;
+            // Use vault document as source of truth (match Vault Management / Battle Arena)
             const maxPP = vaultData.capacity || 1000; // Capacity is the max PP
+            const currentPP = vaultData.currentPP ?? student?.powerPoints ?? player.powerPoints ?? 0;
             const maxVaultHealth = Math.floor(maxPP * 0.1); // Health is 10% of max PP
-            const vaultHealth = vaultData.vaultHealth !== undefined 
-              ? Math.min(vaultData.vaultHealth, maxVaultHealth, currentPP)
+            const vaultHealth = vaultData.vaultHealth !== undefined
+              ? Math.min(vaultData.vaultHealth, maxVaultHealth, vaultData.currentPP ?? currentPP)
               : Math.min(currentPP, maxVaultHealth);
-            
+
             vaultDataMap[player.userId] = {
               vaultHealth,
               maxVaultHealth,
-              shieldStrength: vaultData.shieldStrength || 0,
-              maxShieldStrength: vaultData.maxShieldStrength || 100,
+              shieldStrength: vaultData.shieldStrength ?? 0,
+              maxShieldStrength: vaultData.maxShieldStrength ?? 100,
               currentPP,
               maxPP
             };
@@ -668,15 +723,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       let health, maxHealth, shield, maxShield, pp, maxPP;
       
       if (useSessionHealth) {
-        // Use session player hp/shield (authoritative for In-Session mode)
         health = player.hp ?? 100;
-        maxHealth = player.maxHp ?? 100;
         shield = player.shield ?? 100;
-        maxShield = player.maxShield ?? 100;
         pp = player.powerPoints ?? 0;
         maxPP = student?.powerPoints || player.powerPoints || 1000;
+        // Use vault max when available so display reflects upgrades; otherwise session max
+        const vaultForMax = playerVaultData[player.userId];
+        maxHealth = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
+        maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
       } else {
-        // Fall back to vault data (for backwards compatibility)
         const vaultData = playerVaultData[player.userId] || {
           vaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
           maxVaultHealth: Math.floor((student?.powerPoints || player.powerPoints) * 0.1),
@@ -696,9 +751,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return {
         id: player.userId,
         name: profile?.displayName || player.displayName,
-        currentPP: pp, // Keep for compatibility, but In-Session uses hp
+        currentPP: pp,
         maxPP: maxPP,
-        vaultHealth: health, // Map hp to vaultHealth for BattleEngine
+        vaultHealth: health,
         maxVaultHealth: maxHealth,
         shieldStrength: shield,
         maxShieldStrength: maxShield,
@@ -721,18 +776,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       let health, maxHealth, shield, maxShield, pp, maxPP;
       
       if (useSessionHealth) {
-        // Use session player hp/shield (authoritative for In-Session mode)
         health = player.hp ?? 100;
-        maxHealth = player.maxHp ?? 100;
         shield = player.shield ?? 100;
-        maxShield = player.maxShield ?? 100;
         pp = player.powerPoints ?? 0;
         maxPP = vault?.capacity || student?.powerPoints || player.powerPoints || 1000;
+        const vaultForMax = playerVaultData[player.userId];
+        maxHealth = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
+        maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
       } else {
-        // Fall back to vault data (for backwards compatibility)
         const vaultData = playerVaultData[player.userId] || (vault ? {
           vaultHealth: Math.floor(vault.currentPP * 0.1),
-          maxVaultHealth: Math.floor(vault.currentPP * 0.1),
+          maxVaultHealth: Math.floor((vault.capacity || vault.currentPP) * 0.1),
           shieldStrength: vault.shieldStrength || 100,
           maxShieldStrength: vault.maxShieldStrength || 100,
           currentPP: vault.currentPP,
@@ -756,9 +810,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return {
         id: player.userId,
         name: profile?.displayName || player.displayName,
-        currentPP: pp, // Keep for compatibility, but In-Session uses hp
+        currentPP: pp,
         maxPP: maxPP,
-        vaultHealth: health, // Map hp to vaultHealth for BattleEngine
+        vaultHealth: health,
         maxVaultHealth: maxHealth,
         shieldStrength: shield,
         maxShieldStrength: maxShield,
@@ -1112,7 +1166,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const renderPlayerCard = (student: Student & { isInSession: boolean; sessionData: SessionPlayer | null }, isLeft: boolean) => {
     const player = student.sessionData;
     
-    // Get vault data with proper fallbacks
+    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
+                               process.env.REACT_APP_DEBUG === 'true';
+    
+    // CRITICAL: For players in session, use session player data (hp/shield from session document)
+    // This is the source of truth that gets updated by applyInSessionMove
+    // Only fall back to vault data for players not in session
     let vaultData: {
       vaultHealth: number;
       maxVaultHealth: number;
@@ -1122,8 +1181,41 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       maxPP: number;
     };
     
-    if (player && playerVaultData[student.id]) {
-      // Player is in session and we have vault data
+    if (player && (player.hp !== undefined || player.shield !== undefined)) {
+      // Session player: current hp/shield from session; max and PP from vault when available (match Vault Management / Battle Arena)
+      let hp = player.hp ?? 100;
+      let shield = player.shield ?? 100;
+      const vaultForMax = playerVaultData[student.id];
+      const maxHp = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
+      const maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
+      // When session still shows "full" (never took damage), prefer vault current so display matches Vault Management
+      if (vaultForMax && hp >= maxHp && shield >= maxShield) {
+        hp = vaultForMax.vaultHealth;
+        shield = vaultForMax.shieldStrength;
+      }
+      // Prefer vault currentPP so displayed PP matches Vault Management
+      const pp = vaultForMax?.currentPP ?? player.powerPoints ?? (student.powerPoints || 0);
+      const maxPP = vaultForMax?.maxPP ?? 1000;
+      vaultData = {
+        vaultHealth: hp,
+        maxVaultHealth: maxHp,
+        shieldStrength: shield,
+        maxShieldStrength: maxShield,
+        currentPP: pp,
+        maxPP
+      };
+      
+      if (DEBUG_LIVE_EVENTS) {
+        console.log(`📊 [renderPlayerCard] Using session data for ${player.displayName}:`, {
+          hp,
+          maxHp,
+          shield,
+          maxShield,
+          pp
+        });
+      }
+    } else if (player && playerVaultData[student.id]) {
+      // Player is in session but no hp/shield yet - use vault data as fallback
       vaultData = playerVaultData[student.id];
     } else if (player) {
       // Player is in session but no vault data yet - use player's PP
@@ -1167,7 +1259,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const isPresentInPresenceService = playerPresence?.connected === true;
     const isPresentInActiveViewers = activeViewers.includes(student.id);
     const isPresent = isActiveInSession && (isPresentInPresenceService || isPresentInActiveViewers);
-    
+    // Eliminated: from session flag or inferred when in session with 0 health and 0 shield
+    const isEliminated = player?.eliminated === true || (isActiveInSession && vaultData.vaultHealth === 0 && vaultData.shieldStrength === 0);
+
     return (
       <div
         key={student.id}
@@ -1220,21 +1314,47 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               });
             }
             
-            if (DEBUG_LIVE_EVENTS) {
-              console.log('[InSessionBattle] 🎯 TARGET CLICKED:', {
-                traceId,
-                targetId: student.id,
-                targetName: student.displayName,
-                selectedMove: {
-                  id: selectedMove.id,
-                  name: selectedMove.name,
-                  type: selectedMove.type,
-                  cost: selectedMove.cost,
-                  category: selectedMove.category
-                },
-                actorUid: currentUser?.uid,
-                sessionId: sessionId
-              });
+            // ALWAYS log target click (critical - must see this)
+            console.log('🎯 [InSessionBattle] ⚡ TARGET CLICKED ⚡', student.displayName, '| Move:', selectedMove?.name, '| TraceId:', traceId);
+            console.log('🎯 [InSessionBattle] Target click details:', {
+              traceId: traceId || 'NONE',
+              targetId: student.id,
+              targetName: student.displayName,
+              selectedMove: selectedMove ? {
+                id: selectedMove.id,
+                name: selectedMove.name,
+                type: selectedMove.type,
+                cost: selectedMove.cost,
+                category: selectedMove.category
+              } : null,
+              actorUid: currentUser?.uid,
+              sessionId: sessionId,
+              hasClassId: !!classId
+            });
+            
+            // CRITICAL: Verify we have all required data before dispatching
+            if (!selectedMove || !selectedMove.id) {
+              console.error('❌ [InSessionBattle] Cannot dispatch - invalid selectedMove!', selectedMove);
+              alert('Error: No move selected. Please select a move first.');
+              return;
+            }
+            
+            if (!student.id) {
+              console.error('❌ [InSessionBattle] Cannot dispatch - invalid target!', student);
+              alert('Error: Invalid target selected.');
+              return;
+            }
+            
+            if (!currentUser || !currentUser.uid) {
+              console.error('❌ [InSessionBattle] Cannot dispatch - no current user!');
+              alert('Error: Not logged in.');
+              return;
+            }
+            
+            if (!sessionId) {
+              console.error('❌ [InSessionBattle] Cannot dispatch - no sessionId!');
+              alert('Error: No session ID.');
+              return;
             }
             
             setSelectedTarget(student.id);
@@ -1250,12 +1370,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             
             // ALWAYS log event dispatch (critical - must see this)
             console.log('📤 [InSessionBattle] ⚡ DISPATCHING EVENT ⚡', selectedMove?.name, '→', student.displayName, '| TraceId:', traceId);
+            console.log('📤 [InSessionBattle] Event detail:', eventDetail);
             
-            window.dispatchEvent(new CustomEvent('inSessionMoveSelect', {
-              detail: eventDetail
-            }));
-            
-            console.log('📤 [InSessionBattle] Event dispatched ✓');
+            try {
+              window.dispatchEvent(new CustomEvent('inSessionMoveSelect', {
+                detail: eventDetail
+              }));
+              console.log('✅ [InSessionBattle] Event dispatched successfully');
+            } catch (error) {
+              console.error('❌ [InSessionBattle] Failed to dispatch event:', error);
+              alert('Error: Failed to dispatch move event. Check console for details.');
+              return;
+            }
             
             // Clear selection after dispatching
             setSelectedMove(null);
@@ -1494,10 +1620,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         </div>
 
-        {/* PP Display */}
+        {/* PP Display - use vaultData so it matches Vault Management / Battle Arena */}
         <div style={{ marginBottom: '0.375rem' }}>
           <div style={{ fontSize: '0.65rem', color: '#6b7280' }}>
-            {student.powerPoints || 0} PP
+            {vaultData.currentPP} PP
           </div>
         </div>
 
@@ -1708,6 +1834,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             Not Present
           </div>
         )}
+
+        {/* Eliminated overlay - shows over card when player is eliminated */}
+        {isEliminated && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: '0.5rem',
+              background: 'rgba(0, 0, 0, 0.65)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              zIndex: 10
+            }}
+          >
+            <span style={{
+              fontSize: '1.25rem',
+              fontWeight: '800',
+              color: '#fef2f2',
+              textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+              letterSpacing: '0.05em'
+            }}>
+              Eliminated
+            </span>
+          </div>
+        )}
       </div>
     );
   };
@@ -1745,23 +1898,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             {sessionPlayers.length} players • {currentPlayer ? `${currentPlayer.movesEarned} moves available` : 'Loading...'}
           </p>
         </div>
-        {/* End Session Button - Only visible to admins/hosts */}
-        {(isAdminUser || isSessionHost) && (
+        {/* Leave Live Event: all players. End Session: only designated session-ender (all others see only Leave Live Event) */}
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
             onClick={async () => {
               if (!currentUser) return;
               try {
-                const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
-                if (ended) {
-                  debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
-                  onEndSession();
+                const left = await leaveSession(sessionId, currentUser.uid, currentUser.displayName || undefined);
+                if (left) {
+                  debug('inSessionBattle', `User ${currentUser.uid} left session ${sessionId}`);
+                  navigate('/live-events');
                 } else {
-                  debugError('inSessionBattle', `Failed to end session ${sessionId}`);
-                  alert('Failed to end session. Only the host, admin, or global host can end the session.');
+                  alert('Failed to leave session. Please try again.');
                 }
               } catch (error) {
-                debugError('inSessionBattle', `Error ending session`, error);
-                alert('Error ending session. Please try again.');
+                debugError('inSessionBattle', 'Error leaving session', error);
+                alert('Error leaving session. Please try again.');
               }
             }}
             style={{
@@ -1775,9 +1927,41 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               cursor: 'pointer'
             }}
           >
-            End Session
+            Leave Live Event
           </button>
-        )}
+          {permissionsChecked && canEndLiveEventSession(currentUser?.email ?? null) && (
+            <button
+              onClick={async () => {
+                if (!currentUser) return;
+                try {
+                  const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
+                  if (ended) {
+                    debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
+                    onEndSession();
+                  } else {
+                    debugError('inSessionBattle', `Failed to end session ${sessionId}`);
+                    alert('Failed to end session. Only the designated host can end the session.');
+                  }
+                } catch (error) {
+                  debugError('inSessionBattle', `Error ending session`, error);
+                  alert('Error ending session. Please try again.');
+                }
+              }}
+              style={{
+                background: 'rgba(239, 68, 68, 0.9)',
+                color: 'white',
+                border: '2px solid white',
+                borderRadius: '0.5rem',
+                padding: '0.75rem 1.5rem',
+                fontSize: '1rem',
+                fontWeight: '600',
+                cursor: 'pointer'
+              }}
+            >
+              End Session
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 200px)', minHeight: '600px' }}>
@@ -1868,8 +2052,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }}>
             <button
               onClick={() => {
+                console.log('⚔️ [InSessionBattle] FIGHT button clicked', {
+                  hasCurrentPlayer: !!currentPlayer,
+                  movesEarned: currentPlayer?.movesEarned || 0,
+                  willOpenMenu: !!(currentPlayer && (currentPlayer.movesEarned || 0) > 0)
+                });
                 if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
                   setShowMoveMenu(true);
+                  console.log('✅ [InSessionBattle] Move menu opened');
+                } else {
+                  console.warn('⚠️ [InSessionBattle] Cannot open menu - no moves available');
                 }
               }}
               disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0}
@@ -2376,22 +2568,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               return (
                                 <button
                                   key={move.id}
-                                  onClick={() => {
-                                    const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
-                                                             process.env.REACT_APP_DEBUG === 'true';
-                                    
-                                    if (DEBUG_LIVE_EVENTS) {
-                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (Elemental):', {
-                                        skillId: move.id,
-                                        skillName: move.name,
-                                        skillType: move.type,
-                                        category: move.category,
-                                        cost: move.cost,
-                                        cooldown: move.cooldown,
-                                        actorUid: currentUser?.uid,
-                                        sessionId: sessionId
-                                      });
-                                    }
+                                  onClick={async (e) => {
+                                    // ALWAYS log skill click (critical - must see this)
+                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| Cost:', move.cost, '| Actor:', currentUser?.uid?.substring(0, 8));
+                                    console.log('🎮 [InSessionBattle] Click event details:', {
+                                      buttonClicked: true,
+                                      moveId: move.id,
+                                      moveName: move.name,
+                                      moveType: move.type,
+                                      category: move.category,
+                                      hasCurrentUser: !!currentUser,
+                                      hasSessionId: !!sessionId,
+                                      hasClassId: !!classId
+                                    });
                                     
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
@@ -2701,9 +2890,44 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               return (
                                 <button
                                   key={move.id}
-                                  onClick={async () => {
+                                  onClick={async (e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    
                                     // ALWAYS log skill click (critical - must see this)
                                     console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| Cost:', move.cost, '| Actor:', currentUser?.uid?.substring(0, 8));
+                                    console.log('🎮 [InSessionBattle] Click event details:', {
+                                      buttonClicked: true,
+                                      moveId: move.id,
+                                      moveName: move.name,
+                                      hasCurrentUser: !!currentUser,
+                                      hasSessionId: !!sessionId,
+                                      hasClassId: !!classId,
+                                      timestamp: new Date().toISOString()
+                                    });
+                                    
+                                    // CRITICAL: Verify the move object is valid
+                                    if (!move || !move.id) {
+                                      console.error('❌ [InSessionBattle] Invalid move object!', move);
+                                      return;
+                                    }
+                                    
+                                    // CRITICAL: Verify we have required context
+                                    if (!currentUser || !sessionId) {
+                                      console.error('❌ [InSessionBattle] Missing required context!', {
+                                        hasCurrentUser: !!currentUser,
+                                        hasSessionId: !!sessionId
+                                      });
+                                      return;
+                                    }
+                                    console.log('🎮 [InSessionBattle] Context check:', {
+                                      hasCurrentUser: !!currentUser,
+                                      userId: currentUser?.uid?.substring(0, 8),
+                                      sessionId: sessionId || 'MISSING',
+                                      classId: classId || 'MISSING',
+                                      moveId: move.id,
+                                      moveName: move.name
+                                    });
                                     
                                     const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
                                                              process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -2714,7 +2938,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     const traceId = generateTraceId();
                                     setCurrentTraceId(traceId);
                                     
-                                    console.log('🎮 [InSessionBattle] TraceId:', traceId);
+                                    console.log('🎮 [InSessionBattle] TraceId generated:', traceId);
                                     
                                     traceStage('selected', traceId, 'Skill selected', {
                                       skillId: move.id,

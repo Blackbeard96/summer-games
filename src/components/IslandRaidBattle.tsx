@@ -14,6 +14,7 @@ import Ch24ConclusionCutscene from './Ch24ConclusionCutscene';
 import { debug } from '../utils/debug';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
+import { grantArtifactToPlayer } from '../utils/artifactCompensation';
 
 interface IslandRaidBattleProps {
   gameId: string;
@@ -441,6 +442,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
 
             // Always sync enemy health/shield changes from Firestore to keep all players in sync
             // Skip if we're currently updating enemies (prevent circular updates)
+            // CRITICAL: Add small delay after update flag is cleared to ensure transaction completes
             if (!isUpdatingEnemiesRef.current && room.enemies) {
               // Check if we need to update opponents (new enemies, wave change, or health/shield changes)
               const hasNewEnemies = opponents.length === 0 || room.enemies.length !== opponents.length;
@@ -517,25 +519,46 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     console.log(`🔍 [LISTENER] Enemy ${enemy.name} (${enemy.id}) waveNumber: ${enemyWave}, room.waveNumber: ${room.waveNumber}, local waveNumber: ${waveNumber}`);
                   }
                   
-                  // CRITICAL: Firestore is the source of truth - always use enemy.health/shield from Firestore
-                  // Don't preserve local state for health/shield - sync from Firestore
+                  // CRITICAL FIX: Merge Firestore values with local state intelligently
+                  // Use the minimum (most damage) to prevent stale Firestore data from "healing" enemies
+                  // This ensures we never overwrite correct local damage with stale Firestore values
                   const firestoreHealth = Number(enemy.health || 0);
                   const firestoreShield = Number(enemy.shieldStrength || 0);
+                  const localHealth = existingOpp ? (existingOpp.vaultHealth !== undefined ? existingOpp.vaultHealth : (existingOpp.health !== undefined ? existingOpp.health : firestoreHealth)) : firestoreHealth;
+                  const localShield = existingOpp ? (existingOpp.shieldStrength || 0) : firestoreShield;
+                  
+                  // Use minimum (most damage) to ensure consistency
+                  // This prevents stale Firestore data from overwriting correct local damage
+                  const mergedHealth = Math.min(firestoreHealth, localHealth);
+                  const mergedShield = Math.min(firestoreShield, localShield);
+                  
+                  // Log if we're using a different value (for debugging)
+                  if (Math.abs(mergedHealth - firestoreHealth) > 0.1 || Math.abs(mergedShield - firestoreShield) > 0.1) {
+                    console.log(`🔄 IslandRaidBattle: Listener merged ${enemy.name}:`, {
+                      firestoreHealth,
+                      localHealth,
+                      mergedHealth,
+                      firestoreShield,
+                      localShield,
+                      mergedShield,
+                      usingLocal: mergedHealth < firestoreHealth || mergedShield < firestoreShield
+                    });
+                  }
                   
                   return {
                     id: enemy.id,
                     name: enemy.name,
                     currentPP: existingOpp?.currentPP || 0,
                     maxPP: existingOpp?.maxPP || 0,
-                    shieldStrength: firestoreShield, // Always use Firestore value
+                    shieldStrength: mergedShield, // Use merged value (most damage)
                     maxShieldStrength: enemy.maxShieldStrength || 0,
                     level: enemy.level || existingOpp?.level || 1,
-                    health: firestoreHealth, // Always use Firestore value
+                    health: mergedHealth, // Use merged value (most damage)
                     maxHealth: enemy.maxHealth || 100,
                     type: enemy.type || existingOpp?.type || 'zombie',
                     image: enemy.image || existingOpp?.image || undefined,
-                    vaultHealth: firestoreHealth, // Always use Firestore value (source of truth)
-                    maxVaultHealth: enemy.maxHealth || 100, // Always use Firestore value
+                    vaultHealth: mergedHealth, // Use merged value (most damage)
+                    maxVaultHealth: enemy.maxHealth || 100,
                     waveNumber: enemyWave // CRITICAL: Set waveNumber for filtering
                   };
                 });
@@ -1282,12 +1305,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           // Grant rewards to ALL players in the battle
           const players = battleRoom.players || [];
           console.log('🏝️ Granting rewards to all players:', players.length, players);
+
+          const isMissionBattle = !!(battleRoom as any).isMissionBattle;
+          const missionRewards = (battleRoom as any).rewards as { xp: number; pp: number; drops?: Array<{ type: string; refId?: string; qty?: number }> } | undefined;
           
-          // Determine rewards based on difficulty (same for all players)
+          // Determine rewards: mission battle uses room.rewards; otherwise use difficulty-based rewards
           const difficultyKey = difficulty.toLowerCase();
           let baseRewards: { pp: number; xp: number; truthMetal: number; elementalRing?: { id: string; name: string; image: string }; captainHelmet?: boolean } = { pp: 0, xp: 0, truthMetal: 0 };
           
-          if (difficulty === 'easy') {
+          if (isMissionBattle && missionRewards) {
+            baseRewards = { pp: missionRewards.pp ?? 0, xp: missionRewards.xp ?? 0, truthMetal: 0 };
+          } else if (difficulty === 'easy') {
             baseRewards = { pp: 150, xp: 150, truthMetal: 0, captainHelmet: true };
           } else if (difficulty === 'normal') {
             const elementalRings = [
@@ -1311,10 +1339,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 const islandRaidCompletions = studentData.islandRaidCompletions || {};
                 const isFirstCompletion = !islandRaidCompletions[difficultyKey];
                 
-                // Use first completion rewards if first time, otherwise reduced rewards
                 let rewards = baseRewards;
-                if (!isFirstCompletion) {
-                  // Subsequent completions - reduced rewards (no Captain Helmet on repeat)
+                if (!isMissionBattle && !isFirstCompletion) {
                   if (difficulty === 'easy') {
                     rewards = { pp: 150, xp: 150, truthMetal: 0 };
                   } else if (difficulty === 'normal') {
@@ -1322,12 +1348,26 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   }
                 }
                 
-                // Grant artifacts if first completion
                 const currentArtifacts = studentData.artifacts || {};
                 let updatedArtifacts = { ...currentArtifacts };
                 
-                if (isFirstCompletion) {
-                  // Grant Captain Helmet
+                // Mission battle: grant artifacts from rewards.drops
+                if (isMissionBattle && missionRewards?.drops?.length) {
+                  for (const drop of missionRewards.drops) {
+                    const qty = Math.max(1, drop.qty ?? 1);
+                    if (drop.type === 'ARTIFACT' && drop.refId) {
+                      for (let i = 0; i < qty; i++) {
+                        try {
+                          await grantArtifactToPlayer(playerId, drop.refId, currentUser?.uid || 'system', 'mission_battle_reward');
+                        } catch (e) {
+                          console.error('Error granting mission artifact:', e);
+                        }
+                      }
+                    }
+                  }
+                }
+                
+                if (!isMissionBattle && isFirstCompletion) {
                   if (rewards.captainHelmet) {
                     updatedArtifacts = {
                       ...updatedArtifacts,
@@ -1339,16 +1379,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                         slot: 'head',
                         category: 'armor',
                         rarity: 'rare',
-                        stats: {
-                          manifestDamageBoost: 0.05 // 5% boost
-                        },
+                        stats: { manifestDamageBoost: 0.05 },
                         obtainedAt: new Date(),
                         fromIslandRaid: true
                       }
                     };
                   }
-                  
-                  // Grant elemental ring if provided
                   if (rewards.elementalRing) {
                     updatedArtifacts = {
                       ...updatedArtifacts,
@@ -1367,29 +1403,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   }
                 }
                 
-                // Update player's data
                 const updates: any = {
                   powerPoints: increment(rewards.pp),
                   xp: increment(rewards.xp),
                   truthMetal: increment(rewards.truthMetal)
                 };
-                
-                // Only update artifacts if first completion
-                if (isFirstCompletion && (rewards.captainHelmet || rewards.elementalRing)) {
+                if (!isMissionBattle && isFirstCompletion && (rewards.captainHelmet || rewards.elementalRing)) {
                   updates.artifacts = updatedArtifacts;
-                  updates.islandRaidCompletions = {
-                    ...islandRaidCompletions,
-                    [difficultyKey]: {
-                      completed: true,
-                      completedAt: new Date(),
-                      firstCompletion: true
-                    }
-                  };
+                  updates.islandRaidCompletions = { ...islandRaidCompletions, [difficultyKey]: { completed: true, completedAt: new Date(), firstCompletion: true } };
                 }
-                
                 await updateDoc(studentRef, updates);
                 
-                // Also update users collection
                 const userRef = doc(db, 'users', playerId);
                 const userDoc = await getDoc(userRef);
                 if (userDoc.exists()) {
@@ -1399,7 +1423,6 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     truthMetal: increment(rewards.truthMetal)
                   });
                 }
-                
                 console.log(`✅ Rewards granted to player ${playerId}:`, rewards);
               }
             } catch (error) {
@@ -1407,54 +1430,45 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             }
           });
           
-          // Wait for all rewards to be granted
           await Promise.all(rewardPromises);
           
-          // Show victory modal to current user with their rewards
           if (currentUser) {
             const studentRef = doc(db, 'students', currentUser.uid);
             const studentDoc = await getDoc(studentRef);
-            
             if (studentDoc.exists()) {
               const studentData = studentDoc.data();
               const islandRaidCompletions = studentData.islandRaidCompletions || {};
               const isFirstCompletion = !islandRaidCompletions[difficultyKey];
               
-              // Create Live Feed post for Island Raid completion (if privacy settings allow)
-              try {
-                const shouldShare = await shouldShareEvent(currentUser.uid, 'raid_complete');
-                if (shouldShare) {
-                  const playerLevel = getLevelFromXP(studentData.xp || 0);
-                  
-                  await createLiveFeedMilestone(
-                    currentUser.uid,
-                    currentUser.displayName || 'Unknown',
-                    currentUser.photoURL || undefined,
-                    studentData.role || undefined,
-                    playerLevel,
-                    'raid_complete',
-                    {
-                      waveNumber: battleRoom.maxWaves || 5,
-                      difficulty: difficulty || 'normal'
-                    },
-                    `raid_complete_${currentUser.uid}_${gameId}_${Date.now()}`
-                  );
+              if (!isMissionBattle) {
+                try {
+                  const shouldShare = await shouldShareEvent(currentUser.uid, 'raid_complete');
+                  if (shouldShare) {
+                    const playerLevel = getLevelFromXP(studentData.xp || 0);
+                    await createLiveFeedMilestone(
+                      currentUser.uid,
+                      currentUser.displayName || 'Unknown',
+                      currentUser.photoURL || undefined,
+                      studentData.role || undefined,
+                      playerLevel,
+                      'raid_complete',
+                      { waveNumber: battleRoom.maxWaves || 5, difficulty: difficulty || 'normal' },
+                      `raid_complete_${currentUser.uid}_${gameId}_${Date.now()}`
+                    );
+                  }
+                } catch (error) {
+                  console.error('Error creating Live Feed post for Island Raid completion:', error);
                 }
-              } catch (error) {
-                console.error('Error creating Live Feed post for Island Raid completion:', error);
               }
               
-              if (isFirstCompletion) {
-                // Show first completion rewards
+              if (isMissionBattle) {
+                setVictoryRewards(baseRewards);
+                setShowVictoryModal(true);
+              } else if (isFirstCompletion) {
                 setVictoryRewards(baseRewards);
                 setShowVictoryModal(true);
               } else {
-                // Show repeat completion rewards
-                if (difficulty === 'easy') {
-                  setVictoryRewards({ pp: 150, xp: 150, truthMetal: 0 });
-                } else if (difficulty === 'normal') {
-                  setVictoryRewards({ pp: 100, xp: 100, truthMetal: 0 });
-                }
+                setVictoryRewards(difficulty === 'easy' ? { pp: 150, xp: 150, truthMetal: 0 } : { pp: 100, xp: 100, truthMetal: 0 });
                 setShowVictoryModal(true);
               }
             }
@@ -1649,32 +1663,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     try {
       const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
       
-      // CRITICAL FIX: Read current enemy state from Firestore to avoid using stale cached data
-      // This ensures we use the most up-to-date health values, not potentially stale battleRoom.enemies
-      let currentBattleRoomEnemies: IslandRaidEnemy[] = [];
-      try {
-        const battleRoomDoc = await getDoc(battleRoomRef);
-        if (battleRoomDoc.exists()) {
-          currentBattleRoomEnemies = (battleRoomDoc.data().enemies || []) as IslandRaidEnemy[];
-          console.log('🏝️ IslandRaidBattle: Read current enemies from Firestore:', currentBattleRoomEnemies.map(e => ({
-            id: e.id,
-            name: e.name,
-            health: e.health,
-            maxHealth: e.maxHealth
-          })));
-        } else {
-          // Fallback to cached battleRoom if Firestore read fails
-          currentBattleRoomEnemies = battleRoom.enemies || [];
-          console.warn('🏝️ IslandRaidBattle: Battle room not found in Firestore, using cached enemies');
-        }
-      } catch (error) {
-        console.error('🏝️ IslandRaidBattle: Error reading current enemies from Firestore:', error);
-        // Fallback to cached battleRoom if Firestore read fails
-        currentBattleRoomEnemies = battleRoom.enemies || [];
-      }
-      
       console.log('🏝️ IslandRaidBattle: handleOpponentsUpdate called with', updatedOpponents.length, 'opponents');
-      console.log('🏝️ IslandRaidBattle: Current wave:', waveNumber, 'BattleRoom wave:', battleRoom?.waveNumber);
       console.log('🏝️ IslandRaidBattle: Updated opponents data:', updatedOpponents.map(opp => ({
         id: opp.id,
         name: opp.name,
@@ -1684,150 +1673,205 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         health: opp.health,
         waveNumber: opp.waveNumber
       })));
-      console.log('🏝️ IslandRaidBattle: Current local opponents:', opponents.map(opp => ({
-        id: opp.id,
-        name: opp.name,
-        vaultHealth: opp.vaultHealth,
-        waveNumber: opp.waveNumber
-      })));
       
-      // Convert updated opponents to enemy format, preserving all properties
-      const enemies: IslandRaidEnemy[] = updatedOpponents.map(opp => {
-        // Find original enemy data from battleRoom (to preserve all properties like damage, moves, position, etc.)
-        const originalEnemy = currentBattleRoomEnemies.find((e: IslandRaidEnemy) => e.id === opp.id);
+      // CRITICAL FIX: Store BattleEngine values for use inside transaction
+      // We'll build the enemy array INSIDE the transaction using fresh Firestore data
+      const battleEngineUpdates = new Map<string, {
+        health: number;
+        shield: number;
+        maxHealth: number;
+        maxShield: number;
+        opp: any;
+      }>();
+      
+      updatedOpponents.forEach(opp => {
+        const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.health !== undefined ? opp.health : 0);
+        const shield = opp.shieldStrength !== undefined ? opp.shieldStrength : 0;
+        const maxHealth = opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxHealth !== undefined ? opp.maxHealth : 100);
+        const maxShield = opp.maxShieldStrength !== undefined ? opp.maxShieldStrength : 0;
         
-        // Use updated health/shields from opponent (this is the authoritative source from BattleEngine)
-        // CRITICAL FIX: Do NOT fall back to originalEnemy.health - that would reset health to full!
-        // Only use values from opp (BattleEngine update), or if missing, use current Firestore value
-        // Priority: vaultHealth (Island Raid) > health > current Firestore health (NOT original full health)
-        const currentFirestoreHealth = originalEnemy?.health !== undefined ? originalEnemy.health : 100;
-        const updatedHealth = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.health !== undefined ? opp.health : currentFirestoreHealth);
-        const updatedMaxHealth = opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxHealth !== undefined ? opp.maxHealth : (originalEnemy?.maxHealth || 100));
-        const currentFirestoreShield = originalEnemy?.shieldStrength !== undefined ? originalEnemy.shieldStrength : 0;
-        const updatedShield = opp.shieldStrength !== undefined ? opp.shieldStrength : currentFirestoreShield;
-        const updatedMaxShield = opp.maxShieldStrength !== undefined ? opp.maxShieldStrength : (originalEnemy?.maxShieldStrength || 0);
-        
-        // Log if we're using fallback values (shouldn't happen in normal flow)
-        if (opp.vaultHealth === undefined && opp.health === undefined) {
-          console.warn(`⚠️ IslandRaidBattle: No health value in opponent update for ${opp.name} (${opp.id}), using Firestore value: ${currentFirestoreHealth}`);
-        }
-        
-        // Preserve all other properties from original enemy
-        return {
-          id: opp.id,
-          type: opp.type || originalEnemy?.type || 'zombie',
-          name: opp.name || originalEnemy?.name || 'Unknown Enemy',
-          health: updatedHealth,
-          maxHealth: updatedMaxHealth,
-          shieldStrength: updatedShield,
-          maxShieldStrength: updatedMaxShield,
-          level: opp.level || originalEnemy?.level || 1,
-          damage: originalEnemy?.damage || 30,
-          moves: originalEnemy?.moves || [],
-          position: originalEnemy?.position || { x: 0, y: 0 },
-          spawnTime: originalEnemy?.spawnTime || new Date(),
-          waveNumber: originalEnemy?.waveNumber || waveNumber,
-          image: originalEnemy?.image || opp.image || undefined
-        };
-      });
-
-      // Also preserve any enemies that weren't in the updated opponents array
-      const updatedEnemyIds = new Set(updatedOpponents.map(opp => opp.id));
-      const preservedEnemies = currentBattleRoomEnemies.filter((e: IslandRaidEnemy) => !updatedEnemyIds.has(e.id));
-      const allEnemies = [...enemies, ...preservedEnemies];
-
-      console.log('🏝️ IslandRaidBattle: Saving enemies to Firestore:', allEnemies.map(e => ({ 
-        id: e.id, 
-        name: e.name, 
-        health: e.health, 
-        maxHealth: e.maxHealth, 
-        shieldStrength: e.shieldStrength,
-        maxShieldStrength: e.maxShieldStrength
-      })));
-
-      // Use transaction to prevent race conditions when multiple players update simultaneously
-      // Firestore automatically retries transactions on version conflicts, but we add manual retry
-      // for better error handling and to reduce console noise
-      try {
-        await runTransaction(db, async (transaction) => {
-          const battleRoomDoc = await transaction.get(battleRoomRef);
-          
-          if (!battleRoomDoc.exists()) {
-            throw new Error('Battle room does not exist');
-          }
-          
-          const currentRoomData = battleRoomDoc.data();
-          const currentEnemies = (currentRoomData.enemies || []) as IslandRaidEnemy[];
-          
-          // Merge updates intelligently: use the minimum health/shield (most damage taken)
-          // This ensures all players see the worst-case state (most accurate)
-          const mergedEnemies = allEnemies.map(updatedEnemy => {
-            const currentEnemy = currentEnemies.find(e => e.id === updatedEnemy.id);
-            
-            if (!currentEnemy) {
-              // New enemy, use updated values
-              return updatedEnemy;
-            }
-            
-            // Get numeric values for comparison
-            const updatedHealth = Number(updatedEnemy.health || currentEnemy.health || 100);
-            const currentHealth = Number(currentEnemy.health || updatedEnemy.health || 100);
-            const updatedShield = Number(updatedEnemy.shieldStrength || currentEnemy.shieldStrength || 0);
-            const currentShield = Number(currentEnemy.shieldStrength || updatedEnemy.shieldStrength || 0);
-            
-            // Merge: use minimum health/shield to ensure all players see the most damage
-            // This prevents one player's update from overwriting another player's damage
-            const mergedHealth = Math.min(updatedHealth, currentHealth);
-            const mergedShield = Math.min(updatedShield, currentShield);
-            
-            // Preserve all other properties from updated enemy, but use merged health/shield
-            return {
-              ...updatedEnemy,
-              health: mergedHealth,
-              shieldStrength: mergedShield,
-              // Also preserve max values from current if they exist
-              maxHealth: updatedEnemy.maxHealth || currentEnemy.maxHealth || 100,
-              maxShieldStrength: updatedEnemy.maxShieldStrength || currentEnemy.maxShieldStrength || 0
-            };
-          });
-          
-          // Preserve enemies that weren't in the update
-          const updatedEnemyIds = new Set(allEnemies.map(e => e.id));
-          const preservedEnemies = currentEnemies.filter(e => !updatedEnemyIds.has(e.id));
-          const finalEnemies = [...mergedEnemies, ...preservedEnemies];
-          
-          transaction.update(battleRoomRef, {
-            enemies: finalEnemies,
-            updatedAt: serverTimestamp()
-          });
+        // Log what BattleEngine is sending for debugging
+        console.log(`📥 IslandRaidBattle: BattleEngine update for ${opp.name} (${opp.id}):`, {
+          vaultHealth: opp.vaultHealth,
+          health: opp.health,
+          extractedHealth: health,
+          shieldStrength: opp.shieldStrength,
+          extractedShield: shield
         });
         
-        console.log('✅ IslandRaidBattle: Successfully saved enemies to Firestore (transactional)');
-      } catch (error: any) {
-        // Firestore transactions automatically retry on version conflicts
-        // Suppress version mismatch errors (they're expected with concurrent updates)
-        const isVersionMismatch = error?.message?.includes('version') || 
-                                 error?.message?.includes('does not match') ||
-                                 error?.code === 'failed-precondition';
-        
-        if (isVersionMismatch) {
-          // This is expected with concurrent updates - Firestore will retry automatically
-          // The listener will sync the correct state from Firestore
-          console.log('🔄 IslandRaidBattle: Transaction version conflict (expected with concurrent updates, Firestore will retry)');
-        } else {
-          // Other errors should be logged
-          console.error('❌ IslandRaidBattle: Transaction error:', error);
-          // Fall back to non-transactional update as last resort (less safe but better than failing)
-          try {
-            await updateDoc(battleRoomRef, {
-              enemies: allEnemies,
+        battleEngineUpdates.set(opp.id, {
+          health,
+          shield,
+          maxHealth,
+          maxShield,
+          opp
+        });
+      });
+
+      // Use transaction to prevent race conditions when multiple players update simultaneously
+      // CRITICAL: Implement retry logic for failed-precondition errors
+      // CRITICAL FIX: Do ALL reads INSIDE the transaction to avoid stale data
+      let retryCount = 0;
+      const maxRetries = 3;
+      let transactionSucceeded = false;
+      
+      while (retryCount < maxRetries && !transactionSucceeded) {
+        try {
+          await runTransaction(db, async (transaction) => {
+            // CRITICAL: Read INSIDE transaction to get fresh data
+            const battleRoomDoc = await transaction.get(battleRoomRef);
+            
+            if (!battleRoomDoc.exists()) {
+              throw new Error('Battle room does not exist');
+            }
+            
+            const currentRoomData = battleRoomDoc.data();
+            const currentEnemies = (currentRoomData.enemies || []) as IslandRaidEnemy[];
+            
+            // Build enemy array INSIDE transaction using fresh Firestore data + BattleEngine updates
+            const updatedEnemyIds = new Set(battleEngineUpdates.keys());
+            const mergedEnemies = currentEnemies.map(currentEnemy => {
+              const battleEngineUpdate = battleEngineUpdates.get(currentEnemy.id);
+              
+              if (!battleEngineUpdate) {
+                // Enemy not in update, preserve as-is
+                return currentEnemy;
+              }
+              
+              // Merge BattleEngine values with current Firestore values
+              // Use minimum (most damage) to ensure consistency
+              const battleEngineHealth = battleEngineUpdate.health;
+              const battleEngineShield = battleEngineUpdate.shield;
+              const currentHealth = Number(currentEnemy.health || 100);
+              const currentShield = Number(currentEnemy.shieldStrength || 0);
+              
+              const mergedHealth = Math.min(battleEngineHealth, currentHealth);
+              const mergedShield = Math.min(battleEngineShield, currentShield);
+              
+              // Log if merge resulted in different values (for debugging)
+              if (Math.abs(mergedHealth - battleEngineHealth) > 0.1 || Math.abs(mergedShield - battleEngineShield) > 0.1) {
+                console.log(`🔄 IslandRaidBattle: Merged ${currentEnemy.name} (${currentEnemy.id}):`, {
+                  battleEngineHealth,
+                  firestoreHealth: currentHealth,
+                  finalHealth: mergedHealth,
+                  battleEngineShield,
+                  firestoreShield: currentShield,
+                  finalShield: mergedShield
+                });
+              }
+              
+              // Preserve all properties from current enemy, update health/shield with merged values
+              return {
+                ...currentEnemy,
+                health: mergedHealth,
+                shieldStrength: mergedShield,
+                maxHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                maxShieldStrength: battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0
+              };
+            });
+            
+            // Add any new enemies from BattleEngine that don't exist in Firestore yet
+            battleEngineUpdates.forEach((update, enemyId) => {
+              if (!currentEnemies.find(e => e.id === enemyId)) {
+                // New enemy - add it
+                const opp = update.opp;
+                mergedEnemies.push({
+                  id: opp.id,
+                  type: opp.type || 'zombie',
+                  name: opp.name || 'Unknown Enemy',
+                  health: update.health,
+                  maxHealth: update.maxHealth,
+                  shieldStrength: update.shield,
+                  maxShieldStrength: update.maxShield,
+                  level: opp.level || 1,
+                  damage: 30,
+                  moves: [],
+                  position: { x: 0, y: 0 },
+                  spawnTime: new Date(),
+                  waveNumber: waveNumber,
+                  image: opp.image || undefined
+                });
+              }
+            });
+            
+            console.log('🏝️ IslandRaidBattle: Saving enemies to Firestore (transaction):', mergedEnemies.map(e => ({ 
+              id: e.id, 
+              name: e.name, 
+              health: e.health, 
+              maxHealth: e.maxHealth, 
+              shieldStrength: e.shieldStrength,
+              maxShieldStrength: e.maxShieldStrength
+            })));
+            
+            const newEnemiesRevision = (Number(currentRoomData.enemiesRevision) || 0) + 1;
+            transaction.update(battleRoomRef, {
+              enemies: mergedEnemies,
+              enemiesRevision: newEnemiesRevision,
               updatedAt: serverTimestamp()
             });
-            console.warn('⚠️ IslandRaidBattle: Fallback to non-transactional update');
-          } catch (fallbackError) {
-            console.error('❌ IslandRaidBattle: Fallback update also failed:', fallbackError);
+          });
+          
+          transactionSucceeded = true;
+          console.log(`✅ IslandRaidBattle: Successfully saved enemies to Firestore (transactional, retry ${retryCount})`);
+        } catch (error: any) {
+          retryCount++;
+          const isVersionMismatch = error?.message?.includes('version') || 
+                                   error?.message?.includes('does not match') ||
+                                   error?.code === 'failed-precondition';
+          
+          if (isVersionMismatch && retryCount < maxRetries) {
+            // Firestore transactions automatically retry, but we add manual retry for better control
+            console.log(`🔄 IslandRaidBattle: Transaction version conflict (retry ${retryCount}/${maxRetries}), retrying...`);
+            // Small delay before retry to allow other transactions to complete
+            await new Promise(resolve => setTimeout(resolve, 100 * retryCount));
+            continue;
+          } else if (isVersionMismatch) {
+            // Max retries reached - use non-transactional update as fallback
+            // CRITICAL: Build enemy array from BattleEngine updates for fallback
+            console.warn(`⚠️ IslandRaidBattle: Transaction failed after ${maxRetries} retries, using fallback update`);
+            try {
+              // Read current state for fallback
+              const fallbackDoc = await getDoc(battleRoomRef);
+              if (fallbackDoc.exists()) {
+                const fallbackData = fallbackDoc.data();
+                const fallbackEnemies = (fallbackData.enemies || []) as IslandRaidEnemy[];
+                
+                // Merge BattleEngine updates with current Firestore state
+                const fallbackMerged = fallbackEnemies.map(enemy => {
+                  const update = battleEngineUpdates.get(enemy.id);
+                  if (!update) return enemy;
+                  
+                  return {
+                    ...enemy,
+                    health: Math.min(update.health, Number(enemy.health || 100)),
+                    shieldStrength: Math.min(update.shield, Number(enemy.shieldStrength || 0)),
+                    maxHealth: update.maxHealth || enemy.maxHealth || 100,
+                    maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0
+                  };
+                });
+                
+                const fallbackRevision = (Number(fallbackData.enemiesRevision) || 0) + 1;
+                await updateDoc(battleRoomRef, {
+                  enemies: fallbackMerged,
+                  enemiesRevision: fallbackRevision,
+                  updatedAt: serverTimestamp()
+                });
+                console.warn('⚠️ IslandRaidBattle: Fallback to non-transactional update succeeded');
+                transactionSucceeded = true;
+              }
+            } catch (fallbackError) {
+              console.error('❌ IslandRaidBattle: Fallback update also failed:', fallbackError);
+            }
+          } else {
+            // Other errors should be logged and not retried
+            console.error('❌ IslandRaidBattle: Transaction error (non-retryable):', error);
+            break;
           }
         }
+      }
+      
+      if (!transactionSucceeded) {
+        console.error('❌ IslandRaidBattle: Failed to update enemies after all retries');
       }
       
       // Update local opponents state immediately to reflect the changes
@@ -1905,11 +1949,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       throw error;
     } finally {
       // Clear flag after a delay to allow Firestore write to complete and listener to process
+      // CRITICAL: Increase delay to ensure transaction fully commits before listener processes
       setTimeout(() => {
         isUpdatingEnemiesRef.current = false;
         isUpdatingEnemiesBlockStartRef.current = null;
-        console.log('🏝️ IslandRaidBattle: Cleared isUpdatingEnemiesRef flag');
-      }, 500);
+        console.log('🏝️ IslandRaidBattle: Cleared isUpdatingEnemiesRef flag - Firestore write should be committed');
+      }, 1000); // Increased from 500ms to 1000ms to ensure transaction completes
     }
   };
 

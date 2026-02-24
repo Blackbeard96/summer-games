@@ -39,6 +39,7 @@ import AssessmentGoalsAdmin from '../components/AssessmentGoalsAdmin';
 import TrainingGroundsAdmin from '../components/TrainingGroundsAdmin';
 import SearchBar from '../components/SearchBar';
 import { searchStudents } from '../utils/searchUtils';
+import MissionAdmin from '../components/MissionAdmin';
 
 interface Classroom {
   id: string;
@@ -216,7 +217,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'progression-repair' | 'uxp-approval'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'progression-repair' | 'uxp-approval' | 'missions'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -2971,6 +2972,23 @@ const AdminPanel: React.FC = () => {
           🎯 Training Grounds
         </button>
         <button
+          onClick={() => setActiveTab('missions')}
+          style={{
+            backgroundColor: activeTab === 'missions' ? '#4f46e5' : '#e5e7eb',
+            color: activeTab === 'missions' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          📜 Mission Admin
+        </button>
+        <button
           onClick={() => setActiveTab('progression-repair')}
           style={{
             backgroundColor: activeTab === 'progression-repair' ? '#dc2626' : '#e5e7eb',
@@ -3061,6 +3079,8 @@ const AdminPanel: React.FC = () => {
         <AssessmentGoalsAdmin />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />
+      ) : activeTab === 'missions' ? (
+        <MissionAdmin />
       ) : activeTab === 'progression-repair' ? (
         <ProgressionRepairTool />
       ) : activeTab === 'uxp-approval' ? (

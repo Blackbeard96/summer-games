@@ -96,6 +96,15 @@ export const isUserAdmin = async (userId: string, userEmail?: string | null): Pr
 };
 
 /**
+ * Check if a user can end a live event session (stricter than isUserAdmin).
+ * Only the designated session-ender can see "End Session" in the UI.
+ * All other users (including other admins) see only "Leave Live Event".
+ */
+export const canEndLiveEventSession = (userEmail?: string | null): boolean => {
+  return userEmail === 'edm21179@gmail.com';
+};
+
+/**
  * Helper function to set up common roles for testing
  */
 export const setupTestRoles = async () => {

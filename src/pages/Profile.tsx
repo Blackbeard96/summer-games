@@ -18,7 +18,7 @@ import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import { normalizePlayerData } from '../utils/playerData';
 import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
-import { SkillTreePage } from '../components/skillTree/SkillTreePage';
+import { UniversalLawSkillTreePage } from '../components/skillTree/UniversalLawSkillTreePage';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -1288,13 +1288,11 @@ const Profile = () => {
                 </p>
               </div>
 
-              {/* Skill Tree Component */}
+              {/* Universal Law Skill Tree Component */}
               <div style={{ position: 'relative', zIndex: 1 }}>
                 {currentUser?.uid ? (
-                  <SkillTreePage
+                  <UniversalLawSkillTreePage
                     userId={currentUser.uid}
-                    playerLevel={level}
-                    totalPPSpent={userData?.totalPPSpent || 0}
                   />
                 ) : (
                   <div style={{

@@ -25,6 +25,7 @@ import TimuIslandStoryModal from './TimuIslandStoryModal';
 import SquadUpStoryModal from './SquadUpStoryModal';
 import SonidoTransmissionModal from './SonidoTransmissionModal';
 import ImpositionTestBattle from './ImpositionTestBattle';
+import StoryMissionsSection from './StoryMissionsSection';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
 import { grantChallengeRewards } from '../utils/challengeRewards';
@@ -3804,6 +3805,12 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   const renderChallenges = () => {
     return (
       <div className="space-y-6">
+        {/* Story Missions Section */}
+        <StoryMissionsSection 
+          chapterId={`chapter_${chapter.id}`}
+          chapterTitle={chapter.title}
+        />
+        
         <h2 style={{ 
           fontSize: '2rem', 
           fontWeight: 'bold', 

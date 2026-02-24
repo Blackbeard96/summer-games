@@ -1,6 +1,8 @@
 /**
  * Authoritative move application service for In-Session mode
  * Uses Firestore transactions to ensure single source of truth
+ * 
+ * NOW SUPPORTS UNIFIED RESOLVER: Can accept ResolvedSkillAction for consistent calculations
  */
 
 import { db } from '../firebase';
@@ -9,6 +11,7 @@ import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDe
 import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
 import type { Move } from '../types/battle';
+import type { ResolvedSkillAction } from './battleSkillResolver';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -40,6 +43,7 @@ export interface ApplyMoveParams {
   targetUid: string;
   targetName: string;
   move: Move;
+  // Legacy: Individual values (for backward compatibility)
   damage: number;
   shieldDamage: number;
   healing: number;
@@ -47,6 +51,8 @@ export interface ApplyMoveParams {
   ppStolen: number;
   ppCost: number;
   battleLogMessage: string;
+  // New: Unified resolved action (preferred, will override individual values if provided)
+  resolvedAction?: ResolvedSkillAction;
   traceId?: string; // Optional traceId for debugging
   classId?: string; // Optional classId for debug mirror
   eventId?: string; // Optional eventId for debug mirror
@@ -64,13 +70,14 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     targetUid,
     targetName,
     move,
-    damage,
-    shieldDamage,
-    healing,
-    shieldBoost,
-    ppStolen,
-    ppCost,
-    battleLogMessage,
+    damage: legacyDamage,
+    shieldDamage: legacyShieldDamage,
+    healing: legacyHealing,
+    shieldBoost: legacyShieldBoost,
+    ppStolen: legacyPpStolen,
+    ppCost: legacyPpCost,
+    battleLogMessage: legacyBattleLogMessage,
+    resolvedAction,
     traceId,
     classId,
     eventId
@@ -78,6 +85,17 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
   const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                              process.env.REACT_APP_DEBUG === 'true';
+
+  // Use resolvedAction if provided (unified resolver), otherwise use legacy individual values
+  const damage = resolvedAction ? resolvedAction.damage : legacyDamage;
+  const shieldDamage = resolvedAction ? resolvedAction.shieldDamage : legacyShieldDamage;
+  const healing = resolvedAction ? resolvedAction.healing : legacyHealing;
+  const shieldBoost = resolvedAction ? resolvedAction.shieldBoost : legacyShieldBoost;
+  const ppStolen = resolvedAction ? resolvedAction.ppStolen : legacyPpStolen;
+  const ppCost = resolvedAction ? resolvedAction.ppCost : legacyPpCost;
+  const battleLogMessage = resolvedAction && resolvedAction.logMessages.length > 0 
+    ? resolvedAction.logMessages[0] 
+    : legacyBattleLogMessage;
 
   if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
     console.log('[applyInSessionMove] 🎯 SUBMIT ACTION CALLED:', {
@@ -89,6 +107,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       moveId: move.id,
       moveName: move.name,
       moveType: move.type,
+      usingUnifiedResolver: !!resolvedAction,
       damage,
       shieldDamage,
       healing,
@@ -244,32 +263,26 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       if (actorCopy.powerPoints === undefined) actorCopy.powerPoints = 0;
 
       // Apply damage to target
-      // Handle normal damage: shield absorbs first, then health
-      // Handle special shield damage (like Shield OFF): direct shield damage
+      // Use target's CURRENT state (read in this transaction) so attack impact is accurate
       const currentShield = targetCopy.shield || 0;
-      
-      if (shieldDamage > 0) {
-        // Apply shield damage (for special moves or pre-calculated shield absorption)
+      const currentHp = targetCopy.hp || 0;
+      let appliedShieldDamage = 0;
+      let appliedHealthDamage = 0;
+
+      if (shieldDamage > 0 && damage === 0) {
+        // Special move: direct shield damage only (e.g. Shield OFF) - use passed-in shieldDamage
+        appliedShieldDamage = Math.min(shieldDamage, currentShield);
         targetCopy.shield = Math.max(0, currentShield - shieldDamage);
-        
-        // Then apply remaining damage to health (if any)
-        const remainingDamage = Math.max(0, damage - shieldDamage);
-        if (remainingDamage > 0) {
-          targetCopy.hp = Math.max(0, (targetCopy.hp || 0) - remainingDamage);
-        }
       } else if (damage > 0) {
-        // Normal damage flow: shield absorbs first, then health
+        // Normal damage: shield absorbs first, then health - computed from SERVER state for accurate impact
         const shieldAbsorbed = Math.min(currentShield, damage);
         const remainingDamage = Math.max(0, damage - shieldAbsorbed);
-        
-        // Apply shield damage first
-        if (shieldAbsorbed > 0) {
-          targetCopy.shield = Math.max(0, currentShield - shieldAbsorbed);
-        }
-        
-        // Apply remaining damage to health
+        appliedShieldDamage = shieldAbsorbed;
+        appliedHealthDamage = remainingDamage;
+
+        targetCopy.shield = Math.max(0, currentShield - shieldAbsorbed);
         if (remainingDamage > 0) {
-          targetCopy.hp = Math.max(0, (targetCopy.hp || 0) - remainingDamage);
+          targetCopy.hp = Math.max(0, currentHp - remainingDamage);
         }
       }
 
@@ -310,20 +323,45 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }
 
       // Update players array
-      const updatedPlayers = [...players];
-      updatedPlayers[actorIndex] = actorCopy;
-      updatedPlayers[targetIndex] = targetCopy;
+      // CRITICAL: Create a new array to ensure Firestore detects the change
+      const updatedPlayers = players.map((p, idx) => {
+        if (idx === actorIndex) return actorCopy;
+        if (idx === targetIndex) return targetCopy;
+        return p;
+      });
+      
+      // Verify the updates were applied correctly
+      if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
+        console.log('🔍 [applyInSessionMove] Players array update verification:', {
+          actorIndex,
+          targetIndex,
+          actorBefore: { hp: actor.hp, shield: actor.shield, pp: actor.powerPoints },
+          actorAfter: { hp: actorCopy.hp, shield: actorCopy.shield, pp: actorCopy.powerPoints },
+          targetBefore: { hp: target.hp, shield: target.shield, pp: target.powerPoints },
+          targetAfter: { hp: targetCopy.hp, shield: targetCopy.shield, pp: targetCopy.powerPoints },
+          updatedPlayersLength: updatedPlayers.length,
+          originalPlayersLength: players.length
+        });
+      }
 
-      // Add battle log entry (validate it's not undefined)
+      // Add battle log entry - use actual applied damage so log matches impact
       let finalBattleLogMessage = battleLogMessage;
-      if (!finalBattleLogMessage || typeof finalBattleLogMessage !== 'string') {
-        debugError('inSessionMove', `Invalid battleLogMessage: ${battleLogMessage}`, { 
+      if (appliedShieldDamage > 0 || appliedHealthDamage > 0) {
+        const totalApplied = appliedShieldDamage + appliedHealthDamage;
+        if (appliedShieldDamage > 0 && appliedHealthDamage > 0) {
+          finalBattleLogMessage = `⚔️ ${actorName} attacked ${targetName} with ${move.name} for ${totalApplied} damage (${appliedShieldDamage} to shields, ${appliedHealthDamage} to vault health)!`;
+        } else if (appliedShieldDamage > 0) {
+          finalBattleLogMessage = `⚔️ ${actorName} attacked ${targetName} with ${move.name} for ${appliedShieldDamage} damage to shields!`;
+        } else {
+          finalBattleLogMessage = `⚔️ ${actorName} attacked ${targetName} with ${move.name} for ${appliedHealthDamage} damage to vault health!`;
+        }
+      } else if (!finalBattleLogMessage || typeof finalBattleLogMessage !== 'string') {
+        debugError('inSessionMove', `Invalid battleLogMessage: ${battleLogMessage}`, {
           battleLogMessage,
           battleLogMessageType: typeof battleLogMessage,
           moveId: move.id,
           moveName: move.name
         });
-        // Create a fallback message instead of throwing
         finalBattleLogMessage = `⚔️ ${actorName} used ${move.name} on ${targetName}!`;
         if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
           console.warn('[applyInSessionMove] ⚠️ Using fallback battle log message');
@@ -347,15 +385,40 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         finalBattleLog = [...updatedBattleLog, eliminationMessage];
       }
 
-      // ALWAYS log what we're about to write (critical for debugging) - concise version
-      console.log('💾 [applyInSessionMove] ⚡ WRITING ⚡', targetName, '| HP:', target.hp, '→', targetCopy.hp, '| Shield:', target.shield, '→', targetCopy.shield, '| Dmg:', damage);
+      // ALWAYS log what we're about to write (critical for debugging) - detailed version
+      console.log('💾 [applyInSessionMove] ⚡ WRITING TO FIRESTORE ⚡', {
+        targetName,
+        targetHpBefore: target.hp,
+        targetHpAfter: targetCopy.hp,
+        targetShieldBefore: target.shield,
+        targetShieldAfter: targetCopy.shield,
+        actorPpBefore: actor.powerPoints,
+        actorPpAfter: actorCopy.powerPoints,
+        damage,
+        shieldDamage,
+        healing,
+        shieldBoost,
+        playersArrayLength: updatedPlayers.length,
+        battleLogLength: finalBattleLog.length
+      });
       
-      // Update session document
+      // CRITICAL: Update session document with players array and battle log
+      // This is the authoritative update that all clients will receive via subscription
       transaction.update(sessionRef, {
         players: updatedPlayers,
         battleLog: finalBattleLog,
         updatedAt: serverTimestamp()
       });
+      
+      // Log that transaction update was queued (will commit when transaction completes)
+      if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
+        console.log('💾 [applyInSessionMove] Transaction update queued:', {
+          targetIndex,
+          targetHpDelta: targetCopy.hp - target.hp,
+          targetShieldDelta: targetCopy.shield - target.shield,
+          actorPpDelta: actorCopy.powerPoints - actor.powerPoints
+        });
+      }
       
       // Stage E: State applied - Update debug mirror (after transaction completes)
       // Note: We can't await async operations inside transaction, so we'll do this after

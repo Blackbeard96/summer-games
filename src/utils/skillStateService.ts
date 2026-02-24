@@ -4,7 +4,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { PlayerSkillState } from '../types/skillSystem';
 import { getStarterNodes } from '../data/skillTreeDefinition';
 import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
@@ -120,5 +120,62 @@ export function getUnlockedSkillIds(
   });
   
   return Array.from(skillIds);
+}
+
+// ============================================================================
+// Universal Law Tree Functions
+// ============================================================================
+
+/**
+ * Get learned node IDs for Universal Law trees
+ * Uses learnedNodeIds field if present, otherwise returns empty array
+ */
+export async function getLearnedNodeIds(userId: string): Promise<string[]> {
+  try {
+    const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
+    const skillStateDoc = await getDoc(skillStateRef);
+    
+    if (skillStateDoc.exists()) {
+      const data = skillStateDoc.data();
+      // Support both learnedNodeIds (new) and unlockedNodeIds (legacy)
+      return data.learnedNodeIds || [];
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('Error getting learned node IDs:', error);
+    return [];
+  }
+}
+
+/**
+ * Learn a Universal Law node
+ * Adds nodeId to learnedNodeIds array in Firestore
+ */
+export async function learnUniversalLawNode(
+  userId: string,
+  nodeId: string,
+  currentLearnedNodeIds: string[]
+): Promise<boolean> {
+  try {
+    // Check if already learned
+    if (currentLearnedNodeIds.includes(nodeId)) {
+      return true; // Already learned
+    }
+    
+    const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
+    
+    // Use arrayUnion to add the nodeId atomically
+    await updateDoc(skillStateRef, {
+      learnedNodeIds: arrayUnion(nodeId),
+      lastUpdated: serverTimestamp(),
+      version: SKILL_STATE_VERSION
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Error learning Universal Law node:', error);
+    return false;
+  }
 }
 

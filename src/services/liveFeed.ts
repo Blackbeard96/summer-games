@@ -194,6 +194,15 @@ export async function createLiveFeedMilestone(
   // Generate text based on kind
   let text = '';
   switch (kind) {
+    case 'mission_accept':
+      text = `${userDisplayName} accepted mission: ${meta.missionTitle || 'Unknown Mission'}`;
+      break;
+    case 'mission_complete':
+      text = `${userDisplayName} completed mission: ${meta.missionTitle || 'Unknown Mission'}`;
+      break;
+    case 'chapter_complete':
+      text = `${userDisplayName} completed ${meta.chapterId || 'a chapter'}!`;
+      break;
     case 'challenge_complete':
       text = `Completed Daily Challenge: ${meta.challengeTitle || 'Challenge'}`;
       break;

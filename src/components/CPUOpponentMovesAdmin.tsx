@@ -46,13 +46,14 @@ interface CPUOpponentMove {
   duration?: number; // How many turns the defensive effect lasts (for damage reduction)
 }
 
-interface CPUOpponent {
+export interface CPUOpponent {
   id: string;
   name: string;
   moves: CPUOpponentMove[];
 }
 
-const DEFAULT_OPPONENTS: CPUOpponent[] = [
+/** Exported for Mission Builder wave opponent selection. */
+export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-easy-1',
     name: 'Training Dummy',

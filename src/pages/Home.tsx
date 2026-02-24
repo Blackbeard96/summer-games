@@ -7,12 +7,10 @@ import { db } from '../firebase';
 import { getLevelFromXP } from '../utils/leveling';
 import BattlePass from '../components/BattlePass';
 import Season0IntroModal from '../components/Season0IntroModal';
-import DailyChallengesCompact from '../components/DailyChallengesCompact';
-import LiveFeedCard from '../components/LiveFeedCard';
-import LiveFeedPrivacySettings from '../components/LiveFeedPrivacySettings';
-import BattlePassCompactCard from '../components/BattlePassCompactCard';
-import QuickLinksRow from '../components/QuickLinksRow';
 import { useJourneyStatus } from '../hooks/useJourneyStatus';
+import NPCMissionModal from '../components/NPCMissionModal';
+import NpcHotspots from '../components/NpcHotspots';
+import PowerCardOverlay from '../components/PowerCardOverlay';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -52,6 +50,7 @@ const Home: React.FC = () => {
   const [showVideoReplay, setShowVideoReplay] = useState(false);
   const [battlePassXP, setBattlePassXP] = useState(0);
   const [battlePassTier, setBattlePassTier] = useState(0);
+  const [selectedNPC, setSelectedNPC] = useState<'sonido' | 'zeke' | 'luz' | 'kon' | null>(null);
   
   // Use shared journey status hook
   const journeyStatus = useJourneyStatus(currentUser?.uid || null);
@@ -116,179 +115,160 @@ const Home: React.FC = () => {
   // No need for separate fetchJourneyProgress useEffect
 
 
+  const handleBattlePassRefresh = async () => {
+    if (currentUser) {
+      try {
+        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const playerXP = userData.xp || 0;
+          setBattlePassXP(playerXP);
+          setBattlePassTier(calculateTier(playerXP));
+        }
+      } catch (error) {
+        console.error('Error refreshing Battle Pass progress:', error);
+      }
+    }
+  };
+
   return (
     <>
-      <style>{`
-        /* Desktop: 3 columns (25% / 50% / 25%) */
-        @media (min-width: 1024px) {
-          .home-main-grid {
-            grid-template-columns: 1fr 2fr 1fr !important;
-          }
-        }
-        
-        /* Tablet: Live Feed full width on top, Daily Challenges + Battle Pass side-by-side below */
-        @media (min-width: 768px) and (max-width: 1023px) {
-          .home-main-grid {
-            grid-template-columns: 1fr 1fr !important;
-          }
-          .home-live-feed {
-            grid-column: 1 / -1 !important;
-            margin-bottom: 1.5rem;
-          }
-        }
-        
-        /* Mobile: Stacked vertically */
-        @media (max-width: 767px) {
-          .home-main-grid {
-            grid-template-columns: 1fr !important;
-          }
-          .home-daily-challenges,
-          .home-live-feed,
-          .home-battle-pass {
-            margin-bottom: 1.5rem;
-          }
-        }
-      `}</style>
       <div style={{ 
-        minHeight: '100vh',
+        height: '100vh',
         width: '100%',
-        backgroundImage: 'url(/images/MST%20BKG.png)',
+        backgroundImage: 'url(/images/Home_BKG_V2.png)',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundAttachment: 'fixed',
         backgroundRepeat: 'no-repeat',
         position: 'relative',
-        paddingTop: '2rem',
-        paddingBottom: '2rem'
+        overflow: 'hidden'
       }}>
-      <div style={{ 
-        maxWidth: '1200px', 
-        margin: '0 auto', 
-        padding: '0 2rem',
-        position: 'relative',
-        zIndex: 1
-      }}>
-      {/* Header Section - Matching Battle page style */}
-      <div style={{ 
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        color: 'white',
-        padding: '2rem',
-        borderRadius: '1rem',
-        marginBottom: '1.5rem',
-        textAlign: 'center',
-        position: 'relative'
-      }}>
-        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🏠 MST Home</h1>
-        <p style={{ fontSize: '1.1rem', opacity: 0.9, margin: 0 }}>
-          "Master Space & Time" — Your journey begins here
-        </p>
-        {/* Video Replay Button */}
-        <button
-          onClick={() => setShowVideoReplay(true)}
-          style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            background: 'rgba(255, 255, 255, 0.2)',
-            border: '1px solid rgba(255, 255, 255, 0.3)',
-            borderRadius: '0.5rem',
-            padding: '0.5rem 1rem',
+        {/* Background Container - for NPC hotspots positioning */}
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 1
+        }}>
+          {/* NPC Hotspots - positioned absolutely over background */}
+          <NpcHotspots onNpcClick={setSelectedNPC} />
+        </div>
+
+        {/* Fixed Header - Top Center */}
+        <div style={{
+          position: 'fixed',
+          top: '1rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10,
+          width: 'clamp(300px, 90vw, 600px)'
+        }}>
+          <div style={{ 
+            background: 'rgba(31, 41, 55, 0.85)',
+            backdropFilter: 'blur(10px)',
             color: 'white',
-            fontSize: '0.875rem',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            transition: 'all 0.2s'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-          }}
-        >
-          <span>▶️</span>
-          <span>Watch Season 0 Intro</span>
-        </button>
-      </div>
-
-      {/* Quick Links Row */}
-      <QuickLinksRow />
-
-      {/* Main 3-Column Grid */}
-      <div 
-        className="home-main-grid"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: '1.5rem',
-          marginBottom: '2rem'
-        }}
-      >
-        {/* Left Column: Daily Challenges */}
-        <div className="home-daily-challenges">
-          <DailyChallengesCompact />
+            padding: '0.75rem 1rem',
+            borderRadius: '0.75rem',
+            textAlign: 'center',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)'
+          }}>
+            <h1 style={{ fontSize: '1.25rem', margin: 0, lineHeight: '1.2' }}>🏠 MST Home</h1>
+            <p style={{ fontSize: '0.75rem', opacity: 0.9, margin: '0.25rem 0 0 0' }}>
+              "Master Space & Time"
+            </p>
+            {/* Video Replay Button */}
+            <button
+              onClick={() => setShowVideoReplay(true)}
+              style={{
+                position: 'absolute',
+                top: '0.5rem',
+                right: '0.5rem',
+                background: 'rgba(255, 255, 255, 0.15)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '0.375rem',
+                padding: '0.25rem 0.5rem',
+                color: 'white',
+                fontSize: '0.625rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
+              }}
+            >
+              <span>▶️</span>
+            </button>
+          </div>
         </div>
 
-        {/* Center Column: Live Feed + Privacy Settings */}
-        <div className="home-live-feed" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <LiveFeedCard />
-          <LiveFeedPrivacySettings />
-        </div>
 
-        {/* Right Column: Battle Pass */}
-        <div className="home-battle-pass">
-          <BattlePassCompactCard
-            currentTier={battlePassTier}
-            maxTier={season0Tiers.length}
-            totalXP={battlePassXP}
-            onViewRewards={() => setShowBattlePass(true)}
-          />
-        </div>
-      </div>
-
-      {/* Battle Pass Modal */}
-      {showBattlePass && (
-        <BattlePass
-          isOpen={showBattlePass}
-          onClose={async () => {
-            setShowBattlePass(false);
-            // Refresh Battle Pass progress after closing modal - use player's actual XP
-            if (currentUser) {
-              try {
-                const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
-                if (userDoc.exists()) {
-                  const userData = userDoc.data();
-                  const playerXP = userData.xp || 0;
-                  setBattlePassXP(playerXP);
-                  setBattlePassTier(calculateTier(playerXP));
-                }
-              } catch (error) {
-                console.error('Error refreshing Battle Pass progress:', error);
-              }
-            }
-          }}
-          season={0}
+        {/* Power Card Overlay - fixed at bottom */}
+        <PowerCardOverlay
+          battlePassTier={battlePassTier}
+          maxTier={season0Tiers.length}
+          battlePassXP={battlePassXP}
+          onBattlePassRefresh={handleBattlePassRefresh}
         />
-      )}
 
-      {/* Season 0 Introduction Modal (auto-play on first login) */}
-      <Season0IntroModal
-        isOpen={showSeason0Intro}
-        onClose={() => setShowSeason0Intro(false)}
-        autoPlayVideo={true}
-      />
-      
-      {/* Season 0 Video Replay Modal */}
-      <Season0IntroModal
-        isOpen={showVideoReplay}
-        onClose={() => setShowVideoReplay(false)}
-        autoPlayVideo={false}
-      />
+        {/* NPC Mission Modals */}
+        {selectedNPC === 'sonido' && (
+          <NPCMissionModal
+            isOpen={true}
+            onClose={() => setSelectedNPC(null)}
+            npc="sonido"
+            npcName="Sonido"
+          />
+        )}
+        {selectedNPC === 'zeke' && (
+          <NPCMissionModal
+            isOpen={true}
+            onClose={() => setSelectedNPC(null)}
+            npc="zeke"
+            npcName="Zeke"
+          />
+        )}
+        {selectedNPC === 'luz' && (
+          <NPCMissionModal
+            isOpen={true}
+            onClose={() => setSelectedNPC(null)}
+            npc="luz"
+            npcName="Luz"
+          />
+        )}
+        {selectedNPC === 'kon' && (
+          <NPCMissionModal
+            isOpen={true}
+            onClose={() => setSelectedNPC(null)}
+            npc="kon"
+            npcName="Kon"
+          />
+        )}
+
+        {/* Season 0 Introduction Modal (auto-play on first login) */}
+        <Season0IntroModal
+          isOpen={showSeason0Intro}
+          onClose={() => setShowSeason0Intro(false)}
+          autoPlayVideo={true}
+        />
+        
+        {/* Season 0 Video Replay Modal */}
+        <Season0IntroModal
+          isOpen={showVideoReplay}
+          onClose={() => setShowVideoReplay(false)}
+          autoPlayVideo={false}
+        />
       </div>
-    </div>
     </>
   );
 };

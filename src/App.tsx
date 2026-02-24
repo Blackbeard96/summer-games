@@ -162,6 +162,7 @@ const InSessionCreate = withRouteSplitting(() => import('./components/InSessionC
 const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
 const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
+const MissionRunner = withRouteSplitting(() => import('./pages/MissionRunner'));
 const QuizPlayer = withRouteSplitting(() => import('./pages/QuizPlayer'));
 const QuizResults = withRouteSplitting(() => import('./pages/QuizResults'));
 
@@ -629,6 +630,11 @@ const AppContent = () => {
             <Route path="/training-grounds/results/:attemptId" element={
               <ProtectedRoute user={true}>
                 <QuizResults />
+              </ProtectedRoute>
+            } />
+            <Route path="/mission/:missionId/play" element={
+              <ProtectedRoute user={true}>
+                <MissionRunner />
               </ProtectedRoute>
             } />
             {/* Catch-all route for 404 */}

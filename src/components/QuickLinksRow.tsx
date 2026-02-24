@@ -21,15 +21,15 @@ const QuickLinksRow: React.FC = () => {
   return (
     <div style={{
       display: 'flex',
-      gap: '0.75rem',
-      padding: '0.75rem 1rem',
-      background: 'rgba(31, 41, 55, 0.8)',
+      gap: '0.5rem',
+      padding: '0.5rem 0.75rem',
+      background: 'rgba(31, 41, 55, 0.85)',
       backdropFilter: 'blur(10px)',
       borderRadius: '0.5rem',
-      marginBottom: '1.5rem',
       border: '1px solid rgba(255, 255, 255, 0.1)',
       flexWrap: 'wrap',
-      justifyContent: 'center'
+      justifyContent: 'center',
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)'
     }}>
       {quickLinks.map((link) => (
         <button
@@ -38,13 +38,13 @@ const QuickLinksRow: React.FC = () => {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 1rem',
+            gap: '0.375rem',
+            padding: '0.375rem 0.75rem',
             background: 'rgba(255, 255, 255, 0.1)',
             border: '1px solid rgba(255, 255, 255, 0.2)',
             borderRadius: '0.375rem',
             color: 'white',
-            fontSize: '0.875rem',
+            fontSize: '0.75rem',
             fontWeight: '500',
             cursor: 'pointer',
             transition: 'all 0.2s',
