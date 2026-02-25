@@ -11,9 +11,20 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, orderBy, serverTimestamp, writeBatch, getDoc as getDocFn } from 'firebase/firestore';
 import { db } from '../firebase';
-import { MissionTemplate, MissionCategory, DeliveryChannel, PlayerJourneyLink, MissionSequenceStep } from '../types/missions';
+import { MissionTemplate, MissionCategory, DeliveryChannel, PlayerJourneyLink, MissionSequenceStep, ProfileMetadata, ProfileJourneyStageId } from '../types/missions';
 import { CHAPTERS, ChapterChallenge } from '../types/chapters';
 import MissionSequenceBuilder from './MissionSequenceBuilder';
+
+const PROFILE_JOURNEY_STAGE_OPTIONS: Array<{ value: ProfileJourneyStageId; label: string }> = [
+  { value: 'ordinary-world', label: '1. Ordinary World' },
+  { value: 'call-to-adventure', label: '2. Call to Adventure' },
+  { value: 'meeting-mentor', label: '3. Meeting the Mentor' },
+  { value: 'tests-allies-enemies', label: '4. Tests, Allies, Enemies' },
+  { value: 'approaching-cave', label: '5. Approaching the Cave' },
+  { value: 'ordeal', label: '6. The Ordeal' },
+  { value: 'road-back', label: '7. The Road Back' },
+  { value: 'resurrection', label: '8. Resurrection' },
+];
 
 const MissionAdmin: React.FC = () => {
   const [missions, setMissions] = useState<MissionTemplate[]>([]);
@@ -44,6 +55,7 @@ const MissionAdmin: React.FC = () => {
           missionCategory: data.missionCategory || 'SIDE',
           deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
           story: data.story || undefined,
+          profile: data.profile || undefined,
           playerJourneyLink: data.playerJourneyLink || undefined,
           gating: data.gating || undefined,
           rewards: data.rewards || {},
@@ -185,8 +197,8 @@ const MissionAdmin: React.FC = () => {
             onClick={() => setSelectedMission(mission)}
             style={{
               padding: '1rem',
-              background: mission.missionCategory === 'STORY' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-              border: `2px solid ${mission.missionCategory === 'STORY' ? '#fbbf24' : '#3b82f6'}`,
+              background: mission.missionCategory === 'STORY' ? 'rgba(251, 191, 36, 0.1)' : mission.missionCategory === 'PROFILE' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
+              border: `2px solid ${mission.missionCategory === 'STORY' ? '#fbbf24' : mission.missionCategory === 'PROFILE' ? '#10b981' : '#3b82f6'}`,
               borderRadius: '0.5rem',
               cursor: 'pointer',
               transition: 'transform 0.2s'
@@ -205,7 +217,7 @@ const MissionAdmin: React.FC = () => {
                     {mission.title}
                   </h3>
                   <span style={{
-                    backgroundColor: mission.missionCategory === 'STORY' ? '#fbbf24' : '#3b82f6',
+                    backgroundColor: mission.missionCategory === 'STORY' ? '#fbbf24' : mission.missionCategory === 'PROFILE' ? '#10b981' : '#3b82f6',
                     color: mission.missionCategory === 'STORY' ? '#1f2937' : 'white',
                     padding: '0.25rem 0.5rem',
                     borderRadius: '0.25rem',
@@ -221,6 +233,11 @@ const MissionAdmin: React.FC = () => {
                 {mission.story && (
                   <p style={{ margin: '0.5rem 0 0 0', color: '#9ca3af', fontSize: '0.8rem' }}>
                     Chapter: {mission.story.chapterId} | Order: {mission.story.order} | Required: {mission.story.required ? 'Yes' : 'No'}
+                  </p>
+                )}
+                {mission.profile && (
+                  <p style={{ margin: '0.5rem 0 0 0', color: '#9ca3af', fontSize: '0.8rem' }}>
+                    Journey: {mission.profile.journeyStageId} {mission.profile.order != null ? `| Order: ${mission.profile.order}` : ''}
                   </p>
                 )}
               </div>
@@ -269,6 +286,8 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
     storyOrder: mission.story?.order || 1,
     storyRequired: mission.story?.required !== false,
     storyPrerequisites: (mission.story?.prerequisites || []).join(', '),
+    profileJourneyStageId: (mission.profile?.journeyStageId || 'ordinary-world') as ProfileJourneyStageId,
+    profileOrder: mission.profile?.order ?? 1,
     gatingMinLevel: mission.gating?.minPlayerLevel ? String(mission.gating.minPlayerLevel) : '',
     gatingChapterId: mission.gating?.chapterId || ''
   });
@@ -301,6 +320,14 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
           .split(',')
           .map(s => s.trim())
           .filter(s => s.length > 0)
+      };
+    }
+
+    // Add profile metadata if PROFILE mission
+    if (formData.missionCategory === 'PROFILE') {
+      missionData.profile = {
+        journeyStageId: formData.profileJourneyStageId,
+        order: formData.profileOrder
       };
     }
 
@@ -395,6 +422,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
             >
               <option value="SIDE">SIDE</option>
               <option value="STORY">STORY</option>
+              <option value="PROFILE">PROFILE</option>
             </select>
           </div>
 
@@ -449,6 +477,43 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
                   placeholder="mission_id_1, mission_id_2"
                   style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
                 />
+              </div>
+            </>
+          )}
+
+          {formData.missionCategory === 'PROFILE' && (
+            <>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Journey Stage (Player&apos;s Journey on Power Card)
+                </label>
+                <select
+                  value={formData.profileJourneyStageId}
+                  onChange={(e) => setFormData({ ...formData, profileJourneyStageId: e.target.value as ProfileJourneyStageId })}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                >
+                  {PROFILE_JOURNEY_STAGE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                  Completing this mission will add information to this stage in the player&apos;s Journey on their Profile.
+                </p>
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Order (within stage)
+                </label>
+                <input
+                  type="number"
+                  value={formData.profileOrder}
+                  onChange={(e) => setFormData({ ...formData, profileOrder: parseInt(e.target.value) || 1 })}
+                  min={1}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                />
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                  When multiple Profile missions target the same stage, this order determines display sequence.
+                </p>
               </div>
             </>
           )}
@@ -567,6 +632,8 @@ const MissionCreateModal: React.FC<{
     storyOrder: 1,
     storyRequired: true,
     storyPrerequisites: '',
+    profileJourneyStageId: 'ordinary-world' as ProfileJourneyStageId,
+    profileOrder: 1,
     linkedJourneyStep: '' // Format: "chapterId::challengeId"
   });
   
@@ -660,6 +727,13 @@ const MissionCreateModal: React.FC<{
           .split(',')
           .map(s => s.trim())
           .filter(s => s.length > 0)
+      };
+    }
+
+    if (formData.missionCategory === 'PROFILE') {
+      missionData.profile = {
+        journeyStageId: formData.profileJourneyStageId,
+        order: formData.profileOrder
       };
     }
     
@@ -783,6 +857,7 @@ const MissionCreateModal: React.FC<{
             >
               <option value="SIDE">SIDE</option>
               <option value="STORY">STORY</option>
+              <option value="PROFILE">PROFILE</option>
             </select>
           </div>
 
@@ -837,6 +912,43 @@ const MissionCreateModal: React.FC<{
                   placeholder="mission_id_1, mission_id_2"
                   style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
                 />
+              </div>
+            </>
+          )}
+
+          {formData.missionCategory === 'PROFILE' && (
+            <>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Journey Stage (Player&apos;s Journey on Power Card)
+                </label>
+                <select
+                  value={formData.profileJourneyStageId}
+                  onChange={(e) => setFormData({ ...formData, profileJourneyStageId: e.target.value as ProfileJourneyStageId })}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                >
+                  {PROFILE_JOURNEY_STAGE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                  Completing this mission will add information to this stage in the player&apos;s Journey on their Profile.
+                </p>
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Order (within stage)
+                </label>
+                <input
+                  type="number"
+                  value={formData.profileOrder}
+                  onChange={(e) => setFormData({ ...formData, profileOrder: parseInt(e.target.value) || 1 })}
+                  min={1}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                />
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                  When multiple Profile missions target the same stage, this order determines display sequence.
+                </p>
               </div>
             </>
           )}

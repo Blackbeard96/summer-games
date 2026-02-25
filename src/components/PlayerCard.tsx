@@ -25,6 +25,8 @@ interface PlayerCardProps {
   userId?: string;
   onManifestReselect?: () => void;
   ordinaryWorld?: string;
+  /** Saved text per journey stage (from Profile missions); keys e.g. 'ordinary-world', 'call-to-adventure' */
+  journeyStageContent?: Record<string, string>;
   squadAbbreviation?: string | null;
   hasSkillTreeAccess?: boolean;
   candyType?: 'on-off' | 'up-down' | 'config'; // RR Candy type the player has
@@ -89,6 +91,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   userId,
   onManifestReselect,
   ordinaryWorld,
+  journeyStageContent = {},
   squadAbbreviation,
   hasSkillTreeAccess = false,
   candyType = 'on-off', // Default to on-off for now
@@ -219,61 +222,63 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     setSelectedJourneyStage(null);
   }, []);
 
-  // Journey stage data - this would typically come from user's profile data
+  // Journey stage data - merge saved content from Profile missions (journeyStageContent) with defaults
+  const getStageText = (stageId: string, fallback: string) =>
+    (journeyStageContent[stageId] || (stageId === 'ordinary-world' ? ordinaryWorld : null) || '').trim() || fallback;
   const journeyStages = {
     'ordinary-world': {
       title: 'Ordinary World',
       icon: '🌍',
-      description: ordinaryWorld || 'You haven\'t written your Ordinary World reflection yet. Complete the Chapter 1 challenge to add your personal story!',
-      content: 'This is your personal reflection for the Ordinary World stage of your hero\'s journey. Here you describe your life before the call to adventure - your familiar routines, your world as you knew it, and the place where your transformation began.'
+      description: getStageText('ordinary-world', 'You haven\'t written your Ordinary World reflection yet. Complete the Chapter 1 challenge to add your personal story!'),
+      content: getStageText('ordinary-world', 'This is your personal reflection for the Ordinary World stage of your hero\'s journey. Here you describe your life before the call to adventure - your familiar routines, your world as you knew it, and the place where your transformation began.')
     },
     'call-to-adventure': {
       title: 'Call to Adventure',
       icon: '📢',
-      description: 'You haven\'t written your Call to Adventure reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Call to Adventure stage. Here you describe the moment when everything changed - the call that pulled you from your ordinary world into something extraordinary.'
+      description: getStageText('call-to-adventure', 'You haven\'t written your Call to Adventure reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('call-to-adventure', 'This is your personal reflection for the Call to Adventure stage. Here you describe the moment when everything changed - the call that pulled you from your ordinary world into something extraordinary.')
     },
     'meeting-mentor': {
       title: 'Meeting the Mentor',
       icon: '🧙',
-      description: 'You haven\'t written your Meeting the Mentor reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Meeting the Mentor stage. Here you describe the wise guide who helped you understand your new world and prepared you for the challenges ahead.'
+      description: getStageText('meeting-mentor', 'You haven\'t written your Meeting the Mentor reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('meeting-mentor', 'This is your personal reflection for the Meeting the Mentor stage. Here you describe the wise guide who helped you understand your new world and prepared you for the challenges ahead.')
     },
     'tests-allies-enemies': {
       title: 'Tests, Allies, Enemies',
       icon: '⚔️',
-      description: 'You haven\'t written your Tests, Allies, Enemies reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Tests, Allies, Enemies stage. Here you describe the trials that tested your resolve, the allies who joined your cause, and the enemies who stood in your way.'
+      description: getStageText('tests-allies-enemies', 'You haven\'t written your Tests, Allies, Enemies reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('tests-allies-enemies', 'This is your personal reflection for the Tests, Allies, Enemies stage. Here you describe the trials that tested your resolve, the allies who joined your cause, and the enemies who stood in your way.')
     },
     'approaching-cave': {
       title: 'Approaching the Cave',
       icon: '🏰',
-      description: 'You haven\'t written your Approaching the Cave reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Approaching the Cave stage. Here you describe the approach to your greatest challenge - the moment when you stepped into the unknown.'
+      description: getStageText('approaching-cave', 'You haven\'t written your Approaching the Cave reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('approaching-cave', 'This is your personal reflection for the Approaching the Cave stage. Here you describe the approach to your greatest challenge - the moment when you stepped into the unknown.')
     },
     'ordeal': {
       title: 'The Ordeal',
       icon: '🔥',
-      description: 'You haven\'t written your Ordeal reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Ordeal stage. Here you describe your greatest trial - the moment when you faced your deepest fears and emerged transformed.'
+      description: getStageText('ordeal', 'You haven\'t written your Ordeal reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('ordeal', 'This is your personal reflection for the Ordeal stage. Here you describe your greatest trial - the moment when you faced your deepest fears and emerged transformed.')
     },
     'road-back': {
       title: 'The Road Back',
       icon: '🏃',
-      description: 'You haven\'t written your Road Back reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Road Back stage. Here you describe the journey home - carrying your new wisdom and power back to your ordinary world.'
+      description: getStageText('road-back', 'You haven\'t written your Road Back reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('road-back', 'This is your personal reflection for the Road Back stage. Here you describe the journey home - carrying your new wisdom and power back to your ordinary world.')
     },
     'resurrection': {
       title: 'Resurrection',
       icon: '⚡',
-      description: 'You haven\'t written your Resurrection reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Resurrection stage. Here you describe your final transformation - the moment when you became truly who you were meant to be.'
+      description: getStageText('resurrection', 'You haven\'t written your Resurrection reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('resurrection', 'This is your personal reflection for the Resurrection stage. Here you describe your final transformation - the moment when you became truly who you were meant to be.')
     },
     'return-elixir': {
       title: 'Return with Elixir',
       icon: '🏆',
-      description: 'You haven\'t written your Return with Elixir reflection yet. Complete more challenges to unlock this stage!',
-      content: 'This is your personal reflection for the Return with Elixir stage. Here you describe how you brought your transformation back to help others - sharing the gift of your journey.'
+      description: getStageText('return-elixir', 'You haven\'t written your Return with Elixir reflection yet. Complete more challenges to unlock this stage!'),
+      content: getStageText('return-elixir', 'This is your personal reflection for the Return with Elixir stage. Here you describe how you brought your transformation back to help others - sharing the gift of your journey.')
     }
   };
 
@@ -517,20 +522,6 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
             {/* Divider */}
             <div style={{ width: '80%', height: 2, background: '#e5e7eb', margin: '12px auto' }} />
 
-            {/* Moves Section */}
-            {moves && moves.length > 0 && (
-              <div style={{ margin: '12px 0', textAlign: 'center' }}>
-                <div style={{ fontWeight: 'bold', color: '#4f46e5', marginBottom: 4 }}>Moves</div>
-                {moves.map((move, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 18 }}>{move.icon}</span>
-                    <span style={{ fontWeight: 'bold' }}>{move.name}</span>
-                    <span style={{ color: '#6b7280', fontSize: 14 }}>{move.description}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            
             {/* Badges Button */}
             <div style={{ margin: '12px 0', textAlign: 'center' }}>
               <button
@@ -689,23 +680,34 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   marginBottom: 16,
                   flex: '1 1 auto',
                 }}>
-                  <div style={{
-                    fontSize: 16,
-                    color: '#1f2937',
-                    lineHeight: '1.6',
-                    marginBottom: 16,
-                    fontStyle: 'italic'
-                  }}>
-                    "{journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.description}"
-                  </div>
-                  
-                  <div style={{
-                    fontSize: 14,
-                    color: '#6b7280',
-                    lineHeight: '1.5'
-                  }}>
-                    {journeyStages[selectedJourneyStage as keyof typeof journeyStages]?.content}
-                  </div>
+                  {(() => {
+                    const stage = journeyStages[selectedJourneyStage as keyof typeof journeyStages];
+                    const desc = stage?.description ?? '';
+                    const content = stage?.content ?? '';
+                    const isSameText = desc === content;
+                    return (
+                      <>
+                        <div style={{
+                          fontSize: 16,
+                          color: '#1f2937',
+                          lineHeight: '1.6',
+                          marginBottom: isSameText ? 0 : 16,
+                          fontStyle: 'italic'
+                        }}>
+                          "{desc}"
+                        </div>
+                        {!isSameText && (
+                          <div style={{
+                            fontSize: 14,
+                            color: '#6b7280',
+                            lineHeight: '1.5'
+                          }}>
+                            {content}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 
                 <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>

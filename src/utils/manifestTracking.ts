@@ -105,10 +105,13 @@ export const getAbilityUsageCount = (playerManifest: PlayerManifest, level: numb
   return playerManifest.abilityUsage?.[level] || 0;
 };
 
+/** Milestone thresholds for both Manifest and Elemental ability usage (20, 50, 100, 200, 500 uses) */
+export const MANIFEST_MILESTONES = [20, 50, 100, 200, 500] as const;
+
 /**
  * Check if a milestone has been reached
  * @param usageCount - The current usage count
- * @param milestone - The milestone to check (20, 50, 100)
+ * @param milestone - The milestone to check (20, 50, 100, 200, 500)
  * @returns boolean - Whether the milestone has been reached
  */
 export const hasReachedMilestone = (usageCount: number, milestone: number): boolean => {
@@ -121,8 +124,7 @@ export const hasReachedMilestone = (usageCount: number, milestone: number): bool
  * @returns number[] - Array of reached milestones
  */
 export const getReachedMilestones = (usageCount: number): number[] => {
-  const milestones = [20, 50, 100];
-  return milestones.filter(milestone => usageCount >= milestone);
+  return MANIFEST_MILESTONES.filter(milestone => usageCount >= milestone);
 };
 
 /**
@@ -131,8 +133,16 @@ export const getReachedMilestones = (usageCount: number): number[] => {
  * @returns number | null - The next milestone or null if all are reached
  */
 export const getNextMilestone = (usageCount: number): number | null => {
-  const milestones = [20, 50, 100];
-  return milestones.find(milestone => usageCount < milestone) || null;
+  return MANIFEST_MILESTONES.find(milestone => usageCount < milestone) || null;
+};
+
+/**
+ * Get the previous milestone (for progress bar) before the given milestone
+ */
+const getPreviousMilestone = (nextMilestone: number): number => {
+  const arr: number[] = [...MANIFEST_MILESTONES];
+  const idx = arr.indexOf(nextMilestone);
+  return idx > 0 ? arr[idx - 1] : 0;
 };
 
 /**
@@ -144,7 +154,7 @@ export const getMilestoneProgress = (usageCount: number): { milestone: number, p
   const nextMilestone = getNextMilestone(usageCount);
   if (!nextMilestone) return null;
   
-  const previousMilestone = nextMilestone === 20 ? 0 : (nextMilestone === 50 ? 20 : 50);
+  const previousMilestone = getPreviousMilestone(nextMilestone);
   const progress = ((usageCount - previousMilestone) / (nextMilestone - previousMilestone)) * 100;
   
   return {
@@ -497,15 +507,35 @@ export const claimMilestoneRewards = async (
         xp += 100; // 100 XP for 100 uses
         claimedMilestones.push(100);
         
-        // Dispatch custom event to trigger milestone modal
         window.dispatchEvent(new CustomEvent('milestoneReached', {
           detail: {
             milestone: 100,
             moveName: moveName,
-            rewards: {
-              pp: 200,
-              xp: 100
-            }
+            rewards: { pp: 200, xp: 100 }
+          }
+        }));
+      } else if (milestone === 200) {
+        powerPoints += 300; // 300 PP for 200 uses
+        xp += 150; // 150 XP for 200 uses
+        claimedMilestones.push(200);
+        
+        window.dispatchEvent(new CustomEvent('milestoneReached', {
+          detail: {
+            milestone: 200,
+            moveName: moveName,
+            rewards: { pp: 300, xp: 150 }
+          }
+        }));
+      } else if (milestone === 500) {
+        powerPoints += 500; // 500 PP for 500 uses
+        xp += 250; // 250 XP for 500 uses
+        claimedMilestones.push(500);
+        
+        window.dispatchEvent(new CustomEvent('milestoneReached', {
+          detail: {
+            milestone: 500,
+            moveName: moveName,
+            rewards: { pp: 500, xp: 250 }
           }
         }));
       }

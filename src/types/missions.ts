@@ -1,10 +1,11 @@
 /**
  * Mission System Types
  * 
- * Story Missions integrate with Home Hub NPCs and Player Journey tab
+ * Story Missions integrate with Home Hub NPCs and Player Journey tab.
+ * Profile Missions add information directly into the Player's Journey on their Power Card.
  */
 
-export type MissionCategory = 'SIDE' | 'STORY';
+export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE';
 export type DeliveryChannel = 'HUB_NPC' | 'PLAYER_JOURNEY';
 export type MissionStatus = 'available' | 'active' | 'completed' | 'locked';
 export type MissionSource = 'HUB_NPC' | 'PLAYER_JOURNEY';
@@ -14,6 +15,22 @@ export interface StoryMetadata {
   order: number;               // order within chapter (1..n)
   required: boolean;           // default true for STORY
   prerequisites?: string[];    // optional missionIds required first
+}
+
+/** Journey stage IDs shown in the Player's Journey on the Power Card (Profile) */
+export type ProfileJourneyStageId =
+  | 'ordinary-world'
+  | 'call-to-adventure'
+  | 'meeting-mentor'
+  | 'tests-allies-enemies'
+  | 'approaching-cave'
+  | 'ordeal'
+  | 'road-back'
+  | 'resurrection';
+
+export interface ProfileMetadata {
+  journeyStageId: ProfileJourneyStageId;  // which stage this mission adds content to
+  order?: number;                         // order when multiple Profile missions target the same stage (1..n)
 }
 
 export interface MissionGating {
@@ -32,9 +49,10 @@ export interface MissionTemplate {
   title: string;
   description: string;
   npc?: string;               // "sonido" | "zeke" | "luz" | "kon" | undefined
-  missionCategory: MissionCategory;  // "SIDE" | "STORY"
+  missionCategory: MissionCategory;  // "SIDE" | "STORY" | "PROFILE"
   deliveryChannels: DeliveryChannel[]; // ["HUB_NPC"] | ["PLAYER_JOURNEY"] | both
   story?: StoryMetadata;      // only for STORY missions
+  profile?: ProfileMetadata;  // only for PROFILE missions — which journey stage to add content to
   playerJourneyLink?: PlayerJourneyLink; // Link to Player Journey step
   gating?: MissionGating;
   rewards?: {

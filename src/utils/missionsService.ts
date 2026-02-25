@@ -32,7 +32,8 @@ import {
   MissionCategory,
   DeliveryChannel,
   MissionStatus,
-  MissionSource
+  MissionSource,
+  ProfileJourneyStageId
 } from '../types/missions';
 
 /**
@@ -58,6 +59,7 @@ export async function getMissionTemplate(missionId: string): Promise<MissionTemp
       missionCategory: data.missionCategory || 'SIDE',
       deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
       story: data.story || undefined,
+      profile: data.profile || undefined,
       gating: data.gating || undefined,
       rewards: data.rewards || {},
       objectives: data.objectives || [],
@@ -109,6 +111,7 @@ export async function getMissionTemplates(filters?: {
         missionCategory: data.missionCategory || 'SIDE',
         deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
         story: data.story || undefined,
+        profile: data.profile || undefined,
         gating: data.gating || undefined,
         rewards: data.rewards || {},
         objectives: data.objectives || [],
@@ -131,6 +134,37 @@ export async function getMissionTemplates(filters?: {
     console.error('Error fetching mission templates:', error);
     return [];
   }
+}
+
+/**
+ * Get profile journey stage content (text players wrote for each stage on their Power Card)
+ */
+export async function getProfileJourneyContent(userId: string): Promise<Record<string, string>> {
+  try {
+    const userRef = doc(db, 'students', userId);
+    const userDoc = await getDoc(userRef);
+    if (!userDoc.exists()) return {};
+    const data = userDoc.data();
+    return (data?.journeyStageContent && typeof data.journeyStageContent === 'object') ? data.journeyStageContent : {};
+  } catch (error) {
+    console.error('Error fetching profile journey content:', error);
+    return {};
+  }
+}
+
+/**
+ * Save text for a profile journey stage (used when completing Profile missions)
+ */
+export async function saveProfileJourneyText(
+  userId: string,
+  journeyStageId: ProfileJourneyStageId | string,
+  text: string
+): Promise<void> {
+  const userRef = doc(db, 'students', userId);
+  const userDoc = await getDoc(userRef);
+  const existing = userDoc.exists() ? (userDoc.data()?.journeyStageContent || {}) : {};
+  const updated = { ...existing, [journeyStageId]: text };
+  await updateDoc(userRef, { journeyStageContent: updated });
 }
 
 /**

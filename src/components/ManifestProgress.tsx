@@ -1,13 +1,20 @@
 import React from 'react';
 import { MANIFESTS, PlayerManifest } from '../types/manifest';
-import { trackAbilityUsage, trackMoveUsage, getMilestoneProgress, getMoveUsageCount, claimMilestoneRewards } from '../utils/manifestTracking';
+import { trackAbilityUsage, trackMoveUsage, getMilestoneProgress, getMoveUsageCount, claimMilestoneRewards, MANIFEST_MILESTONES } from '../utils/manifestTracking';
+
+interface ManifestMove {
+  name: string;
+  icon?: string;
+  description?: string;
+  category?: 'manifest' | 'elemental' | 'system';
+}
 
 interface ManifestProgressProps {
   playerManifest: PlayerManifest;
   onVeilBreak?: (veilId: string) => void;
   userId?: string;
   onAbilityUsed?: () => void; // Callback to refresh data after ability usage
-  moves?: Array<{ name: string; icon?: string; description?: string }>; // Player's moves
+  moves?: ManifestMove[]; // Player's moves (manifest + elemental)
 }
 
 const ManifestProgress: React.FC<ManifestProgressProps> = ({ 
@@ -644,7 +651,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
               manifest.levels.map((level) => {
                 const isUnlocked = playerManifest.unlockedLevels.includes(level.level);
                 const usageCount = playerManifest.abilityUsage?.[level.level] || 0;
-                const milestones = [20, 50, 100];
+                const milestones = [...MANIFEST_MILESTONES];
                 const milestoneProgress = getMilestoneProgress(usageCount);
                 const moveName = getMoveForLevel(level.level) || getDefaultMoveNameForLevel(level.level);
                 const unclaimedMilestones = moveName ? (playerManifest.unclaimedMilestones?.[moveName] || []) : [];
@@ -855,6 +862,130 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
             )}
           </div>
         </div>
+
+        {/* Elemental Milestones - same tracking as manifest (20, 50, 100, 200, 500) */}
+        {moves.some((m) => (m as ManifestMove).category === 'elemental') && (
+          <div style={{
+            minWidth: '350px',
+            background: 'rgba(0,0,0,0.2)',
+            padding: '1.5rem',
+            borderRadius: '0.75rem',
+            border: '1px solid rgba(245, 158, 11, 0.5)'
+          }}>
+            <h4 style={{
+              marginBottom: '1rem',
+              color: '#f59e0b',
+              fontSize: '1.1rem',
+              fontWeight: 'bold'
+            }}>
+              ⚡ Elemental Milestones
+            </h4>
+            <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+              {moves
+                .filter((move) => (move as ManifestMove).category === 'elemental')
+                .map((move) => {
+                  const usageCount = getMoveUsageCount(playerManifest, move.name);
+                  const milestones = [...MANIFEST_MILESTONES];
+                  const milestoneProgress = getMilestoneProgress(usageCount);
+                  const reachedMilestones = milestones.filter((m) => usageCount >= m);
+                  const unclaimedMilestones = playerManifest.unclaimedMilestones?.[move.name] || [];
+                  const availableToClaim = milestones.filter((m) => usageCount >= m && unclaimedMilestones.includes(m));
+                  const hasUnclaimedMilestones = availableToClaim.length > 0;
+                  const hasReachedMilestones = reachedMilestones.length > 0;
+                  const elementalColor = '#f59e0b';
+                  return (
+                    <div
+                      key={move.name}
+                      style={{
+                        padding: '0.75rem',
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        border: '1px solid rgba(245, 158, 11, 0.5)',
+                        borderRadius: '0.5rem',
+                        marginBottom: '0.75rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {move.icon && <span style={{ fontSize: '1rem' }}>{move.icon}</span>}
+                          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: elementalColor }}>{move.name}</span>
+                        </div>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: elementalColor }}>{usageCount} uses</span>
+                      </div>
+                      {move.description && (
+                        <div style={{ fontSize: '0.7rem', opacity: 0.8, marginBottom: '0.5rem' }}>{move.description}</div>
+                      )}
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <div style={{ fontSize: '0.7rem', marginBottom: '0.25rem', color: 'rgba(255,255,255,0.8)' }}>Milestones:</div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                          {milestones.map((milestone) => {
+                            const isReached = usageCount >= milestone;
+                            return (
+                              <div
+                                key={milestone}
+                                style={{
+                                  padding: '0.25rem 0.5rem',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 'bold',
+                                  background: isReached ? elementalColor : 'rgba(255,255,255,0.1)',
+                                  color: isReached ? 'white' : 'rgba(255,255,255,0.6)',
+                                  border: `1px solid ${isReached ? elementalColor : 'rgba(255,255,255,0.2)'}`
+                                }}
+                              >
+                                {milestone} {isReached ? '✓' : ''}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {milestoneProgress && (
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <div style={{ fontSize: '0.7rem', marginBottom: '0.25rem', color: 'rgba(255,255,255,0.8)' }}>Next: {milestoneProgress.milestone} uses</div>
+                            <div style={{ width: '100%', height: '0.25rem', background: 'rgba(255,255,255,0.2)', borderRadius: '0.125rem', overflow: 'hidden' }}>
+                              <div style={{ width: `${milestoneProgress.progress}%`, height: '100%', background: elementalColor, transition: 'width 0.3s ease' }} />
+                            </div>
+                          </div>
+                        )}
+                        {hasReachedMilestones && userId ? (
+                          <button
+                            onClick={async () => {
+                              if (hasUnclaimedMilestones) {
+                                await claimMilestoneRewards(userId, move.name, availableToClaim);
+                                if (onAbilityUsed) onAbilityUsed();
+                              }
+                            }}
+                            disabled={!hasUnclaimedMilestones}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              background: hasUnclaimedMilestones ? '#f59e0b' : '#9ca3af',
+                              border: 'none',
+                              borderRadius: '0.25rem',
+                              color: 'white',
+                              cursor: hasUnclaimedMilestones ? 'pointer' : 'not-allowed',
+                              fontSize: '0.8rem',
+                              fontWeight: 'bold',
+                              width: '100%',
+                              transition: 'all 0.2s ease',
+                              opacity: hasUnclaimedMilestones ? 1 : 0.6
+                            }}
+                          >
+                            {hasUnclaimedMilestones ? (
+                              <>🎁 Claim Milestone{availableToClaim.length > 1 ? 's' : ''} ({availableToClaim.length})</>
+                            ) : (
+                              <>✓ Milestone Claimed - Next: {milestoneProgress?.milestone || 'N/A'} uses</>
+                            )}
+                          </button>
+                        ) : (
+                          <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)' }}>
+                            Use this move in battle to progress (20, 50, 100, 200, 500 uses).
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         {/* Current Level Card */}
         <div style={{

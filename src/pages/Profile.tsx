@@ -16,6 +16,8 @@ import { CHAPTERS } from '../types/chapters';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import { normalizePlayerData } from '../utils/playerData';
+import { getMoveUsageCount, getMilestoneProgress, claimMilestoneRewards, MANIFEST_MILESTONES } from '../utils/manifestTracking';
+import { MOVE_TEMPLATES } from '../types/battle';
 import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
 import { UniversalLawSkillTreePage } from '../components/skillTree/UniversalLawSkillTreePage';
@@ -326,10 +328,12 @@ const Profile = () => {
       // Fetch from both collections
       const studentsRef = doc(db, 'students', currentUser.uid);
       const usersRef = doc(db, 'users', currentUser.uid);
+      const battleMovesRef = doc(db, 'battleMoves', currentUser.uid);
       
-      const [studentsSnap, usersSnap] = await Promise.all([
+      const [studentsSnap, usersSnap, battleMovesSnap] = await Promise.all([
         getDoc(studentsRef),
-        getDoc(usersRef)
+        getDoc(usersRef),
+        getDoc(battleMovesRef)
       ]);
       
       if (studentsSnap.exists()) {
@@ -409,7 +413,9 @@ const Profile = () => {
         );
         setCardBorderColor(userDataFromDB.cardBorderColor || '#a78bfa');
         setCardImageBorderColor(userDataFromDB.cardImageBorderColor || '#a78bfa');
-        setMoves(userDataFromDB.moves || []);
+        // Use battle loadout moves (battleMoves) when available so Elemental Move Progress sees same moves as Battle/Skills & Mastery
+        const battleMovesList = battleMovesSnap.exists() ? battleMovesSnap.data().moves : null;
+        setMoves(Array.isArray(battleMovesList) && battleMovesList.length > 0 ? battleMovesList : (userDataFromDB.moves || []));
         setBadges(userDataFromDB.badges || []);
         
         // Find the next available challenge
@@ -1214,6 +1220,7 @@ const Profile = () => {
               userId={currentUser?.uid}
               onManifestReselect={() => setShowManifestSelection(true)}
               ordinaryWorld={userData?.ordinaryWorld}
+              journeyStageContent={userData?.journeyStageContent}
               squadAbbreviation={squadAbbreviation}
               hasSkillTreeAccess={!!userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.isCompleted}
               candyType={userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.candyChoice || 'on-off'} // Get from challenge data or default to on-off
@@ -1498,8 +1505,6 @@ const Profile = () => {
                   </div>
                 ) : (
                   <div>
-                    <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}</h2>
-                    <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{bio || 'No bio yet. Click edit to add one!'}</p>
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
                       <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
@@ -2648,6 +2653,153 @@ const Profile = () => {
               >
                 Select Your Manifest
               </button>
+            </div>
+          )}
+
+          {/* Elemental Move Progress - under Manifest; same structure (usage, milestones 20/50/100/200/500, claim) */}
+          {playerManifest && Array.isArray(moves) && (
+            <div style={{ marginTop: '2rem', minWidth: '600px' }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', color: '#f59e0b', margin: 0, lineHeight: '1.5rem', flexShrink: 0 }}>
+                ⚡ Elemental Move Progress
+              </h2>
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(245, 158, 11, 0.04) 100%)',
+                border: '2px solid rgba(245, 158, 11, 0.4)',
+                borderRadius: '1rem',
+                padding: '1.5rem',
+                marginBottom: '1.5rem',
+                color: '#1f2937'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {(() => {
+                    // Match by base name so "Ember Jab [Level 2]" or "Ember Jab (Base: ...)" matches template "Ember Jab"
+                    const getTemplateForMove = (move: any) => {
+                      const name = move?.name;
+                      if (!name) return undefined;
+                      return MOVE_TEMPLATES.find((t: any) =>
+                        t.name === name ||
+                        name.startsWith(t.name + ' ') ||
+                        name.startsWith(t.name + '[') ||
+                        name.startsWith(t.name + '(')
+                      );
+                    };
+                    const getCategoryFromTemplate = (move: any) => move?.category ?? getTemplateForMove(move)?.category;
+                    const getMoveElement = (move: any) => (move?.elementalAffinity ?? getTemplateForMove(move)?.elementalAffinity)?.toLowerCase?.();
+                    // Only show elemental moves that match the player's chosen element
+                    const playerElement = (style || 'Fire').toString().toLowerCase();
+                    const elementalMoves = moves.filter((move: any) =>
+                      getCategoryFromTemplate(move) === 'elemental' && getMoveElement(move) === playerElement
+                    );
+                    if (elementalMoves.length === 0) {
+                      return (
+                        <p style={{ margin: 0, color: '#6b7280', fontSize: '0.95rem' }}>
+                          No elemental moves in your loadout yet. Unlock and add elemental moves in the Battle Arena (Skills & Mastery) to track their usage and milestones (20, 50, 100, 200, 500) here.
+                        </p>
+                      );
+                    }
+                    return elementalMoves.map((move: any) => {
+                    const usageCount = getMoveUsageCount(playerManifest, move.name);
+                    const milestones = [...MANIFEST_MILESTONES];
+                    const milestoneProgress = getMilestoneProgress(usageCount);
+                    const reachedMilestones = milestones.filter((m: number) => usageCount >= m);
+                    const unclaimedMilestones = playerManifest.unclaimedMilestones?.[move.name] || [];
+                    const availableToClaim = milestones.filter((m: number) => usageCount >= m && unclaimedMilestones.includes(m));
+                    const hasUnclaimedMilestones = availableToClaim.length > 0;
+                    const hasReachedMilestones = reachedMilestones.length > 0;
+                    const elementalColor = '#f59e0b';
+                    return (
+                      <div
+                        key={move.name}
+                        style={{
+                          padding: '1rem',
+                          background: 'rgba(255,255,255,0.6)',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          borderRadius: '0.75rem',
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {move.icon && <span style={{ fontSize: '1.25rem' }}>{move.icon}</span>}
+                            <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#92400e' }}>{move.name}</span>
+                          </div>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: elementalColor }}>{usageCount} uses</span>
+                        </div>
+                        {move.description && (
+                          <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.75rem' }}>{move.description}</div>
+                        )}
+                        <div style={{ marginBottom: '0.5rem' }}>
+                          <div style={{ fontSize: '0.75rem', marginBottom: '0.25rem', color: '#6b7280', fontWeight: '600' }}>Milestones:</div>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                            {milestones.map((milestone: number) => {
+                              const isReached = usageCount >= milestone;
+                              return (
+                                <div
+                                  key={milestone}
+                                  style={{
+                                    padding: '0.25rem 0.5rem',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    background: isReached ? elementalColor : 'rgba(255,255,255,0.8)',
+                                    color: isReached ? 'white' : '#6b7280',
+                                    border: `1px solid ${isReached ? elementalColor : '#e5e7eb'}`
+                                  }}
+                                >
+                                  {milestone} {isReached ? '✓' : ''}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {milestoneProgress && (
+                            <div style={{ marginBottom: '0.5rem' }}>
+                              <div style={{ fontSize: '0.75rem', marginBottom: '0.25rem', color: '#6b7280' }}>Next: {milestoneProgress.milestone} uses</div>
+                              <div style={{ width: '100%', height: '0.5rem', background: '#e5e7eb', borderRadius: '0.25rem', overflow: 'hidden' }}>
+                                <div style={{ width: `${milestoneProgress.progress}%`, height: '100%', background: elementalColor, transition: 'width 0.3s ease' }} />
+                              </div>
+                            </div>
+                          )}
+                          {hasReachedMilestones && currentUser?.uid ? (
+                            <button
+                              onClick={async () => {
+                                if (hasUnclaimedMilestones) {
+                                  await claimMilestoneRewards(currentUser.uid, move.name, availableToClaim);
+                                  if (currentUser?.uid) fetchUserData();
+                                }
+                              }}
+                              disabled={!hasUnclaimedMilestones}
+                              style={{
+                                padding: '0.5rem 1rem',
+                                background: hasUnclaimedMilestones ? elementalColor : '#9ca3af',
+                                border: 'none',
+                                borderRadius: '0.5rem',
+                                color: 'white',
+                                cursor: hasUnclaimedMilestones ? 'pointer' : 'not-allowed',
+                                fontSize: '0.875rem',
+                                fontWeight: 'bold',
+                                width: '100%',
+                                transition: 'all 0.2s ease',
+                                opacity: hasUnclaimedMilestones ? 1 : 0.6
+                              }}
+                            >
+                              {hasUnclaimedMilestones ? (
+                                <>🎁 Claim Milestone{availableToClaim.length > 1 ? 's' : ''} ({availableToClaim.length})</>
+                              ) : (
+                                <>✓ Milestone Claimed - Next: {milestoneProgress?.milestone || 'N/A'} uses</>
+                              )}
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>
+                              Use this move in battle to progress (20, 50, 100, 200, 500 uses).
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  });
+                  })()}
+                </div>
+              </div>
             </div>
           )}
         </div>
