@@ -4403,29 +4403,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('⚠️ No shield damage dealt, no XP awarded for shield damage');
       }
 
-      // Track daily challenge: Attack Vault (always track if attack was attempted, regardless of damage)
-      if (currentUser && (selectedMove || selectedCard)) {
-        console.log('🎯 [Daily Challenge] Tracking vault attack:', {
-          userId: currentUser.uid,
-          moveId: selectedMove?.id,
-          moveName: selectedMove?.name,
-          cardId: selectedCard?.id,
-          cardName: selectedCard?.name,
-          ppStolen,
-          shieldDamage,
-          timestamp: new Date().toISOString()
-        });
-        updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch(err => 
-          console.error('❌ [Daily Challenge] Error updating daily challenge progress:', err)
-        );
-      } else {
-        console.warn('⚠️ [Daily Challenge] Vault attack not tracked - missing user or move/card:', {
-          hasUser: !!currentUser,
-          hasMove: !!selectedMove,
-          hasCard: !!selectedCard
-        });
-      }
-      
       // Track daily challenge: Earn PP (if PP was stolen)
       if (currentUser && ppStolen > 0) {
         updateChallengeProgressByType(currentUser.uid, 'earn_pp', ppStolen).catch(err => 
@@ -4488,6 +4465,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         attackId: attackDocRef.id,
         attackData: attackData
       });
+
+      // Track daily challenges (after attack is recorded so tracker stays in sync with live feed)
+      if (currentUser) {
+        updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch(err =>
+          console.error('❌ [Daily Challenge] Error updating attack_vault progress:', err)
+        );
+        if (selectedMove?.category === 'elemental') {
+          updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
+            console.error('❌ [Daily Challenge] Error updating use_elemental_move progress:', err)
+          );
+        }
+        if (selectedMove?.category === 'manifest') {
+          updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
+            console.error('❌ [Daily Challenge] Error updating use_manifest_ability progress:', err)
+          );
+        }
+      }
     
       // Refresh vault data to ensure everything is synchronized
       await refreshVaultData();

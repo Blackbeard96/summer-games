@@ -49,87 +49,96 @@ import { useDailyChallengeToasts } from './hooks/useDailyChallengeToasts';
 import './utils/consoleCommands';
 
 // Suppress Firestore internal assertion errors globally - MUST run after imports
-const isFirestoreInternalError = (error: any): boolean => {
-  if (!error) return false;
-  const errorString = String(error);
-  const errorMessage = error?.message || '';
-  const errorStack = error?.stack || '';
-  const errorCode = error?.code || '';
-  
-  // Check for nested errors in CONTEXT field
-  let contextString = '';
+function buildErrorDiagnosticString(value: any): string {
+  if (value == null) return '';
+  const parts: string[] = [
+    String(value),
+    typeof value === 'object' && value?.message ? String(value.message) : '',
+    typeof value === 'object' && value?.stack ? String(value.stack) : '',
+    typeof value === 'object' && value?.code != null ? String(value.code) : ''
+  ];
   try {
-    if (error?.context) {
-      contextString = JSON.stringify(error.context);
+    if (typeof value === 'object') {
+      parts.push(JSON.stringify(value));
+      if (value.context) parts.push(JSON.stringify(value.context));
     }
-    if (error?.hc) {
-      contextString += String(error.hc);
-    }
-  } catch (e) {
-    // Ignore JSON stringify errors
+  } catch (_) {
+    // ignore
   }
-  
-  const allErrorStrings = [
-    errorString,
-    errorMessage,
-    errorStack,
-    contextString,
-    JSON.stringify(error)
-  ].join(' ');
-  
+  return parts.join(' ');
+}
+
+const isFirestoreInternalError = (error: any): boolean => {
+  const allErrorStrings = buildErrorDiagnosticString(error);
+  if (!allErrorStrings.length) return false;
   return (
-    allErrorStrings.includes('INTERNAL ASSERTION FAILED') || 
+    allErrorStrings.includes('INTERNAL ASSERTION FAILED') ||
     allErrorStrings.includes('ID: ca9') ||
-    allErrorStrings.includes('ca9') || // Catch ca9 anywhere in error (e.g., "(ID: ca9)")
+    allErrorStrings.includes('(ID: ca9)') ||
+    allErrorStrings.includes('ca9') ||
     allErrorStrings.includes('ID: b815') ||
-    allErrorStrings.includes('b815') || // Catch b815 anywhere in error
+    allErrorStrings.includes('b815') ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('Unexpected state')) ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
-    (errorCode === 'failed-precondition' && (allErrorStrings.includes('ID: ca9') || allErrorStrings.includes('ID: b815') || allErrorStrings.includes('ca9') || allErrorStrings.includes('b815'))) ||
-    // Check for specific Firestore internal patterns
     allErrorStrings.includes('__PRIVATE__fail') ||
     allErrorStrings.includes('__PRIVATE_hardAssert') ||
     allErrorStrings.includes('__PRIVATE_WatchChangeAggregator') ||
     allErrorStrings.includes('__PRIVATE_PersistentListenStream') ||
     allErrorStrings.includes('BrowserConnectivityMonitor') ||
     (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)')) ||
-    // Firefox-specific patterns
-    (allErrorStrings.includes('FIRESTORE') && allErrorStrings.includes('(11.10.0)') && allErrorStrings.includes('INTERNAL ASSERTION')) ||
-    // Check for CONTEXT with ve:-1 (version error indicator)
-    (allErrorStrings.includes('CONTEXT') && allErrorStrings.includes('"ve":-1'))
+    (allErrorStrings.includes('CONTEXT') && (allErrorStrings.includes('"ve":-1') || allErrorStrings.includes('ve":-1')))
   );
 };
 
+function shouldSuppressFirestoreError(event: ErrorEvent | PromiseRejectionEvent): boolean {
+  try {
+    if ('error' in event && isFirestoreInternalError((event as ErrorEvent).error)) return true;
+    if ('message' in event && isFirestoreInternalError((event as ErrorEvent).message)) return true;
+    if ('reason' in event && isFirestoreInternalError((event as PromiseRejectionEvent).reason)) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Override console.error immediately to catch Firestore errors
 const originalConsoleError = console.error;
-console.error = function(...args: any[]) {
+console.error = function (...args: any[]) {
   const message = args.join(' ');
-  if (isFirestoreInternalError(message) || args.some(arg => isFirestoreInternalError(arg))) {
-    return; // Completely suppress
+  if (isFirestoreInternalError(message) || args.some((arg) => isFirestoreInternalError(arg))) {
+    return;
   }
   originalConsoleError.apply(console, args);
 };
 
-// Global error handlers - set up immediately
-window.addEventListener('error', (event) => {
-  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
-    return false;
-  }
-}, true);
+// Global error handlers - capture phase first so we run before React's overlay
+window.addEventListener(
+  'error',
+  (event: ErrorEvent) => {
+    if (shouldSuppressFirestoreError(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return false;
+    }
+  },
+  true
+);
 
-window.addEventListener('error', (event) => {
-  if (isFirestoreInternalError(event.error) || isFirestoreInternalError(event.message)) {
-    event.preventDefault();
-    event.stopPropagation();
-    return false;
-  }
-}, false);
+window.addEventListener(
+  'error',
+  (event: ErrorEvent) => {
+    if (shouldSuppressFirestoreError(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    }
+  },
+  false
+);
 
-window.addEventListener('unhandledrejection', (event) => {
-  if (isFirestoreInternalError(event.reason)) {
+window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+  if (shouldSuppressFirestoreError(event)) {
     event.preventDefault();
     event.stopPropagation();
     return false;

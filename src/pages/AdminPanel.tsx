@@ -902,6 +902,58 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  // Reset Chapter 1-6 (Journey to Xiotein / Face Hela) for current user (testing)
+  const resetChapter16ForCurrentUser = async () => {
+    if (!currentUser) {
+      alert('No current user found');
+      return;
+    }
+    if (!window.confirm('⚠️ This will reset Chapter 1-6 "Journey to Xiotein" for YOUR account, marking it as incomplete.\n\nYou can test facing Hela again.\n\nContinue?')) {
+      return;
+    }
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const cleanChallenge: any = { isCompleted: false, completedAt: null };
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              'ep1-portal-sequence': cleanChallenge
+            }
+          }
+        };
+        await updateDoc(userRef, { chapters: updatedChapters });
+      }
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const cleanChallenge: any = { isCompleted: false, completedAt: null };
+        const updatedChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              'ep1-portal-sequence': cleanChallenge
+            }
+          }
+        };
+        await updateDoc(studentRef, { chapters: updatedChapters });
+      }
+      alert('✅ Chapter 1-6 "Journey to Xiotein" has been reset for your account! The page will now refresh.');
+      window.location.reload();
+    } catch (error) {
+      console.error('Error resetting Chapter 1-6:', error);
+      alert('Error resetting Chapter 1-6. Check console for details.');
+    }
+  };
+
   // Reset Challenge 7 (Hela Awakened) for current user (testing)
   const resetChallenge7ForCurrentUser = async () => {
     if (!currentUser) {
@@ -3360,6 +3412,21 @@ const AdminPanel: React.FC = () => {
                   }}
                 >
                   {storyProgressLoading ? '🔄 Processing...' : '⚠️ RESET ALL PLAYER PROGRESS'}
+                </button>
+                <button
+                  onClick={resetChapter16ForCurrentUser}
+                  style={{
+                    background: '#7c3aed',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    padding: '0.75rem 1.5rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  📜 Reset Chapter 1-6 (Your Account - Testing)
                 </button>
                 <button
                   onClick={resetChallenge7ForCurrentUser}

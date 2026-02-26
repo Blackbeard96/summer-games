@@ -5,7 +5,7 @@ import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
 import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
-import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
+import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync, loadMoveOverrides } from '../utils/moveOverrides';
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
 import { trackMoveUsage } from '../utils/manifestTracking';
 
@@ -764,10 +764,17 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     }
   };
 
+  // Show all unlocked moves (manifest, elemental, system) - no category filter
   const unlockedMoves = moves.filter(move => move.unlocked);
   const unlockedCards = actionCards.filter(card => card.unlocked);
 
-  // Only log when modal state changes to avoid excessive logging
+  // Load move overrides when modal opens so names/descriptions display accurately
+  useEffect(() => {
+    if (isOpen) {
+      loadMoveOverrides().catch(() => {});
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     if (isOpen) {
       console.log('VaultSiegeModal: Modal opened');
@@ -1026,7 +1033,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           left: 0,
           right: 0,
           bottom: 0,
-          background: 'rgba(255, 0, 0, 0.8)', // Changed to bright red background
+          background: 'rgba(0, 0, 0, 0.6)',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
@@ -1034,22 +1041,19 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
           pointerEvents: 'auto',
           width: '100vw',
           height: '100vh',
-          border: '10px solid yellow', // Added bright yellow border
         }}>
       <div style={{
-        background: 'lime', // Changed to bright lime background
+        background: '#fff',
         borderRadius: '12px',
         padding: '2rem',
         maxWidth: '800px',
         maxHeight: '90vh',
         overflow: 'auto',
         width: '90%',
-        border: '10px solid blue', // Changed to bright blue border
-        boxShadow: '0 0 100px rgba(0, 255, 0, 1)', // Bright green shadow
+        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
         position: 'relative',
         zIndex: 1000000,
-        color: 'black', // Ensure text is visible
-        fontSize: '16px', // Ensure text size is readable
+        color: '#1f2937',
       }}>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -1601,7 +1605,6 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         borderRadius: '0.5rem',
                         fontSize: '0.75rem',
                         fontWeight: 'bold',
-                        backdropFilter: 'blur(10px)',
                         zIndex: 2
                       }}>
                         ✓ SELECTED
@@ -1620,7 +1623,6 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                         borderRadius: '0.5rem',
                         fontSize: '0.75rem',
                         fontWeight: 'bold',
-                        backdropFilter: 'blur(10px)',
                         zIndex: 2
                       }}>
                         ⏰ On Cooldown
@@ -1631,8 +1633,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
                       <div style={{ 
                         fontSize: '2rem', 
-                        marginBottom: '0.5rem',
-                        filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'
+                        marginBottom: '0.5rem'
                       }}>
                         {getShieldIcon()}
                       </div>
@@ -1658,8 +1659,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     <div style={{ 
                       background: 'rgba(255,255,255,0.95)',
                       padding: '1rem',
-                      borderRadius: '0.75rem',
-                      backdropFilter: 'blur(10px)'
+                      borderRadius: '0.75rem'
                     }}>
                       <div style={{ 
                         display: 'grid',
@@ -1922,14 +1922,13 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             {unlockedMoves.map(move => {
               const isSelected = selectedMoves.includes(move.id);
               
-              // Get move data and calculate damage range
-              // Use the move's actual damage if it exists (from upgrades), otherwise use lookup
+              // Get move data and calculate damage range (use move.name for template lookup)
+              const displayName = getMoveNameSync(move.name) || move.name;
+              const displayDescription = getMoveDescriptionSync(move.name) || move.description || '';
               let baseDamage: number;
               if (move.damage && move.damage > 0) {
-                // Use the upgraded damage directly
                 baseDamage = move.damage;
               } else {
-                // Fall back to lookup for moves that haven't been upgraded yet
                 const moveDamageValue = getMoveDamageSync(move.name);
                 if (typeof moveDamageValue === 'object') {
                   baseDamage = moveDamageValue.max || moveDamageValue.min || 0;
@@ -2026,10 +2025,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       color: '#4f46e5',
                       padding: '0.25rem 0.5rem',
                       borderRadius: '0.5rem',
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      backdropFilter: 'blur(10px)',
-                      zIndex: 2
+                        fontSize: '0.75rem',
+                        fontWeight: 'bold',
+                        zIndex: 2
                     }}>
                       ✓ SELECTED
                     </div>
@@ -2037,10 +2035,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
                   {/* Card Header */}
                   <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-                    <div style={{ 
-                      fontSize: '2rem', 
-                      marginBottom: '0.5rem',
-                      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'
+                    <div style={{
+                      fontSize: '2rem',
+                      marginBottom: '0.5rem'
                     }}>
                       {getMoveIcon()}
                     </div>
@@ -2051,7 +2048,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                       marginBottom: '0.25rem'
                     }}>
-                      {move.name} [Level {move.masteryLevel}]
+                      {displayName} [Level {move.level}]
                     </div>
                     <div style={{ 
                       color: 'rgba(255,255,255,0.9)',
@@ -2059,11 +2056,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                       textTransform: 'uppercase'
                     }}>
-                      {move.category === 'manifest' && move.manifestType ? 
-                        `${move.manifestType.charAt(0).toUpperCase() + move.manifestType.slice(1)} Manifest` :
-                        move.category === 'elemental' && move.elementalAffinity ? 
-                        `${move.elementalAffinity.charAt(0).toUpperCase() + move.elementalAffinity.slice(1)} Element` :
-                        `${move.category} Move`
+                      {move.category === 'manifest'
+                        ? (move.manifestType ? `${move.manifestType.charAt(0).toUpperCase() + move.manifestType.slice(1)} Manifest` : 'Manifest')
+                        : move.category === 'elemental'
+                        ? (move.elementalAffinity ? `${move.elementalAffinity.charAt(0).toUpperCase() + move.elementalAffinity.slice(1)} Element` : 'Elemental')
+                        : `${(move.category || 'system').charAt(0).toUpperCase() + (move.category || 'system').slice(1)} Move`
                       }
                     </div>
                   </div>
@@ -2072,8 +2069,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   <div style={{ 
                     background: 'rgba(255,255,255,0.95)',
                     padding: '1rem',
-                    borderRadius: '0.75rem',
-                    backdropFilter: 'blur(10px)'
+                    borderRadius: '0.75rem'
                   }}>
                     <div style={{ 
                       fontSize: '0.875rem',
@@ -2082,7 +2078,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       marginBottom: '0.75rem',
                       textAlign: 'center'
                     }}>
-                      {move.description}
+                      {displayDescription}
                     </div>
                     
                     {damageDisplay && (
@@ -2109,11 +2105,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       fontWeight: '500',
                       textTransform: 'uppercase'
                     }}>
-                      {move.type} • {move.category === 'manifest' && move.manifestType ? 
-                        move.manifestType.toUpperCase() :
-                        move.category === 'elemental' && move.elementalAffinity ? 
-                        move.elementalAffinity.toUpperCase() :
-                        move.category.toUpperCase()
+                      {move.type} • {move.category === 'manifest'
+                        ? (move.manifestType || 'MANIFEST').toUpperCase()
+                        : move.category === 'elemental'
+                        ? (move.elementalAffinity || 'ELEMENTAL').toUpperCase()
+                        : (move.category || 'SYSTEM').toUpperCase()
                       }
                     </div>
                   </div>
@@ -2228,10 +2224,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       color: '#4f46e5',
                       padding: '0.25rem 0.5rem',
                       borderRadius: '0.5rem',
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      backdropFilter: 'blur(10px)',
-                      zIndex: 2
+                        fontSize: '0.75rem',
+                        fontWeight: 'bold',
+                        zIndex: 2
                     }}>
                       ✓ SELECTED
                     </div>
@@ -2239,10 +2234,9 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
                   {/* Card Header */}
                   <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-                    <div style={{ 
-                      fontSize: '2rem', 
-                      marginBottom: '0.5rem',
-                      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'
+                    <div style={{
+                      fontSize: '2rem',
+                      marginBottom: '0.5rem'
                     }}>
                       🃏
                     </div>
@@ -2269,8 +2263,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                   <div style={{ 
                     background: 'rgba(255,255,255,0.95)',
                     padding: '1rem',
-                    borderRadius: '0.75rem',
-                    backdropFilter: 'blur(10px)'
+                    borderRadius: '0.75rem'
                   }}>
                     <div style={{ 
                       fontSize: '0.875rem',

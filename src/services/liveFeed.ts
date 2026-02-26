@@ -222,8 +222,8 @@ export async function createLiveFeedMilestone(
       text = `Completed Island Raid`;
       break;
     case 'vault_attack':
-      text = meta.targetName 
-        ? `⚔️ Attacked ${meta.targetName}'s vault and stole ${meta.ppStolen || 0} PP`
+      text = meta.targetName
+        ? `${userDisplayName} Successfully Sieged ${meta.targetName}'s Vault`
         : `⚔️ Attacked an enemy vault`;
       break;
     case 'vault_defense':

@@ -1,5 +1,9 @@
 import React from 'react';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
+import {
+  LIVE_EVENT_PP_BASE_PER_ELIMINATION,
+  LIVE_EVENT_PP_PER_PARTICIPATION_POINT
+} from '../utils/inSessionStatsService';
 
 interface SessionSummaryModalProps {
   isOpen: boolean;
@@ -17,12 +21,28 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   if (!isOpen || !summary) return null;
 
   const currentPlayerStats = summary.stats[currentPlayerId];
+  const allStats = Object.values(summary.stats);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}m ${secs}s`;
   };
+
+  // Players who earned PP (with breakdown: +900 per elimination, +50 per participation point)
+  const playersWithPP = allStats
+    .filter((s) => (s.ppEarned || 0) > 0)
+    .sort((a, b) => (b.ppEarned || 0) - (a.ppEarned || 0));
+
+  // Players eliminated
+  const eliminatedPlayers = allStats.filter((s) => s.isEliminated);
+
+  // Who had the most participation
+  const mostParticipation = allStats.reduce<SessionStats | null>((best, s) => {
+    const p = s.participationEarned || 0;
+    if (!best || p > (best.participationEarned || 0)) return s;
+    return best;
+  }, null);
 
   return (
     <div
@@ -39,7 +59,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         zIndex: 10000,
         padding: '1rem'
       }}
-      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="session-summary-title"
     >
       <div
         style={{
@@ -56,19 +78,136 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h2 style={{ 
-            fontSize: '2rem', 
-            fontWeight: 'bold', 
-            color: '#fff', 
-            marginBottom: '0.5rem',
-            textShadow: '2px 2px 4px rgba(0,0,0,0.3)'
-          }}>
-            🎉 Session Summary
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <h2
+            id="session-summary-title"
+            style={{
+              fontSize: '2rem',
+              fontWeight: 'bold',
+              color: '#fff',
+              marginBottom: '0.5rem',
+              textShadow: '2px 2px 4px rgba(0,0,0,0.3)'
+            }}
+          >
+            🎉 Live Event Summary
           </h2>
           <p style={{ fontSize: '1rem', color: '#f0f0f0' }}>
             {summary.className} • {formatDuration(summary.duration)}
           </p>
+        </div>
+
+        {/* 1. PP Earned — who earned PP and breakdown (+900 per elimination, +50 per participation point) */}
+        <div
+          style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.25rem',
+            marginBottom: '1rem',
+            border: '2px solid #10b981'
+          }}
+        >
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
+            💰 PP Earned
+          </h3>
+          <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '1rem' }}>
+            +{LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP + eliminated player&apos;s vault PP per elimination • +{LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP per participation point
+          </p>
+          {playersWithPP.length === 0 ? (
+            <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No PP earned this event.</p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {playersWithPP.map((s) => {
+                const partPP = (s.participationEarned || 0) * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+                const elimPP = Math.max(0, (s.ppEarned || 0) - partPP);
+                const total = s.ppEarned || 0;
+                return (
+                  <li
+                    key={s.playerId}
+                    style={{
+                      padding: '0.5rem 0',
+                      borderBottom: '1px solid #e5e7eb',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}
+                  >
+                    <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{s.playerName}</span>
+                    <span style={{ color: '#059669', fontWeight: 'bold' }}>+{total} PP</span>
+                    <span style={{ fontSize: '0.8rem', color: '#6b7280', width: '100%' }}>
+                      {s.eliminations ? `${s.eliminations} elimination(s): +${elimPP} PP (${LIVE_EVENT_PP_BASE_PER_ELIMINATION} + vault each)` : ''}
+                      {s.eliminations && (s.participationEarned || 0) > 0 ? ' • ' : ''}
+                      {(s.participationEarned || 0) > 0
+                        ? `${s.participationEarned} participation × ${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} = +${partPP} PP`
+                        : ''}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* 2. Players Eliminated */}
+        <div
+          style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.25rem',
+            marginBottom: '1rem',
+            border: '2px solid #ef4444'
+          }}
+        >
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
+            ☠️ Players Eliminated
+          </h3>
+          {eliminatedPlayers.length === 0 ? (
+            <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No one was eliminated.</p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {eliminatedPlayers.map((s) => (
+                <li
+                  key={s.playerId}
+                  style={{
+                    padding: '0.35rem 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span style={{ color: '#ef4444', fontWeight: 'bold' }}>{s.playerName}</span>
+                  {s.eliminatedBy && summary.stats[s.eliminatedBy] && (
+                    <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>
+                      (eliminated by {summary.stats[s.eliminatedBy].playerName})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* 3. Most Participation */}
+        <div
+          style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.25rem',
+            marginBottom: '1.5rem',
+            border: '2px solid #3b82f6'
+          }}
+        >
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
+            ✨ Most Participation
+          </h3>
+          {mostParticipation && (mostParticipation.participationEarned || 0) > 0 ? (
+            <p style={{ fontSize: '1rem', color: '#1f2937', margin: 0 }}>
+              <strong>{mostParticipation.playerName}</strong> — {mostParticipation.participationEarned} participation point{mostParticipation.participationEarned !== 1 ? 's' : ''}
+            </p>
+          ) : (
+            <p style={{ fontSize: '0.9rem', color: '#6b7280', margin: 0 }}>No participation points earned this event.</p>
+          )}
         </div>
 
         {/* Current Player Stats (Highlighted) */}
@@ -378,12 +517,15 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           </div>
         </details>
 
-        {/* Close Button */}
+        {/* Close button — summary stays until user dismisses */}
+        <p style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.85)', marginTop: '1.5rem', marginBottom: '0.5rem', textAlign: 'center' }}>
+          Close when you&apos;re done reading.
+        </p>
         <button
           onClick={onClose}
           style={{
             width: '100%',
-            marginTop: '2rem',
+            marginTop: '0.5rem',
             background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
             color: '#fff',
             border: 'none',

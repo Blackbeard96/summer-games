@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, CSSProperties, MouseEvent, memo, useCallback, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, getDocs, updateDoc, DocumentReference, DocumentData, doc, getDoc, addDoc, query, where, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -436,6 +436,12 @@ const NavBar = memo(() => {
       return () => document.removeEventListener('keydown', handleEscape);
     }
   }, [openDropdown]);
+
+  const location = useLocation();
+  useEffect(() => {
+    setOpenDropdown(null);
+    setOpenSubDropdown(null);
+  }, [location.pathname]);
 
   const handleNotificationClick = useCallback(async (notif: Notification) => {
     if (notif.challengeId) {
@@ -987,10 +993,8 @@ const NavBar = memo(() => {
                           key={subItemKey}
                           style={{
                             position: 'relative',
-                            padding: '0.75rem 1rem',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '0.5rem',
                             color: 'white',
                             cursor: 'default',
                             transition: 'background-color 0.2s'
@@ -1009,9 +1013,26 @@ const NavBar = memo(() => {
                             }, 200);
                           }}
                         >
-                          {subItem.icon && <span>{subItem.icon}</span>}
-                          <span>{subItem.label}</span>
-                          <span style={{ marginLeft: 'auto', fontSize: '0.75rem' }}>▶</span>
+                          <Link
+                            to={subItem.to || subItem.path || '#'}
+                            onClick={() => { setOpenDropdown(null); setOpenSubDropdown(null); }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              flex: 1,
+                              padding: '0.75rem 1rem',
+                              color: 'white',
+                              textDecoration: 'none',
+                              transition: 'background-color 0.2s'
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            {subItem.icon && <span>{subItem.icon}</span>}
+                            <span>{subItem.label}</span>
+                          </Link>
+                          <span style={{ paddingRight: '1rem', fontSize: '0.75rem', pointerEvents: 'none' }}>▶</span>
                           {/* Sub-dropdown (Vault Mastery, Skills & Mastery) */}
                           {openSubDropdown === subItemKey && subItem.children && (
                             <div

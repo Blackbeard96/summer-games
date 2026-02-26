@@ -2511,6 +2511,63 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     }
   };
 
+  // Retry Chapter 1-6 (Journey to Xiotein) - allowed for any user for testing
+  const retryChapter16 = async () => {
+    if (!currentUser) return;
+    if (!window.confirm('Reset Chapter 1-6 "Journey to Xiotein" so you can play it again?\n\nYour completion will be cleared and you can face Hela again.')) {
+      return;
+    }
+    try {
+      const challengeId = 'ep1-portal-sequence';
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const cleanChallenge: any = { isCompleted: false, completedAt: null };
+        const updatedChapters = {
+          ...(userData.chapters || {}),
+          [1]: {
+            ...(userData.chapters?.[1] || {}),
+            challenges: {
+              ...(userData.chapters?.[1]?.challenges || {}),
+              [challengeId]: cleanChallenge
+            }
+          }
+        };
+        await updateDoc(userRef, { chapters: updatedChapters });
+      }
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        const studentData = studentDoc.data();
+        const cleanChallenge: any = { isCompleted: false, completedAt: null };
+        const updatedChapters = {
+          ...(studentData.chapters || {}),
+          [1]: {
+            ...(studentData.chapters?.[1] || {}),
+            challenges: {
+              ...(studentData.chapters?.[1]?.challenges || {}),
+              [challengeId]: cleanChallenge
+            }
+          }
+        };
+        await updateDoc(studentRef, { chapters: updatedChapters });
+      }
+      const refreshedUserDoc = await getDoc(userRef);
+      if (refreshedUserDoc.exists()) {
+        setUserProgress(refreshedUserDoc.data());
+      }
+      const refreshedStudentDoc = await getDoc(studentRef);
+      if (refreshedStudentDoc.exists()) {
+        setStudentData(refreshedStudentDoc.data());
+      }
+      alert('✅ Chapter 1-6 has been reset! You can now click "Face Hela" to play again.');
+    } catch (error) {
+      console.error('Error retrying Chapter 1-6:', error);
+      alert('Error resetting. Please try again.');
+    }
+  };
+
   // Generic reset function for any Chapter 1 challenge (ADMIN ONLY)
   const resetChapter1Challenge = async (challengeId: string, challengeTitle: string) => {
     if (!currentUser) return;
@@ -4326,12 +4383,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                           </button>
                         )}
                         
-                        {/* Portal Sequence challenge */}
+                        {/* Journey to Xiotein: Face Hela at the subway (before the portal) */}
                         {status === 'available' && challenge.id === 'ep1-portal-sequence' && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setShowPortalTutorial(true);
+                              setCompletingChallenge('ep1-portal-sequence');
+                              setShowHelaBattle(true);
                             }}
                             style={{
                               background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
@@ -4349,8 +4407,36 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                               width: '100%'
                             }}
                           >
-                            <span style={{ marginRight: '0.5rem' }}>🌀</span>
-                            Navigate the Portal
+                            <span style={{ marginRight: '0.5rem' }}>❄️</span>
+                            Face Hela
+                          </button>
+                        )}
+                        {/* Retry Chapter 1-6 (any user can retry for testing) */}
+                        {status === 'completed' && challenge.id === 'ep1-portal-sequence' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              retryChapter16();
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                              color: 'white',
+                              padding: '0.75rem 1.5rem',
+                              borderRadius: '0.5rem',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(124, 58, 237, 0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '100%',
+                              marginTop: '0.5rem'
+                            }}
+                          >
+                            <span style={{ marginRight: '0.5rem' }}>🔄</span>
+                            Retry (reset and play again)
                           </button>
                         )}
                         

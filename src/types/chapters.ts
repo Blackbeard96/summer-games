@@ -234,11 +234,11 @@ export const CHAPTERS: Chapter[] = [
       {
         id: 'ep1-portal-sequence',
         title: 'Journey to Xiotein',
-        description: 'Receive a letter from Xiotein School directing you to an abandoned subway station. Meet other manifesters and face your first true test when the villain Hela appears, threatening to take your power cards or end your journey before it begins.',
+        description: 'You travel to the abandoned subway station and meet other manifesters. There you face your first true test: the villain Hela appears, threatening to take your power cards or end your journey before it begins. Stand your ground and face Hela before the portal to Xiotein can open.',
         type: 'personal',
         requirements: [{ type: 'artifact', value: 'power_card_discovered', description: 'Must have discovered your Power Card' }],
         rewards: [
-          { type: 'xp', value: 60, description: 'Portal sequence completion XP' },
+          { type: 'xp', value: 60, description: 'Face Hela completion XP' },
           { type: 'pp', value: 100, description: 'First villain encounter PP' },
           { type: 'artifact', value: 'hela_encountered', description: 'Encountered Hela' }
         ],

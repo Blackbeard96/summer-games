@@ -8,6 +8,11 @@ import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction } from 
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
 
+/** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
+export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
+/** PP awarded per participation point in a live event */
+export const LIVE_EVENT_PP_PER_PARTICIPATION_POINT = 50;
+
 /**
  * Initialize session stats for a player when they join
  */
@@ -165,7 +170,8 @@ export async function trackDamage(
 }
 
 /**
- * Track an elimination
+ * Track an elimination.
+ * Eliminator earns LIVE_EVENT_PP_BASE_PER_ELIMINATION (500) + the eliminated player's vault currentPP.
  */
 export async function trackElimination(
   sessionId: string,
@@ -175,18 +181,31 @@ export async function trackElimination(
   try {
     const eliminatorStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', eliminatorId);
     const eliminatedStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', eliminatedId);
-    
+
+    // PP earned = base + eliminated player's vault PP (read at elimination time)
+    let eliminatedVaultPP = 0;
+    try {
+      const vaultRef = doc(db, 'vaults', eliminatedId);
+      const vaultSnap = await getDoc(vaultRef);
+      if (vaultSnap.exists()) {
+        eliminatedVaultPP = vaultSnap.data()?.currentPP ?? 0;
+      }
+    } catch (vaultErr) {
+      debugError('inSessionStats', `Could not read vault for eliminated player ${eliminatedId}`, vaultErr);
+    }
+    const ppFromElimination = LIVE_EVENT_PP_BASE_PER_ELIMINATION + Math.max(0, eliminatedVaultPP);
+
     await runTransaction(db, async (transaction) => {
-      // Increment eliminator's elimination count
+      // Increment eliminator's elimination count and add PP (base + vault)
       const eliminatorStatsDoc = await transaction.get(eliminatorStatsRef);
       if (eliminatorStatsDoc.exists()) {
         const eliminatorStats = eliminatorStatsDoc.data() as SessionStats;
         transaction.update(eliminatorStatsRef, {
           eliminations: (eliminatorStats.eliminations || 0) + 1,
-          ppEarned: (eliminatorStats.ppEarned || 0) + 10 // Bonus PP for elimination
+          ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination
         });
       }
-      
+
       // Mark eliminated player
       const eliminatedStatsDoc = await transaction.get(eliminatedStatsRef);
       if (eliminatedStatsDoc.exists()) {
@@ -196,8 +215,8 @@ export async function trackElimination(
         });
       }
     });
-    
-    debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId}`);
+
+    debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
     return true;
   } catch (error) {
     debugError('inSessionStats', `Error tracking elimination`, error);
@@ -226,10 +245,13 @@ export async function trackParticipation(
       const stats = statsDoc.data() as SessionStats;
       const newParticipation = (stats.participationEarned || 0) + participationAmount;
       const newMovesEarned = Math.floor(newParticipation / 1); // 1 participation = 1 move
+      const ppFromParticipation = participationAmount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+      const newPPEarned = (stats.ppEarned || 0) + ppFromParticipation;
       
       transaction.update(statsRef, {
         participationEarned: newParticipation,
-        movesEarned: newMovesEarned
+        movesEarned: newMovesEarned,
+        ppEarned: newPPEarned
       });
     });
     

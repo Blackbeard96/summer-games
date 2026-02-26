@@ -277,9 +277,10 @@ export const updateChallengeProgressByType = async (
           });
         }
         
-        // Normalize types for comparison (handle case sensitivity and whitespace)
-        const normalizedStoredType = storedType.toLowerCase().trim();
-        const normalizedChallengeType = challengeType.toLowerCase().trim();
+        // Normalize types for comparison (handle case, whitespace, and "Attack Vault" vs "attack_vault")
+        const normalizeType = (t: string) => t.toLowerCase().trim().replace(/\s+/g, '_');
+        const normalizedStoredType = normalizeType(String(storedType));
+        const normalizedChallengeType = normalizeType(String(challengeType));
         
         // ALWAYS log challenge matching (critical for debugging)
         console.log('[Daily Challenge] 🔍 Checking challenge:', {
