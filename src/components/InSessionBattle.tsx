@@ -1898,11 +1898,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             {sessionPlayers.length} players • {currentPlayer ? `${currentPlayer.movesEarned} moves available` : 'Loading...'}
           </p>
         </div>
-        {/* Leave Live Event: all players. End Session: only designated session-ender (all others see only Leave Live Event) */}
+        {/* Leave Live Event: all players. End Session: only designated session-ender. Disabled while summary is open — must close summary first. */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
             onClick={async () => {
-              if (!currentUser) return;
+              if (!currentUser || showSessionSummary) return;
               try {
                 const left = await leaveSession(sessionId, currentUser.uid, currentUser.displayName || undefined);
                 if (left) {
@@ -1916,15 +1916,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 alert('Error leaving session. Please try again.');
               }
             }}
+            disabled={showSessionSummary}
+            title={showSessionSummary ? 'Close the Live Event summary first' : undefined}
             style={{
-              background: 'rgba(255, 255, 255, 0.2)',
+              background: showSessionSummary ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.2)',
               color: 'white',
               border: '2px solid white',
               borderRadius: '0.5rem',
               padding: '0.75rem 1.5rem',
               fontSize: '1rem',
               fontWeight: '600',
-              cursor: 'pointer'
+              cursor: showSessionSummary ? 'not-allowed' : 'pointer',
+              opacity: showSessionSummary ? 0.7 : 1
             }}
           >
             Leave Live Event
@@ -1932,7 +1935,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           {permissionsChecked && canEndLiveEventSession(currentUser?.email ?? null) && (
             <button
               onClick={async () => {
-                if (!currentUser) return;
+                if (!currentUser || showSessionSummary) return;
                 try {
                   const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
                   if (ended) {
@@ -1947,15 +1950,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   alert('Error ending session. Please try again.');
                 }
               }}
+              disabled={showSessionSummary}
+              title={showSessionSummary ? 'Close the Live Event summary first' : undefined}
               style={{
-                background: 'rgba(239, 68, 68, 0.9)',
+                background: showSessionSummary ? 'rgba(239, 68, 68, 0.5)' : 'rgba(239, 68, 68, 0.9)',
                 color: 'white',
                 border: '2px solid white',
                 borderRadius: '0.5rem',
                 padding: '0.75rem 1.5rem',
                 fontSize: '1rem',
                 fontWeight: '600',
-                cursor: 'pointer'
+                cursor: showSessionSummary ? 'not-allowed' : 'pointer',
+                opacity: showSessionSummary ? 0.7 : 1
               }}
             >
               End Session

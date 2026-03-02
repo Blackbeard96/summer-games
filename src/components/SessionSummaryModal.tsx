@@ -18,6 +18,19 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   summary,
   currentPlayerId
 }) => {
+  // Only close via the Close button — ignore Escape and backdrop click
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [isOpen]);
+
   if (!isOpen || !summary) return null;
 
   const currentPlayerStats = summary.stats[currentPlayerId];
@@ -62,6 +75,13 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="session-summary-title"
+      onClick={(e) => {
+        // Do not close on backdrop click — summary only closes via the Close button
+        if (e.target === e.currentTarget) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
     >
       <div
         style={{
@@ -517,9 +537,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           </div>
         </details>
 
-        {/* Close button — summary stays until user dismisses */}
+        {/* Close button — summary stays until user dismisses; no backdrop or Escape close */}
         <p style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.85)', marginTop: '1.5rem', marginBottom: '0.5rem', textAlign: 'center' }}>
-          Close when you&apos;re done reading.
+          You must close this summary to continue. Click the button below when you&apos;re done reading.
         </p>
         <button
           onClick={onClose}

@@ -7,6 +7,7 @@ import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/fi
 import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
 import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync, loadMoveOverrides } from '../utils/moveOverrides';
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
+import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 import { trackMoveUsage } from '../utils/manifestTracking';
 
 interface VaultSiegeModalProps {
@@ -52,7 +53,25 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const [targetVaultBefore, setTargetVaultBefore] = useState<any>(null); // Store initial stats
   const [attackResults, setAttackResults] = useState<any>(null);
   const [remainingMoves, setRemainingMoves] = useState<number>(0);
+  const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+
+  // Load equipped artifacts when modal opens so skill levels match Skill Mastery (including ring bonuses)
+  useEffect(() => {
+    if (!isOpen || !currentUser) return;
+    const loadEquippedArtifacts = async () => {
+      try {
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const studentDoc = await getDoc(studentRef);
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        setEquippedArtifacts(studentData?.equippedArtifacts || null);
+      } catch (err) {
+        console.error('VaultSiegeModal: Error loading equipped artifacts', err);
+        setEquippedArtifacts(null);
+      }
+    };
+    loadEquippedArtifacts();
+  }, [isOpen, currentUser?.uid]);
 
   // Debug effect to check if modal is rendered
   useEffect(() => {
@@ -1940,9 +1959,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               let damageRange = null;
               let damageDisplay = null;
               
+              // Use effective mastery level (matches Skill Mastery; includes e.g. Blaze Ring +1)
+              const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
               if (baseDamage > 0) {
-                // Calculate range based on the actual damage and mastery level
-                damageRange = calculateDamageRange(baseDamage, move.level, move.masteryLevel);
+                damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
                 damageDisplay = formatDamageRange(damageRange);
               }
               
@@ -2048,7 +2068,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                       textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                       marginBottom: '0.25rem'
                     }}>
-                      {displayName} [Level {move.level}]
+                      {displayName} [Level {effectiveMasteryLevel}]
                     </div>
                     <div style={{ 
                       color: 'rgba(255,255,255,0.9)',

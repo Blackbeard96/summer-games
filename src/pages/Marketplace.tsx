@@ -76,7 +76,7 @@ const artifacts: Artifact[] = [
     id: 'uxp-credit-1',
     name: '+1 UXP Credit', 
     description: 'Credit to be added to any non-assessment assignment', 
-    price: 100, 
+    price: 1000, 
     icon: '📕', 
     image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
@@ -86,7 +86,7 @@ const artifacts: Artifact[] = [
     id: 'uxp-credit',
     name: '+2 UXP Credit',
     description: 'Credit to be added to any non-assessment assignment', 
-    price: 180, 
+    price: 1800, 
     icon: '📚', 
     image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
@@ -96,12 +96,11 @@ const artifacts: Artifact[] = [
     id: 'uxp-credit-4',
     name: '+4 UXP Credit',
     description: 'Enhanced credit to be added to any non-assessment assignment', 
-    price: 100, 
+    price: 3420, 
     icon: '📖', 
     image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
     category: 'special',
-    rarity: 'rare',
-    disabled: true
+    rarity: 'rare'
   },
   { 
     id: 'double-pp',
