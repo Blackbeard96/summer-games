@@ -51,6 +51,19 @@ export interface SessionStats {
   }>;
 }
 
+/** Quiz awards snapshot (stored when a quiz completes, shown in Live Event summary). */
+export interface QuizAwardsPlacement {
+  place: string;   // e.g. "1st", "2nd", "Top 5"
+  pp: number;
+  xp: number;
+  artifactName?: string;
+}
+
+export interface QuizAwardsSnapshot {
+  quizTitle?: string;
+  placements: QuizAwardsPlacement[];
+}
+
 export interface SessionSummary {
   sessionId: string;
   classId: string;
@@ -61,6 +74,8 @@ export interface SessionSummary {
   totalPlayers: number;
   stats: { [playerId: string]: SessionStats };
   mvpPlayerId?: string; // Player with most eliminations or most PP
+  /** Quiz rewards by placement (if a quiz was run during the event). */
+  quizAwardsSnapshot?: QuizAwardsSnapshot;
 }
 
 

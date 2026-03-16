@@ -1131,9 +1131,9 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
               📜 BATTLE LOG
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              {battleLog.map((logEntry, index) => (
+              {[...battleLog].reverse().map((logEntry, revIndex) => (
                 <div 
-                  key={index}
+                  key={battleLog.length - 1 - revIndex}
                   style={{
                     padding: '0.375rem 0.5rem',
                     borderRadius: '0.25rem',

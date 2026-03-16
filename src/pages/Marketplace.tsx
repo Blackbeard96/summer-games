@@ -805,81 +805,58 @@ const Marketplace = () => {
         // Update both collections atomically using a transaction
         const usersRef = doc(db, 'users', currentUser.uid);
         await runTransaction(db, async (transaction) => {
-          // Re-read documents to ensure we have latest data
           const freshUserSnap = await transaction.get(userRef);
           const freshUsersSnap = await transaction.get(usersRef);
           
-          if (!freshUserSnap.exists()) {
-            throw new Error('User document not found in students collection');
+          if (freshUserSnap.exists()) {
+            const freshUserData = freshUserSnap.data();
+            const freshInventory = freshUserData.inventory || [];
+            const freshUpdatedInventory = [...freshInventory];
+            const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+            if (freshArtifactIndex > -1) {
+              freshUpdatedInventory.splice(freshArtifactIndex, 1);
+            }
+            transaction.update(userRef, { inventory: freshUpdatedInventory });
           }
           
-          const freshUserData = freshUserSnap.data();
-          const freshInventory = freshUserData.inventory || [];
-          
-          // Remove artifact from students inventory
-          const freshUpdatedInventory = [...freshInventory];
-          const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
-          if (freshArtifactIndex > -1) {
-            freshUpdatedInventory.splice(freshArtifactIndex, 1);
-          }
-          
-          // Update students collection
-          transaction.update(userRef, {
-            inventory: freshUpdatedInventory
-          });
-          
-          // Update users collection artifacts array
           if (freshUsersSnap.exists()) {
             const freshUsersData = freshUsersSnap.data();
-            const freshArtifacts = freshUsersData.artifacts || [];
-            
+            const freshArtifactsRaw = freshUsersData.artifacts || [];
+            let freshArtifacts: any[] = Array.isArray(freshArtifactsRaw)
+              ? freshArtifactsRaw
+              : (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null
+                  ? Object.values(freshArtifactsRaw).filter((val: any) => typeof val === 'object' && val !== null && (val.name || val.id))
+                  : []);
             let foundOne = false;
             const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
               if (foundOne) return artifact;
-              
               if (typeof artifact === 'string') {
                 if (artifact === artifactName) {
                   foundOne = true;
-                  return { 
-                    id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                    name: artifactName,
-                    used: true,
-                    usedAt: new Date(),
-                    isLegacy: true
-                  };
-                }
-                return artifact;
-              } else {
-                const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-                if (artifact.name === artifactName && isNotUsed) {
-                  foundOne = true;
-                  return { ...artifact, used: true, usedAt: new Date() };
+                  return { id: artifactName.toLowerCase().replace(/\s+/g, '-'), name: artifactName, used: true, usedAt: new Date(), isLegacy: true };
                 }
                 return artifact;
               }
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
             });
-            
-            transaction.update(usersRef, {
-              artifacts: freshUpdatedArtifacts
-            });
+            transaction.update(usersRef, { artifacts: freshUpdatedArtifacts });
           }
         });
         
-        // Refresh local state
         const refreshedSnap = await getDoc(userRef);
         if (refreshedSnap.exists()) {
           const refreshedData = refreshedSnap.data();
           setInventory(refreshedData.inventory || []);
         }
-        
-        // Refresh artifact counts
         await updateAllArtifactCounts();
-        
-        // Track daily challenge: Use Health Potion
         updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch(err => 
           console.error('Error updating daily challenge progress for health potion:', err)
         );
-        
         alert(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
         return;
       }
@@ -903,91 +880,58 @@ const Marketplace = () => {
         // Update both collections atomically using a transaction
         const usersRef = doc(db, 'users', currentUser.uid);
         await runTransaction(db, async (transaction) => {
-          // Re-read documents to ensure we have latest data
           const freshUserSnap = await transaction.get(userRef);
           const freshUsersSnap = await transaction.get(usersRef);
           
-          if (!freshUserSnap.exists()) {
-            throw new Error('User document not found in students collection');
+          if (freshUserSnap.exists()) {
+            const freshUserData = freshUserSnap.data();
+            const freshInventory = freshUserData.inventory || [];
+            const freshUpdatedInventory = [...freshInventory];
+            const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+            if (freshArtifactIndex > -1) {
+              freshUpdatedInventory.splice(freshArtifactIndex, 1);
+            }
+            transaction.update(userRef, { inventory: freshUpdatedInventory });
           }
           
-          const freshUserData = freshUserSnap.data();
-          const freshInventory = freshUserData.inventory || [];
-          
-          // Remove artifact from students inventory
-          const freshUpdatedInventory = [...freshInventory];
-          const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
-          if (freshArtifactIndex > -1) {
-            freshUpdatedInventory.splice(freshArtifactIndex, 1);
-          }
-          
-          // Update students collection
-          transaction.update(userRef, {
-            inventory: freshUpdatedInventory
-          });
-          
-          // Update users collection artifacts array
           if (freshUsersSnap.exists()) {
             const freshUsersData = freshUsersSnap.data();
             const freshArtifactsRaw = freshUsersData.artifacts || [];
-            
-            // Handle artifacts as either array or object
             let freshArtifacts: any[] = [];
             if (Array.isArray(freshArtifactsRaw)) {
               freshArtifacts = freshArtifactsRaw;
             } else if (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null) {
-              // Convert object format to array format
-              freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) => {
-                // Filter out purchase metadata entries (those with _purchase suffix)
-                if (typeof val === 'object' && val !== null) {
-                  return val.name || val.id; // Keep actual artifact objects
-                }
-                return false;
-              });
+              freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) =>
+                typeof val === 'object' && val !== null && (val.name || val.id)
+              );
             }
-            
             let foundOne = false;
             const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
               if (foundOne) return artifact;
-              
               if (typeof artifact === 'string') {
                 if (artifact === artifactName) {
                   foundOne = true;
-                  return { 
-                    id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                    name: artifactName,
-                    used: true,
-                    usedAt: new Date(),
-                    isLegacy: true
-                  };
-                }
-                return artifact;
-              } else {
-                const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-                if (artifact.name === artifactName && isNotUsed) {
-                  foundOne = true;
-                  return { ...artifact, used: true, usedAt: new Date() };
+                  return { id: artifactName.toLowerCase().replace(/\s+/g, '-'), name: artifactName, used: true, usedAt: new Date(), isLegacy: true };
                 }
                 return artifact;
               }
+              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+              if (artifact.name === artifactName && isNotUsed) {
+                foundOne = true;
+                return { ...artifact, used: true, usedAt: new Date() };
+              }
+              return artifact;
             });
-            
-            transaction.update(usersRef, {
-              artifacts: freshUpdatedArtifacts
-            });
+            transaction.update(usersRef, { artifacts: freshUpdatedArtifacts });
           }
         });
         
-        // Refresh local state
         const refreshedSnap = await getDoc(userRef);
         if (refreshedSnap.exists()) {
           const refreshedData = refreshedSnap.data();
           setInventory(refreshedData.inventory || []);
         }
-        
-        // Refresh artifact counts
         await updateAllArtifactCounts();
-        
         alert('🛡️ Shield activated! Your next attack will be blocked.');
         return;
       }
@@ -1058,83 +1002,50 @@ const Marketplace = () => {
       // Update both collections atomically using a transaction
       // usersRef is already declared at the top of the try block
       await runTransaction(db, async (transaction) => {
-        // Re-read documents to ensure we have latest data
         const freshUserSnap = await transaction.get(userRef);
         const freshUsersSnap = await transaction.get(usersRef);
-        
-        if (!freshUserSnap.exists()) {
-          throw new Error('User document not found in students collection');
+        if (!freshUserSnap.exists() && !freshUsersSnap.exists()) {
+          throw new Error('User data not found. Please refresh the page and try again.');
         }
-        
-        const freshUserData = freshUserSnap.data();
-        const freshInventory = freshUserData.inventory || [];
-        
-        // Remove artifact from students inventory
-        const freshUpdatedInventory = [...freshInventory];
-        const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
-        if (freshArtifactIndex > -1) {
-          freshUpdatedInventory.splice(freshArtifactIndex, 1);
+        if (freshUserSnap.exists()) {
+          const freshUserData = freshUserSnap.data();
+          const freshInventory = freshUserData.inventory || [];
+          const freshUpdatedInventory = [...freshInventory];
+          const freshArtifactIndex = freshUpdatedInventory.indexOf(artifactName);
+          if (freshArtifactIndex > -1) {
+            freshUpdatedInventory.splice(freshArtifactIndex, 1);
+          }
+          transaction.update(userRef, { inventory: freshUpdatedInventory });
         }
-        
-        // Update students collection
-        transaction.update(userRef, {
-          inventory: freshUpdatedInventory
-        });
-        
-        // Update users collection artifacts array
         if (freshUsersSnap.exists()) {
           const freshUsersData = freshUsersSnap.data();
           const freshArtifactsRaw = freshUsersData.artifacts || [];
-          
-          // Handle artifacts as either array or object
           let freshArtifacts: any[] = [];
           if (Array.isArray(freshArtifactsRaw)) {
             freshArtifacts = freshArtifactsRaw;
           } else if (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null) {
-            // Convert object format to array format
-            freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) => {
-              // Filter out purchase metadata entries (those with _purchase suffix)
-              if (typeof val === 'object' && val !== null) {
-                return val.name || val.id; // Keep actual artifact objects
-              }
-              return false;
-            });
+            freshArtifacts = Object.values(freshArtifactsRaw).filter((val: any) =>
+              typeof val === 'object' && val !== null && (val.name || val.id)
+            );
           }
-          
-          // Find the FIRST unused artifact with this name and mark only that one as used
           let foundOne = false;
           const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
-            // If we already found and marked one, don't mark any more
             if (foundOne) return artifact;
-            
             if (typeof artifact === 'string') {
-              // Legacy artifact stored as string - match by name
               if (artifact === artifactName) {
                 foundOne = true;
-                return { 
-                  id: artifactName.toLowerCase().replace(/\s+/g, '-'),
-                  name: artifactName,
-                  used: true,
-                  usedAt: new Date(),
-                  isLegacy: true
-                };
-              }
-              return artifact;
-            } else {
-              // New artifact stored as object - match by name and check if not already used
-              // Only mark as used if it's not already used (check for used property explicitly)
-              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-              if (artifact.name === artifactName && isNotUsed) {
-                foundOne = true;
-                return { ...artifact, used: true, usedAt: new Date() };
+                return { id: artifactName.toLowerCase().replace(/\s+/g, '-'), name: artifactName, used: true, usedAt: new Date(), isLegacy: true };
               }
               return artifact;
             }
+            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+            if (artifact.name === artifactName && isNotUsed) {
+              foundOne = true;
+              return { ...artifact, used: true, usedAt: new Date() };
+            }
+            return artifact;
           });
-          
-          transaction.update(usersRef, {
-            artifacts: freshUpdatedArtifacts
-          });
+          transaction.update(usersRef, { artifacts: freshUpdatedArtifacts });
         }
       });
 
@@ -1155,19 +1066,20 @@ const Marketplace = () => {
     } catch (error: any) {
       console.error('Error using artifact:', error);
       
-      // Provide more specific error messages
       let errorMessage = 'Failed to use artifact. Please try again.';
+      const code = error?.code;
+      const msg = error?.message ?? '';
       
-      if (error?.message) {
-        if (error.message.includes('not found')) {
-          errorMessage = `❌ Artifact "${artifactName}" not found. Please refresh the page and try again.`;
-        } else if (error.message.includes('permission')) {
-          errorMessage = '❌ Permission denied. Please make sure you are logged in.';
-        } else if (error.message.includes('network') || error.message.includes('offline')) {
-          errorMessage = '❌ Network error. Please check your connection and try again.';
-        } else {
-          errorMessage = `❌ Error: ${error.message}`;
-        }
+      if (code === 'permission-denied' || msg.toLowerCase().includes('permission')) {
+        errorMessage = '❌ Permission denied. Please make sure you are logged in.';
+      } else if (code === 'not-found' || msg.toLowerCase().includes('not found')) {
+        errorMessage = '❌ User or artifact data not found. Please refresh the page and try again.';
+      } else if (code === 'unavailable' || msg.toLowerCase().includes('network') || msg.toLowerCase().includes('offline')) {
+        errorMessage = '❌ Network error. Please check your connection and try again.';
+      } else if (code === 'failed-precondition' || msg.toLowerCase().includes('transaction')) {
+        errorMessage = '❌ Data changed. Please refresh the page and try again.';
+      } else if (msg) {
+        errorMessage = `❌ ${msg}`;
       }
       
       alert(errorMessage);

@@ -53,6 +53,21 @@ import {
 } from '../utils/generatorEarnings';
 import VaultUpgradeModal, { VaultUpgradeData } from '../components/VaultUpgradeModal';
 
+/** Pattern Break and Strategy Matrix are always 1-turn cooldown; normalize when loading from Firestore. */
+function normalizeManifestMoveCooldowns(moves: Move[]): Move[] {
+  if (!moves?.length) return moves;
+  const oneTurnNames = new Set(['Pattern Break', 'Strategy Matrix']);
+  return moves.map((move) => {
+    const templateIndex = parseInt(String(move.id || '').replace('move_', ''), 10) - 1;
+    const template = templateIndex >= 0 && templateIndex < MOVE_TEMPLATES.length ? MOVE_TEMPLATES[templateIndex] : null;
+    const isOneTurnCooldown = template && oneTurnNames.has(template.name);
+    if (isOneTurnCooldown || oneTurnNames.has(move.name)) {
+      return { ...move, cooldown: 1 };
+    }
+    return move;
+  });
+}
+
 interface BattleContextType {
   // Vault Management
   vault: Vault | null;
@@ -637,13 +652,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               return originalMove && move.name !== originalMove.name;
             });
             
-            // Only update database if names changed
-            if (hasNameUpdates) {
-              console.log('BattleContext: Move names updated, saving to database');
-              await updateDoc(movesRef, { moves: updatedMoves });
+            const normalizedMoves = normalizeManifestMoveCooldowns(updatedMoves);
+            // Only update database if names or cooldowns changed
+            const hasCooldownUpdates = normalizedMoves.some((m, i) => (updatedMoves[i] as Move)?.cooldown !== m.cooldown);
+            if (hasNameUpdates || hasCooldownUpdates) {
+              if (hasCooldownUpdates) console.log('BattleContext: Normalizing Pattern Break / Strategy Matrix cooldown to 1');
+              await updateDoc(movesRef, { moves: normalizedMoves });
             }
             
-            setMoves(updatedMoves);
+            setMoves(normalizedMoves);
           }
         }
 
@@ -1021,7 +1038,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (movesDoc.exists()) {
           const movesData = movesDoc.data().moves || [];
           console.log('BattleContext: Moves updated from Firestore listener, count:', movesData.length);
-          setMoves(movesData);
+          setMoves(normalizeManifestMoveCooldowns(movesData));
         }
       } catch (error) {
         if (isFirestoreInternalError(error)) {

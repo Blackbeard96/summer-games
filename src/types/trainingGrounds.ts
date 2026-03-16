@@ -30,6 +30,10 @@ export interface TrainingQuizSet {
   isPublished: boolean;
   questionCount: number; // Denormalized count
   tags?: string[];
+  /** If true, quiz can be launched in Live Event Quiz Mode. Default true when undefined. */
+  isLiveEventCompatible?: boolean;
+  /** Per-question time limit in seconds for live mode. Override default (e.g. 20). */
+  timeLimitSeconds?: number;
   createdAt: any;
   updatedAt: any;
 }

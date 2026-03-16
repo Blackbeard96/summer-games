@@ -214,7 +214,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             background: 'rgba(255, 255, 255, 0.95)',
             borderRadius: '0.75rem',
             padding: '1.25rem',
-            marginBottom: '1.5rem',
+            marginBottom: '1rem',
             border: '2px solid #3b82f6'
           }}
         >
@@ -229,6 +229,53 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             <p style={{ fontSize: '0.9rem', color: '#6b7280', margin: 0 }}>No participation points earned this event.</p>
           )}
         </div>
+
+        {/* 4. Awards (quiz rewards by placement, if any) */}
+        {summary.quizAwardsSnapshot && summary.quizAwardsSnapshot.placements?.length > 0 && (
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.95)',
+              borderRadius: '0.75rem',
+              padding: '1.25rem',
+              marginBottom: '1.5rem',
+              border: '2px solid #f59e0b'
+            }}
+          >
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem' }}>
+              🏆 Awards
+            </h3>
+            {summary.quizAwardsSnapshot.quizTitle && (
+              <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>
+                Quiz: {summary.quizAwardsSnapshot.quizTitle}
+              </p>
+            )}
+            <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>
+              Rewards by placement (already applied to players):
+            </p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {summary.quizAwardsSnapshot.placements.map((row, idx) => (
+                <li
+                  key={idx}
+                  style={{
+                    padding: '0.5rem 0',
+                    borderBottom: idx < summary.quizAwardsSnapshot!.placements.length - 1 ? '1px solid #e5e7eb' : 'none',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span style={{ fontWeight: 'bold', color: '#1f2937', minWidth: '4rem' }}>{row.place}</span>
+                  {row.pp > 0 && <span style={{ color: '#059669', fontSize: '0.9rem' }}>{row.pp} PP</span>}
+                  {row.pp > 0 && row.xp > 0 && <span style={{ color: '#6b7280' }}>•</span>}
+                  {row.xp > 0 && <span style={{ color: '#2563eb', fontSize: '0.9rem' }}>{row.xp} XP</span>}
+                  {row.pp > 0 && row.xp > 0 && row.artifactName && <span style={{ color: '#6b7280' }}>•</span>}
+                  {row.artifactName && <span style={{ color: '#7c3aed', fontSize: '0.9rem' }}>{row.artifactName}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Current Player Stats (Highlighted) */}
         {currentPlayerStats && (

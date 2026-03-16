@@ -388,7 +388,7 @@ export async function finalizeSessionStats(
     // Determine overall MVP (prioritize eliminations, then PP)
     const mvpPlayerId = mvpEliminationsPlayer || mvpPPPlayer;
     
-    // Create session summary
+    // Create session summary (include quiz awards if stored when a quiz completed)
     const summary: SessionSummary = {
       sessionId,
       classId: sessionData.classId,
@@ -398,9 +398,10 @@ export async function finalizeSessionStats(
       duration,
       totalPlayers: playerIds.length,
       stats: statsMap,
-      mvpPlayerId
+      mvpPlayerId,
+      ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot })
     };
-    
+
     // Store summary in session document
     await updateDoc(sessionRef, {
       sessionSummary: summary,

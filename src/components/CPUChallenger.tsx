@@ -578,8 +578,8 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
           <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#374151' }}>
             Battle Log
           </h4>
-          {battleLog.map((log, index) => (
-            <div key={index} style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
+          {[...battleLog].reverse().map((log, revIndex) => (
+            <div key={battleLog.length - 1 - revIndex} style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>
               {log}
             </div>
           ))}

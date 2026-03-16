@@ -49,6 +49,63 @@
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
     <title>Xiotein School - Manifestation Game</title>
+    <!-- Run before any bundle: suppress Firestore ca9 so dev overlay never sees it -->
+    <script>
+(function() {
+  function isFirestoreCa9(msg, err) {
+    var s = (msg || '') + (err && err.message ? err.message : '') + (err && err.stack ? err.stack : '');
+    if (!s) return false;
+    return s.indexOf('INTERNAL ASSERTION FAILED') !== -1 || s.indexOf('(ID: ca9)') !== -1 || s.indexOf('ID: ca9') !== -1 || s.indexOf('"ve":-1') !== -1 || (s.indexOf('FIRESTORE') !== -1 && s.indexOf('Unexpected state') !== -1);
+  }
+  function patchHook(hook) {
+    if (!hook) return hook;
+    if (hook.onError) {
+      var orig = hook.onError;
+      hook.onError = function() {
+        for (var i = 0; i < arguments.length; i++) {
+          var a = arguments[i];
+          var str = (a && a.message) || String(a);
+          if (isFirestoreCa9(str, a)) return;
+        }
+        return orig.apply(this, arguments);
+      };
+    }
+    if (hook.showErrorOverlay) {
+      var origShow = hook.showErrorOverlay;
+      hook.showErrorOverlay = function() {
+        for (var i = 0; i < arguments.length; i++) {
+          var a = arguments[i];
+          var str = (a && a.message) || String(a);
+          if (isFirestoreCa9(str, a)) return;
+        }
+        return origShow.apply(this, arguments);
+      };
+    }
+    return hook;
+  }
+  var _hook;
+  Object.defineProperty(window, '__REACT_ERROR_OVERLAY_GLOBAL_HOOK__', {
+    get: function() { return _hook; },
+    set: function(v) { _hook = patchHook(v); },
+    configurable: true
+  });
+  window.addEventListener('error', function(ev) {
+    var msg = ev.message || '';
+    var errStr = ev.error ? (ev.error.message || '') + (ev.error.stack || '') : '';
+    if (isFirestoreCa9(msg, ev.error) || isFirestoreCa9(errStr, null)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    }
+  }, true);
+  var prev = window.onerror;
+  window.onerror = function(msg, src, line, col, err) {
+    if (isFirestoreCa9(msg, err)) return true;
+    if (prev) return prev.apply(this, arguments);
+    return false;
+  };
+})();
+    </script>
     <style>
       /* Prevent flash of unstyled content */
       body {

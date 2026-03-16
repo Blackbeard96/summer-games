@@ -5,7 +5,8 @@ import { useBattle } from '../context/BattleContext';
 import { doc, onSnapshot, updateDoc, setDoc, serverTimestamp, getDoc, arrayUnion, arrayRemove, increment, deleteField, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
-import { IslandRaidBattleRoom, IslandRaidEnemy, IslandRaidPlayer } from '../types/islandRaid';
+import { IslandRaidBattleRoom, IslandRaidEnemy, IslandRaidPlayer, IslandRaidLevel } from '../types/islandRaid';
+import { getIslandRaidLevel } from '../utils/islandRaidLevelsService';
 import { getLevelFromXP } from '../utils/leveling';
 import IslandRaidVictoryModal from './IslandRaidVictoryModal';
 import LuzIntroCutscene from './LuzIntroCutscene';
@@ -15,6 +16,28 @@ import { debug } from '../utils/debug';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { grantArtifactToPlayer } from '../utils/artifactCompensation';
+
+/** Artifact id -> name/image for granting level completion rewards. */
+const REWARD_ARTIFACT_INFO: Record<string, { name: string; image: string }> = {
+  'checkin-free': { name: 'Get Out of Check-in Free', image: '/images/Get-Out-of-Check-in-Free.png' },
+  'shield': { name: 'Shield', image: '/images/Shield Item.jpeg' },
+  'health-potion-25': { name: 'Health Potion (25)', image: '/images/Health Potion - 25.png' },
+  'lunch-mosley': { name: 'Lunch on Mosley', image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2' },
+  'forge-token': { name: 'Forge Token', image: '/images/Forge Token.png' },
+  'uxp-credit-1': { name: '+1 UXP Credit', image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2' },
+  'uxp-credit': { name: '+2 UXP Credit', image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2' },
+  'uxp-credit-4': { name: '+4 UXP Credit', image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2' },
+  'double-pp': { name: 'Double PP Boost', image: '/images/Double PP.png' },
+  'skip-the-line': { name: 'Skip the Line', image: '/images/Skip the Line.png' },
+  'work-extension': { name: 'Work Extension', image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=facearea&w=256&h=256&facepad=2' },
+  'instant-a': { name: 'Instant A', image: '/images/Instant A.png' },
+  'blaze-ring': { name: 'Blaze Ring', image: '/images/Blaze Ring.png' },
+  'terra-ring': { name: 'Terra Ring', image: '/images/Terra Ring.png' },
+  'aqua-ring': { name: 'Aqua Ring', image: '/images/Aqua Ring.png' },
+  'air-ring': { name: 'Air Ring', image: '/images/Air Ring.png' },
+  'instant-regrade-pass': { name: 'Instant Regrade Pass', image: '/images/Instant Regrade Pass.png' },
+  'captains-helmet': { name: "Captain's Helmet", image: '/images/Captains Helmet.png' }
+};
 
 interface IslandRaidBattleProps {
   gameId: string;
@@ -55,6 +78,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     elementalRing?: { id: string; name: string; image: string };
     captainHelmet?: boolean;
   } | null>(null);
+  const [levelConfig, setLevelConfig] = useState<IslandRaidLevel | null>(null);
   const hasJoinedRef = useRef(false);
   const isUpdatingEnemiesRef = useRef(false); // Track when we're updating enemies to prevent listener from overwriting
   const isUpdatingEnemiesBlockStartRef = useRef<number | null>(null); // Track when the block started for safety timeout
@@ -160,28 +184,41 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     joinBattleRoom();
   }, [currentUser, gameId, lobbyId]);
 
-  // Fetch difficulty from game document
+  // Fetch difficulty from game document; fetch level config when battle room has levelId
   useEffect(() => {
     if (!gameId) return;
 
-    const fetchDifficulty = async () => {
+    const fetchDifficultyAndLevel = async () => {
       try {
         const gameRef = doc(db, 'islandRaidGames', gameId);
         const gameDoc = await getDoc(gameRef);
-        
         if (gameDoc.exists()) {
           const gameData = gameDoc.data();
-          if (gameData.difficulty) {
-            setDifficulty(gameData.difficulty);
+          if (gameData.difficulty) setDifficulty(gameData.difficulty);
+          if (gameData.levelId) {
+            const level = await getIslandRaidLevel(gameData.levelId);
+            setLevelConfig(level ?? null);
+          } else {
+            setLevelConfig(null);
           }
         }
       } catch (error) {
-        console.error('Error fetching game difficulty:', error);
+        console.error('Error fetching game difficulty/level:', error);
       }
     };
 
-    fetchDifficulty();
+    fetchDifficultyAndLevel();
   }, [gameId]);
+
+  // Also load level when battle room has levelId (e.g. room created by lobby with level)
+  useEffect(() => {
+    const levelId = (battleRoom as any)?.levelId;
+    if (!levelId) {
+      if (!(battleRoom as any)?.levelId) setLevelConfig(null);
+      return;
+    }
+    getIslandRaidLevel(levelId).then((level) => setLevelConfig(level ?? null));
+  }, [battleRoom?.id, (battleRoom as any)?.levelId]);
 
   // Listen to battle room updates
   useEffect(() => {
@@ -626,6 +663,40 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
 
     return () => unsubscribe();
   }, [gameId, currentUser]);
+
+  /** Generate enemies for a wave from admin-defined level config. */
+  const generateWaveEnemiesFromLevel = (wave: number, level: IslandRaidLevel): IslandRaidEnemy[] => {
+    const waveConfig = level.waves?.find((w) => w.waveIndex === wave);
+    if (!waveConfig?.enemies?.length) return [];
+    const difficultyMultiplier = { easy: 0.8, normal: 1.0, hard: 1.5, nightmare: 2.0 }[level.difficulty];
+    const out: IslandRaidEnemy[] = [];
+    let idx = 0;
+    for (const t of waveConfig.enemies) {
+      const count = Math.max(1, t.count || 1);
+      for (let c = 0; c < count; c++) {
+        const health = Math.floor((t.health || 100) * difficultyMultiplier);
+        const shield = Math.floor((t.shieldStrength ?? 0) * difficultyMultiplier);
+        out.push({
+          id: `enemy_${wave}_${idx}`,
+          type: t.type,
+          name: count > 1 ? `${t.name} ${c + 1}` : t.name,
+          health,
+          maxHealth: health,
+          shieldStrength: shield,
+          maxShieldStrength: shield,
+          level: Math.floor((t.level || 1) * difficultyMultiplier),
+          damage: Math.floor((t.damage || 40) * difficultyMultiplier),
+          moves: [],
+          position: { x: Math.random() * 100, y: Math.random() * 100 },
+          spawnTime: new Date(),
+          waveNumber: wave,
+          image: t.image
+        });
+        idx++;
+      }
+    }
+    return out;
+  };
 
   // Generate enemies for a wave
   const generateWaveEnemies = (wave: number, difficulty: 'easy' | 'normal' | 'hard' | 'nightmare'): IslandRaidEnemy[] => {
@@ -1114,7 +1185,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         return false;
       }
       
-      // Get custom enemies or generate new ones
+      // Get custom enemies, level config enemies, or generate from default
       let newEnemies: IslandRaidEnemy[];
       if (battleRoomData && (battleRoomData as any).customWaves && (battleRoomData as any).customWaves[nextWave]) {
         debug.log('IslandRaidBattle', `Using CUSTOM enemies for Wave ${nextWave}`);
@@ -1123,9 +1194,15 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           ...enemy,
           waveNumber: enemy.waveNumber !== undefined ? enemy.waveNumber : nextWave
         }));
+      } else if (levelConfig) {
+        debug.log('IslandRaidBattle', `Using LEVEL config enemies for Wave ${nextWave}`);
+        newEnemies = generateWaveEnemiesFromLevel(nextWave, levelConfig);
+        newEnemies = newEnemies.map((enemy: any) => ({
+          ...enemy,
+          waveNumber: enemy.waveNumber !== undefined ? enemy.waveNumber : nextWave
+        }));
       } else {
         debug.log('IslandRaidBattle', `Generating enemies for Wave ${nextWave}`);
-        // generateWaveEnemies is defined in this file
         newEnemies = generateWaveEnemies(nextWave, difficulty);
         newEnemies = newEnemies.map((enemy: any) => ({
           ...enemy,
@@ -1309,12 +1386,25 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           const isMissionBattle = !!(battleRoom as any).isMissionBattle;
           const missionRewards = (battleRoom as any).rewards as { xp: number; pp: number; drops?: Array<{ type: string; refId?: string; qty?: number }> } | undefined;
           
-          // Determine rewards: mission battle uses room.rewards; otherwise use difficulty-based rewards
+          // Determine rewards: mission battle uses room.rewards; level config uses level.rewards; else difficulty-based
           const difficultyKey = difficulty.toLowerCase();
-          let baseRewards: { pp: number; xp: number; truthMetal: number; elementalRing?: { id: string; name: string; image: string }; captainHelmet?: boolean } = { pp: 0, xp: 0, truthMetal: 0 };
+          let baseRewards: { pp: number; xp: number; truthMetal: number; elementalRing?: { id: string; name: string; image: string }; captainHelmet?: boolean; artifactIds?: string[] } = { pp: 0, xp: 0, truthMetal: 0 };
           
           if (isMissionBattle && missionRewards) {
             baseRewards = { pp: missionRewards.pp ?? 0, xp: missionRewards.xp ?? 0, truthMetal: 0 };
+          } else if (levelConfig?.rewards) {
+            const r = levelConfig.rewards;
+            baseRewards = { pp: r.pp ?? 0, xp: r.xp ?? 0, truthMetal: r.truthMetal ?? 0, captainHelmet: r.captainHelmet, artifactIds: r.artifactIds && r.artifactIds.length > 0 ? r.artifactIds : undefined };
+            if (r.elementalRingIds?.length) {
+              const ringId = r.elementalRingIds[Math.floor(Math.random() * r.elementalRingIds.length)];
+              const ringImages: Record<string, string> = {
+                'blaze-ring': '/images/Blaze Ring.png',
+                'terra-ring': '/images/Terra Ring.png',
+                'aqua-ring': '/images/Aqua Ring.png',
+                'air-ring': '/images/Air Ring.png'
+              };
+              baseRewards.elementalRing = { id: ringId, name: ringId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), image: ringImages[ringId] || '/images/Blaze Ring.png' };
+            }
           } else if (difficulty === 'easy') {
             baseRewards = { pp: 150, xp: 150, truthMetal: 0, captainHelmet: true };
           } else if (difficulty === 'normal') {
@@ -1341,7 +1431,10 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 
                 let rewards = baseRewards;
                 if (!isMissionBattle && !isFirstCompletion) {
-                  if (difficulty === 'easy') {
+                  if (levelConfig?.repeatRewards) {
+                    const rr = levelConfig.repeatRewards;
+                    rewards = { pp: rr.pp ?? 0, xp: rr.xp ?? 0, truthMetal: rr.truthMetal ?? 0, artifactIds: rr.artifactIds };
+                  } else if (difficulty === 'easy') {
                     rewards = { pp: 150, xp: 150, truthMetal: 0 };
                   } else if (difficulty === 'normal') {
                     rewards = { pp: 100, xp: 100, truthMetal: 0 };
@@ -1401,6 +1494,23 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       }
                     };
                   }
+                  if (rewards.artifactIds?.length) {
+                    for (const aid of rewards.artifactIds) {
+                      const info = REWARD_ARTIFACT_INFO[aid] || { name: aid.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()), image: '' };
+                      updatedArtifacts = {
+                        ...updatedArtifacts,
+                        [aid]: true,
+                        [`${aid}_purchase`]: {
+                          id: aid,
+                          name: info.name,
+                          image: info.image,
+                          purchasedAt: new Date(),
+                          used: false,
+                          fromIslandRaid: true
+                        }
+                      };
+                    }
+                  }
                 }
                 
                 const updates: any = {
@@ -1408,7 +1518,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   xp: increment(rewards.xp),
                   truthMetal: increment(rewards.truthMetal)
                 };
-                if (!isMissionBattle && isFirstCompletion && (rewards.captainHelmet || rewards.elementalRing)) {
+                const hasArtifactRewards = rewards.captainHelmet || rewards.elementalRing || (rewards.artifactIds && rewards.artifactIds.length > 0);
+                if (!isMissionBattle && isFirstCompletion && hasArtifactRewards) {
                   updates.artifacts = updatedArtifacts;
                   updates.islandRaidCompletions = { ...islandRaidCompletions, [difficultyKey]: { completed: true, completedAt: new Date(), firstCompletion: true } };
                 }

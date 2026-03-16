@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { IslandRunLobby, IslandRunPlayer } from '../types/islandRun';
 import { getLevelFromXP } from '../utils/leveling';
 import { joinRaidLobby, leaveRaidLobby, touchRaidLobby, touchRaidLobbyMember } from '../utils/raidLobbyService';
+import { listIslandRaidLevels, getIslandRaidLevel, buildWaveEnemiesFromLevel } from '../utils/islandRaidLevelsService';
 
 const IslandRunLobbyView: React.FC = () => {
   const { lobbyId } = useParams<{ lobbyId: string }>();
@@ -15,6 +16,8 @@ const IslandRunLobbyView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isReady, setIsReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now()); // For timer updates
+  const [availableLevels, setAvailableLevels] = useState<{ id: string; name: string; difficulty: string; maxWaves: number }[]>([]);
+  const [selectedLevelId, setSelectedLevelId] = useState<string>(''); // optional level override
   const hasJoinedRef = useRef(false);
   const joinAttemptedRef = useRef(false);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -75,6 +78,13 @@ const IslandRunLobbyView: React.FC = () => {
 
     joinLobby();
   }, [lobbyId, currentUser, navigate]);
+
+  // Load admin-defined Island Raid levels (for host level selector)
+  useEffect(() => {
+    listIslandRaidLevels().then((levels) => {
+      setAvailableLevels(levels.map((l) => ({ id: l.id, name: l.name, difficulty: l.difficulty, maxWaves: l.maxWaves })));
+    }).catch(() => {});
+  }, []);
 
   // Listen to lobby updates
   useEffect(() => {
@@ -296,34 +306,24 @@ const IslandRunLobbyView: React.FC = () => {
     }
 
     try {
-      // Create game document
-      const gameData = {
-        lobbyId,
-        hostId: currentUser.uid,
-        difficulty: lobby.difficulty,
-        status: 'in_progress',
-        players: lobby.players.map(p => p.userId),
-        waveNumber: 1,
-        maxWaves: lobby.difficulty === 'easy' ? 3 : 5,
-        createdAt: serverTimestamp()
-      };
+      let difficulty = lobby.difficulty;
+      let maxWaves = lobby.difficulty === 'easy' ? 3 : 5;
+      let levelId: string | undefined;
+      let initialEnemies: any[] = [];
 
-      const gamesRef = collection(db, 'islandRaidGames');
-      const gameDoc = await addDoc(gamesRef, gameData);
-      const gameId = gameDoc.id;
+      if (selectedLevelId) {
+        const level = await getIslandRaidLevel(selectedLevelId);
+        if (level) {
+          difficulty = level.difficulty;
+          maxWaves = level.maxWaves;
+          levelId = level.id;
+          initialEnemies = buildWaveEnemiesFromLevel(level, 1);
+        }
+      }
 
-      // Update lobby status
-      const lobbyRef = doc(db, 'islandRunLobbies', lobbyId);
-      await updateDoc(lobbyRef, {
-        status: 'in_progress',
-        gameId,
-        updatedAt: serverTimestamp()
-      }).catch((error) => {
-        console.error('Error updating lobby:', error);
-      });
-
-      // Generate initial enemies for wave 1
-      const generateWaveEnemies = (wave: number, difficulty: 'easy' | 'normal' | 'hard' | 'nightmare') => {
+      if (initialEnemies.length === 0) {
+        // Generate initial enemies for wave 1 (default when no level selected)
+        const generateWaveEnemies = (wave: number, diff: 'easy' | 'normal' | 'hard' | 'nightmare') => {
         const enemies: any[] = [];
 
         const difficultyMultiplier = {
@@ -615,24 +615,49 @@ const IslandRunLobbyView: React.FC = () => {
 
         return enemies;
       };
+        initialEnemies = generateWaveEnemies(1, difficulty);
+      }
 
-      // Create battle room with all players and initial enemies
-      const initialEnemies = generateWaveEnemies(1, lobby.difficulty);
-      // Determine maxWaves based on difficulty
-      const maxWaves = lobby.difficulty === 'easy' ? 3 : 5;
-      
-      const battleRoomData = {
+      // Create game document
+      const gameData: Record<string, unknown> = {
+        lobbyId,
+        hostId: currentUser.uid,
+        difficulty,
+        status: 'in_progress',
+        players: lobby.players.map(p => p.userId),
+        waveNumber: 1,
+        maxWaves,
+        createdAt: serverTimestamp()
+      };
+      if (levelId) gameData.levelId = levelId;
+
+      const gamesRef = collection(db, 'islandRaidGames');
+      const gameDoc = await addDoc(gamesRef, gameData);
+      const gameId = gameDoc.id;
+
+      const lobbyRef = doc(db, 'islandRunLobbies', lobbyId);
+      await updateDoc(lobbyRef, {
+        status: 'in_progress',
+        gameId,
+        updatedAt: serverTimestamp()
+      }).catch((error) => {
+        console.error('Error updating lobby:', error);
+      });
+
+      const battleRoomData: Record<string, unknown> = {
         id: gameId,
         gameId,
         lobbyId,
-        players: lobby.players.map(p => p.userId), // Include ALL players from lobby
+        players: lobby.players.map(p => p.userId),
         enemies: initialEnemies,
         waveNumber: 1,
-        maxWaves: maxWaves,
+        maxWaves,
         status: 'active',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
+      if (levelId) battleRoomData.levelId = levelId;
+      battleRoomData.difficulty = difficulty;
 
       const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
       await setDoc(battleRoomRef, battleRoomData);
@@ -780,10 +805,26 @@ const IslandRunLobbyView: React.FC = () => {
         </button>
         
         {isHost && (
-          <button
-            onClick={handleStartGame}
-            disabled={!allPlayersReady || lobby.players.length < 1}
-            style={{
+          <>
+            {availableLevels.length > 0 && (
+              <div style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <label style={{ fontWeight: 500, fontSize: '0.875rem' }}>Level (optional):</label>
+                <select
+                  value={selectedLevelId}
+                  onChange={(e) => setSelectedLevelId(e.target.value)}
+                  style={{ padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e1', minWidth: '200px' }}
+                >
+                  <option value="">Default ({lobby.difficulty})</option>
+                  {availableLevels.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name} ({l.difficulty}, {l.maxWaves} waves)</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <button
+              onClick={handleStartGame}
+              disabled={!allPlayersReady || lobby.players.length < 1}
+              style={{
               background: allPlayersReady && lobby.players.length >= 1
                 ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'
                 : '#d1d5db',
@@ -799,6 +840,7 @@ const IslandRunLobbyView: React.FC = () => {
           >
             Start Game
           </button>
+          </>
         )}
 
         <button

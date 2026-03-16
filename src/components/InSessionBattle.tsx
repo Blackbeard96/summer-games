@@ -54,6 +54,22 @@ import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
 import SessionSummaryModal from './SessionSummaryModal';
 import { SessionSummary } from '../types/inSessionStats';
 import LiveEventDebugOverlay from './LiveEventDebugOverlay';
+import {
+  subscribeQuizSession,
+  startQuizSession,
+  launchFirstQuestion,
+  advanceQuiz,
+  endQuizSession,
+  clearQuizSession,
+  grantLiveQuizRewards,
+  submitQuizResponse,
+  getMyResponse,
+  subscribeResponseCount,
+} from '../utils/liveQuizService';
+import { getPublishedQuizSets, getQuestions } from '../utils/trainingGroundsService';
+import type { LiveQuizSession as LiveQuizSessionType, LiveQuizRewardConfig, LiveQuizPlacementKey } from '../types/liveQuiz';
+import type { TrainingQuestion } from '../types/trainingGrounds';
+import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
 
 interface Student {
   id: string;
@@ -135,6 +151,42 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   // Session summary modal state
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+
+  // Live Quiz Mode state
+  const [quizSession, setQuizSession] = useState<LiveQuizSessionType | null>(null);
+  const [quizQuestions, setQuizQuestions] = useState<TrainingQuestion[]>([]);
+  const [quizModalOpen, setQuizModalOpen] = useState(false);
+  const [quizList, setQuizList] = useState<{ id: string; title: string; questionCount: number }[]>([]);
+  const [quizStartLoading, setQuizStartLoading] = useState(false);
+  const [selectedQuizId, setSelectedQuizId] = useState<string>('');
+  const [quizNumQuestions, setQuizNumQuestions] = useState<number>(0);
+  const [quizTimeLimit, setQuizTimeLimit] = useState<number>(20);
+  const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
+  const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
+  const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
+  const [quizResponseCount, setQuizResponseCount] = useState(0);
+  const [quizCountdown, setQuizCountdown] = useState<number | null>(null);
+  const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const defaultPlacement = () => ({ pp: 0, xp: 0 });
+  const [quizRewardConfig, setQuizRewardConfig] = useState<LiveQuizRewardConfig>({
+    placements: {
+      first: { pp: 50, xp: 25 },
+      second: { pp: 30, xp: 15 },
+      third: { pp: 20, xp: 10 },
+      top5: defaultPlacement(),
+      top10: defaultPlacement(),
+    },
+  });
+  const QUIZ_REWARD_ARTIFACTS: { id: string; name: string }[] = [
+    { id: 'uxp-credit-1', name: '+1 UXP Credit' },
+    { id: 'uxp-credit', name: '+2 UXP Credit' },
+    { id: 'uxp-credit-4', name: '+4 UXP Credit' },
+    { id: 'shield', name: 'Shield' },
+    { id: 'health-potion-25', name: 'Health Potion (25)' },
+    { id: 'checkin-free', name: 'Get Out of Check-in Free' },
+    { id: 'skip-the-line', name: 'Skip the Line' },
+    { id: 'double-pp', name: 'Double PP Boost' },
+  ];
 
   // Track player presence using presence service
   useEffect(() => {
@@ -436,6 +488,91 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       unsubscribe();
     };
   }, [sessionId, currentUser, userProfiles]);
+
+  // Append entry to Live Event battle log
+  const appendBattleLog = useCallback(async (entry: string) => {
+    try {
+      const sessionRef = doc(db, 'inSessionRooms', sessionId);
+      await updateDoc(sessionRef, {
+        battleLog: arrayUnion(entry),
+        updatedAt: serverTimestamp(),
+      });
+      setBattleLog((prev) => [...prev, entry]);
+    } catch (e) {
+      debugError('inSessionBattle', 'appendBattleLog error', e);
+    }
+  }, [sessionId]);
+
+  // Subscribe to Live Quiz session
+  useEffect(() => {
+    if (!sessionId) return;
+    const unsub = subscribeQuizSession(sessionId, (session) => {
+      setQuizSession(session);
+      if (!session || session.status !== 'question_live') {
+        setQuizCountdown(null);
+        if (quizCountdownRef.current) {
+          clearInterval(quizCountdownRef.current);
+          quizCountdownRef.current = null;
+        }
+      }
+    });
+    return () => unsub();
+  }, [sessionId]);
+
+  // Load quiz questions when session has quizId
+  useEffect(() => {
+    if (!quizSession?.quizId) {
+      setQuizQuestions([]);
+      return;
+    }
+    getQuestions(quizSession.quizId).then(setQuizQuestions);
+  }, [quizSession?.quizId]);
+
+  // Countdown timer when question is live
+  useEffect(() => {
+    if (!quizSession || quizSession.status !== 'question_live' || !quizSession.questionEndsAt) {
+      setQuizCountdown(null);
+      return;
+    }
+    const update = () => {
+      const now = Date.now();
+      const end = quizSession.questionEndsAt ?? 0;
+      const sec = Math.max(0, Math.ceil((end - now) / 1000));
+      setQuizCountdown(sec);
+      if (sec <= 0 && quizCountdownRef.current) {
+        clearInterval(quizCountdownRef.current);
+        quizCountdownRef.current = null;
+      }
+    };
+    update();
+    const t = setInterval(update, 500);
+    quizCountdownRef.current = t;
+    return () => {
+      if (quizCountdownRef.current) clearInterval(quizCountdownRef.current);
+      quizCountdownRef.current = null;
+    };
+  }, [quizSession?.status, quizSession?.questionEndsAt, quizSession?.currentQuestionId]);
+
+  // Reset player answer state when new question goes live
+  useEffect(() => {
+    if (quizSession?.status === 'question_live' && quizSession.currentQuestionId) {
+      setQuizAnswerSubmitted(false);
+      setQuizMyResponse(null);
+      setQuizSelectedIndices([]);
+      getMyResponse(sessionId, currentUser?.uid ?? '').then((r) => {
+        if (r && r.currentQuestionId === quizSession.currentQuestionId) {
+          setQuizAnswerSubmitted(true);
+          setQuizMyResponse({ selectedIndices: r.selectedIndices, isCorrect: r.isCorrect, pointsAwarded: r.pointsAwarded });
+        }
+      });
+    }
+  }, [sessionId, currentUser?.uid, quizSession?.status, quizSession?.currentQuestionId]);
+
+  // Subscribe to response count (host)
+  useEffect(() => {
+    if (!quizSession || !isSessionHost || !quizSession.currentQuestionId) return;
+    return subscribeResponseCount(sessionId, quizSession.currentQuestionId, setQuizResponseCount);
+  }, [sessionId, isSessionHost, quizSession?.currentQuestionId]);
 
   // Load vault data for all players
   const [playerVaultData, setPlayerVaultData] = useState<Record<string, {
@@ -1898,8 +2035,32 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             {sessionPlayers.length} players • {currentPlayer ? `${currentPlayer.movesEarned} moves available` : 'Loading...'}
           </p>
         </div>
-        {/* Leave Live Event: all players. End Session: only designated session-ender. Disabled while summary is open — must close summary first. */}
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        {/* Leave Live Event: all players. End Session: only designated session-ender. Quiz Mode: host only. Disabled while summary is open. */}
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {isSessionHost && !quizSession && (
+            <button
+              onClick={() => {
+                setQuizModalOpen(true);
+                getPublishedQuizSets().then((sets) => {
+                  setQuizList(sets.map((s) => ({ id: s.id, title: s.title, questionCount: s.questionCount || 0 })));
+                  if (sets.length > 0 && !selectedQuizId) setSelectedQuizId(sets[0].id);
+                  if (sets.length > 0 && quizNumQuestions === 0) setQuizNumQuestions(Math.min(10, sets[0].questionCount || 10));
+                });
+              }}
+              style={{
+                background: 'rgba(139, 92, 246, 0.9)',
+                color: 'white',
+                border: '2px solid white',
+                borderRadius: '0.5rem',
+                padding: '0.75rem 1.25rem',
+                fontSize: '1rem',
+                fontWeight: '600',
+                cursor: 'pointer',
+              }}
+            >
+              📋 Start Quiz
+            </button>
+          )}
           <button
             onClick={async () => {
               if (!currentUser || showSessionSummary) return;
@@ -1970,6 +2131,194 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
       </div>
 
+      {/* Quiz setup modal (host only) */}
+      {quizModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}
+          onClick={() => setQuizModalOpen(false)}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '420px',
+              width: '90%',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Start Quiz Mode</h3>
+            <p style={{ marginBottom: '1rem', color: '#64748b', fontSize: '0.9rem' }}>
+              Choose a Training Grounds quiz. All players in the event will answer in real time.
+            </p>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Quiz</label>
+            <select
+              value={selectedQuizId}
+              onChange={(e) => {
+                setSelectedQuizId(e.target.value);
+                const q = quizList.find((x) => x.id === e.target.value);
+                if (q) setQuizNumQuestions(Math.min(10, q.questionCount || 10));
+              }}
+              style={{ width: '100%', padding: '0.5rem', marginBottom: '1rem', borderRadius: '0.5rem' }}
+            >
+              {quizList.map((q) => (
+                <option key={q.id} value={q.id}>
+                  {q.title} ({q.questionCount} questions)
+                </option>
+              ))}
+            </select>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Number of questions</label>
+            <input
+              type="number"
+              min={1}
+              max={quizList.find((q) => q.id === selectedQuizId)?.questionCount || 10}
+              value={quizNumQuestions}
+              onChange={(e) => setQuizNumQuestions(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              style={{ width: '100%', padding: '0.5rem', marginBottom: '1rem', borderRadius: '0.5rem' }}
+            />
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Time per question (seconds)</label>
+            <input
+              type="number"
+              min={5}
+              max={60}
+              value={quizTimeLimit}
+              onChange={(e) => setQuizTimeLimit(Math.max(5, Math.min(60, parseInt(e.target.value, 10) || 20)))}
+              style={{ width: '100%', padding: '0.5rem', marginBottom: '1rem', borderRadius: '0.5rem' }}
+            />
+
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem', marginTop: '0.5rem' }}>
+              <h4 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600 }}>Rewards</h4>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.75rem' }}>Set PP, XP, and artifact for each placement (1st, 2nd, 3rd, Top 5, Top 10). Leave 0 or empty for no reward.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                {(['first', 'second', 'third', 'top5', 'top10'] as LiveQuizPlacementKey[]).map((key) => {
+                  const label = key === 'first' ? '1st' : key === 'second' ? '2nd' : key === 'third' ? '3rd' : key === 'top5' ? 'Top 5 (4th–5th)' : 'Top 10 (6th–10th)';
+                  const p = quizRewardConfig.placements[key] ?? { pp: 0, xp: 0 };
+                  return (
+                    <div key={key} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 1rem', padding: '0.5rem', background: '#f8fafc', borderRadius: '0.5rem' }}>
+                      <span style={{ minWidth: '100px', fontSize: '0.875rem', fontWeight: 600 }}>{label}</span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                        PP
+                        <input
+                          type="number"
+                          min={0}
+                          value={p.pp}
+                          onChange={(e) => setQuizRewardConfig((c) => ({
+                            ...c,
+                            placements: {
+                              ...c.placements,
+                              [key]: { ...(c.placements[key] ?? { pp: 0, xp: 0 }), pp: Math.max(0, parseInt(e.target.value, 10) || 0) },
+                            },
+                          }))}
+                          style={{ width: '64px', padding: '0.35rem', borderRadius: '0.35rem' }}
+                        />
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                        XP
+                        <input
+                          type="number"
+                          min={0}
+                          value={p.xp}
+                          onChange={(e) => setQuizRewardConfig((c) => ({
+                            ...c,
+                            placements: {
+                              ...c.placements,
+                              [key]: { ...(c.placements[key] ?? { pp: 0, xp: 0 }), xp: Math.max(0, parseInt(e.target.value, 10) || 0) },
+                            },
+                          }))}
+                          style={{ width: '64px', padding: '0.35rem', borderRadius: '0.35rem' }}
+                        />
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                        Artifact
+                        <select
+                          value={p.artifactId ?? ''}
+                          onChange={(e) => {
+                            const opt = QUIZ_REWARD_ARTIFACTS.find((a) => a.id === e.target.value);
+                            setQuizRewardConfig((c) => ({
+                              ...c,
+                              placements: {
+                                ...c.placements,
+                                [key]: {
+                                  ...(c.placements[key] ?? { pp: 0, xp: 0 }),
+                                  artifactId: opt?.id,
+                                  artifactName: opt?.name,
+                                },
+                              },
+                            }));
+                          }}
+                          style={{ padding: '0.35rem', borderRadius: '0.35rem', minWidth: '140px' }}
+                        >
+                          <option value="">None</option>
+                          {QUIZ_REWARD_ARTIFACTS.map((a) => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button
+                onClick={() => setQuizModalOpen(false)}
+                style={{ padding: '0.5rem 1rem', borderRadius: '0.5rem', border: '1px solid #ccc', background: '#f1f5f9' }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={quizStartLoading || !selectedQuizId}
+                onClick={async () => {
+                  if (!currentUser || !selectedQuizId) return;
+                  setQuizStartLoading(true);
+                  const hasRewards = Object.values(quizRewardConfig.placements).some(
+                    (p) => (p.pp > 0 || p.xp > 0 || !!(p.artifactId || p.artifactName))
+                  );
+                  const rewardConfigToSave = hasRewards ? { ...quizRewardConfig } : undefined;
+                  const res = await startQuizSession(sessionId, currentUser.uid, selectedQuizId, quizNumQuestions, quizTimeLimit, rewardConfigToSave);
+                  if (!res.ok) {
+                    alert(res.error || 'Failed to start quiz');
+                    setQuizStartLoading(false);
+                    return;
+                  }
+                  const launch = await launchFirstQuestion(sessionId, currentUser.uid);
+                  setQuizStartLoading(false);
+                  if (!launch.ok) {
+                    alert(launch.error || 'Failed to launch first question');
+                    return;
+                  }
+                  await appendBattleLog(`📋 Quiz started: ${quizList.find((q) => q.id === selectedQuizId)?.title ?? 'Quiz'} (${quizNumQuestions} questions, ${quizTimeLimit}s each)`);
+                  setQuizModalOpen(false);
+                }}
+                style={{
+                  padding: '0.5rem 1.25rem',
+                  borderRadius: '0.5rem',
+                  background: '#4f46e5',
+                  color: 'white',
+                  border: 'none',
+                  fontWeight: 600,
+                  cursor: quizStartLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {quizStartLoading ? 'Starting...' : 'Start Quiz'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 200px)', minHeight: '600px' }}>
         {/* Left Side - Players (Scrollable) */}
         <div style={{
@@ -1995,7 +2344,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         </div>
 
-        {/* Center - Battle Log, Action Buttons, and BattleEngine */}
+        {/* Center - Quiz Mode or Battle Log + Action Buttons + BattleEngine */}
         <div style={{ 
           flex: 1, 
           display: 'flex', 
@@ -2004,6 +2353,194 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           minWidth: 0,
           position: 'relative'
         }}>
+          {quizSession ? (
+            /* Live Quiz Mode panel */
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {quizSession.status === 'lobby' && (
+                <div style={{ background: '#f0f9ff', padding: '1.5rem', borderRadius: '1rem', textAlign: 'center' }}>
+                  <p style={{ fontSize: '1.1rem', fontWeight: 600, color: '#0369a1' }}>Quiz starting soon...</p>
+                  <p style={{ color: '#64748b', marginTop: '0.5rem' }}>{quizSession.quizTitle} — {quizSession.questionOrder.length} questions</p>
+                  {isSessionHost && (
+                    <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#64748b' }}>Click &quot;Start First Question&quot; above when ready (or it may start automatically).</p>
+                  )}
+                </div>
+              )}
+              {(quizSession.status === 'question_live' || (quizSession.questionEndsAt && Date.now() > quizSession.questionEndsAt && quizSession.status !== 'completed')) && quizSession.currentQuestionId && (() => {
+                const currentQ = quizQuestions.find((q) => q.id === quizSession.currentQuestionId);
+                const timeExpired = quizSession.questionEndsAt != null && Date.now() > quizSession.questionEndsAt;
+                const correctIndices = currentQ?.correctIndices ?? (currentQ?.correctIndex !== undefined ? [currentQ.correctIndex] : []);
+                return currentQ ? (
+                  <div key={quizSession.currentQuestionId}>
+                    <LiveQuizQuestionCard
+                      question={currentQ}
+                      questionNumber={(quizSession.questionIndex ?? 0) + 1}
+                      totalQuestions={quizSession.questionOrder?.length ?? 0}
+                      countdownSeconds={quizCountdown}
+                      timeExpired={timeExpired}
+                    />
+                    <LiveQuizAnswerOptions
+                      question={currentQ}
+                      selectedIndices={quizSelectedIndices}
+                      onSelect={(idx) => {
+                        if (quizAnswerSubmitted) return;
+                        const next = quizSelectedIndices.includes(idx)
+                          ? quizSelectedIndices.filter((i) => i !== idx)
+                          : [...quizSelectedIndices, idx];
+                        setQuizSelectedIndices(next);
+                      }}
+                      disabled={quizAnswerSubmitted || timeExpired}
+                      reveal={timeExpired || !!quizMyResponse}
+                      submittedIndices={quizMyResponse?.selectedIndices}
+                    />
+                    {!quizAnswerSubmitted && !timeExpired && (
+                      <button
+                        onClick={async () => {
+                          if (!currentUser || !currentQ || quizAnswerSubmitted) return;
+                          const res = await submitQuizResponse(
+                            sessionId,
+                            currentUser.uid,
+                            quizSession.currentQuestionId!,
+                            quizSelectedIndices.length ? quizSelectedIndices : [0],
+                            correctIndices
+                          );
+                          if (res.ok) {
+                            setQuizAnswerSubmitted(true);
+                            setQuizMyResponse({
+                              selectedIndices: quizSelectedIndices.length ? quizSelectedIndices : [0],
+                              isCorrect: res.pointsAwarded !== undefined && res.pointsAwarded > 0,
+                              pointsAwarded: res.pointsAwarded ?? 0,
+                            });
+                          } else if (res.error) alert(res.error);
+                        }}
+                        disabled={quizSelectedIndices.length === 0}
+                        style={{
+                          marginTop: '1rem',
+                          padding: '0.75rem 1.5rem',
+                          background: quizSelectedIndices.length > 0 ? '#10b981' : '#9ca3af',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.5rem',
+                          fontWeight: 600,
+                          cursor: quizSelectedIndices.length > 0 ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        Submit Answer
+                      </button>
+                    )}
+                    {(timeExpired || quizMyResponse) && quizMyResponse && (
+                      <div style={{ marginTop: '1rem', padding: '1rem', background: quizMyResponse.isCorrect ? '#ecfdf5' : '#fef2f2', borderRadius: '0.5rem', border: `2px solid ${quizMyResponse.isCorrect ? '#10b981' : '#ef4444'}` }}>
+                        <strong>{quizMyResponse.isCorrect ? '✓ Correct!' : '✗ Incorrect'}</strong> — {quizMyResponse.pointsAwarded} points
+                      </div>
+                    )}
+                    {isSessionHost && (
+                      <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.9rem', color: '#64748b' }}>Answers: {quizResponseCount} / {sessionPlayers.length}</span>
+                        <button
+                          onClick={async () => {
+                            if (!currentUser) return;
+                            const res = await advanceQuiz(sessionId, currentUser.uid);
+                            if (res.ok && res.completed) {
+                              await grantLiveQuizRewards(sessionId);
+                              await appendBattleLog('📋 Quiz completed! Rewards have been applied.');
+                              // Save quiz awards snapshot so Live Event end summary can show them
+                              const config = quizSession.rewardConfig;
+                              if (config?.placements) {
+                                const placements = [
+                                  { key: 'first' as const, label: '1st' },
+                                  { key: 'second' as const, label: '2nd' },
+                                  { key: 'third' as const, label: '3rd' },
+                                  { key: 'top5' as const, label: 'Top 5' },
+                                  { key: 'top10' as const, label: 'Top 10' },
+                                ]
+                                  .map(({ key, label }) => {
+                                    const p = config.placements[key];
+                                    if (!p || (p.pp <= 0 && p.xp <= 0 && !p.artifactId && !p.artifactName)) return null;
+                                    return { place: label, pp: p.pp ?? 0, xp: p.xp ?? 0, artifactName: p.artifactName ?? p.artifactId };
+                                  })
+                                  .filter(Boolean) as { place: string; pp: number; xp: number; artifactName?: string }[];
+                                if (placements.length > 0) {
+                                  const sessionRef = doc(db, 'inSessionRooms', sessionId);
+                                  await updateDoc(sessionRef, {
+                                    lastQuizAwardsSnapshot: {
+                                      quizTitle: quizSession.quizTitle ?? undefined,
+                                      placements,
+                                    },
+                                    updatedAt: serverTimestamp(),
+                                  });
+                                }
+                              }
+                            } else if (res.ok) {
+                              await appendBattleLog(`📋 Next question (${(quizSession.questionIndex ?? 0) + 2}/${quizSession.questionOrder?.length ?? 0})`);
+                            }
+                            if (res.error) alert(res.error);
+                          }}
+                          style={{ padding: '0.5rem 1rem', background: '#4f46e5', color: 'white', border: 'none', borderRadius: '0.5rem', fontWeight: 600, cursor: 'pointer' }}
+                          title={(quizSession.questionIndex ?? 0) + 1 >= (quizSession.questionOrder?.length ?? 0) ? 'Complete the quiz and show final standings' : 'Show the next question'}
+                        >
+                          {(quizSession.questionIndex ?? 0) + 1 >= (quizSession.questionOrder?.length ?? 0) ? 'Finish Quiz' : 'Next Question →'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!currentUser) return;
+                            const res = await endQuizSession(sessionId, currentUser.uid);
+                            if (res.ok) await appendBattleLog('📋 Quiz ended by host.');
+                            if (res.error) alert(res.error);
+                          }}
+                          style={{ padding: '0.5rem 1rem', background: '#6b7280', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
+                          title="End the quiz early (no more questions)"
+                        >
+                          End Quiz
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null;
+              })()}
+              {quizSession.status === 'completed' && (
+                <div>
+                  <div style={{ marginBottom: '1rem', padding: '1rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '2px solid #10b981', textAlign: 'center' }}>
+                    <strong>Quiz complete!</strong>
+                  </div>
+                  <LiveQuizLeaderboard
+                    entries={sessionPlayers.map((p) => ({
+                      uid: p.userId,
+                      displayName: p.displayName,
+                      score: quizSession.leaderboard?.[p.userId] ?? 0,
+                      correctCount: quizSession.correctCount?.[p.userId],
+                    }))}
+                    title="Final standings"
+                  />
+                  {isSessionHost && (
+                    <button
+                      onClick={async () => {
+                        if (!currentUser) return;
+                        const res = await clearQuizSession(sessionId, currentUser.uid);
+                        if (res.ok) setQuizSession(null);
+                        if (res.error) alert(res.error);
+                      }}
+                      style={{ marginTop: '1rem', padding: '0.5rem 1rem', background: '#6b7280', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
+                    >
+                      Close
+                    </button>
+                  )}
+                </div>
+              )}
+              {/* Mini leaderboard during quiz (right side or below) */}
+              {quizSession.status === 'question_live' && Object.keys(quizSession.leaderboard ?? {}).length > 0 && (
+                <LiveQuizLeaderboard
+                  entries={sessionPlayers.map((p) => ({
+                    uid: p.userId,
+                    displayName: p.displayName,
+                    score: quizSession.leaderboard?.[p.userId] ?? 0,
+                    correctCount: quizSession.correctCount?.[p.userId],
+                  }))}
+                  title="Standings"
+                  maxEntries={5}
+                />
+              )}
+            </div>
+          ) : (
+            <>
           {/* Battle Log */}
           <div style={{
             background: '#374151',
@@ -2040,8 +2577,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   Welcome to the MST Battle Arena! Select a move to begin your attack!
                 </div>
               ) : (
-                battleLog.map((log, index) => (
-                  <div key={index} style={{ color: 'white', padding: '0.25rem 0' }}>
+                [...battleLog].reverse().map((log, revIndex) => (
+                  <div key={battleLog.length - 1 - revIndex} style={{ color: 'white', padding: '0.25rem 0' }}>
                     {log}
                   </div>
                 ))
@@ -2220,6 +2757,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               />
             </div>
           </div>
+            </>
+          )}
         </div>
 
         {/* Right Side - Players (Scrollable) */}

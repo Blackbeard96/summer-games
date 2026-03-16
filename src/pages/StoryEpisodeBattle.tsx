@@ -898,9 +898,9 @@ const StoryEpisodeBattle: React.FC = () => {
           flexDirection: 'column',
           gap: '0.5rem'
         }}>
-          {battleLog.map((message, index) => (
+          {[...battleLog].reverse().map((message, revIndex) => (
             <div
-              key={index}
+              key={battleLog.length - 1 - revIndex}
               style={{
                 color: 'rgba(255, 255, 255, 0.9)',
                 fontSize: '0.875rem',

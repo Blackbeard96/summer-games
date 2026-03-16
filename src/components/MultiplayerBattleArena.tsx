@@ -206,10 +206,11 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   const renderParticipantCard = (participant: Participant, isAlly: boolean, index: number) => {
     const isSelected = selectedTarget === participant.id;
     const isCurrentPlayer = participant.isPlayer === true; // Explicitly check for true
-    // Enemies can always be clicked when a move is selected and it's player's turn
-    // Allies can only be clicked if it's the current player (self-targeting)
-    // For enemies (isAlly = false), canClick = selectedMove && isPlayerTurn && (!false || false) = selectedMove && isPlayerTurn && true
-    const canClick = selectedMove && isPlayerTurn && (!isAlly || isCurrentPlayer);
+    // Defensive moves (shield boost, healing) only target self - only the current player's card is clickable
+    const isDefensiveMove = !!(selectedMove?.shieldBoost || selectedMove?.healing);
+    const canClick = selectedMove && isPlayerTurn && (
+      isDefensiveMove ? (isAlly && isCurrentPlayer) : (!isAlly || isCurrentPlayer)
+    );
     
     // Always log when a move is selected to help debug
     if (selectedMove && !isAlly) {
@@ -696,7 +697,11 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 }}>
                   ✅ Selected: <strong>{selectedMove.name}</strong>
                   <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', color: '#fff' }}>
-                    🎯 <strong>Click an enemy card on the right to attack!</strong>
+                    {(selectedMove.shieldBoost || selectedMove.healing) ? (
+                      <>🛡️ <strong>This move targets you.</strong> Click your card on the left to confirm, or it will apply automatically.</>
+                    ) : (
+                      <>🎯 <strong>Click an enemy card on the right to attack!</strong></>
+                    )}
                   </div>
                   <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.8 }}>
                     (Click FIGHT button again to change move)
@@ -715,11 +720,13 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   }}>
                     📜 BATTLE LOG
                   </div>
-                  {battleLog.map((logEntry, index) => {
+                  {[...battleLog].reverse().map((logEntry, revIndex) => {
+                    const index = battleLog.length - 1 - revIndex;
                     // Check if this is a round separator
                     const isRoundSeparator = logEntry.includes('━━━━') || logEntry.includes('ROUND') || logEntry.includes('Round') && logEntry.includes('Complete');
                     const isRoundHeader = logEntry.includes('ROUND') && !logEntry.includes('Complete');
                     const isRoundEnd = logEntry.includes('Round') && logEntry.includes('Complete');
+                    const isNewest = revIndex === 0;
                     
                     return (
                       <div 
@@ -731,14 +738,14 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                             ? 'rgba(59, 130, 246, 0.3)' 
                             : isRoundHeader || isRoundEnd
                             ? 'rgba(34, 197, 94, 0.2)'
-                            : index === battleLog.length - 1 
+                            : isNewest 
                             ? 'rgba(251, 191, 36, 0.2)' 
                             : 'rgba(255, 255, 255, 0.05)',
                           borderLeft: isRoundSeparator 
                             ? 'none'
                             : isRoundHeader || isRoundEnd
                             ? '3px solid #22c55e'
-                            : index === battleLog.length - 1 
+                            : isNewest 
                             ? '3px solid #fbbf24' 
                             : '1px solid rgba(255, 255, 255, 0.2)',
                           fontSize: isRoundHeader || isRoundEnd ? '0.875rem' : '0.875rem',
@@ -988,6 +995,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {availableMoves.map((move) => {
                   const isSelected = selectedMove?.id === move.id;
+                  const onCooldown = (move.currentCooldown ?? 0) > 0;
                   const moveColor = getMoveTypeColor(move);
                   const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
                   // Effective move level should match effective mastery level when artifacts boost it
@@ -1042,13 +1050,13 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
+                        if (onCooldown) return;
                         console.log(`🎯 [MultiplayerBattleArena] Move selected: ${move.name} (${move.id})`);
                         onMoveSelect(move);
                         setShowMoveMenu(false);
                         console.log(`✅ [MultiplayerBattleArena] Move menu closed. Enemies should now be clickable.`);
-                        // Don't show target menu - enemies are clickable directly when move is selected
-                        // setShowTargetMenu(true);
                       }}
+                      disabled={onCooldown}
                       style={{
                         padding: '0.75rem',
                         background: isSelected 
@@ -1057,15 +1065,16 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                         color: isSelected ? 'white' : '#1f2937',
                         border: `2px solid ${isSelected ? moveColor : moveColor}`,
                         borderRadius: '0.5rem',
-                        cursor: 'pointer',
+                        cursor: onCooldown ? 'not-allowed' : 'pointer',
                         fontSize: '0.875rem',
                         fontWeight: '500',
                         textAlign: 'left',
                         transition: 'all 0.2s ease',
-                        position: 'relative'
+                        position: 'relative',
+                        opacity: onCooldown ? 0.6 : 1
                       }}
                       onMouseEnter={(e) => {
-                        if (!isSelected) {
+                        if (!isSelected && !onCooldown) {
                           e.currentTarget.style.background = getMoveBackgroundColor(move, true);
                           e.currentTarget.style.borderColor = moveColor;
                         }
@@ -1150,10 +1159,13 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                             💰 PP Steal: {move.ppSteal}
                           </div>
                         )}
-                        {move.cooldown > 0 && (
-                          <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
-                            ⏱️ Cooldown: {move.cooldown} {move.cooldown === 1 ? 'turn' : 'turns'}
-                            {move.currentCooldown > 0 && ` (${move.currentCooldown} remaining)`}
+                        {(move.cooldown ?? 0) > 0 && (
+                          <div style={{ color: onCooldown ? '#f59e0b' : '#8b5cf6', fontWeight: 'bold', fontSize: onCooldown ? '0.8rem' : '0.65rem' }}>
+                            {onCooldown ? (
+                              <>⏱️ {move.currentCooldown} turn{(move.currentCooldown ?? 0) !== 1 ? 's' : ''} left</>
+                            ) : (
+                              <>⏱️ Cooldown: {move.cooldown} {move.cooldown === 1 ? 'turn' : 'turns'}</>
+                            )}
                           </div>
                         )}
                         {move.priority !== undefined && move.priority !== 0 && (

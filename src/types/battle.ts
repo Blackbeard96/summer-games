@@ -504,7 +504,7 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     debuffType: 'stun',
     debuffStrength: 15,
     duration: 1,
-    cooldown: 4,
+    cooldown: 1,
     targetType: 'single',
   },
   {
@@ -520,7 +520,7 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     buffType: 'accuracy',
     buffStrength: 30,
     duration: 2,
-    cooldown: 3,
+    cooldown: 1,
     targetType: 'self',
   },
   

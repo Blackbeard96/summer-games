@@ -932,6 +932,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {availableMoves.map((move, index) => {
+              const onCooldown = (move.currentCooldown ?? 0) > 0;
               // Calculate effective mastery level once for this move (includes ring bonuses)
               const effectiveMasteryLevel = move.category === 'elemental' && equippedArtifacts 
                 ? getEffectiveMasteryLevel(move, equippedArtifacts)
@@ -942,7 +943,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               return (
               <button
                 key={move.id}
-                onClick={() => handleMoveClick(move)}
+                onClick={() => !onCooldown && handleMoveClick(move)}
+                disabled={onCooldown}
                 style={{
                   background: getMoveTypeColor(move),
                   color: 'white',
@@ -951,16 +953,19 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   padding: '0.5rem',
                   fontSize: '0.75rem',
                   fontWeight: 'bold',
-                  cursor: 'pointer',
+                  cursor: onCooldown ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   gap: '0.25rem',
-                  transition: 'all 0.2s'
+                  transition: 'all 0.2s',
+                  opacity: onCooldown ? 0.6 : 1
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'scale(1.05)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+                  if (!onCooldown) {
+                    e.currentTarget.style.transform = 'scale(1.05)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+                  }
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'scale(1)';
@@ -984,6 +989,11 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
                 </div>
+                {onCooldown && (
+                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>
+                    ⏱️ {move.currentCooldown} turn{(move.currentCooldown ?? 0) !== 1 ? 's' : ''} left
+                  </div>
+                )}
                 {(() => {
                   // Use actual user level for range calculation
                   const playerLevel = userLevel;

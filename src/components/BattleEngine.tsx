@@ -1588,16 +1588,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   }, [battleState.isPlayerTurn, battleState.phase, battleState.turnCount]);
 
-  // Filter available moves: unlocked AND not on cooldown
-  // Use battleSkills (canonical) if available, otherwise fallback to moves array
+  // Available moves: all unlocked skills, with currentCooldown so UI can show cooldown timer (don't remove skills on cooldown)
   const availableMoves = useMemo(() => {
     const skillsToUse = battleSkills.length > 0 ? battleSkills : moves.filter(m => m.unlocked);
     
-    return skillsToUse.filter(skill => {
-      // Check cooldown from battle state (not from skill library)
-      const cooldown = skillCooldowns.get(skill.id) || 0;
-      return skill.unlocked && cooldown === 0;
-    });
+    return skillsToUse
+      .filter(skill => skill.unlocked)
+      .map(skill => {
+        const currentCooldown = skillCooldowns.get(skill.id) || 0;
+        return { ...skill, currentCooldown };
+      });
   }, [battleSkills, moves, skillCooldowns]);
   
   // Create availableTargets from current opponent state - this will update when opponent changes
@@ -3005,7 +3005,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                         name: opp.name,
                         vaultHealth: opp.vaultHealth,
                         shieldStrength: opp.shieldStrength
-                      }))
+                      })),
                     });
                     onOpponentsUpdate(updated);
                     // Clear flag after notifying
@@ -3530,7 +3530,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing);
 
     // Find the target opponent based on selectedTarget ID
-    // Defensive moves (shield boost, healing) always target the player - allow 'self' or player id
+    // Defensive moves (shield boost, healing) ALWAYS target the player - ignore any enemy selection
     console.log(`🎯 [handleAnimationComplete] Looking for target: ${battleState.selectedTarget}`, {
       isMultiplayer,
       isDefensiveMove,
@@ -3540,9 +3540,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     let targetOpponent: Opponent;
-    if (isDefensiveMove && (battleState.selectedTarget === 'self' || battleState.selectedTarget === currentUser?.uid)) {
-      // Defensive move targeting self - use placeholder so rest of flow runs; effect applies to player vault
-      // Use inline display name only (playerName is declared later in this function)
+    if (isDefensiveMove) {
+      // Defensive moves (Pebbleguard, Strategy Matrix, heals) always affect the player who used them
       const selfName = currentUser?.displayName ?? 'Player';
       targetOpponent = {
         id: currentUser!.uid,
@@ -3552,7 +3551,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         shieldStrength: 0,
         isDefeated: false
       } as Opponent;
-      console.log(`✅ [handleAnimationComplete] Defensive move - targeting self (${selfName})`);
+      console.log(`✅ [handleAnimationComplete] Defensive move - always targeting self (${selfName})`);
     } else if (isMultiplayer && opponents.length > 0) {
       const found = opponents.find(opp => opp.id === battleState.selectedTarget);
       if (!found) {
@@ -5950,6 +5949,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   const handleMoveSelect = (move: Move | null) => {
+    if (move && (move.currentCooldown ?? 0) > 0) return;
     // Instrument: Skill clicked
     (async () => {
       const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
@@ -6041,14 +6041,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // Validate target ID exists in current opponents or allies
-    // Defensive moves (shield boost, healing) can target 'self' or the current player
+    // Defensive moves (shield boost, healing) ONLY target self - never allow enemies/allies
     const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing);
     const isSelfTarget = targetId === 'self' || targetId === currentUser?.uid;
-    const isValidTarget = (isDefensiveMove && isSelfTarget) || (
-      isMultiplayer
-        ? (opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
-        : (opponent.id === targetId || opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
-    );
+    const isValidTarget = isDefensiveMove
+      ? isSelfTarget
+      : (isMultiplayer
+          ? (opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId))
+          : (opponent.id === targetId || opponents.some(opp => opp.id === targetId) || allies.some(ally => ally.id === targetId)));
     // Normalize 'self' to current user id for storage so handleAnimationComplete can recognize it
     const targetToStore = (targetId === 'self' && currentUser?.uid) ? currentUser.uid : targetId;
 
@@ -6465,34 +6465,47 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
                 gap: '0.75rem'
               }}>
-                {availableMoves.slice(0, 8).map((move) => (
-                  <button
-                    key={move.id || move.name}
-                    onClick={() => handleMoveSelect(move)}
-                    style={{
-                      padding: '0.75rem',
-                      background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '0.5rem',
-                      cursor: 'pointer',
-                      fontSize: '0.875rem',
-                      fontWeight: '500',
-                      transition: 'all 0.2s',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'translateY(-2px)';
-                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-                    }}
-                  >
-                    {move.name}
-                  </button>
-                ))}
+                {availableMoves.slice(0, 8).map((move) => {
+                  const onCooldown = (move.currentCooldown ?? 0) > 0;
+                  return (
+                    <button
+                      key={move.id || move.name}
+                      onClick={() => !onCooldown && handleMoveSelect(move)}
+                      disabled={onCooldown}
+                      style={{
+                        padding: '0.75rem',
+                        background: onCooldown ? 'rgba(107, 114, 128, 0.5)' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.5rem',
+                        cursor: onCooldown ? 'not-allowed' : 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        transition: 'all 0.2s',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        opacity: onCooldown ? 0.65 : 1
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!onCooldown) {
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                          e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                      }}
+                      title={onCooldown ? `${move.currentCooldown} turn(s) left` : undefined}
+                    >
+                      <div>{move.name}</div>
+                      {onCooldown && (
+                        <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', opacity: 0.9 }}>
+                          ⏱️ {move.currentCooldown} turn{move.currentCooldown !== 1 ? 's' : ''} left
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
             
@@ -6760,9 +6773,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               📜 BATTLE LOG
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              {battleState.battleLog.map((logEntry, index) => (
+              {[...battleState.battleLog].reverse().map((logEntry, index) => (
                 <div 
-                  key={index}
+                  key={battleState.battleLog.length - 1 - index}
                   style={{
                     padding: '0.25rem 0.5rem',
                     borderRadius: '0.25rem',
@@ -6885,9 +6898,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           📜 BATTLE LOG
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          {battleState.battleLog.map((logEntry, index) => (
+          {[...battleState.battleLog].reverse().map((logEntry, index) => (
             <div 
-              key={index}
+              key={battleState.battleLog.length - 1 - index}
               style={{
                 padding: '0.25rem 0.5rem',
                 borderRadius: '0.25rem',
