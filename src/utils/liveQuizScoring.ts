@@ -13,22 +13,37 @@ export interface CalculateLiveQuizPointsParams {
   questionEndsAt: number;
 }
 
+const toMs = (v: number | { toMillis?: () => number } | undefined): number => {
+  if (v == null) return 0;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof (v as { toMillis?: () => number }).toMillis === 'function') return (v as { toMillis: () => number }).toMillis();
+  return 0;
+};
+
+/** Max points per question (base + speed bonus). Cap to prevent timestamp bugs from producing huge values. */
+export const LIVE_QUIZ_MAX_POINTS_PER_QUESTION = LIVE_QUIZ_BASE_POINTS + LIVE_QUIZ_SPEED_BONUS_MAX;
+
 /**
  * Calculate points for a single live quiz answer.
  * - Incorrect: 0
  * - Correct: base (100) + speed bonus (up to 50) based on remaining time
+ * - Result is capped at LIVE_QUIZ_MAX_POINTS_PER_QUESTION to avoid runaway scores from bad timestamps
  */
 export function calculateLiveQuizPoints(params: CalculateLiveQuizPointsParams): number {
   const { isCorrect, submittedAt, questionStartedAt, questionEndsAt } = params;
   if (!isCorrect) return 0;
 
-  const totalMs = questionEndsAt - questionStartedAt;
+  const startMs = toMs(questionStartedAt);
+  const endMs = toMs(questionEndsAt);
+  const submittedMs = toMs(submittedAt);
+
+  const totalMs = endMs - startMs;
   if (totalMs <= 0) return LIVE_QUIZ_BASE_POINTS;
 
-  const elapsed = submittedAt - questionStartedAt;
-  const remainingMs = Math.max(0, questionEndsAt - submittedAt);
-  const remainingRatio = remainingMs / totalMs; // 1 = answered instantly, 0 = at deadline
+  const remainingMs = Math.max(0, endMs - submittedMs);
+  const remainingRatio = Math.min(1, Math.max(0, remainingMs / totalMs)); // clamp 0..1
 
   const speedBonus = Math.floor(LIVE_QUIZ_SPEED_BONUS_MAX * remainingRatio);
-  return LIVE_QUIZ_BASE_POINTS + speedBonus;
+  const points = LIVE_QUIZ_BASE_POINTS + speedBonus;
+  return Math.min(LIVE_QUIZ_MAX_POINTS_PER_QUESTION, Math.max(0, points));
 }

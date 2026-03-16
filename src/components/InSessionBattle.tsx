@@ -169,8 +169,21 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizResponseCount, setQuizResponseCount] = useState(0);
   const [quizCountdown, setQuizCountdown] = useState<number | null>(null);
   const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  /** When a quiz is active, players/host can swap between Quiz view and Battle Log view */
-  const [centerView, setCenterView] = useState<'quiz' | 'battleLog'>('battleLog');
+  /** When a quiz is active, players/host can swap between Quiz view and Battle Log view. Persist in sessionStorage so it survives remounts and toggling works reliably. */
+  const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
+  const setCenterView = useCallback((next: 'quiz' | 'battleLog' | ((prev: 'quiz' | 'battleLog') => 'quiz' | 'battleLog')) => {
+    setCenterViewState((prev) => {
+      const value = typeof next === 'function' ? next(prev) : next;
+      if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(`liveEventCenterView_${sessionId}`, value);
+      return value;
+    });
+  }, [sessionId]);
+  // Restore tab choice from sessionStorage when sessionId or quiz appears (so toggling back to Quiz works after remount/navigation)
+  useEffect(() => {
+    if (typeof sessionStorage === 'undefined' || !sessionId) return;
+    const saved = sessionStorage.getItem(`liveEventCenterView_${sessionId}`);
+    if (saved === 'quiz' || saved === 'battleLog') setCenterViewState(saved);
+  }, [sessionId, quizSession?.status]);
   const defaultPlacement = () => ({ pp: 0, xp: 0 });
   const [quizRewardConfig, setQuizRewardConfig] = useState<LiveQuizRewardConfig>({
     placements: {
@@ -2365,22 +2378,29 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           minWidth: 0,
           position: 'relative'
         }}>
-          {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky so it stays visible when scrolling */}
+          {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky, high z-index so always clickable */}
           {quizSession && (
             <div
+              role="tablist"
+              aria-label="Switch between Quiz and Battle Log"
               style={{
                 display: 'flex',
                 gap: '0.25rem',
                 flexShrink: 0,
                 position: 'sticky',
                 top: 0,
-                zIndex: 10,
+                zIndex: 50,
                 background: '#1f2937',
                 paddingBottom: '0.25rem',
+                pointerEvents: 'auto',
               }}
             >
               <button
                 type="button"
+                role="tab"
+                aria-selected={centerView === 'quiz'}
+                aria-label="Show Quiz"
+                tabIndex={centerView === 'quiz' ? -1 : 0}
                 onClick={() => setCenterView('quiz')}
                 style={{
                   padding: '0.5rem 1rem',
@@ -2391,12 +2411,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   color: centerView === 'quiz' ? 'white' : '#4f46e5',
                   cursor: 'pointer',
                   fontSize: '0.9rem',
+                  pointerEvents: 'auto',
                 }}
               >
                 📋 Quiz
               </button>
               <button
                 type="button"
+                role="tab"
+                aria-selected={centerView === 'battleLog'}
+                aria-label="Show Battle Log"
+                tabIndex={centerView === 'battleLog' ? -1 : 0}
                 onClick={() => setCenterView('battleLog')}
                 style={{
                   padding: '0.5rem 1rem',
@@ -2407,6 +2432,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   color: centerView === 'battleLog' ? 'white' : '#374151',
                   cursor: 'pointer',
                   fontSize: '0.9rem',
+                  pointerEvents: 'auto',
                 }}
               >
                 📜 Battle Log
@@ -2612,7 +2638,85 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     entries={entriesWithPP}
                     title="Final standings"
                   />
-                  {/* Per-player quiz summary: correct/wrong, performance, PP earned */}
+                  {/* Host only: how every player did — per-player breakdown */}
+                  {isSessionHost && (() => {
+                    const totalQuestions = quizSession.questionOrder?.length ?? 0;
+                    const questionMap = new Map(quizQuestions.map((q) => [q.id, q]));
+                    const truncate = (s: string, max: number) => (s.length <= max ? s : s.slice(0, max) + '…');
+                    return (
+                      <div style={{
+                        marginTop: '1.25rem',
+                        padding: '1.25rem',
+                        background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                        borderRadius: '1rem',
+                        border: '2px solid #93c5fd',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                      }}>
+                        <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#1e40af', marginBottom: '0.5rem' }}>
+                          👥 How every player did
+                        </h3>
+                        <p style={{ fontSize: '0.9rem', color: '#1e3a8a', marginBottom: '1rem' }}>
+                          Breakdown of each player&apos;s performance on this quiz.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                          {entriesWithPP.map((entry) => {
+                            const perQuestion = quizSession.perQuestionResults?.[entry.uid] ?? [];
+                            const correctItems = perQuestion.filter((r: { isCorrect: boolean }) => r.isCorrect).map((r: { questionId: string }) => questionMap.get(r.questionId)?.prompt || `Q ${r.questionId}`);
+                            const wrongItems = perQuestion.filter((r: { isCorrect: boolean }) => !r.isCorrect).map((r: { questionId: string }) => questionMap.get(r.questionId)?.prompt || `Q ${r.questionId}`);
+                            const correctCount = quizSession.correctCount?.[entry.uid] ?? correctItems.length;
+                            const passPct = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+                            const participationPP = correctCount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+                            const totalPP = (entry.ppEarned ?? 0) + participationPP;
+                            return (
+                              <div
+                                key={entry.uid}
+                                style={{
+                                  padding: '1rem',
+                                  background: 'white',
+                                  borderRadius: '0.75rem',
+                                  border: '1px solid #bfdbfe',
+                                  fontSize: '0.9rem',
+                                }}
+                              >
+                                <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '0.5rem' }}>
+                                  {entry.displayName}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.5rem', color: '#475569' }}>
+                                  <span>{entry.score} pts</span>
+                                  <span>{correctCount}/{totalQuestions} correct</span>
+                                  <span style={{ fontWeight: 600, color: passPct >= 70 ? '#059669' : passPct >= 50 ? '#d97706' : '#dc2626' }}>
+                                    Pass: {passPct}%
+                                  </span>
+                                  <span>+{totalPP} PP</span>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                  <div style={{ padding: '0.5rem', background: '#ecfdf5', borderRadius: '0.375rem', border: '1px solid #a7f3d0' }}>
+                                    <div style={{ fontWeight: 600, color: '#047857', fontSize: '0.8rem' }}>✓ Correct ({correctItems.length})</div>
+                                    {correctItems.length === 0 ? <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>—</div> : (
+                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#065f46', fontSize: '0.85rem' }}>
+                                        {correctItems.slice(0, 5).map((text: string, i: number) => <li key={i}>{truncate(text, 50)}</li>)}
+                                        {correctItems.length > 5 && <li style={{ color: '#6b7280' }}>+{correctItems.length - 5} more</li>}
+                                      </ul>
+                                    )}
+                                  </div>
+                                  <div style={{ padding: '0.5rem', background: '#fef2f2', borderRadius: '0.375rem', border: '1px solid #fecaca' }}>
+                                    <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: '0.8rem' }}>✗ Wrong ({wrongItems.length})</div>
+                                    {wrongItems.length === 0 ? <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>—</div> : (
+                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#991b1b', fontSize: '0.85rem' }}>
+                                        {wrongItems.slice(0, 5).map((text: string, i: number) => <li key={i}>{truncate(text, 50)}</li>)}
+                                        {wrongItems.length > 5 && <li style={{ color: '#6b7280' }}>+{wrongItems.length - 5} more</li>}
+                                      </ul>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {/* Each player sees their own performance breakdown */}
                   {currentUser && (() => {
                     const uid = currentUser.uid;
                     const myCorrect = quizSession.correctCount?.[uid] ?? 0;
@@ -2637,9 +2741,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         border: '2px solid #e2e8f0',
                         boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
                       }}>
-                        <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#1e293b', marginBottom: '1rem' }}>
-                          📋 Your Quiz Summary
+                        <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#1e293b', marginBottom: '0.35rem' }}>
+                          📋 Your performance breakdown
                         </h3>
+                        <p style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '1rem' }}>
+                          How you did on each question and what you earned.
+                        </p>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.95rem' }}>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                             <div style={{ padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #a7f3d0' }}>

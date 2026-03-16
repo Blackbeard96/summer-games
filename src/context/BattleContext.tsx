@@ -490,6 +490,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const movesDoc = await getDoc(movesRef);
         
         if (!movesDoc.exists()) {
+          // Guard: double-check doc still doesn't exist (avoid race where another tab just created it)
+          const movesDocRecheck = await getDoc(movesRef);
+          if (movesDocRecheck.exists()) {
+            const recheckMoves = movesDocRecheck.data().moves || [];
+            setMoves(normalizeManifestMoveCooldowns(recheckMoves));
+            console.log('BattleContext: battleMoves appeared on recheck, loading existing');
+          } else {
           // Create initial moves - NO elemental moves unlocked initially
           // Elemental moves will be unlocked when player completes Chapter 1 - Challenge 7
           const initialMoves: Move[] = MOVE_TEMPLATES.map((template, index) => ({
@@ -504,6 +511,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.log('BattleContext: Creating initial moves (elemental moves locked until Challenge 7):', initialMoves);
           await setDoc(movesRef, { moves: initialMoves });
           setMoves(initialMoves);
+          }
         } else {
           const movesData = movesDoc.data().moves || [];
           console.log('BattleContext: Loading existing moves:', movesData);
@@ -537,29 +545,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               // Always use the original template.name as the key to look up overrides
               const overriddenName = getMoveNameSync(template.name);
               
-              // Match existing move by ID first (most reliable), then by original template name
-              // Don't match by overridden name since it might have changed
+              // Match existing move by ID first (most reliable), then by category+element+name for elemental
               const moveId = `move_${index + 1}`;
-              const existingMove = movesData.find((m: Move) => 
-                m.id === moveId || 
-                m.name === template.name
-              );
-              
+              let existingMove = movesData.find((m: Move) => m.id === moveId || m.name === template.name);
+              if (!existingMove && template.category === 'elemental' && template.elementalAffinity) {
+                existingMove = movesData.find((m: Move) =>
+                  m.category === 'elemental' && m.elementalAffinity === template.elementalAffinity && m.name === template.name
+                );
+              }
+              // Preserve level (elemental 1–4) and masteryLevel so skills are never reset by migration
+              const preservedLevel = existingMove?.level ?? template.level;
+              const preservedMasteryLevel = existingMove?.masteryLevel ?? 1;
+
               return {
                 ...template,
                 name: overriddenName, // Use the overridden name from admin panel
                 id: moveId,
                 unlocked: isUnlocked,
                 currentCooldown: 0,
-                // Preserve mastery level if move exists, otherwise default to 1
-                masteryLevel: existingMove?.masteryLevel || 1,
+                level: preservedLevel,
+                masteryLevel: preservedMasteryLevel,
                 // Preserve other properties that might have been upgraded
-                damage: existingMove?.damage || template.damage,
-                shieldBoost: existingMove?.shieldBoost || template.shieldBoost,
-                healing: existingMove?.healing || template.healing,
-                ppSteal: existingMove?.ppSteal || template.ppSteal,
-                debuffStrength: existingMove?.debuffStrength || template.debuffStrength,
-                buffStrength: existingMove?.buffStrength || template.buffStrength,
+                damage: existingMove?.damage ?? template.damage,
+                shieldBoost: existingMove?.shieldBoost ?? template.shieldBoost,
+                healing: existingMove?.healing ?? template.healing,
+                ppSteal: existingMove?.ppSteal ?? template.ppSteal,
+                debuffStrength: existingMove?.debuffStrength ?? template.debuffStrength,
+                buffStrength: existingMove?.buffStrength ?? template.buffStrength,
               };
             });
             
@@ -1032,13 +1044,39 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let vaultSyncTimeout: NodeJS.Timeout | null = null;
     
     // Listen to battleMoves collection for real-time updates (including RR Candy moves)
+    // Safeguard: never accept a snapshot that would downgrade a move's level or masteryLevel (prevents reset bugs)
     const movesRef = doc(db, 'battleMoves', currentUser.uid);
     const unsubscribeMoves = onSnapshot(movesRef, (movesDoc) => {
       try {
         if (movesDoc.exists()) {
           const movesData = movesDoc.data().moves || [];
-          console.log('BattleContext: Moves updated from Firestore listener, count:', movesData.length);
-          setMoves(normalizeManifestMoveCooldowns(movesData));
+          const incoming = normalizeManifestMoveCooldowns(movesData);
+          setMoves((currentMoves) => {
+            if (currentMoves.length === 0) {
+              console.log('BattleContext: Moves updated from Firestore listener, count:', incoming.length);
+              return incoming;
+            }
+            // Merge: for each move by id, keep the higher level and masteryLevel so we never downgrade
+            let hasDowngrade = false;
+            const merged = incoming.map((inc: Move) => {
+              const cur = currentMoves.find((c: Move) => c.id === inc.id);
+              if (!cur) return inc;
+              const level = Math.max(inc.level ?? 1, cur.level ?? 1);
+              const masteryLevel = Math.max(inc.masteryLevel ?? 1, cur.masteryLevel ?? 1);
+              if (level > (inc.level ?? 1) || masteryLevel > (inc.masteryLevel ?? 1)) hasDowngrade = true;
+              return { ...inc, level, masteryLevel };
+            });
+            if (hasDowngrade) {
+              console.warn('BattleContext: Snapshot would downgrade move levels; keeping current and healing Firestore');
+              // Heal Firestore so the reset does not persist (fire-and-forget)
+              updateDoc(movesRef, { moves: merged }).catch((err) =>
+                console.error('BattleContext: Failed to heal battleMoves after downgrade:', err)
+              );
+              return currentMoves;
+            }
+            console.log('BattleContext: Moves updated from Firestore listener, count:', merged.length);
+            return merged;
+          });
         }
       } catch (error) {
         if (isFirestoreInternalError(error)) {

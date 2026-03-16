@@ -338,13 +338,18 @@ export async function advanceQuiz(
     const newPerQuestionResults: { [uid: string]: Array<{ questionId: string; isCorrect: boolean; pointsAwarded: number }> } = { ...(session.perQuestionResults || {}) };
 
     if (currentQId) {
+      const MAX_POINTS_PER_QUESTION = 150; // base 100 + speed 50
       responsesForCurrentQuestion.forEach(({ uid, data: r }) => {
-        if (r.currentQuestionId === currentQId) {
-          newLeaderboard[uid] = (newLeaderboard[uid] || 0) + r.pointsAwarded;
-          if (r.isCorrect) newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
-          const arr = newPerQuestionResults[uid] || [];
-          newPerQuestionResults[uid] = [...arr, { questionId: currentQId, isCorrect: r.isCorrect, pointsAwarded: r.pointsAwarded }];
-        }
+        if (r.currentQuestionId !== currentQId) return;
+        // Idempotent: do not add points if we already recorded this question for this user (prevents double-count on duplicate advance)
+        const existing = newPerQuestionResults[uid] || [];
+        if (existing.some((e) => e.questionId === currentQId)) return;
+        const points = typeof r.pointsAwarded === 'number' && Number.isFinite(r.pointsAwarded)
+          ? Math.max(0, Math.min(MAX_POINTS_PER_QUESTION, r.pointsAwarded))
+          : 0;
+        newLeaderboard[uid] = (newLeaderboard[uid] || 0) + points;
+        if (r.isCorrect) newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
+        newPerQuestionResults[uid] = [...existing, { questionId: currentQId, isCorrect: r.isCorrect, pointsAwarded: points }];
       });
     }
 
