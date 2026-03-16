@@ -5,6 +5,8 @@ export interface LeaderboardEntry {
   displayName: string;
   score: number;
   correctCount?: number;
+  /** PP earned from this quiz (placement rewards); shown at end of quiz */
+  ppEarned?: number;
 }
 
 interface LiveQuizLeaderboardProps {
@@ -59,6 +61,11 @@ export const LiveQuizLeaderboard: React.FC<LiveQuizLeaderboardProps> = ({
               {entry.correctCount != null && (
                 <span style={{ fontSize: '0.875rem', color: '#64748b' }}>
                   {entry.correctCount} correct
+                </span>
+              )}
+              {entry.ppEarned != null && entry.ppEarned > 0 && (
+                <span style={{ fontWeight: 600, color: '#059669', fontSize: '0.875rem' }}>
+                  +{entry.ppEarned} PP
                 </span>
               )}
             </li>

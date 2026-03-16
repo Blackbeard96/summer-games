@@ -126,8 +126,8 @@ export async function startQuizSession(
   }
 }
 
-/** Get placement reward for a 1-based rank. first=1, second=2, third=3, top5=4-5, top10=6-10. */
-function getPlacementRewardForRank(
+/** Get placement reward for a 1-based rank. first=1, second=2, third=3, top5=4-5, top10=6-10. Exported for UI to show PP earned per player. */
+export function getPlacementRewardForRank(
   placements: LiveQuizRewardConfig['placements'],
   rank: number
 ): LiveQuizPlacementReward | null {
@@ -448,10 +448,33 @@ export async function submitQuizResponse(
     log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded });
     return { ok: true, pointsAwarded, isCorrect: allCorrect };
   }).then(async (result) => {
-    // Correct answers in Live Event quiz count as 1 participation point (and grant PP via trackParticipation)
+    // Correct answers in Live Event quiz count as 1 participation point so players can use skills
     if (result.ok && result.isCorrect) {
       await trackParticipation(sessionId, uid, 1);
-      log('Participation +1 for correct quiz answer', { sessionId, uid });
+      // Update the session room's players array so this player's movesEarned increases (enables skill use)
+      try {
+        const roomRef = doc(db, 'inSessionRooms', sessionId);
+        const roomSnap = await getDoc(roomRef);
+        if (roomSnap.exists()) {
+          const data = roomSnap.data();
+          const players: Array<{ userId: string; participationCount?: number; movesEarned?: number; [k: string]: unknown }> = data?.players ?? [];
+          const idx = players.findIndex((p) => p.userId === uid);
+          if (idx >= 0) {
+            const p = players[idx];
+            const newParticipationCount = (p.participationCount ?? 0) + 1;
+            const newMovesEarned = (p.movesEarned ?? 0) + 1;
+            const updatedPlayers = [...players];
+            updatedPlayers[idx] = { ...p, participationCount: newParticipationCount, movesEarned: newMovesEarned };
+            await updateDoc(roomRef, {
+              players: updatedPlayers,
+              updatedAt: serverTimestamp(),
+            });
+            log('Session player participation +1 for correct quiz answer (moves available for skills)', { sessionId, uid, newMovesEarned });
+          }
+        }
+      } catch (err) {
+        log('Failed to update session player participation for quiz correct', err);
+      }
     }
     return result;
   });

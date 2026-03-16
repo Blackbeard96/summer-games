@@ -62,6 +62,7 @@ import {
   endQuizSession,
   clearQuizSession,
   grantLiveQuizRewards,
+  getPlacementRewardForRank,
   submitQuizResponse,
   getMyResponse,
   subscribeResponseCount,
@@ -2538,18 +2539,28 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   </div>
                 ) : null;
               })()}
-              {quizSession.status === 'completed' && (
+              {quizSession.status === 'completed' && (() => {
+                const placements = (quizSession.rewardConfig?.placements ?? {}) as LiveQuizRewardConfig['placements'];
+                const entriesWithScores = sessionPlayers.map((p) => ({
+                  uid: p.userId,
+                  displayName: p.displayName,
+                  score: quizSession.leaderboard?.[p.userId] ?? 0,
+                  correctCount: quizSession.correctCount?.[p.userId],
+                }));
+                const sortedByScore = [...entriesWithScores].sort((a, b) => b.score - a.score);
+                const entriesWithPP = entriesWithScores.map((entry) => {
+                  const rank = sortedByScore.findIndex((e) => e.uid === entry.uid) + 1;
+                  const reward = rank > 0 ? getPlacementRewardForRank(placements, rank) : null;
+                  const ppEarned = reward?.pp ?? 0;
+                  return { ...entry, ppEarned: ppEarned > 0 ? ppEarned : undefined };
+                });
+                return (
                 <div>
                   <div style={{ marginBottom: '1rem', padding: '1rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '2px solid #10b981', textAlign: 'center' }}>
                     <strong>Quiz complete!</strong>
                   </div>
                   <LiveQuizLeaderboard
-                    entries={sessionPlayers.map((p) => ({
-                      uid: p.userId,
-                      displayName: p.displayName,
-                      score: quizSession.leaderboard?.[p.userId] ?? 0,
-                      correctCount: quizSession.correctCount?.[p.userId],
-                    }))}
+                    entries={entriesWithPP}
                     title="Final standings"
                   />
                   {isSessionHost && (
@@ -2566,7 +2577,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     </button>
                   )}
                 </div>
-              )}
+                );
+              })()}
               {/* Mini leaderboard during quiz (right side or below) */}
               {quizSession.status === 'question_live' && Object.keys(quizSession.leaderboard ?? {}).length > 0 && (
                 <LiveQuizLeaderboard
