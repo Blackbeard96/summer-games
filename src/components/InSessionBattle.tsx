@@ -48,7 +48,8 @@ import {
   trackDamage,
   trackElimination,
   trackParticipation,
-  getSessionSummary
+  getSessionSummary,
+  LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
 } from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
 import SessionSummaryModal from './SessionSummaryModal';
@@ -506,12 +507,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
   }, [sessionId]);
 
-  // Subscribe to Live Quiz session
+  // Subscribe to Live Quiz session (only switch to Quiz view when a quiz first appears, not on every update)
+  const hadQuizSessionRef = useRef(false);
   useEffect(() => {
     if (!sessionId) return;
     const unsub = subscribeQuizSession(sessionId, (session) => {
+      const hadQuiz = hadQuizSessionRef.current;
       setQuizSession(session);
-      if (session) setCenterView('quiz'); // when a quiz appears, show Quiz tab first
+      if (session && !hadQuiz) {
+        hadQuizSessionRef.current = true;
+        setCenterView('quiz'); // when a quiz first appears, show Quiz tab; don't override user's choice on later updates
+      }
+      if (!session) hadQuizSessionRef.current = false;
       if (!session || session.status !== 'question_live') {
         setQuizCountdown(null);
         if (quizCountdownRef.current) {
@@ -2358,9 +2365,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           minWidth: 0,
           position: 'relative'
         }}>
-          {/* Tab to swap between Quiz and Battle Log when a quiz is active */}
+          {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky so it stays visible when scrolling */}
           {quizSession && (
-            <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.25rem',
+                flexShrink: 0,
+                position: 'sticky',
+                top: 0,
+                zIndex: 10,
+                background: '#1f2937',
+                paddingBottom: '0.25rem',
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setCenterView('quiz')}
@@ -2450,7 +2468,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             setQuizAnswerSubmitted(true);
                             setQuizMyResponse({
                               selectedIndices: quizSelectedIndices.length ? quizSelectedIndices : [0],
-                              isCorrect: res.pointsAwarded !== undefined && res.pointsAwarded > 0,
+                              isCorrect: res.isCorrect === true,
                               pointsAwarded: res.pointsAwarded ?? 0,
                             });
                           } else if (res.error) alert(res.error);
@@ -2471,8 +2489,39 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       </button>
                     )}
                     {(timeExpired || quizMyResponse) && quizMyResponse && (
-                      <div style={{ marginTop: '1rem', padding: '1rem', background: quizMyResponse.isCorrect ? '#ecfdf5' : '#fef2f2', borderRadius: '0.5rem', border: `2px solid ${quizMyResponse.isCorrect ? '#10b981' : '#ef4444'}` }}>
-                        <strong>{quizMyResponse.isCorrect ? '✓ Correct!' : '✗ Incorrect'}</strong> — {quizMyResponse.pointsAwarded} points
+                      <div style={{
+                        marginTop: '1rem',
+                        padding: '1.25rem 1rem',
+                        background: quizMyResponse.isCorrect ? '#ecfdf5' : '#fef2f2',
+                        borderRadius: '0.75rem',
+                        border: `2px solid ${quizMyResponse.isCorrect ? '#10b981' : '#ef4444'}`,
+                        textAlign: 'left',
+                      }}>
+                        <div style={{ fontWeight: 700, fontSize: '1.1rem', color: quizMyResponse.isCorrect ? '#047857' : '#b91c1c', marginBottom: quizMyResponse.isCorrect ? '0.5rem' : 0 }}>
+                          {quizMyResponse.isCorrect ? '✓ Correct!' : '✗ Incorrect'}
+                        </div>
+                        <div style={{ color: '#374151', fontSize: '0.95rem' }}>
+                          {quizMyResponse.pointsAwarded} pts
+                          {quizMyResponse.isCorrect && (
+                            <>
+                              <span style={{ margin: '0 0.35rem' }}>•</span>
+                              <strong style={{ color: '#059669' }}>+1 Participation Point</strong>
+                            </>
+                          )}
+                        </div>
+                        {quizMyResponse.isCorrect && (
+                          <div style={{
+                            marginTop: '0.75rem',
+                            padding: '0.6rem 0.75rem',
+                            background: 'rgba(5, 150, 105, 0.15)',
+                            borderRadius: '0.5rem',
+                            fontSize: '0.9rem',
+                            color: '#065f46',
+                            fontWeight: 600,
+                          }}>
+                            🗡️ You can now use <strong>Skills</strong> to attack other players and spend points — try the FIGHT button!
+                          </div>
+                        )}
                       </div>
                     )}
                     {isSessionHost && (
@@ -2563,6 +2612,74 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     entries={entriesWithPP}
                     title="Final standings"
                   />
+                  {/* Per-player quiz summary: correct/wrong, performance, PP earned */}
+                  {currentUser && (() => {
+                    const uid = currentUser.uid;
+                    const myCorrect = quizSession.correctCount?.[uid] ?? 0;
+                    const totalQuestions = quizSession.questionOrder?.length ?? 0;
+                    const myWrong = totalQuestions - myCorrect;
+                    const passPct = totalQuestions > 0 ? Math.round((myCorrect / totalQuestions) * 100) : 0;
+                    const myEntry = entriesWithPP.find((e) => e.uid === uid);
+                    const placementPP = myEntry?.ppEarned ?? 0;
+                    const participationPP = myCorrect * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+                    const totalPP = placementPP + participationPP;
+                    const perQuestion = quizSession.perQuestionResults?.[uid] ?? [];
+                    const questionMap = new Map(quizQuestions.map((q) => [q.id, q]));
+                    const correctItems = perQuestion.filter((r) => r.isCorrect).map((r) => questionMap.get(r.questionId)?.prompt || `Question ${r.questionId}`);
+                    const wrongItems = perQuestion.filter((r) => !r.isCorrect).map((r) => questionMap.get(r.questionId)?.prompt || `Question ${r.questionId}`);
+                    const truncate = (s: string, max: number) => (s.length <= max ? s : s.slice(0, max) + '…');
+                    return (
+                      <div style={{
+                        marginTop: '1.25rem',
+                        padding: '1.25rem',
+                        background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                        borderRadius: '1rem',
+                        border: '2px solid #e2e8f0',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                      }}>
+                        <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#1e293b', marginBottom: '1rem' }}>
+                          📋 Your Quiz Summary
+                        </h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.95rem' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                            <div style={{ padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #a7f3d0' }}>
+                              <div style={{ fontWeight: 600, color: '#047857', marginBottom: '0.35rem' }}>✓ Correct ({correctItems.length})</div>
+                              {correctItems.length === 0 ? <div style={{ color: '#6b7280' }}>None</div> : (
+                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#065f46' }}>
+                                  {correctItems.map((text, i) => <li key={i}>{truncate(text, 60)}</li>)}
+                                </ul>
+                              )}
+                            </div>
+                            <div style={{ padding: '0.75rem', background: '#fef2f2', borderRadius: '0.5rem', border: '1px solid #fecaca' }}>
+                              <div style={{ fontWeight: 600, color: '#b91c1c', marginBottom: '0.35rem' }}>✗ Wrong ({wrongItems.length})</div>
+                              {wrongItems.length === 0 ? <div style={{ color: '#6b7280' }}>None</div> : (
+                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#991b1b' }}>
+                                  {wrongItems.map((text, i) => <li key={i}>{truncate(text, 60)}</li>)}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
+                            <span style={{ fontWeight: 600, color: '#374151' }}>Overall:</span>
+                            <span>{myCorrect}/{totalQuestions} correct</span>
+                            <span style={{ fontWeight: 600, color: passPct >= 70 ? '#059669' : passPct >= 50 ? '#d97706' : '#dc2626' }}>
+                              Pass: {passPct}%
+                            </span>
+                          </div>
+                          <div style={{ padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fcd34d' }}>
+                            <div style={{ fontWeight: 600, color: '#92400e', marginBottom: '0.25rem' }}>💰 PP earned this quiz</div>
+                            <div style={{ color: '#78350f' }}>
+                              {placementPP > 0 && <span>Placement: +{placementPP} PP</span>}
+                              {placementPP > 0 && participationPP > 0 && <span> · </span>}
+                              {participationPP > 0 && <span>Participation ({myCorrect} correct): +{participationPP} PP</span>}
+                              {(placementPP === 0 && participationPP === 0) && <span>0 PP</span>}
+                              {(placementPP > 0 || participationPP > 0) && <strong style={{ marginLeft: '0.5rem' }}>Total: +{totalPP} PP</strong>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {isSessionHost && (
                     <button
                       onClick={async () => {

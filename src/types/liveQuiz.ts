@@ -48,6 +48,8 @@ export interface LiveQuizSession {
   leaderboard: { [uid: string]: number };
   /** Correct count per player (optional, for display) */
   correctCount?: { [uid: string]: number };
+  /** Per-question results per player for quiz summary (questionId -> isCorrect, pointsAwarded) */
+  perQuestionResults?: { [uid: string]: Array<{ questionId: string; isCorrect: boolean; pointsAwarded: number }> };
   /** Reward config set by host when starting the quiz. Applied when quiz completes. */
   rewardConfig?: LiveQuizRewardConfig;
   createdAt?: any;

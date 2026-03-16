@@ -335,12 +335,15 @@ export async function advanceQuiz(
     const currentQId = session.currentQuestionId;
     const newLeaderboard = { ...session.leaderboard };
     const newCorrectCount = { ...(session.correctCount || {}) };
+    const newPerQuestionResults: { [uid: string]: Array<{ questionId: string; isCorrect: boolean; pointsAwarded: number }> } = { ...(session.perQuestionResults || {}) };
 
     if (currentQId) {
       responsesForCurrentQuestion.forEach(({ uid, data: r }) => {
         if (r.currentQuestionId === currentQId) {
           newLeaderboard[uid] = (newLeaderboard[uid] || 0) + r.pointsAwarded;
           if (r.isCorrect) newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
+          const arr = newPerQuestionResults[uid] || [];
+          newPerQuestionResults[uid] = [...arr, { questionId: currentQId, isCorrect: r.isCorrect, pointsAwarded: r.pointsAwarded }];
         }
       });
     }
@@ -355,6 +358,7 @@ export async function advanceQuiz(
         questionEndsAt: null,
         leaderboard: newLeaderboard,
         correctCount: newCorrectCount,
+        perQuestionResults: newPerQuestionResults,
         updatedAt: serverTimestamp(),
       });
       log('Quiz completed', { sessionId });
@@ -373,6 +377,7 @@ export async function advanceQuiz(
       questionEndsAt: endsAt,
       leaderboard: newLeaderboard,
       correctCount: newCorrectCount,
+      perQuestionResults: newPerQuestionResults,
       updatedAt: serverTimestamp(),
     });
     log('Advanced to question', { sessionId, nextIndex, nextQuestionId });
@@ -406,7 +411,7 @@ export async function submitQuizResponse(
   questionId: string,
   selectedIndices: number[],
   correctIndices: number[]
-): Promise<{ ok: boolean; error?: string; pointsAwarded?: number }> {
+): Promise<{ ok: boolean; error?: string; pointsAwarded?: number; isCorrect?: boolean }> {
   return runTransaction(db, async (tx) => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
     if (!sessionSnap.exists()) return { ok: false, error: 'No quiz session' };
