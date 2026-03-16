@@ -22,6 +22,7 @@ import type { UpdateData, DocumentData } from 'firebase/firestore';
 import type { LiveQuizSession, LiveQuizStatus, LiveQuizResponse, LiveQuizRewardConfig, LiveQuizPlacementReward } from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { calculateLiveQuizPoints } from './liveQuizScoring';
+import { trackParticipation } from './inSessionStatsService';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
 
@@ -445,7 +446,14 @@ export async function submitQuizResponse(
     };
     tx.set(responseDocRef(sessionId, uid), response);
     log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded });
-    return { ok: true, pointsAwarded };
+    return { ok: true, pointsAwarded, isCorrect: allCorrect };
+  }).then(async (result) => {
+    // Correct answers in Live Event quiz count as 1 participation point (and grant PP via trackParticipation)
+    if (result.ok && result.isCorrect) {
+      await trackParticipation(sessionId, uid, 1);
+      log('Participation +1 for correct quiz answer', { sessionId, uid });
+    }
+    return result;
   });
 }
 

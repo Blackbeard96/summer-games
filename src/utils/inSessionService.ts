@@ -20,7 +20,7 @@ import {
 } from 'firebase/firestore';
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
-import { initializePlayerStats, finalizeSessionStats } from './inSessionStatsService';
+import { initializePlayerStats, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
 
 export interface SessionPlayer {
   userId: string;
@@ -114,7 +114,15 @@ export async function createSession(
       status: 'live' as const, // Use 'live' consistently
       mode: 'in_session' as const,
       players: [] as SessionPlayer[],
-      battleLog: [`🎉 Live Event is now active for ${className || 'this class'}! Join the battle in the arena.`] as string[],
+      battleLog: [
+        `🎉 Live Event is now active for ${className || 'this class'}! Join the battle in the arena.`,
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '📋 How to earn PP this event:',
+        `  • +${LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP for every player you eliminate (plus their vault PP)`,
+        '  • PP for each correct quiz answer (more for faster answers)',
+        `  • +${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP for every Participation Point the host gives you`,
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      ] as string[],
       createdAt: serverTimestamp(),
       startedAt: serverTimestamp()
     };

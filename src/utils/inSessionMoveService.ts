@@ -6,7 +6,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDebug';
 import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
@@ -479,6 +479,28 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       const hpChange = result.stateChanges ? `${result.stateChanges.targetHpBefore} → ${result.stateChanges.targetHpAfter}` : 'N/A';
       const shieldChange = result.stateChanges ? `${result.stateChanges.targetShieldBefore} → ${result.stateChanges.targetShieldAfter}` : 'N/A';
       console.log('✅ [applyInSessionMove] ⚡ SUCCESS ⚡', targetName, '| HP:', hpChange, '| Shield:', shieldChange, '| Dmg:', result.damage, '| Subscription should update');
+
+      // Sync target's vault health and shield to their global vault so Live Event impact persists
+      const targetHp = result.stateChanges?.targetHpAfter;
+      const targetShield = result.stateChanges?.targetShieldAfter;
+      if (targetUid && (targetHp !== undefined || targetShield !== undefined)) {
+        Promise.resolve().then(async () => {
+          try {
+            const vaultRef = doc(db, 'vaults', targetUid);
+            const updates: { vaultHealth?: number; shieldStrength?: number } = {};
+            if (targetHp !== undefined) updates.vaultHealth = Math.max(0, targetHp);
+            if (targetShield !== undefined) updates.shieldStrength = Math.max(0, targetShield);
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(vaultRef, updates);
+              if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
+                debug('inSessionMove', `Synced vault for ${targetName}: vaultHealth=${updates.vaultHealth ?? '—'}, shieldStrength=${updates.shieldStrength ?? '—'}`);
+              }
+            }
+          } catch (syncError) {
+            debugError('inSessionMove', 'Failed to sync target vault after move', syncError);
+          }
+        });
+      }
     } else {
       console.error('❌ [applyInSessionMove] ⚠️ FAILED', move.name, '→', targetName, '| Error:', result.message);
     }

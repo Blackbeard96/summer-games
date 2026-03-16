@@ -167,6 +167,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizResponseCount, setQuizResponseCount] = useState(0);
   const [quizCountdown, setQuizCountdown] = useState<number | null>(null);
   const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** When a quiz is active, players/host can swap between Quiz view and Battle Log view */
+  const [centerView, setCenterView] = useState<'quiz' | 'battleLog'>('battleLog');
   const defaultPlacement = () => ({ pp: 0, xp: 0 });
   const [quizRewardConfig, setQuizRewardConfig] = useState<LiveQuizRewardConfig>({
     placements: {
@@ -508,6 +510,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     if (!sessionId) return;
     const unsub = subscribeQuizSession(sessionId, (session) => {
       setQuizSession(session);
+      if (session) setCenterView('quiz'); // when a quiz appears, show Quiz tab first
       if (!session || session.status !== 'question_live') {
         setQuizCountdown(null);
         if (quizCountdownRef.current) {
@@ -2101,7 +2104,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
                   if (ended) {
                     debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
-                    onEndSession();
+                    // Do not call onEndSession() here — keep host on the page so the Live Event Overview
+                    // modal stays visible until they dismiss it. They can leave via "Leave Live Event" after.
                   } else {
                     debugError('inSessionBattle', `Failed to end session ${sessionId}`);
                     alert('Failed to end session. Only the designated host can end the session.');
@@ -2353,8 +2357,46 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           minWidth: 0,
           position: 'relative'
         }}>
-          {quizSession ? (
-            /* Live Quiz Mode panel */
+          {/* Tab to swap between Quiz and Battle Log when a quiz is active */}
+          {quizSession && (
+            <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setCenterView('quiz')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontWeight: 600,
+                  borderRadius: '0.5rem',
+                  border: '2px solid #4f46e5',
+                  background: centerView === 'quiz' ? '#4f46e5' : 'transparent',
+                  color: centerView === 'quiz' ? 'white' : '#4f46e5',
+                  cursor: 'pointer',
+                  fontSize: '0.9rem',
+                }}
+              >
+                📋 Quiz
+              </button>
+              <button
+                type="button"
+                onClick={() => setCenterView('battleLog')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontWeight: 600,
+                  borderRadius: '0.5rem',
+                  border: '2px solid #374151',
+                  background: centerView === 'battleLog' ? '#374151' : 'transparent',
+                  color: centerView === 'battleLog' ? 'white' : '#374151',
+                  cursor: 'pointer',
+                  fontSize: '0.9rem',
+                }}
+              >
+                📜 Battle Log
+              </button>
+            </div>
+          )}
+          <>
+          {quizSession && centerView === 'quiz' && (
+            /* Live Quiz Mode panel - full area when Quiz tab is selected */
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {quizSession.status === 'lobby' && (
                 <div style={{ background: '#f0f9ff', padding: '1.5rem', borderRadius: '1rem', textAlign: 'center' }}>
@@ -2455,14 +2497,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   .map(({ key, label }) => {
                                     const p = config.placements[key];
                                     if (!p || (p.pp <= 0 && p.xp <= 0 && !p.artifactId && !p.artifactName)) return null;
-                                    return { place: label, pp: p.pp ?? 0, xp: p.xp ?? 0, artifactName: p.artifactName ?? p.artifactId };
+                                    return { place: label, pp: p.pp ?? 0, xp: p.xp ?? 0, artifactName: (p.artifactName ?? p.artifactId ?? null) as string | null };
                                   })
-                                  .filter(Boolean) as { place: string; pp: number; xp: number; artifactName?: string }[];
+                                  .filter(Boolean) as { place: string; pp: number; xp: number; artifactName: string | null }[];
                                 if (placements.length > 0) {
                                   const sessionRef = doc(db, 'inSessionRooms', sessionId);
                                   await updateDoc(sessionRef, {
                                     lastQuizAwardsSnapshot: {
-                                      quizTitle: quizSession.quizTitle ?? undefined,
+                                      quizTitle: quizSession.quizTitle ?? null,
                                       placements,
                                     },
                                     updatedAt: serverTimestamp(),
@@ -2539,8 +2581,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 />
               )}
             </div>
-          ) : (
-            <>
+          )}
+          {/* Battle Log and Skills - show when no quiz or when Battle Log tab is selected */}
+          {(!quizSession || centerView === 'battleLog') && (
+          <>
           {/* Battle Log */}
           <div style={{
             background: '#374151',
@@ -2757,8 +2801,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               />
             </div>
           </div>
-            </>
+          </>
           )}
+          </>
         </div>
 
         {/* Right Side - Players (Scrollable) */}

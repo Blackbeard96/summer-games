@@ -327,7 +327,29 @@ export async function finalizeSessionStats(
         statsMap[playerId] = finalizedStats;
       }
     }
-    
+
+    // Sync each player's vault health and shield from session state so Live Event impact persists globally
+    const players = sessionData.players || [];
+    for (const p of players) {
+      const uid = p.userId;
+      if (!uid) continue;
+      const hp = p.hp;
+      const shield = p.shield;
+      if (hp === undefined && shield === undefined) continue;
+      try {
+        const vaultRef = doc(db, 'vaults', uid);
+        const updates: { vaultHealth?: number; shieldStrength?: number } = {};
+        if (hp !== undefined) updates.vaultHealth = Math.max(0, hp);
+        if (shield !== undefined) updates.shieldStrength = Math.max(0, shield);
+        if (Object.keys(updates).length > 0) {
+          await updateDoc(vaultRef, updates);
+          debug('inSessionStats', `Synced vault for ${p.displayName || uid}: vaultHealth=${updates.vaultHealth ?? '—'}, shieldStrength=${updates.shieldStrength ?? '—'}`);
+        }
+      } catch (err) {
+        debugError('inSessionStats', `Failed to sync vault for ${uid} at session end`, err);
+      }
+    }
+
     // Calculate MVP badges
     let mostPP = 0;
     let mostEliminations = 0;
