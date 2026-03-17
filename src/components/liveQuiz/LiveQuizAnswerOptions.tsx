@@ -24,9 +24,13 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
 }) => {
   const correctIndices = question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : []);
   const selected = submittedIndices ?? selectedIndices;
+  const isMultiple = correctIndices.length > 1;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <p style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.25rem', fontWeight: 600 }}>
+        {isMultiple ? 'Select all that apply' : 'Select one answer'}
+      </p>
       {question.options.map((option, index) => {
         const isSelected = selected.includes(index);
         const isCorrect = correctIndices.includes(index);

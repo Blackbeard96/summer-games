@@ -378,18 +378,21 @@ const QuizPlayer: React.FC = () => {
             </div>
           )}
 
-          {/* Answer selection hint */}
-          {isMultiSelect && !showFeedback && (
+          {/* Answer selection hint — make it clear when one vs multiple answers */}
+          {!showFeedback && (
             <div style={{
               marginBottom: '1rem',
               padding: '0.75rem',
-              background: '#eff6ff',
+              background: isMultiSelect ? '#eff6ff' : '#f0fdf4',
               borderRadius: '0.5rem',
-              border: '1px solid #bfdbfe',
+              border: isMultiSelect ? '1px solid #bfdbfe' : '1px solid #bbf7d0',
               fontSize: '0.875rem',
-              color: '#1e40af'
+              color: isMultiSelect ? '#1e40af' : '#166534'
             }}>
-              <strong>Multiple correct answers:</strong> Select all that apply
+              {isMultiSelect ? (
+                <strong>Multiple correct answers:</strong>
+              ) : null}{' '}
+              {isMultiSelect ? 'Select all that apply' : 'Select one answer'}
             </div>
           )}
 

@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { db } from '../firebase';
+import React, { useState, useEffect, useRef } from 'react';
+import { db, storage } from '../firebase';
 import { doc, getDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ARTIFACT_PERK_OPTIONS, getArtifactPerkLimit } from '../constants/artifactPerks';
+import { getPowerLevelBonusForRarity, normalizeArtifactRarity, type ArtifactRarity } from '../constants/artifactRarity';
 
 interface ArtifactsAdminProps {
   isOpen: boolean;
@@ -20,14 +23,27 @@ interface MarketplaceArtifact {
   discount?: number;
 }
 
+interface EquippableArtifactSkill {
+  id: string;
+  name: string;
+  description: string;
+  type?: 'attack' | 'defense' | 'utility' | 'support' | 'control';
+  cost?: number;
+  cooldown?: number;
+  targetType?: 'self' | 'single' | 'team' | 'enemy' | 'enemy_team' | 'all';
+}
+
 interface EquippableArtifact {
   id: string;
   name: string;
-  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket';
+  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket' | 'weapon';
+  rarity?: ArtifactRarity;
+  powerLevelBonus?: number;
   stats?: {
     [key: string]: number;
   };
   perks?: string[];
+  artifactSkill?: EquippableArtifactSkill | null;
   level?: number;
   image?: string;
   description?: string;
@@ -40,6 +56,10 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
   const [editingArtifact, setEditingArtifact] = useState<string | null>(null);
   const [newArtifact, setNewArtifact] = useState<Partial<MarketplaceArtifact | EquippableArtifact>>({});
   const [loading, setLoading] = useState(false);
+  const [perkPickerValue, setPerkPickerValue] = useState<string>('');
+  const [imageUploading, setImageUploading] = useState(false);
+  const marketplaceImageInputRef = useRef<HTMLInputElement>(null);
+  const equippableImageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -67,13 +87,41 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
         const data = equippableDoc.data();
         // Remove metadata fields
         const { lastUpdated, updatedBy, ...artifacts } = data;
-        setEquippableArtifacts(artifacts);
+        setEquippableArtifacts(Object.fromEntries(Object.entries(artifacts).map(([key, artifact]: any) => {
+          const rarity = normalizeArtifactRarity(artifact?.rarity);
+          return [key, {
+            ...artifact,
+            rarity,
+            powerLevelBonus: typeof artifact?.powerLevelBonus === 'number' ? artifact.powerLevelBonus : getPowerLevelBonusForRarity(rarity),
+            perks: Array.isArray(artifact?.perks) ? artifact.perks : [],
+          }];
+        })));
       }
     } catch (error) {
       console.error('Error loading artifacts:', error);
       alert('❌ Failed to load artifacts. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleArtifactImageUpload = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file (e.g. PNG, JPEG, WebP).');
+      return;
+    }
+    setImageUploading(true);
+    try {
+      const path = `artifacts/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(storageRef);
+      setNewArtifact((prev) => ({ ...prev, image: downloadUrl }));
+    } catch (err) {
+      console.error('Image upload failed:', err);
+      alert('❌ Image upload failed. You can still paste an Image URL.');
+    } finally {
+      setImageUploading(false);
     }
   };
 
@@ -140,6 +188,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }));
 
     setNewArtifact({});
+    setPerkPickerValue('');
     setEditingArtifact(null);
   };
 
@@ -149,12 +198,21 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       return;
     }
 
+    const rarity = normalizeArtifactRarity((newArtifact as EquippableArtifact).rarity);
+    const perkLimit = getArtifactPerkLimit(rarity);
+    const perks = ((newArtifact as EquippableArtifact).perks || []).slice(0, perkLimit);
+
     const artifact: EquippableArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
       slot: (newArtifact as EquippableArtifact).slot || 'ring1',
+      rarity,
+      powerLevelBonus: getPowerLevelBonusForRarity(rarity),
       stats: (newArtifact as EquippableArtifact).stats || {},
-      perks: (newArtifact as EquippableArtifact).perks || [],
+      perks,
+      artifactSkill: rarity === 'legendary'
+        ? (newArtifact as EquippableArtifact).artifactSkill || null
+        : null,
       level: (newArtifact as EquippableArtifact).level || 1,
       image: (newArtifact as EquippableArtifact).image || '',
       description: (newArtifact as EquippableArtifact).description || ''
@@ -166,6 +224,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }));
 
     setNewArtifact({});
+    setPerkPickerValue('');
     setEditingArtifact(null);
   };
 
@@ -173,6 +232,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     const artifact = marketplaceArtifacts[artifactId];
     if (artifact) {
       setNewArtifact(artifact);
+      setPerkPickerValue('');
       setEditingArtifact(artifactId);
     }
   };
@@ -181,6 +241,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     const artifact = equippableArtifacts[artifactId];
     if (artifact) {
       setNewArtifact(artifact);
+      setPerkPickerValue('');
       setEditingArtifact(artifactId);
     }
   };
@@ -210,6 +271,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }));
 
     setNewArtifact({});
+    setPerkPickerValue('');
     setEditingArtifact(null);
   };
 
@@ -219,12 +281,21 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       return;
     }
 
+    const rarity = normalizeArtifactRarity((newArtifact as EquippableArtifact).rarity);
+    const perkLimit = getArtifactPerkLimit(rarity);
+    const perks = ((newArtifact as EquippableArtifact).perks || []).slice(0, perkLimit);
+
     const artifact: EquippableArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
       slot: (newArtifact as EquippableArtifact).slot || 'ring1',
+      rarity,
+      powerLevelBonus: getPowerLevelBonusForRarity(rarity),
       stats: (newArtifact as EquippableArtifact).stats || {},
-      perks: (newArtifact as EquippableArtifact).perks || [],
+      perks,
+      artifactSkill: rarity === 'legendary'
+        ? (newArtifact as EquippableArtifact).artifactSkill || null
+        : null,
       level: (newArtifact as EquippableArtifact).level || 1,
       image: (newArtifact as EquippableArtifact).image || '',
       description: (newArtifact as EquippableArtifact).description || ''
@@ -236,6 +307,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }));
 
     setNewArtifact({});
+    setPerkPickerValue('');
     setEditingArtifact(null);
   };
 
@@ -261,7 +333,29 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
 
   const handleCancelEdit = () => {
     setNewArtifact({});
+    setPerkPickerValue('');
     setEditingArtifact(null);
+    setPerkPickerValue('');
+  };
+
+  const draftArtifactRarity = normalizeArtifactRarity((newArtifact as EquippableArtifact).rarity);
+  const draftPerkLimit = getArtifactPerkLimit(draftArtifactRarity);
+  const draftPerks = ((newArtifact as EquippableArtifact).perks || []).slice(0, draftPerkLimit);
+  const draftArtifactSkill = (newArtifact as EquippableArtifact).artifactSkill || null;
+
+  const addDraftPerk = () => {
+    if (!perkPickerValue) return;
+    if (draftPerks.includes(perkPickerValue)) return;
+    if (draftPerks.length >= draftPerkLimit) {
+      alert(`This rarity allows only ${draftPerkLimit} perk${draftPerkLimit === 1 ? '' : 's'}.`);
+      return;
+    }
+    setNewArtifact({ ...newArtifact, perks: [...draftPerks, perkPickerValue] });
+    setPerkPickerValue('');
+  };
+
+  const removeDraftPerk = (perkId: string) => {
+    setNewArtifact({ ...newArtifact, perks: draftPerks.filter((perk) => perk !== perkId) });
   };
 
   if (!isOpen) return null;
@@ -417,7 +511,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   <input
                     type="number"
                     value={(newArtifact as MarketplaceArtifact).price || 0}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, price: parseInt(e.target.value) || 0 })}
+                    onChange={(e) => setNewArtifact((prev) => ({ ...(prev as any), price: parseInt(e.target.value) || 0 }))}
                     placeholder="0"
                     style={{
                       width: '100%',
@@ -434,7 +528,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   <input
                     type="text"
                     value={(newArtifact as MarketplaceArtifact).icon || ''}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, icon: e.target.value })}
+                    onChange={(e) => setNewArtifact((prev) => ({ ...(prev as any), icon: e.target.value }))}
                     placeholder="🛡️"
                     style={{
                       width: '100%',
@@ -462,12 +556,40 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       color: 'white'
                     }}
                   />
+                  <input
+                    ref={marketplaceImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleArtifactImageUpload(f);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => marketplaceImageInputRef.current?.click()}
+                    disabled={imageUploading}
+                    style={{
+                      marginTop: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.875rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#374151',
+                      color: 'white',
+                      cursor: imageUploading ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    {imageUploading ? 'Uploading…' : '📤 Upload image'}
+                  </button>
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Category</label>
                   <select
                     value={(newArtifact as MarketplaceArtifact).category || 'special'}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, category: e.target.value as any })}
+                    onChange={(e) => setNewArtifact((prev) => ({ ...(prev as any), category: e.target.value as any }))}
                     style={{
                       width: '100%',
                       padding: '0.5rem',
@@ -508,7 +630,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   <input
                     type="number"
                     value={(newArtifact as MarketplaceArtifact).originalPrice || ''}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, originalPrice: e.target.value ? parseInt(e.target.value) : undefined })}
+                    onChange={(e) => setNewArtifact((prev) => ({ ...(prev as any), originalPrice: e.target.value ? parseInt(e.target.value) : undefined }))}
                     placeholder="For discount display"
                     style={{
                       width: '100%',
@@ -525,7 +647,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   <input
                     type="number"
                     value={(newArtifact as MarketplaceArtifact).discount || ''}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, discount: e.target.value ? parseInt(e.target.value) : undefined })}
+                    onChange={(e) => setNewArtifact((prev) => ({ ...(prev as any), discount: e.target.value ? parseInt(e.target.value) : undefined }))}
                     placeholder="Discount percentage"
                     style={{
                       width: '100%',
@@ -743,6 +865,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                     <option value="legs">Legs</option>
                     <option value="shoes">Shoes</option>
                     <option value="jacket">Jacket</option>
+                    <option value="weapon">Weapon</option>
                   </select>
                 </div>
                 <div>
@@ -778,6 +901,34 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       color: 'white'
                     }}
                   />
+                  <input
+                    ref={equippableImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleArtifactImageUpload(f);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => equippableImageInputRef.current?.click()}
+                    disabled={imageUploading}
+                    style={{
+                      marginTop: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.875rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#374151',
+                      color: 'white',
+                      cursor: imageUploading ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    {imageUploading ? 'Uploading…' : '📤 Upload image'}
+                  </button>
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Description</label>
@@ -795,6 +946,37 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       color: 'white'
                     }}
                   />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Rarity</label>
+                  <select
+                    value={draftArtifactRarity}
+                    onChange={(e) => {
+                      const rarity = normalizeArtifactRarity(e.target.value);
+                      const cappedPerks = draftPerks.slice(0, getArtifactPerkLimit(rarity));
+                      setNewArtifact({
+                        ...newArtifact,
+                        rarity,
+                        perks: cappedPerks,
+                        artifactSkill: rarity === 'legendary' ? draftArtifactSkill : null,
+                        powerLevelBonus: getPowerLevelBonusForRarity(rarity)
+                      });
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#1f2937',
+                      color: 'white'
+                    }}
+                  >
+                    <option value="common">Common</option>
+                    <option value="uncommon">Uncommon</option>
+                    <option value="rare">Rare</option>
+                    <option value="epic">Epic</option>
+                    <option value="legendary">Legendary</option>
+                  </select>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
@@ -824,25 +1006,161 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   />
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Perks (one per line)</label>
-                  <textarea
-                    value={((newArtifact as EquippableArtifact).perks || []).join('\n')}
-                    onChange={(e) => {
-                      const perks = e.target.value.split('\n').filter(p => p.trim());
-                      setNewArtifact({ ...newArtifact, perks });
-                    }}
-                    placeholder="Grants access to Fire element moves&#10;Increases damage by 10%"
-                    style={{
-                      width: '100%',
-                      padding: '0.5rem',
-                      borderRadius: '0.25rem',
-                      border: '1px solid #4b5563',
-                      background: '#1f2937',
-                      color: 'white',
-                      minHeight: '100px'
-                    }}
-                  />
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Perks ({draftPerks.length}/{draftPerkLimit})</label>
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                    <select
+                      value={perkPickerValue}
+                      onChange={(e) => setPerkPickerValue(e.target.value)}
+                      style={{
+                        flex: '1 1 280px',
+                        padding: '0.5rem',
+                        borderRadius: '0.25rem',
+                        border: '1px solid #4b5563',
+                        background: '#1f2937',
+                        color: 'white'
+                      }}
+                    >
+                      <option value="">Select a perk...</option>
+                      {ARTIFACT_PERK_OPTIONS.map((perk) => (
+                        <option key={perk.id} value={perk.label}>
+                          {perk.label} - {perk.description}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={addDraftPerk}
+                      disabled={!perkPickerValue || draftPerks.length >= draftPerkLimit}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        borderRadius: '0.25rem',
+                        border: 'none',
+                        background: !perkPickerValue || draftPerks.length >= draftPerkLimit ? '#6b7280' : '#3b82f6',
+                        color: 'white',
+                        cursor: !perkPickerValue || draftPerks.length >= draftPerkLimit ? 'not-allowed' : 'pointer',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      Add Perk
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    {draftPerks.map((perk) => (
+                      <div key={perk} style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.35rem 0.6rem',
+                        borderRadius: '999px',
+                        background: '#111827',
+                        border: '1px solid #4b5563',
+                        color: 'white',
+                        fontSize: '0.8rem'
+                      }}>
+                        <span>{perk}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeDraftPerk(perk)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#fca5a5',
+                            cursor: 'pointer',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.5rem' }}>
+                    Common: 1 perk · Uncommon: 2 perks · Rare: 2 perks · Epic: 3 perks · Legendary: 3 perks + a new skill
+                  </p>
                 </div>
+                {draftArtifactRarity === 'legendary' && (
+                  <div style={{ gridColumn: '1 / -1', background: '#111827', border: '1px solid #f59e0b', borderRadius: '0.75rem', padding: '1rem' }}>
+                    <h5 style={{ margin: '0 0 0.75rem 0', color: '#fbbf24' }}>Legendary New Skill</h5>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+                      <input
+                        type="text"
+                        value={draftArtifactSkill?.name || ''}
+                        onChange={(e) => setNewArtifact({
+                          ...newArtifact,
+                          artifactSkill: {
+                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
+                            name: e.target.value,
+                            description: draftArtifactSkill?.description || '',
+                            type: draftArtifactSkill?.type || 'utility',
+                            cost: draftArtifactSkill?.cost || 0,
+                            cooldown: draftArtifactSkill?.cooldown || 0,
+                            targetType: draftArtifactSkill?.targetType || 'self'
+                          }
+                        })}
+                        placeholder="Skill name"
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
+                      />
+                      <input
+                        type="text"
+                        value={draftArtifactSkill?.description || ''}
+                        onChange={(e) => setNewArtifact({
+                          ...newArtifact,
+                          artifactSkill: {
+                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
+                            name: draftArtifactSkill?.name || '',
+                            description: e.target.value,
+                            type: draftArtifactSkill?.type || 'utility',
+                            cost: draftArtifactSkill?.cost || 0,
+                            cooldown: draftArtifactSkill?.cooldown || 0,
+                            targetType: draftArtifactSkill?.targetType || 'self'
+                          }
+                        })}
+                        placeholder="Skill description"
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
+                      />
+                      <select
+                        value={draftArtifactSkill?.type || 'utility'}
+                        onChange={(e) => setNewArtifact({
+                          ...newArtifact,
+                          artifactSkill: {
+                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
+                            name: draftArtifactSkill?.name || '',
+                            description: draftArtifactSkill?.description || '',
+                            type: e.target.value as any,
+                            cost: draftArtifactSkill?.cost || 0,
+                            cooldown: draftArtifactSkill?.cooldown || 0,
+                            targetType: draftArtifactSkill?.targetType || 'self'
+                          }
+                        })}
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
+                      >
+                        <option value="attack">Attack</option>
+                        <option value="defense">Defense</option>
+                        <option value="utility">Utility</option>
+                        <option value="support">Support</option>
+                        <option value="control">Control</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={draftArtifactSkill?.cooldown || 0}
+                        onChange={(e) => setNewArtifact({
+                          ...newArtifact,
+                          artifactSkill: {
+                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
+                            name: draftArtifactSkill?.name || '',
+                            description: draftArtifactSkill?.description || '',
+                            type: draftArtifactSkill?.type || 'utility',
+                            cost: draftArtifactSkill?.cost || 0,
+                            cooldown: parseInt(e.target.value) || 0,
+                            targetType: draftArtifactSkill?.targetType || 'self'
+                          }
+                        })}
+                        placeholder="Cooldown"
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
                 {editingArtifact ? (
@@ -914,6 +1232,9 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                         <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                           Slot: {artifact.slot} | Level: {artifact.level || 1}
                         </div>
+                        <div style={{ fontSize: '0.875rem', color: '#60a5fa', marginTop: '0.25rem', fontWeight: 600 }}>
+                          {String(artifact.rarity || 'common').charAt(0).toUpperCase() + String(artifact.rarity || 'common').slice(1)} · +{artifact.powerLevelBonus ?? getPowerLevelBonusForRarity(artifact.rarity || 'common')} Power Level
+                        </div>
                         {artifact.description && (
                           <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                             {artifact.description}
@@ -927,6 +1248,11 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                         {artifact.perks && artifact.perks.length > 0 && (
                           <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                             Perks: {artifact.perks.join(', ')}
+                          </div>
+                        )}
+                        {artifact.rarity === 'legendary' && artifact.artifactSkill?.name && (
+                          <div style={{ fontSize: '0.875rem', color: '#f59e0b', marginTop: '0.25rem', fontWeight: 600 }}>
+                            New Skill: {artifact.artifactSkill.name}
                           </div>
                         )}
                       </div>

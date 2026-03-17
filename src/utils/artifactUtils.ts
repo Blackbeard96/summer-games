@@ -2,6 +2,27 @@
  * Utility functions for artifact calculations
  */
 
+import { getPowerLevelBonusForRarity, normalizeArtifactRarity } from '../constants/artifactRarity';
+
+/**
+ * Normalize an artifact for power level and display: ensure rarity and powerLevelBonus.
+ * Safe for migration and backward compatibility (missing rarity → 'common').
+ */
+export function normalizeArtifact(artifact: any): any {
+  if (!artifact || typeof artifact !== 'object') return artifact;
+  const rarity = normalizeArtifactRarity(artifact.rarity);
+  const powerLevelBonus =
+    typeof artifact.powerLevelBonus === 'number' && artifact.powerLevelBonus >= 0
+      ? artifact.powerLevelBonus
+      : getPowerLevelBonusForRarity(rarity);
+  return {
+    ...artifact,
+    rarity,
+    powerLevelBonus,
+    perks: Array.isArray(artifact.perks) ? artifact.perks : [],
+  };
+}
+
 /**
  * Calculate damage multiplier for an artifact based on its level
  * Each level adds 50-75% damage (we use 62.5% average for consistency)

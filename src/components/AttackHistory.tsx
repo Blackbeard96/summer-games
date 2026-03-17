@@ -174,13 +174,12 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
                   marginBottom: '0.75rem',
                   backdropFilter: 'blur(10px)',
                   border: (() => {
-                    // Check for discrepancies between calculated damage and actual changes
+                    // Check for shield discrepancy only. PP change is not compared: vault attacks
+                    // reduce vault health (attacker gains ppStolen) but target's currentPP is not
+                    // reduced, so before/after currentPP are intentionally the same.
                     const expectedShieldChange = attack.shieldDamage;
                     const actualShieldChange = attack.targetVaultBefore.shieldStrength - attack.targetVaultAfter.shieldStrength;
-                    const expectedPPChange = attack.ppStolen;
-                    const actualPPChange = attack.targetVaultBefore.currentPP - attack.targetVaultAfter.currentPP;
-                    
-                    if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1 || Math.abs(expectedPPChange - actualPPChange) > 0.1) {
+                    if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1) {
                       return '2px solid #ef4444'; // Red border for discrepancies
                     }
                     return 'none';
@@ -195,13 +194,11 @@ const AttackHistory: React.FC<AttackHistoryProps> = ({ attacks }) => {
                   }}>
                     Target Vault Status
                     {(() => {
-                      // Check for discrepancies and show warning
+                      // Only check shield discrepancy. Target currentPP is not reduced by vault
+                      // attacks (only vault health is), so we don't compare PP change.
                       const expectedShieldChange = attack.shieldDamage;
                       const actualShieldChange = attack.targetVaultBefore.shieldStrength - attack.targetVaultAfter.shieldStrength;
-                      const expectedPPChange = attack.ppStolen;
-                      const actualPPChange = attack.targetVaultBefore.currentPP - attack.targetVaultAfter.currentPP;
-                      
-                      if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1 || Math.abs(expectedPPChange - actualPPChange) > 0.1) {
+                      if (Math.abs(expectedShieldChange - actualShieldChange) > 0.1) {
                         return (
                           <div style={{ 
                             fontSize: '0.625rem', 

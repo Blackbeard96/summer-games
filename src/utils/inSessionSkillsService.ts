@@ -6,13 +6,14 @@
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
-import { getUserUnlockedSkillsForBattle } from './battleSkillsService';
+import { getEquippedSkillsForBattle } from './battleSkillsService';
 import { debug, debugError } from './inSessionDebug';
 
 export interface SessionLoadout {
   manifest: Move[];
   elemental: Move[];
   rrCandy: Move[];
+  artifact?: Move[];
   snapshotAt: any; // Firestore Timestamp
 }
 
@@ -55,18 +56,19 @@ export async function createSessionLoadout(
   userElement?: string
 ): Promise<SessionLoadout | null> {
   try {
-    // Get all unlocked skills for this user
-    const allSkills = await getUserUnlockedSkillsForBattle(userId, userElement);
+    // Get EQUIPPED skills for this user (unified 6-skill loadout)
+    const allSkills = await getEquippedSkillsForBattle(userId, userElement);
     
-    // Categorize skills (System Skills removed - all skills are Manifest, Elemental, or RR Candy)
     const manifest = allSkills.filter(s => s.category === 'manifest');
     const elemental = allSkills.filter(s => s.category === 'elemental');
     const rrCandy = allSkills.filter(s => s.id?.startsWith('rr-candy-'));
+    const artifact = allSkills.filter(s => s.category === 'system' && !s.id?.startsWith('rr-candy-'));
     
     const loadout: SessionLoadout = {
       manifest,
       elemental,
       rrCandy,
+      artifact,
       snapshotAt: serverTimestamp()
     };
     
@@ -112,16 +114,16 @@ export async function getAvailableSkillsForSession(
   const loadout = await getSessionLoadout(sessionId, userId, userElement);
   
   if (!loadout) {
-    // Fallback: get skills directly (no snapshot)
-    debug('inSessionSkills', `No loadout found, using direct fetch for ${userId}`);
-    return await getUserUnlockedSkillsForBattle(userId, userElement);
+    // Fallback: get equipped skills directly (no snapshot)
+    debug('inSessionSkills', `No loadout found, using getEquippedSkillsForBattle for ${userId}`);
+    return await getEquippedSkillsForBattle(userId, userElement);
   }
   
-  // Combine all categories (System Skills removed)
   return [
     ...loadout.manifest,
     ...loadout.elemental,
-    ...loadout.rrCandy
+    ...loadout.rrCandy,
+    ...(loadout.artifact || [])
   ];
 }
 

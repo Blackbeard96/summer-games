@@ -3,7 +3,8 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { calculateUpgradeCost, getArtifactDamageMultiplier, getManifestDamageBoost } from '../utils/artifactUtils';
+import { calculateUpgradeCost, getArtifactDamageMultiplier, getManifestDamageBoost, normalizeArtifact } from '../utils/artifactUtils';
+import { getPowerLevelBonusForRarity } from '../constants/artifactRarity';
 
 // Artifact price definitions for refund calculations
 const artifactPrices: { [key: string]: number } = {
@@ -28,13 +29,16 @@ const artifactPrices: { [key: string]: number } = {
 interface Artifact {
   id: string;
   name: string;
-  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket';
+  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket' | 'weapon';
   stats?: {
     [key: string]: number;
   };
   level?: number;
   image?: string;
   price?: number; // Original purchase price for refund calculations
+  rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+  powerLevelBonus?: number;
+  perks?: string[];
 }
 
 interface EquippedArtifacts {
@@ -47,6 +51,7 @@ interface EquippedArtifacts {
   legs?: Artifact | null;
   shoes?: Artifact | null;
   jacket?: Artifact | null;
+  weapon?: Artifact | null;
 }
 
 const Artifacts: React.FC = () => {
@@ -344,6 +349,7 @@ const Artifacts: React.FC = () => {
     { key: 'legs' as const, label: 'Legs/Bottom', icon: '👖' },
     { key: 'shoes' as const, label: 'Shoes', icon: '👟' },
     { key: 'jacket' as const, label: 'Jacket', icon: '🧥' },
+    { key: 'weapon' as const, label: 'Weapon', icon: '⚔️' },
   ];
 
   if (loading) {
@@ -1789,6 +1795,15 @@ const Artifacts: React.FC = () => {
                             }}>
                               {slot.label}
                             </div>
+                            {(() => {
+                              const rarity = (equipped as Artifact).rarity || 'common';
+                              const bonus = getPowerLevelBonusForRarity(rarity);
+                              return (
+                                <div style={{ fontSize: '0.75rem', color: '#059669', fontWeight: '600', marginTop: '0.25rem' }}>
+                                  {String(rarity).charAt(0).toUpperCase() + String(rarity).slice(1)} · +{bonus} Power Level
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                         {equipped.stats && Object.keys(equipped.stats).length > 0 && (

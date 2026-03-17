@@ -50,9 +50,14 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
           </span>
         )}
       </div>
-      <h2 style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#1e293b', marginBottom: '1rem', lineHeight: 1.4 }}>
+      <h2 style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#1e293b', marginBottom: '0.5rem', lineHeight: 1.4 }}>
         {question.prompt}
       </h2>
+      <p style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '1rem', fontWeight: 500 }}>
+        {(question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : [])).length > 1
+          ? '☑️ Select all that apply'
+          : '○ Select one answer'}
+      </p>
       {question.imageUrl && (
         <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
           <img

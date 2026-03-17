@@ -26,7 +26,7 @@ import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
-import { getUserUnlockedSkillsForBattle } from '../utils/battleSkillsService';
+import { getEquippedSkillsForBattle } from '../utils/battleSkillsService';
 import { SpacesModeState, SpaceId } from '../types/battleSession';
 import SpacesModeUI from './SpacesModeUI';
 import { 
@@ -1535,15 +1535,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         
         setUserElement(element);
         
-        // Load canonical battle skills using shared service
-        const skills = await getUserUnlockedSkillsForBattle(currentUser.uid, element, moves);
+        // Load EQUIPPED battle skills (unified 6-skill loadout)
+        const skills = await getEquippedSkillsForBattle(currentUser.uid, element, moves);
         setBattleSkills(skills);
         
-        console.log('🎯 BattleEngine: Battle skills loaded:', {
+        console.log('🎯 BattleEngine: Equipped battle skills loaded:', {
           count: skills.length,
           manifest: skills.filter(s => s.category === 'manifest').length,
           elemental: skills.filter(s => s.category === 'elemental').length,
           rrCandy: skills.filter(s => s.id?.startsWith('rr-candy-')).length,
+          artifact: skills.filter(s => s.category === 'system' && !s.id?.startsWith('rr-candy-')).length,
           skillIds: skills.map(s => s.id)
         });
       } catch (error) {

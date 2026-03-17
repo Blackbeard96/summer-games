@@ -161,32 +161,17 @@ const InSessionNotification: React.FC = () => {
             }))
           });
 
-          // Filter to sessions in user's classrooms
-          // If user has no classrooms in cache, check all sessions (fallback for data inconsistency)
-          // This ensures the notification shows even if classroom data is temporarily unavailable
+          // Only show Live Event invites for classes the user is in. Never show other classes' events.
           let userSessions: InSessionRoom[] = [];
-          
           if (userClassroomsCache.length > 0) {
-            // Filter by user's classrooms
             userSessions = allSessions.filter(session => userClassroomsCache.includes(session.classId));
             debug.throttle('filtered-classrooms', 2000, 'InSessionNotification', 'Filtered by classrooms', {
               userClassrooms: userClassroomsCache,
               filteredCount: userSessions.length,
               allSessionsCount: allSessions.length
             });
-            
-            // If no sessions found in user's classrooms, check all sessions as fallback
-            // This handles cases where classroom data might be inconsistent
-            if (userSessions.length === 0 && allSessions.length > 0) {
-              debug.log('InSessionNotification', 'No sessions in user classrooms, checking all sessions as fallback');
-              userSessions = allSessions;
-            }
-          } else {
-            // No classrooms found - check all sessions as fallback
-            // This handles cases where classroom data might be inconsistent or not yet loaded
-            debug.log('InSessionNotification', 'No classrooms in cache, checking all active sessions as fallback');
-            userSessions = allSessions;
           }
+          // When user has no classrooms (not yet loaded or not in any class), show no invites.
 
           // Throttle group creation to prevent infinite nesting
           debug.throttle('user-sessions-group', 2000, 'InSessionNotification', `User Sessions (${userSessions.length})`, {

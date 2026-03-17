@@ -6,10 +6,11 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, serverTimestamp, getDocs, collection, query, where } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { computePowerLevel } from '../utils/powerLevel';
 import { getLevelFromXP } from '../utils/leveling';
 import { getPlayerSkillState } from '../utils/skillStateService';
+import { normalizeArtifact } from '../utils/artifactUtils';
 
 /**
  * Recalculate and update power level for a player
@@ -95,25 +96,21 @@ export async function recalculatePowerLevel(playerId: string): Promise<void> {
       
       // Handle both object and array formats
       if (Array.isArray(artifacts)) {
-        // Array format: find artifacts by ID
         artifactIds.forEach(artifactId => {
           const artifact = artifacts.find((a: any) => a.id === artifactId || a.name === artifactId);
           if (artifact) {
-            equippedArtifactDocs.push(artifact);
+            equippedArtifactDocs.push(normalizeArtifact(artifact));
           }
         });
       } else {
-        // Object format: artifacts stored by key
         artifactIds.forEach(artifactId => {
-          // Try direct key match
           const artifact = artifacts[artifactId];
           if (artifact) {
-            equippedArtifactDocs.push(artifact);
+            equippedArtifactDocs.push(normalizeArtifact(artifact));
           } else {
-            // Try finding by id property in nested objects
             Object.values(artifacts).forEach((art: any) => {
               if (art && typeof art === 'object' && (art.id === artifactId || art.name === artifactId)) {
-                equippedArtifactDocs.push(art);
+                equippedArtifactDocs.push(normalizeArtifact(art));
               }
             });
           }

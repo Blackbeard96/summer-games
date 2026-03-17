@@ -1,12 +1,13 @@
 /**
  * Skill Equip/Unequip Service
- * Manages equipping and unequipping skills in player loadout
+ * Manages equipping and unequipping skills in player loadout (unified 6-skill system).
  */
 
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { getPlayerSkillState } from './skillStateService';
 import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
+import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
 
 const SKILL_STATE_VERSION = 'v1';
 
@@ -14,9 +15,9 @@ const SKILL_STATE_VERSION = 'v1';
  * Equip a skill to the player's loadout
  * @param userId - User ID
  * @param skillId - Skill ID to equip
- * @param maxEquipped - Maximum number of equipped skills (default: 3)
+ * @param maxEquipped - Maximum number of equipped skills (default: 6)
  */
-export async function equipSkill(userId: string, skillId: string, maxEquipped: number = 3): Promise<boolean> {
+export async function equipSkill(userId: string, skillId: string, maxEquipped: number = MAX_EQUIPPED_SKILLS): Promise<boolean> {
   try {
     const skillState = await getPlayerSkillState(userId);
     const currentEquipped = skillState.equippedSkillIds || [];
@@ -26,9 +27,10 @@ export async function equipSkill(userId: string, skillId: string, maxEquipped: n
       return true; // Already equipped
     }
     
-    // Check if at max capacity
-    if (currentEquipped.length >= maxEquipped) {
-      throw new Error(`Cannot equip more than ${maxEquipped} skills. Unequip one first.`);
+    // Cap at MAX_EQUIPPED_SKILLS even if caller passes higher
+    const cap = Math.min(maxEquipped, MAX_EQUIPPED_SKILLS);
+    if (currentEquipped.length >= cap) {
+      throw new Error(`Cannot equip more than ${cap} skills. Unequip one first.`);
     }
     
     // Add to equipped list

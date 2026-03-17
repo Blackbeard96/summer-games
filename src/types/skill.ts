@@ -9,8 +9,8 @@ import { Move } from './battle';
 export interface Skill {
   id: string;
   name: string;
-  sourceType: 'manifest' | 'element' | 'rrCandy';
-  sourceId?: string; // e.g. manifestName, elementName, candyType
+  sourceType: 'manifest' | 'element' | 'rrCandy' | 'artifact';
+  sourceId?: string; // e.g. manifestName, elementName, candyType, artifactId
   description: string;
   cost: number; // Skill cost in battle (formerly "move cost")
   cooldownTurns: number; // Cooldown in turns
@@ -123,11 +123,13 @@ export function groupSkillsBySource(skills: Skill[]): {
   manifest: Skill[];
   element: Skill[];
   rrCandy: Skill[];
+  artifact: Skill[];
 } {
   return {
     manifest: skills.filter(s => s.sourceType === 'manifest'),
     element: skills.filter(s => s.sourceType === 'element'),
     rrCandy: skills.filter(s => s.sourceType === 'rrCandy'),
+    artifact: skills.filter(s => s.sourceType === 'artifact'),
   };
 }
 

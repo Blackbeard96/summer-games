@@ -465,6 +465,44 @@ const TrainingGroundsAdmin: React.FC = () => {
     }
   };
 
+  const handleDuplicateQuestion = async (question: TrainingQuestion) => {
+    if (!selectedQuizSet) return;
+
+    try {
+      setUploading(true);
+      const correctIndices = (question as any).correctIndices?.length
+        ? (question as any).correctIndices
+        : (question.correctIndex !== undefined ? [question.correctIndex] : []);
+      const options = [...(question.options || [])];
+      while (options.length < 4) options.push('');
+
+      const duplicateData: Omit<TrainingQuestion, 'id' | 'createdAt' | 'updatedAt'> = {
+        prompt: question.prompt,
+        options,
+        correctIndices,
+        explanation: question.explanation ?? null,
+        difficulty: question.difficulty || 'medium',
+        pointsPP: question.pointsPP ?? 10,
+        pointsXP: question.pointsXP ?? 10,
+        order: questions.length,
+      };
+      if (correctIndices.length === 1) (duplicateData as any).correctIndex = correctIndices[0];
+      if (question.category?.trim()) (duplicateData as any).category = question.category.trim();
+      if (question.artifactRewards?.length) (duplicateData as any).artifactRewards = [...question.artifactRewards];
+      if (question.imageUrl) (duplicateData as any).imageUrl = question.imageUrl;
+
+      await addQuestion(selectedQuizSet.id, duplicateData);
+      alert('Question duplicated successfully!');
+      await loadQuestions(selectedQuizSet.id);
+      await loadQuizSets();
+    } catch (error) {
+      console.error('Error duplicating question:', error);
+      alert('Failed to duplicate question');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleMoveQuestion = async (questionId: string, direction: 'up' | 'down') => {
     if (!selectedQuizSet) return;
 
@@ -976,6 +1014,21 @@ const TrainingGroundsAdmin: React.FC = () => {
                         }}
                       >
                         Edit
+                      </button>
+                      <button
+                        onClick={() => handleDuplicateQuestion(question)}
+                        disabled={uploading}
+                        style={{
+                          padding: '0.25rem 0.5rem',
+                          background: '#059669',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.25rem',
+                          cursor: uploading ? 'not-allowed' : 'pointer',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        Duplicate
                       </button>
                       <button
                         onClick={() => handleDeleteQuestion(question.id)}

@@ -1,12 +1,14 @@
 /**
  * Power Level Calculation System
- * 
+ *
  * Calculates player Power Level (PL) based on:
  * - Base power (player level * 10)
  * - Equipped skills (tier + upgrade level)
- * - Equipped artifacts (rarity + upgrade level)
+ * - Equipped artifacts (FIXED power level bonus by rarity: common +150, uncommon +300, rare +500, epic +700, legendary +900)
  * - Manifest ascension bonus
  */
+
+import { getPowerLevelBonusForRarity } from '../constants/artifactRarity';
 
 export interface PowerBreakdown {
   base: number;
@@ -43,29 +45,6 @@ const SKILL_UPGRADE_MULTIPLIERS: Record<number, number> = {
 };
 
 /**
- * Rarity value map for artifacts
- */
-const ARTIFACT_RARITY_VALUES: Record<string, number> = {
-  common: 20,
-  uncommon: 35,
-  rare: 55,
-  epic: 80,
-  legendary: 110,
-  mythic: 150
-};
-
-/**
- * Artifact upgrade multiplier map
- */
-const ARTIFACT_UPGRADE_MULTIPLIERS: Record<number, number> = {
-  1: 1.0,
-  2: 1.1,
-  3: 1.25,
-  4: 1.45,
-  5: 1.7
-};
-
-/**
  * Manifest ascension bonus map
  */
 const ASCENSION_BONUS: Record<number, number> = {
@@ -96,22 +75,17 @@ export function getSkillPower(skillDoc: any): number {
 }
 
 /**
- * Calculate power contribution from a single artifact
+ * Calculate power contribution from a single artifact.
+ * Uses FIXED Power Level bonus by rarity (common +150 … legendary +900).
+ * If artifact has powerLevelBonus set (e.g. from migration), use it; otherwise derive from rarity.
  */
 export function getArtifactPower(artifactDoc: any): number {
   if (!artifactDoc) return 0;
-  
-  // Defaults for missing fields
-  const rarity = (artifactDoc.rarity || 'common').toLowerCase();
-  const upgradeLevel = artifactDoc.upgradeLevel || 1;
-  
-  // Ensure upgradeLevel is valid
-  const validUpgradeLevel = Math.max(1, Math.min(5, upgradeLevel));
-  
-  const rarityValue = ARTIFACT_RARITY_VALUES[rarity] || ARTIFACT_RARITY_VALUES.common;
-  const multiplier = ARTIFACT_UPGRADE_MULTIPLIERS[validUpgradeLevel] || ARTIFACT_UPGRADE_MULTIPLIERS[1];
-  
-  return Math.round(rarityValue * multiplier);
+  if (typeof artifactDoc.powerLevelBonus === 'number' && artifactDoc.powerLevelBonus >= 0) {
+    return artifactDoc.powerLevelBonus;
+  }
+  const bonus = getPowerLevelBonusForRarity(artifactDoc.rarity);
+  return bonus;
 }
 
 /**

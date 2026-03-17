@@ -1,25 +1,64 @@
 /**
  * Canonical Battle Skills Service
- * 
+ *
  * SINGLE SOURCE OF TRUTH for battle-eligible skills.
- * Used by BattleEngine, battle UIs, and skill selection components.
- * 
- * This service ensures ALL unlocked skills are available in battle:
- * - Manifest Skills (unlocked)
- * - Elemental Affinity Skills (unlocked + matches player element)
- * - RR Candy Skills (unlocked + matches housed candy)
- * 
- * IMPORTANT:
- * - Cooldowns are tracked in battle state, NOT in skill library
- * - Skills are filtered by unlock status, element match, and candy type match
- * - Returns Move[] format for backward compatibility with BattleEngine
+ * - Unified 6-skill loadout: battle uses EQUIPPED skills only (manifest, elemental, RR Candy, artifact).
+ * - getEquippedSkillsForBattle: returns only equipped skills for battle (max 6).
+ * - getUserUnlockedSkillsForBattle: returns all unlocked (for loadout UI / backward compat).
+ *
+ * Cooldowns are tracked in battle state, NOT in skill library.
+ * Returns Move[] for BattleEngine compatibility.
  */
 
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Move } from '../types/battle';
 import { getUserRRCandySkills } from './rrCandyService';
 import { getRRCandyStatusAsync } from './rrCandyUtils';
+import { getPlayerSkillState } from './skillStateService';
+import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
+import type { ArtifactSkillDefinition } from '../types/artifact';
+
+/** Convert artifact skill definition to Move for battle engine. */
+function artifactSkillToMove(skill: ArtifactSkillDefinition, artifactId: string): Move {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    category: 'system',
+    type: skill.type || 'attack',
+    level: 1,
+    cost: skill.cost,
+    cooldown: skill.cooldown,
+    currentCooldown: 0,
+    unlocked: true,
+    masteryLevel: 1,
+    damage: skill.damage,
+    ppSteal: skill.ppSteal,
+    healing: skill.healing,
+    shieldBoost: skill.shieldBoost,
+    debuffType: skill.debuffType as any,
+    debuffStrength: skill.debuffStrength,
+    buffType: skill.buffType as any,
+    buffStrength: skill.buffStrength,
+    duration: skill.duration,
+    targetType: skill.targetType,
+    priority: skill.priority,
+  };
+}
+
+/** Get artifact skills from equipped artifacts (student data). Exported for Skill Mastery / MovesDisplay. */
+export function getArtifactSkillsFromEquipped(studentData: Record<string, any>): Move[] {
+  const equipped = studentData?.equippedArtifacts || {};
+  const moves: Move[] = [];
+  Object.values(equipped).forEach((art: any) => {
+    if (!art || typeof art !== 'object' || !art.artifactSkill) return;
+    const def = art.artifactSkill as ArtifactSkillDefinition;
+    if (!def.id || !def.name) return;
+    moves.push(artifactSkillToMove(def, art.id || ''));
+  });
+  return moves;
+}
 
 /**
  * Get all unlocked skills eligible for battle
@@ -173,14 +212,7 @@ export async function getUserUnlockedSkillsForBattle(
 }
 
 /**
- * Get battle skills with cooldown information
- * This is a helper that combines getUserUnlockedSkillsForBattle with cooldown tracking
- * 
- * @param userId - User ID
- * @param userElement - User's elemental affinity
- * @param skillCooldowns - Map of skillId -> turnsRemaining cooldown
- * @param battleMoves - Optional: existing moves array
- * @returns Array of skills with currentCooldown set from cooldown map
+ * Get battle skills with cooldown information (unlocked pool only).
  */
 export async function getUserBattleSkillsWithCooldowns(
   userId: string,
@@ -189,12 +221,68 @@ export async function getUserBattleSkillsWithCooldowns(
   battleMoves?: Move[]
 ): Promise<Move[]> {
   const skills = await getUserUnlockedSkillsForBattle(userId, userElement, battleMoves);
-  
-  // Apply cooldowns from battle state
   return skills.map(skill => ({
     ...skill,
     currentCooldown: skillCooldowns.get(skill.id) || 0
   }));
+}
+
+/**
+ * Get EQUIPPED skills for battle (unified 6-skill loadout).
+ * Only these skills appear in battle. If equippedSkillIds is empty, falls back to first
+ * MAX_EQUIPPED_SKILLS of unlocked pool for backward compatibility.
+ */
+export async function getEquippedSkillsForBattle(
+  userId: string,
+  userElement?: string,
+  battleMoves?: Move[]
+): Promise<Move[]> {
+  try {
+    const [skillState, unlocked, studentDoc] = await Promise.all([
+      getPlayerSkillState(userId),
+      getUserUnlockedSkillsForBattle(userId, userElement, battleMoves),
+      getDoc(doc(db, 'students', userId)),
+    ]);
+    const studentData = studentDoc.exists() ? studentDoc.data()! : {};
+    const equippedIds = skillState.equippedSkillIds || [];
+    const artifactMoves = getArtifactSkillsFromEquipped(studentData);
+
+    const byId = new Map<string, Move>();
+    unlocked.forEach(m => byId.set(m.id, m));
+    artifactMoves.forEach(m => byId.set(m.id, m));
+
+    if (equippedIds.length > 0) {
+      const result: Move[] = [];
+      const cappedIds = equippedIds.slice(0, MAX_EQUIPPED_SKILLS);
+      for (const id of cappedIds) {
+        const move = byId.get(id);
+        if (move) result.push(move);
+      }
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🎯 getEquippedSkillsForBattle (equipped):', { count: result.length, ids: equippedIds });
+      }
+      return result;
+    }
+
+    const fallback = unlocked.slice(0, MAX_EQUIPPED_SKILLS);
+    if (fallback.length > 0) {
+      const ids = fallback.map(m => m.id);
+      const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
+      updateDoc(skillStateRef, {
+        equippedSkillIds: ids,
+        lastUpdated: serverTimestamp(),
+        version: 'v1',
+      }).catch(() => {});
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🎯 getEquippedSkillsForBattle (fallback, persisted):', { count: fallback.length, ids });
+      }
+      return fallback;
+    }
+    return [];
+  } catch (error) {
+    console.error('Error getEquippedSkillsForBattle:', error);
+    return [];
+  }
 }
 
 

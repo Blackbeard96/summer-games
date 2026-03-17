@@ -14,6 +14,10 @@ import { db } from '../firebase';
 import { getRRCandyMoves } from '../utils/rrCandyMoves';
 import { getRRCandyStatus, getRRCandyStatusAsync } from '../utils/rrCandyUtils';
 import { getUserRRCandySkills, checkRRCandyUnlock } from '../utils/rrCandyService';
+import { getPlayerSkillState } from '../utils/skillStateService';
+import { equipSkill, unequipSkill } from '../utils/skillEquipService';
+import { getArtifactSkillsFromEquipped } from '../utils/battleSkillsService';
+import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -63,6 +67,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const [truthMetal, setTruthMetal] = useState<number>(0);
   const [userManifest, setUserManifest] = useState<string | null>(null);
+  const [equippedSkillIds, setEquippedSkillIds] = useState<string[]>([]);
+  const [loadoutBusy, setLoadoutBusy] = useState(false);
 
   // Load user's manifest type from both students and users collections
   useEffect(() => {
@@ -192,6 +198,20 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     };
 
     loadEquippedArtifacts();
+  }, [currentUser]);
+
+  // Load equipped skill IDs (unified 6-skill loadout)
+  useEffect(() => {
+    const loadEquipped = async () => {
+      if (!currentUser) return;
+      try {
+        const state = await getPlayerSkillState(currentUser.uid);
+        setEquippedSkillIds(state.equippedSkillIds || []);
+      } catch (e) {
+        console.error('MovesDisplay: Error loading equipped skills:', e);
+      }
+    };
+    loadEquipped();
   }, [currentUser]);
 
   // Ensure RR Candy moves are loaded when component mounts
@@ -515,6 +535,21 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       default: return '#6b7280';
     }
   };
+
+  // Artifact skills from equipped artifacts (legendary artifacts with artifactSkill)
+  const artifactMoves = useMemo(
+    () => getArtifactSkillsFromEquipped({ equippedArtifacts: equippedArtifacts || {} }),
+    [equippedArtifacts]
+  );
+
+  // Resolve equipped skill IDs to move objects for loadout preview
+  const equippedMovesForPreview = useMemo(() => {
+    const pool = [...manifestMoves, ...elementalMoves, ...rrCandyMoves];
+    const byId = new Map(pool.map(m => [m.id, m]));
+    return equippedSkillIds
+      .map(id => byId.get(id))
+      .filter((m): m is Move => m != null);
+  }, [equippedSkillIds, manifestMoves, elementalMoves, rrCandyMoves]);
 
   const renderMoveCard = (move: Move) => {
     // Force unlock RR Candy moves if RR Candy is globally unlocked
@@ -1694,6 +1729,79 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             {canUpgrade ? `⬆️ Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP${isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})` : 'Cannot Upgrade'}
           </button>
         )}
+
+        {/* Equip / Unequip for loadout (max 6) */}
+        {effectiveUnlocked && (
+          <div style={{ marginTop: '0.5rem' }}>
+            {equippedSkillIds.includes(move.id) ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!currentUser || loadoutBusy) return;
+                  setLoadoutBusy(true);
+                  try {
+                    await unequipSkill(currentUser.uid, move.id);
+                    const state = await getPlayerSkillState(currentUser.uid);
+                    setEquippedSkillIds(state.equippedSkillIds || []);
+                  } catch (e) {
+                    console.error('Unequip failed:', e);
+                    alert(e instanceof Error ? e.message : 'Failed to unequip');
+                  } finally {
+                    setLoadoutBusy(false);
+                  }
+                }}
+                disabled={loadoutBusy}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  background: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.8rem',
+                  cursor: loadoutBusy ? 'not-allowed' : 'pointer'
+                }}
+              >
+                ✓ Equipped — Unequip
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!currentUser || loadoutBusy) return;
+                  if (equippedSkillIds.length >= MAX_EQUIPPED_SKILLS) {
+                    alert(`You can only equip ${MAX_EQUIPPED_SKILLS} skills. Unequip one first.`);
+                    return;
+                  }
+                  setLoadoutBusy(true);
+                  try {
+                    await equipSkill(currentUser.uid, move.id);
+                    const state = await getPlayerSkillState(currentUser.uid);
+                    setEquippedSkillIds(state.equippedSkillIds || []);
+                  } catch (e) {
+                    console.error('Equip failed:', e);
+                    alert(e instanceof Error ? e.message : 'Failed to equip');
+                  } finally {
+                    setLoadoutBusy(false);
+                  }
+                }}
+                disabled={loadoutBusy || equippedSkillIds.length >= MAX_EQUIPPED_SKILLS}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  background: equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? '#9ca3af' : '#4f46e5',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.8rem',
+                  cursor: loadoutBusy || equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? 'Loadout full (6/6)' : '+ Equip to loadout'}
+              </button>
+            )}
+          </div>
+        )}
         
       </div>
     );
@@ -1897,32 +2005,24 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               )}
             </div>
 
-            {/* Purchase Button */}
+            {/* Purchase Button — Coming Soon */}
             <button
-              disabled={!canPurchase}
+              disabled
               style={{
-                background: canPurchase ? color : '#9ca3af',
+                background: '#9ca3af',
                 color: 'white',
                 border: 'none',
                 padding: '1rem 2rem',
                 borderRadius: '1rem',
-                cursor: canPurchase ? 'pointer' : 'not-allowed',
+                cursor: 'not-allowed',
                 fontSize: '1rem',
                 fontWeight: 'bold',
                 transition: 'all 0.2s',
                 width: '100%',
-                opacity: canPurchase ? 1 : 0.6
-              }}
-              onMouseEnter={(e) => {
-                if (canPurchase) {
-                  e.currentTarget.style.transform = 'scale(1.05)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'scale(1)';
+                opacity: 0.8
               }}
             >
-              {canPurchase ? '💰 Purchase Move' : '🔒 Milestone Required'}
+              Coming Soon
             </button>
           </div>
         </div>
@@ -1945,6 +2045,100 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       }}>
         ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length} Skills Unlocked)
       </h3>
+
+      {/* Loadout: X/6 — only equipped skills appear in battle */}
+      <div style={{
+        marginBottom: '1rem',
+        padding: '0.75rem 1rem',
+        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+        borderRadius: '0.5rem',
+        color: 'white',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '0.5rem'
+      }}>
+        <span style={{ fontWeight: '600' }}>
+          Loadout: {equippedSkillIds.length}/{MAX_EQUIPPED_SKILLS} equipped
+        </span>
+        <span style={{ fontSize: '0.875rem', opacity: 0.95 }}>
+          Only equipped skills appear in battle. Equip or unequip below.
+        </span>
+      </div>
+
+      {/* Equipped loadout preview */}
+      <div style={{
+        marginBottom: '1.5rem',
+        padding: '1rem',
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
+        borderRadius: '0.75rem'
+      }}>
+        <h4 style={{ fontSize: '0.875rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+          Equipped skills
+        </h4>
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.5rem',
+          alignItems: 'stretch'
+        }}>
+          {Array.from({ length: MAX_EQUIPPED_SKILLS }, (_, i) => {
+            const move = equippedMovesForPreview[i];
+            if (move) {
+              const isManifest = move.category === 'manifest';
+              const isElemental = move.category === 'elemental';
+              const isRRCandy = move.id?.startsWith('rr-candy-');
+              const icon = isManifest ? '⭐' : isElemental ? getElementalIcon(move.elementalAffinity || '') : isRRCandy ? '🍬' : '⚔️';
+              const bg = isManifest ? getManifestColor(move.manifestType || '') : isElemental ? getElementalColor(move.elementalAffinity || '') : '#ec4899';
+              return (
+                <div
+                  key={move.id}
+                  style={{
+                    flex: '1 1 120px',
+                    minWidth: '100px',
+                    maxWidth: '160px',
+                    padding: '0.5rem 0.75rem',
+                    background: `${bg}18`,
+                    border: `2px solid ${bg}`,
+                    borderRadius: '0.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span style={{ fontSize: '1.25rem' }}>{icon}</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {move.name}
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <div
+                key={`empty-${i}`}
+                style={{
+                  flex: '1 1 120px',
+                  minWidth: '100px',
+                  maxWidth: '160px',
+                  padding: '0.5rem 0.75rem',
+                  background: '#f1f5f9',
+                  border: '1px dashed #cbd5e1',
+                  borderRadius: '0.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#94a3b8',
+                  fontSize: '0.8rem'
+                }}
+              >
+                Empty slot
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Move Availability Summary */}
       <div style={{ 
@@ -2081,6 +2275,38 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           getElementalColor(userElement)
         )
       )}
+
+      {/* Artifact Skills Section — from equipped legendary artifacts; blank if none */}
+      <div style={{ marginBottom: '2rem' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: '1rem',
+          padding: '0.75rem 1rem',
+          background: '#0ea5e9',
+          borderRadius: '0.5rem'
+        }}>
+          <span style={{ fontSize: '1.25rem', marginRight: '0.75rem' }}>💎</span>
+          <h4 style={{
+            fontSize: '1.125rem',
+            fontWeight: 'bold',
+            color: 'white',
+            margin: 0
+          }}>
+            Artifact Skills ({artifactMoves.length} Available)
+          </h4>
+        </div>
+        {artifactMoves.length > 0 && (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, 380px)',
+            gap: '2rem',
+            justifyContent: 'center'
+          }}>
+            {artifactMoves.map(renderMoveCard)}
+          </div>
+        )}
+      </div>
       
       {/* Unlock Element Skills Button */}
       {elementalMoves.length === 0 && onUnlockElementalMoves && userElement && (

@@ -21,6 +21,7 @@ import AssessmentGoalResultNotifier from './components/AssessmentGoalResultNotif
 import MilestoneModal from './components/MilestoneModal';
 import GeneratorEarningsModal from './components/GeneratorEarningsModal';
 import AnnouncementCarousel from './components/AnnouncementCarousel';
+import SquadCheckInReminderModal, { shouldShowSquadCheckInReminder } from './components/SquadCheckInReminderModal';
 import { shouldShowModalToday } from './utils/generatorEarnings';
 import { getActiveAnnouncements, ROLLOUT_ANNOUNCEMENTS } from './utils/announcementConfig';
 import { checkAndCreditDailyGenerator, shouldShowDailyGeneratorModal } from './utils/dailyGeneratorNotification';
@@ -365,6 +366,11 @@ const AppContent = () => {
           queue.push('announcements');
         }
         
+        // 3. Squad check-in reminder (first login of the day)
+        if (shouldShowSquadCheckInReminder(currentUser.uid)) {
+          queue.push('squadCheckIn');
+        }
+        
         // Set queue and show first modal
         if (queue.length > 0) {
           setModalQueue(queue);
@@ -381,11 +387,14 @@ const AppContent = () => {
   }, [currentUser, loading, vault, getGeneratorRates]);
   
   // Handle modal queue progression
+  const [showSquadCheckInModal, setShowSquadCheckInModal] = React.useState(false);
   React.useEffect(() => {
     if (currentModal === 'dailyGenerator') {
       setShowGeneratorModal(true);
     } else if (currentModal === 'announcements') {
       setShowAnnouncementCarousel(true);
+    } else if (currentModal === 'squadCheckIn') {
+      setShowSquadCheckInModal(true);
     }
   }, [currentModal]);
   
@@ -395,6 +404,8 @@ const AppContent = () => {
       setShowGeneratorModal(false);
     } else if (modalType === 'announcements') {
       setShowAnnouncementCarousel(false);
+    } else if (modalType === 'squadCheckIn') {
+      setShowSquadCheckInModal(false);
     }
     
     // Move to next modal in queue
@@ -731,6 +742,15 @@ const AppContent = () => {
         announcements={announcementTypes}
         onAnnouncementSeen={handleAnnouncementSeen}
       />
+      
+      {/* Squad check-in reminder (first login of the day) */}
+      {currentUser && (
+        <SquadCheckInReminderModal
+          isOpen={showSquadCheckInModal}
+          onClose={() => handleModalClose('squadCheckIn')}
+          userId={currentUser.uid}
+        />
+      )}
       
       {/* Development Components */}
       {process.env.NODE_ENV === 'development' && <FirebaseStatus />}
