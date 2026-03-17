@@ -76,6 +76,8 @@ export interface SessionSummary {
   mvpPlayerId?: string; // Player with most eliminations or most PP
   /** Quiz rewards by placement (if a quiz was run during the event). */
   quizAwardsSnapshot?: QuizAwardsSnapshot;
+  /** PP earned from quiz placement per player (uid -> PP), when a quiz was completed. */
+  quizPpByPlayer?: Record<string, number>;
 }
 
 

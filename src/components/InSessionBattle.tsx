@@ -2577,12 +2577,25 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   })
                                   .filter(Boolean) as { place: string; pp: number; xp: number; artifactName: string | null }[];
                                 if (placements.length > 0) {
+                                  const placementsConfig = (config.placements ?? {}) as LiveQuizRewardConfig['placements'];
+                                  const entriesWithScores = sessionPlayers.map((p) => ({
+                                    uid: p.userId,
+                                    score: quizSession.leaderboard?.[p.userId] ?? 0,
+                                  }));
+                                  const sortedByScore = [...entriesWithScores].sort((a, b) => b.score - a.score);
+                                  const quizPpByPlayer: Record<string, number> = {};
+                                  sortedByScore.forEach((entry, idx) => {
+                                    const rank = idx + 1;
+                                    const reward = getPlacementRewardForRank(placementsConfig, rank);
+                                    quizPpByPlayer[entry.uid] = reward?.pp ?? 0;
+                                  });
                                   const sessionRef = doc(db, 'inSessionRooms', sessionId);
                                   await updateDoc(sessionRef, {
                                     lastQuizAwardsSnapshot: {
                                       quizTitle: quizSession.quizTitle ?? null,
                                       placements,
                                     },
+                                    lastQuizPpByPlayer: quizPpByPlayer,
                                     updatedAt: serverTimestamp(),
                                   });
                                 }

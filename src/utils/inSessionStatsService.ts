@@ -421,7 +421,8 @@ export async function finalizeSessionStats(
       totalPlayers: playerIds.length,
       stats: statsMap,
       mvpPlayerId,
-      ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot })
+      ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot }),
+      ...(sessionData.lastQuizPpByPlayer && { quizPpByPlayer: sessionData.lastQuizPpByPlayer })
     };
 
     // Store summary in session document

@@ -643,11 +643,33 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
     }
   };
 
-  // Handle wave advancement from BattleEngine
+  // Handle wave advancement from BattleEngine (or from our Firestore listener)
   const handleWaveAdvance = useCallback((newWave: number, newEnemies: any[]) => {
     console.log(`[ImpositionTestBattle] Wave advanced to ${newWave}`);
     setCurrentWave(newWave);
     setOpponents(newEnemies);
+    
+    // Keep Firestore in sync so the listener doesn't overwrite with stale wave number
+    if (gameId && newEnemies.length > 0) {
+      const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+      const firestoreEnemies = newEnemies.map((opp: any) => ({
+        id: opp.id,
+        name: opp.name,
+        health: opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP ?? 0),
+        maxHealth: opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxPP ?? 100),
+        shieldStrength: opp.shieldStrength ?? 0,
+        maxShieldStrength: opp.maxShieldStrength ?? 0,
+        level: opp.level ?? 1,
+        image: opp.image,
+        special: opp.special,
+        spawnTime: new Date()
+      }));
+      updateDoc(battleRoomRef, {
+        waveNumber: newWave,
+        enemies: firestoreEnemies,
+        updatedAt: serverTimestamp()
+      }).catch(err => console.error('[ImpositionTestBattle] Error syncing wave to Firestore:', err));
+    }
     
     // Show wave-specific Kon dialogue
     if (newWave === 1) {
@@ -663,7 +685,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
     } else if (newWave === 5) {
       // Wave 5 started - no special dialogue here, will show pre-wave-5 dialogue before this
     }
-  }, [showKonDialogue]);
+  }, [showKonDialogue, gameId]);
 
   // Handle opponents updates from BattleEngine (for real-time health/shield updates)
   const handleOpponentsUpdate = useCallback(async (updatedOpponents: any[]) => {
@@ -793,83 +815,61 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
         special: enemy.special
       }));
 
-      // CRITICAL FIX: Don't overwrite local updates with Firestore data during active battle
-      // Only update from Firestore if:
-      // 1. Wave changed (handled above)
-      // 2. We're not in the middle of a local update
-      // 3. The local state doesn't have more recent damage data
-      if (isUpdatingLocallyRef.current) {
-        console.log('🔄 [ImpositionTestBattle] Skipping Firestore update - local update in progress');
-        return;
+      // CRITICAL: Only skip merging opponents when a local update is in progress;
+      // still run wave completion checks below using snapshot data (formattedEnemies).
+      if (!isUpdatingLocallyRef.current) {
+        // Merge Firestore data with local state, preferring local if it has more recent damage
+        setOpponents(prev => {
+          const merged = formattedEnemies.map((firestoreEnemy: any) => {
+            const localEnemy = prev.find(p => p.id === firestoreEnemy.id);
+            const lastLocalUpdate = lastLocalUpdateRef.current.get(firestoreEnemy.id);
+            
+            if (localEnemy) {
+              const localHealth = localEnemy.vaultHealth !== undefined ? localEnemy.vaultHealth : localEnemy.currentPP;
+              const firestoreHealth = firestoreEnemy.vaultHealth !== undefined ? firestoreEnemy.vaultHealth : firestoreEnemy.currentPP;
+              const localShield = localEnemy.shieldStrength || 0;
+              const firestoreShield = firestoreEnemy.shieldStrength || 0;
+              const lastLocalHealth = lastLocalUpdate?.health;
+              const lastLocalShield = lastLocalUpdate?.shield;
+              
+              if ((lastLocalHealth !== undefined && lastLocalHealth < firestoreHealth) ||
+                  (lastLocalShield !== undefined && lastLocalShield < firestoreShield) ||
+                  (localHealth < firestoreHealth) ||
+                  (localShield < firestoreShield)) {
+                console.log(`✅ [ImpositionTestBattle] Preserving local damage for ${localEnemy.name}:`, {
+                  localHealth,
+                  lastLocalHealth,
+                  firestoreHealth,
+                  localShield,
+                  lastLocalShield,
+                  firestoreShield
+                });
+                return localEnemy;
+              }
+            }
+            return firestoreEnemy;
+          });
+          
+          prev.forEach(localEnemy => {
+            if (!merged.find((m: any) => m.id === localEnemy.id)) {
+              merged.push(localEnemy);
+            }
+          });
+          
+          return merged;
+        });
+      } else {
+        console.log('🔄 [ImpositionTestBattle] Skipping opponent merge - local update in progress (still checking wave completion)');
       }
 
-      // Merge Firestore data with local state, preferring local if it has more recent damage
-      // Also check the lastLocalUpdateRef to see if we have more recent local damage
-      setOpponents(prev => {
-        const merged = formattedEnemies.map((firestoreEnemy: any) => {
-          const localEnemy = prev.find(p => p.id === firestoreEnemy.id);
-          const lastLocalUpdate = lastLocalUpdateRef.current.get(firestoreEnemy.id);
-          
-          if (localEnemy) {
-            // Check if local has more recent damage (lower health/shield)
-            const localHealth = localEnemy.vaultHealth !== undefined ? localEnemy.vaultHealth : localEnemy.currentPP;
-            const firestoreHealth = firestoreEnemy.vaultHealth !== undefined ? firestoreEnemy.vaultHealth : firestoreEnemy.currentPP;
-            const localShield = localEnemy.shieldStrength || 0;
-            const firestoreShield = firestoreEnemy.shieldStrength || 0;
-            
-            // Also check lastLocalUpdateRef for the most recent damage
-            const lastLocalHealth = lastLocalUpdate?.health;
-            const lastLocalShield = lastLocalUpdate?.shield;
-            
-            // If local or lastLocalUpdate has more recent damage (lower values), prefer local
-            if ((lastLocalHealth !== undefined && lastLocalHealth < firestoreHealth) ||
-                (lastLocalShield !== undefined && lastLocalShield < firestoreShield) ||
-                (localHealth < firestoreHealth) ||
-                (localShield < firestoreShield)) {
-              console.log(`✅ [ImpositionTestBattle] Preserving local damage for ${localEnemy.name}:`, {
-                localHealth,
-                lastLocalHealth,
-                firestoreHealth,
-                localShield,
-                lastLocalShield,
-                firestoreShield
-              });
-              return localEnemy;
-            }
-          }
-          
-          // Otherwise use Firestore data (for new enemies or if Firestore is more up-to-date)
-          return firestoreEnemy;
-        });
-        
-        // Add any local enemies that aren't in Firestore (shouldn't happen, but safety check)
-        prev.forEach(localEnemy => {
-          if (!merged.find((m: any) => m.id === localEnemy.id)) {
-            merged.push(localEnemy);
-          }
-        });
-        
-        return merged;
-      });
-
       // Check for wave 1-3 completion (advance to next wave)
-      // Use local opponents state (which has the most recent damage) instead of Firestore data
-      if (firestoreWave >= 1 && firestoreWave <= 3 && opponents.length > 0) {
-        // Filter out allies (player and AI allies like Kon) - only check enemies
-        const enemies = opponents.filter((opp: any) => {
-          // Exclude player
-          if (opp.isPlayer === true) return false;
-          // Exclude AI allies (like Kon)
-          if (opp.isAI === true) return false;
-          // Exclude specific ally IDs
-          if (opp.id === 'kon_ally' || opp.id?.includes('_ally')) return false;
-          // Include everything else (enemies)
-          return true;
-        });
+      // Use snapshot data (formattedEnemies) so we see the latest Firestore state after damage writes
+      if (firestoreWave >= 1 && firestoreWave <= 3 && formattedEnemies.length > 0) {
+        // Firestore "enemies" are only CPU enemies; no need to filter allies
+        const enemies = formattedEnemies;
         
         console.log(`🌊 [ImpositionTestBattle] Checking wave ${firestoreWave} completion:`, {
-          totalOpponents: opponents.length,
-          enemies: enemies.length,
+          totalEnemies: enemies.length,
           enemyDetails: enemies.map((e: any) => ({
             id: e.id,
             name: e.name,
@@ -880,9 +880,8 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
         });
         
         const allDefeated = enemies.length > 0 && enemies.every((opp: any) => {
-          const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
-          const shield = opp.shieldStrength || 0;
-          // Enemy is defeated if health <= 0 and shield <= 0, or if explicitly marked as defeated
+          const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP ?? 0);
+          const shield = opp.shieldStrength ?? 0;
           return (health <= 0 && shield <= 0) || opp.isDefeated === true;
         });
 

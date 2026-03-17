@@ -42,10 +42,13 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     return `${mins}m ${secs}s`;
   };
 
-  // Players who earned PP (with breakdown: +900 per elimination, +50 per participation point)
+  // Total PP from quiz (placement) per player
+  const getQuizPP = (playerId: string) => summary.quizPpByPlayer?.[playerId] ?? 0;
+  // Players who earned any PP (quiz, eliminations, or participation)
+  const totalEarned = (s: SessionStats) => getQuizPP(s.playerId) + (s.ppEarned || 0);
   const playersWithPP = allStats
-    .filter((s) => (s.ppEarned || 0) > 0)
-    .sort((a, b) => (b.ppEarned || 0) - (a.ppEarned || 0));
+    .filter((s) => totalEarned(s) > 0)
+    .sort((a, b) => totalEarned(b) - totalEarned(a));
 
   // Players eliminated
   const eliminatedPlayers = allStats.filter((s) => s.isEliminated);
@@ -130,16 +133,17 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             💰 PP Earned
           </h3>
           <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '1rem' }}>
-            +{LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP + eliminated player&apos;s vault PP per elimination • +{LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP per participation point
+            Quiz: placement PP • Eliminations: +{LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP + eliminated player&apos;s vault per elimination • Participation: +{LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP per participation point
           </p>
           {playersWithPP.length === 0 ? (
             <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No PP earned this event.</p>
           ) : (
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {playersWithPP.map((s) => {
+                const quizPP = getQuizPP(s.playerId);
                 const partPP = (s.participationEarned || 0) * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
                 const elimPP = Math.max(0, (s.ppEarned || 0) - partPP);
-                const total = s.ppEarned || 0;
+                const total = quizPP + (s.ppEarned || 0);
                 return (
                   <li
                     key={s.playerId}
@@ -156,10 +160,12 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                     <span style={{ fontWeight: 'bold', color: '#1f2937' }}>{s.playerName}</span>
                     <span style={{ color: '#059669', fontWeight: 'bold' }}>+{total} PP</span>
                     <span style={{ fontSize: '0.8rem', color: '#6b7280', width: '100%' }}>
-                      {s.eliminations ? `${s.eliminations} elimination(s): +${elimPP} PP (${LIVE_EVENT_PP_BASE_PER_ELIMINATION} + vault each)` : ''}
-                      {s.eliminations && (s.participationEarned || 0) > 0 ? ' • ' : ''}
-                      {(s.participationEarned || 0) > 0
-                        ? `${s.participationEarned} participation × ${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} = +${partPP} PP`
+                      {quizPP > 0 ? `Quiz: +${quizPP} PP` : ''}
+                      {quizPP > 0 && (elimPP > 0 || partPP > 0) ? ' • ' : ''}
+                      {elimPP > 0 ? `Eliminations: +${elimPP} PP` : ''}
+                      {elimPP > 0 && partPP > 0 ? ' • ' : ''}
+                      {partPP > 0
+                        ? `Participation: ${s.participationEarned} × ${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} = +${partPP} PP`
                         : ''}
                     </span>
                   </li>
@@ -358,6 +364,25 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                 </div>
                 <div style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.25rem' }}>
                   {currentPlayerStats.startingPP} → {currentPlayerStats.endingPP}
+                </div>
+              </div>
+
+              {/* Quiz PP */}
+              <div style={{
+                background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                color: '#fff',
+                padding: '1rem',
+                borderRadius: '0.5rem',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '0.875rem', opacity: 0.9, marginBottom: '0.25rem' }}>
+                  Quiz
+                </div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>
+                  +{(summary.quizPpByPlayer?.[currentPlayerId] ?? 0)} PP
+                </div>
+                <div style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.25rem' }}>
+                  from placement
                 </div>
               </div>
 
