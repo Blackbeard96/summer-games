@@ -390,6 +390,18 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       return move.unlocked === true;
     });
     
+    // PRIORITY 3: If unlocked with candyType but no skills from service or moves, show canonical moves
+    // Prevents "Loading..." forever when Firestore or service is slow/fails; user still sees Shield OFF/ON etc.
+    if (filtered.length === 0 && rrCandyStatus.unlocked && rrCandyStatus.candyType) {
+      const canonical = getRRCandyMoves(rrCandyStatus.candyType);
+      console.log('MovesDisplay: Using canonical RR Candy moves (unlocked but no skills loaded yet):', {
+        candyType: rrCandyStatus.candyType,
+        count: canonical.length,
+        names: canonical.map(m => m.name)
+      });
+      return canonical;
+    }
+    
     console.log('MovesDisplay: RR Candy moves from fallback filter:', {
       count: filtered.length,
       rrCandyUnlocked: rrCandyStatus.unlocked,
@@ -633,7 +645,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             textAlign: 'center'
           }}>
-            {getMoveDataWithOverrides(move.name).name} [Level {effectiveMasteryLevel}]
+            {(move.id === 'rr-candy-on-off-shields-off' ? 'Shield OFF' : move.id === 'rr-candy-on-off-shields-on' ? 'Shield ON' : move.id?.startsWith('rr-candy-') ? move.name : getMoveDataWithOverrides(move.name).name)} [Level {effectiveMasteryLevel}]
             {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
               const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
               const moveElement = move.elementalAffinity?.toLowerCase();
@@ -724,7 +736,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textAlign: 'center',
             marginBottom: '0.75rem'
           }}>
-            {getMoveDataWithOverrides(move.name).description || move.description}
+            {(move.id === 'rr-candy-on-off-shields-off' ? 'Remove 25% of opponent\'s shields. Can be leveled up for higher impact.' : move.id === 'rr-candy-on-off-shields-on' ? 'Restore 50% of your maximum shields.' : move.id?.startsWith('rr-candy-') ? (move.description || '') : (getMoveDataWithOverrides(move.name).description || move.description))}
           </p>
 
           {/* Power Type Information */}
@@ -1576,7 +1588,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 });
                 
                 // Show custom confirmation modal instead of window.confirm (works better in Firefox)
-                const moveName = getMoveDataWithOverrides(move.name).name;
+                const moveName = move.id === 'rr-candy-on-off-shields-off' ? 'Shield OFF' : move.id === 'rr-candy-on-off-shields-on' ? 'Shield ON' : (move.id?.startsWith('rr-candy-') ? move.name : getMoveDataWithOverrides(move.name).name);
                 setAscendConfirm({ moveId: move.id, moveName });
               }}
               style={{

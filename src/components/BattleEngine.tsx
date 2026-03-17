@@ -2718,21 +2718,29 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const targetId = moveData.targetId;
       
       // Find target - validate targetId exists in current opponents/allies
+      const isSelfDirectedMove = isPlayerMove && (moveData.move.shieldBoost || moveData.move.healing || moveData.move.targetType === 'self');
+      const isTargetingSelf = targetId === 'self' || targetId === currentUser?.uid || targetId === participant.id;
+
       let target: Opponent | undefined;
       if (isPlayerMove) {
-        // Player (current user or invited player) targeting an opponent
-        target = opponents.find(opp => opp.id === targetId);
-        if (!target) {
-          console.warn(`⚠️ Player ${participant.name} selected invalid target: ${targetId}`, {
-            availableOpponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name })),
-            availableAllyIds: allies.map(ally => ({ id: ally.id, name: ally.name }))
-          });
-          // Try to find a valid target as fallback (first available opponent)
-          if (opponents.length > 0) {
-            target = opponents[0];
-            console.log(`🔄 Using fallback target for ${participant.name}: ${target.name} (${target.id})`);
-          } else {
-            continue; // No valid targets available
+        if (isSelfDirectedMove && isTargetingSelf) {
+          // Self-directed move (Shield ON, heals, etc.) — target is the actor (player) who used it
+          target = allies.find(ally => ally.id === participant.id) ?? (participant as Opponent);
+          console.log(`🎯 [BattleEngine] Self-directed move: ${participant.name} targets self (${target.id})`);
+        } else {
+          // Player targeting an opponent (or ally in multiplayer)
+          target = opponents.find(opp => opp.id === targetId) ?? allies.find(ally => ally.id === targetId);
+          if (!target) {
+            console.warn(`⚠️ Player ${participant.name} selected invalid target: ${targetId}`, {
+              availableOpponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name })),
+              availableAllyIds: allies.map(ally => ({ id: ally.id, name: ally.name }))
+            });
+            if (opponents.length > 0) {
+              target = opponents[0];
+              console.log(`🔄 Using fallback target for ${participant.name}: ${target.name} (${target.id})`);
+            } else {
+              continue;
+            }
           }
         }
       } else {
@@ -2900,8 +2908,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           console.warn(`⚠️ Player move ${playerMove.name} has no damage (damage: ${playerMove.damage})`);
         }
         
-        // Apply damage to target
-        if (totalDamage > 0 && target) {
+        // Apply damage to target (skip for self-directed moves — they apply to actor's vault)
+        if (totalDamage > 0 && target && !(isSelfDirectedMove && isTargetingSelf)) {
           // For Island Raid enemies, use vaultHealth instead of currentPP
           const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
           const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
@@ -3106,6 +3114,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 battleLog: newLog
               };
             });
+
+            // Apply self-directed shield boost / healing to current user's vault (turn-order multiplayer path)
+            if (isDefensiveSelfMove && participant.id === currentUser?.uid && (playerMove.shieldBoost || playerMove.healing)) {
+              const maxShields = vault.maxShieldStrength || 100;
+              let shieldAmount = 0;
+              if (playerMove.id === 'rr-candy-on-off-shields-on') {
+                shieldAmount = Math.floor(maxShields * 0.5);
+              } else if (playerMove.shieldBoost && playerMove.shieldBoost > 0) {
+                const effectiveMasteryLevel = getEffectiveMasteryLevel(playerMove, equippedArtifacts);
+                const shieldRange = calculateShieldBoostRange(playerMove.shieldBoost, playerMove.level, effectiveMasteryLevel);
+                const shieldResult = rollDamage(shieldRange, participant.level || 1, playerMove.level, effectiveMasteryLevel);
+                shieldAmount = shieldResult.damage;
+              }
+              const newShield = Math.min(maxShields, (vault.shieldStrength || 0) + shieldAmount);
+              if (shieldAmount > 0) {
+                updateVault({ shieldStrength: newShield }).then(() => refreshVaultData()).catch(err =>
+                  console.error('Failed to apply self-directed shield boost to vault:', err)
+                );
+              }
+            }
           }
         }
       } else {
@@ -3527,7 +3555,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     const moveForTarget = battleState.selectedMove;
-    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing);
+    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing || moveForTarget?.targetType === 'self');
 
     // Find the target opponent based on selectedTarget ID
     // Defensive moves (shield boost, healing) ALWAYS target the player - ignore any enemy selection
@@ -3637,12 +3665,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     const move = battleState.selectedMove;
+    const isSelfTarget = targetOpponent.id === currentUser?.uid;
     console.log('Move Execution Debug:', {
       moveName: move.name,
       moveType: move.type,
       moveCategory: move.category,
       hasShieldBoost: !!move.shieldBoost,
       shieldBoostValue: move.shieldBoost,
+      isDefensiveMove,
+      isSelfTarget,
       moveObject: move
     });
     
@@ -4383,9 +4414,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           });
         }
         
-        // Defensive moves (shield boost, healing) always apply to the player - pass actor as target so service applies to self
-        const effectiveTargetUid = (move.shieldBoost || move.healing) ? currentUser.uid : targetOpponent.id;
-        const effectiveTargetName = (move.shieldBoost || move.healing) ? playerName : targetOpponent.name;
+        // Defensive / self-directed moves always apply to the player - pass actor as target so service applies to self
+        const effectiveTargetUid = (move.shieldBoost || move.healing || move.targetType === 'self') ? currentUser.uid : targetOpponent.id;
+        const effectiveTargetName = (move.shieldBoost || move.healing || move.targetType === 'self') ? playerName : targetOpponent.name;
 
         // ALWAYS log move execution attempt (critical for debugging)
         console.log('🚀 [In-Session Move] EXECUTING MOVE:', {
@@ -4687,8 +4718,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       return next;
     };
 
+    // For self-directed moves (Pebble Guard, Shield ON, etc.) do NOT apply damage or defeat logic to the caster
     let newTargetOpponent: typeof targetOpponent;
-    if (isMultiplayer) {
+    if (isSelfTarget) {
+      newTargetOpponent = { ...targetOpponent, isDefeated: false, defeatedAt: undefined };
+    } else if (isMultiplayer) {
       setOpponents(prev => {
         const current = prev.find(opp => opp.id === targetOpponent.id);
         if (!current) return prev;
@@ -4833,19 +4867,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Check for victory (health depleted)
-    // For CPU opponents, check currentPP; for PvP, check vaultHealth
-    // But also check vaultHealth for CPU opponents if it exists (for UI consistency)
-    const opponentHealthDepleted = checkIsCPUOpponent(targetOpponent) 
-      ? (newTargetOpponent.currentPP <= 0 || (newTargetOpponent.vaultHealth !== undefined && newTargetOpponent.vaultHealth <= 0))
-      : (newTargetOpponent.vaultHealth !== undefined ? newTargetOpponent.vaultHealth <= 0 : false);
+    // Self-directed moves (Pebble Guard, etc.) never deplete the caster - skip defeat/victory logic
+    const opponentHealthDepleted = !isSelfTarget && (
+      checkIsCPUOpponent(targetOpponent) 
+        ? (newTargetOpponent.currentPP <= 0 || (newTargetOpponent.vaultHealth !== undefined && newTargetOpponent.vaultHealth <= 0))
+        : (newTargetOpponent.vaultHealth !== undefined ? newTargetOpponent.vaultHealth <= 0 : false)
+    );
     
-    // Set isDefeated flag when health reaches 0
-    if (opponentHealthDepleted) {
-      newTargetOpponent.isDefeated = true;
-      newTargetOpponent.defeatedAt = new Date();
-    } else {
-      newTargetOpponent.isDefeated = false;
-      newTargetOpponent.defeatedAt = undefined;
+    // Set isDefeated flag when health reaches 0 (never for self-target)
+    if (!isSelfTarget) {
+      if (opponentHealthDepleted) {
+        newTargetOpponent.isDefeated = true;
+        newTargetOpponent.defeatedAt = new Date();
+      } else {
+        newTargetOpponent.isDefeated = false;
+        newTargetOpponent.defeatedAt = undefined;
+      }
     }
     
     // Check if this is a multi-wave battle BEFORE processing victory
@@ -5967,7 +6004,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     })();
     
-    const isDefensiveMove = !!(move?.shieldBoost || move?.healing);
+    const isDefensiveMove = !!(move?.shieldBoost || move?.healing || move?.targetType === 'self');
     const isIslandRaidOrSession = !!gameId && !isInSession || !!sessionId;
     setBattleState(prev => ({
       ...prev,
@@ -6041,8 +6078,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // Validate target ID exists in current opponents or allies
-    // Defensive moves (shield boost, healing) ONLY target self - never allow enemies/allies
-    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing);
+    // Defensive / self-directed moves (shield boost, healing, targetType === 'self') ONLY target self
+    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing || battleState.selectedMove?.targetType === 'self');
     const isSelfTarget = targetId === 'self' || targetId === currentUser?.uid;
     const isValidTarget = isDefensiveMove
       ? isSelfTarget

@@ -192,6 +192,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
   // Refs to prevent Firestore from overwriting local damage updates
   const isUpdatingLocallyRef = useRef(false);
   const lastLocalUpdateRef = useRef<Map<string, { health: number; shield: number }>>(new Map());
+  const lastLoggedWaveRef = useRef<number>(0); // Dedupe: only post "WAVE X BEGINS!" once per wave
 
   // Initialize battle when modal opens
   useEffect(() => {
@@ -546,7 +547,10 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
 
       setOpponents(formattedEnemies);
       setCurrentWave(waveNumber);
-      setBattleLog(prev => [...prev, `🌊 WAVE ${waveNumber} BEGINS!`]);
+      if (lastLoggedWaveRef.current !== waveNumber) {
+        lastLoggedWaveRef.current = waveNumber;
+        setBattleLog(prev => [...prev, `🌊 WAVE ${waveNumber} BEGINS!`]);
+      }
       setShowBattleEngine(true);
       
       // Show Kon's Wave 1 popup as overlay when battle starts
@@ -791,10 +795,13 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
         spawnTime: enemy.spawnTime?.toDate ? enemy.spawnTime.toDate() : (enemy.spawnTime || new Date())
       }));
 
-      // Update local state if wave changed
+      // Update local state if wave changed (post wave message only once per wave)
       if (firestoreWave !== currentWave) {
         setCurrentWave(firestoreWave);
-        setBattleLog(prev => [...prev, `🌊 WAVE ${firestoreWave} BEGINS!`]);
+        if (lastLoggedWaveRef.current !== firestoreWave) {
+          lastLoggedWaveRef.current = firestoreWave;
+          setBattleLog(prev => [...prev, `🌊 WAVE ${firestoreWave} BEGINS!`]);
+        }
         // Clear local update tracking when wave changes
         lastLocalUpdateRef.current.clear();
         isUpdatingLocallyRef.current = false;
@@ -901,7 +908,10 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
               updatedAt: serverTimestamp()
             }).then(() => {
               setWaveTransitioning(false);
-              setBattleLog(prev => [...prev, `🌊 Wave ${nextWave} begins!`]);
+              if (lastLoggedWaveRef.current !== nextWave) {
+                lastLoggedWaveRef.current = nextWave;
+                setBattleLog(prev => [...prev, `🌊 WAVE ${nextWave} BEGINS!`]);
+              }
             }).catch(err => {
               console.error('Error advancing wave:', err);
               setWaveTransitioning(false);

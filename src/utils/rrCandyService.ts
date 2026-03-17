@@ -52,6 +52,78 @@ export async function getUserRRCandySkills(
     // Filter for RR Candy moves
     let rrCandyMoves = moves.filter((move: Move) => move.id?.startsWith('rr-candy-'));
 
+    // Canonical On/Off RR Candy ids (Shield OFF / Shield ON — shut down or turn off shields)
+    const ON_OFF_CANONICAL_IDS = ['rr-candy-on-off-shields-off', 'rr-candy-on-off-shields-on'];
+
+    // Migrate legacy RR Candy moves (e.g. wrong id or old "Vault Hack" name) to canonical On/Off skills
+    if (rrCandyStatus.candyType === 'on-off' && rrCandyMoves.length > 0) {
+      const hasLegacyIds = rrCandyMoves.some((m: Move) => !ON_OFF_CANONICAL_IDS.includes(m.id || ''));
+      const hasWrongNames = rrCandyMoves.some((m: Move) => m.name === 'Vault Hack');
+      if (hasLegacyIds || hasWrongNames) {
+        const canonical = getRRCandyMoves('on-off');
+        const migrated = canonical.map((canon, idx) => {
+          const existing = rrCandyMoves[idx];
+          return {
+            ...canon,
+            ...(existing && {
+              level: existing.level ?? canon.level,
+              masteryLevel: existing.masteryLevel ?? canon.masteryLevel,
+              cost: existing.cost ?? canon.cost,
+              cooldown: existing.cooldown ?? canon.cooldown,
+              debuffStrength: existing.debuffStrength ?? canon.debuffStrength,
+              shieldBoost: existing.shieldBoost ?? canon.shieldBoost
+            })
+          } as Move;
+        });
+        rrCandyMoves = migrated;
+        const movesRef = doc(db, 'battleMoves', userId);
+        const otherMoves = moves.filter((m: Move) => !m.id?.startsWith('rr-candy-'));
+        const updatedMoves = [...otherMoves, ...rrCandyMoves];
+        try {
+          await updateDoc(movesRef, { moves: updatedMoves });
+          console.log('rrCandyService: Migrated legacy RR Candy to On/Off skills:', rrCandyMoves.map(m => m.name));
+        } catch (e) {
+          console.error('rrCandyService: Migration write failed', e);
+        }
+      }
+    }
+
+    // Legacy: On/Off RR Candy stored as "Vault Hack" / "Shield Restoration" without rr-candy- ids — replace with canonical Shield OFF / Shield ON
+    if (rrCandyStatus.candyType === 'on-off' && rrCandyMoves.length === 0) {
+      const legacyCandy = moves.filter((m: Move) =>
+        m.category === 'system' && (m.name === 'Vault Hack' || m.name === 'Shield Restoration')
+      );
+      if (legacyCandy.length >= 1) {
+        const canonical = getRRCandyMoves('on-off');
+        const migrated = canonical.map((canon, idx) => {
+          const existing = legacyCandy[idx];
+          return {
+            ...canon,
+            ...(existing && {
+              level: existing.level ?? canon.level,
+              masteryLevel: existing.masteryLevel ?? canon.masteryLevel,
+              cost: existing.cost ?? canon.cost,
+              cooldown: existing.cooldown ?? canon.cooldown,
+              debuffStrength: existing.debuffStrength ?? canon.debuffStrength,
+              shieldBoost: existing.shieldBoost ?? canon.shieldBoost
+            })
+          } as Move;
+        });
+        rrCandyMoves = migrated;
+        const movesRef = doc(db, 'battleMoves', userId);
+        const otherMoves = moves.filter((m: Move) =>
+          !(m.category === 'system' && (m.name === 'Vault Hack' || m.name === 'Shield Restoration'))
+        );
+        const updatedMoves = [...otherMoves, ...rrCandyMoves];
+        try {
+          await updateDoc(movesRef, { moves: updatedMoves });
+          console.log('rrCandyService: Replaced legacy Vault Hack/Shield Restoration with Shield OFF / Shield ON');
+        } catch (e) {
+          console.error('rrCandyService: Legacy replacement write failed', e);
+        }
+      }
+    }
+
     // If no moves found but RR Candy is unlocked, generate them and persist to Firestore
     if (rrCandyMoves.length === 0 && rrCandyStatus.unlocked && rrCandyStatus.candyType) {
       const generatedMoves = getRRCandyMoves(rrCandyStatus.candyType);
@@ -107,12 +179,12 @@ export async function getUserRRCandySkills(
     } else if (rrCandyMoves.length > 0) {
       // Update existing RR Candy moves with canonical names and ensure unlocked
       const generatedMoves = rrCandyStatus.candyType ? getRRCandyMoves(rrCandyStatus.candyType) : [];
-      const nameMap = new Map(generatedMoves.map(m => [m.id, m.name]));
-      
+      const canonicalById = new Map(generatedMoves.map(m => [m.id, m]));
+
       const needsUpdate = moves.some((move: Move) => {
         if (move.id?.startsWith('rr-candy-')) {
-          const canonicalName = nameMap.get(move.id);
-          return !move.unlocked || (canonicalName && move.name !== canonicalName);
+          const canon = canonicalById.get(move.id);
+          return !move.unlocked || (canon && (move.name !== canon.name || move.description !== canon.description));
         }
         return false;
       });
@@ -120,12 +192,10 @@ export async function getUserRRCandySkills(
       if (needsUpdate) {
         const updatedMoves = moves.map((move: Move) => {
           if (move.id?.startsWith('rr-candy-')) {
-            const canonicalName = nameMap.get(move.id);
-            return { 
-              ...move, 
-              unlocked: true,
-              name: canonicalName || move.name // Update to canonical name if available
-            };
+            const canon = canonicalById.get(move.id);
+            return canon
+              ? { ...move, unlocked: true, name: canon.name, description: canon.description }
+              : { ...move, unlocked: true };
           }
           return move;
         });
@@ -138,8 +208,8 @@ export async function getUserRRCandySkills(
           rrCandyMoves = updatedMoves
             .filter((move: Move) => move.id?.startsWith('rr-candy-'))
             .map((move: Move) => {
-              const canonicalName = nameMap.get(move.id);
-              return { ...move, name: canonicalName || move.name };
+              const canon = canonicalById.get(move.id);
+              return canon ? { ...move, name: canon.name, description: canon.description } : move;
             });
         } catch (error) {
           console.error('rrCandyService: Error updating RR Candy moves:', error);
@@ -147,17 +217,24 @@ export async function getUserRRCandySkills(
       } else {
         // Ensure names are canonical even if no update needed
         rrCandyMoves = rrCandyMoves.map((move: Move) => {
-          const canonicalName = nameMap.get(move.id);
-          return canonicalName ? { ...move, name: canonicalName } : move;
+          const canon = canonicalById.get(move.id);
+          return canon ? { ...move, name: canon.name, description: canon.description } : move;
         });
       }
     }
 
-    // Ensure all RR Candy moves are marked as unlocked
-    return rrCandyMoves.map(move => ({
-      ...move,
-      unlocked: true // Force unlock if RR Candy is globally unlocked
-    }));
+    // Always apply canonical name and description (On/Off: Shield OFF, Shield ON)
+    const canonicalMoves = getRRCandyMoves(rrCandyStatus.candyType!);
+    const canonicalById = new Map(canonicalMoves.map(m => [m.id, m]));
+
+    return rrCandyMoves.map(move => {
+      const canon = canonicalById.get(move.id);
+      return {
+        ...move,
+        unlocked: true,
+        ...(canon && { name: canon.name, description: canon.description })
+      };
+    });
   } catch (error) {
     console.error('Error fetching RR Candy skills:', error);
     return [];

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getAttempt, getQuizSet, getQuestions } from '../utils/trainingGroundsService';
 import { TrainingAttempt, TrainingQuestion } from '../types/trainingGrounds';
+import TrainingQuizSummaryModal from '../components/TrainingQuizSummaryModal';
 
 const QuizResults: React.FC = () => {
   const { attemptId } = useParams<{ attemptId: string }>();
@@ -14,6 +15,7 @@ const QuizResults: React.FC = () => {
   const [questions, setQuestions] = useState<TrainingQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
+  const [showSummaryModal, setShowSummaryModal] = useState(true);
 
   useEffect(() => {
     if (!attemptId || !currentUser) return;
@@ -67,8 +69,19 @@ const QuizResults: React.FC = () => {
   }
 
   const scoreColor = attempt.percent >= 70 ? '#10b981' : attempt.percent >= 50 ? '#f59e0b' : '#ef4444';
+  const playerName = currentUser?.displayName ?? currentUser?.email ?? 'You';
 
   return (
+    <>
+      {/* Same-style summary as Live Event quiz — shown first, then close to see full results */}
+      <TrainingQuizSummaryModal
+        isOpen={showSummaryModal}
+        onClose={() => setShowSummaryModal(false)}
+        quizTitle={quizSet.title}
+        attempt={attempt}
+        playerName={playerName}
+      />
+
     <div style={{ 
       minHeight: '100vh', 
       background: 'linear-gradient(to bottom, #f3f4f6, #e5e7eb)',
@@ -333,6 +346,7 @@ const QuizResults: React.FC = () => {
         </div>
       </div>
     </div>
+    </>
   );
 };
 

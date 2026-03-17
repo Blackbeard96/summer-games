@@ -52,6 +52,7 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
   const victoryTriggeredRef = useRef(false); // Track if victory has already been triggered
   const completionTriggeredRef = useRef(false); // Track if challenge completion has been triggered
   const lastWaveCheckRef = useRef<number>(0); // Track last time we checked for wave completion (timestamp)
+  const lastLoggedWaveRef = useRef<number>(0); // Dedupe: only post "WAVE X BEGINS!" once per wave
 
   // AUTHORITATIVE: Check if all enemies in the current wave are defeated
   const areAllEnemiesDefeated = useCallback((enemiesForWave: any[]): boolean => {
@@ -287,15 +288,18 @@ const SquadUpStoryModal: React.FC<SquadUpStoryModalProps> = ({ isOpen, onClose, 
           ...clearPlayerMoves
         });
 
-        // Update local state
+        // Update local state (only add wave-status block once per wave)
         setWaveNumber(nextWave);
-        setBattleLog(prev => [...prev, 
-          `🎉 Wave ${firestoreWave} complete!`, 
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, 
-          `🌊 WAVE ${nextWave} BEGINS!`, 
-          `Enemies: ${newEnemies.length}`, 
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-        ]);
+        if (lastLoggedWaveRef.current !== nextWave) {
+          lastLoggedWaveRef.current = nextWave;
+          setBattleLog(prev => [...prev,
+            `🎉 Wave ${firestoreWave} complete!`,
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+            `🌊 WAVE ${nextWave} BEGINS!`,
+            `Enemies: ${newEnemies.length}`,
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+          ]);
+        }
 
         console.log(`✅ SquadUpStoryModal: advanceWaveIfNeeded - Wave ${nextWave} spawned successfully`);
 

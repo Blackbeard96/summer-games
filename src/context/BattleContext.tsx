@@ -792,27 +792,30 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setMoves(updatedMovesWithCandy);
               console.log('BattleContext: Added RR Candy moves:', newRRCandyMoves.map(m => m.name));
             } else {
-              // Ensure RR Candy moves are unlocked even if they already exist
-              // This is critical: if RR Candy is unlocked, all RR Candy moves should be unlocked
+              // Ensure RR Candy moves are unlocked and have canonical names (Shield OFF / Shield ON)
               const updatedMovesWithUnlocked = finalMoves.map((move: Move) => {
-                const isRRCandyMove = rrCandyMoves.some(rm => rm.id === move.id);
-                if (isRRCandyMove && !move.unlocked) {
-                  console.log('BattleContext: Unlocking RR Candy move:', move.id);
-                  return { ...move, unlocked: true };
+                const canonical = rrCandyMoves.find(rm => rm.id === move.id);
+                if (canonical) {
+                  const needsUpdate = !move.unlocked || move.name !== canonical.name || move.description !== canonical.description;
+                  if (needsUpdate) {
+                    return { ...move, unlocked: true, name: canonical.name, description: canonical.description };
+                  }
                 }
                 return move;
               });
-              
-              // Check if any moves were updated
-              const hasUnlockUpdates = updatedMovesWithUnlocked.some((move: Move, index: number) => {
+
+              const hasUnlockOrNameUpdates = updatedMovesWithUnlocked.some((move: Move, index: number) => {
                 const originalMove = finalMoves[index];
-                return originalMove && move.unlocked !== originalMove.unlocked;
+                if (!originalMove) return false;
+                return move.unlocked !== originalMove.unlocked ||
+                  move.name !== originalMove.name ||
+                  move.description !== originalMove.description;
               });
-              
-              if (hasUnlockUpdates) {
+
+              if (hasUnlockOrNameUpdates) {
                 await updateDoc(movesRef, { moves: updatedMovesWithUnlocked });
                 setMoves(updatedMovesWithUnlocked);
-                console.log('BattleContext: Unlocked existing RR Candy moves');
+                console.log('BattleContext: Synced RR Candy moves (unlock + canonical names)');
               } else {
                 setMoves(finalMoves);
               }

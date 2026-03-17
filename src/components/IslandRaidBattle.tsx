@@ -91,6 +91,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   const lastAppliedWaveRevisionRef = useRef<number>(0); // Track last applied waveRevision from Firestore
   const lastAppliedEnemiesRevisionRef = useRef<number>(0); // Track last applied enemiesRevision from Firestore
   const queuedSnapshotRef = useRef<any>(null); // Queue snapshot updates when isUpdatingEnemies is true
+  const lastLoggedWaveRef = useRef<number>(0); // Track last wave we added "WAVE X BEGINS!" for (dedupe battle log)
 
   // Join the battle room when component mounts
   useEffect(() => {
@@ -396,17 +397,16 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             // Note: Kon intro is now shown after Wave 3 completes (before Wave 4)
             // See wave transition logic for Wave 3 → 4
             
-            // Add wave begin message to battle log if this is the initial load or wave changed
-            // Only add wave begin message if we're on the correct wave and it's not already in the log
-            if (room.enemies && room.enemies.length > 0 && !pendingWave1Start) {
-              const waveBeginPattern = new RegExp(`WAVE ${currentWave} BEGINS`, 'i');
-              const hasWaveBeginMessage = battleLog.some(log => waveBeginPattern.test(log));
-              
-              if (!hasWaveBeginMessage) {
-                setBattleLog(prev => {
-                  return [...prev, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, `🌊 WAVE ${currentWave} BEGINS!`, `Enemies: ${room.enemies.length}`, `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`];
-                });
-              }
+            // Add wave begin message to battle log only once per wave (avoid duplicates from repeated listener runs)
+            if (room.enemies && room.enemies.length > 0 && !pendingWave1Start && lastLoggedWaveRef.current !== currentWave) {
+              lastLoggedWaveRef.current = currentWave;
+              setBattleLog(prev => [
+                ...prev,
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+                `🌊 WAVE ${currentWave} BEGINS!`,
+                `Enemies: ${room.enemies.length}`,
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+              ]);
             }
             
             setLoading(false);
@@ -1270,15 +1270,18 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       setOpponents(newOpponentsList);
       setWaveNumber(nextWave);
       
-      // Update battle log
-      const waveMessages = [
-        `🎉 Wave ${currentWave} complete!`,
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-        `🌊 WAVE ${nextWave} BEGINS!`,
-        `Enemies: ${newEnemies.length}`,
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-      ];
-      setBattleLog(prev => [...prev, ...waveMessages]);
+      // Update battle log (only add wave-status block once per wave)
+      if (lastLoggedWaveRef.current !== nextWave) {
+        lastLoggedWaveRef.current = nextWave;
+        const waveMessages = [
+          `🎉 Wave ${currentWave} complete!`,
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+          `🌊 WAVE ${nextWave} BEGINS!`,
+          `Enemies: ${newEnemies.length}`,
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+        ];
+        setBattleLog(prev => [...prev, ...waveMessages]);
+      }
       
       debug.log('IslandRaidBattle', '✅ Wave transition complete', {
         fromWave: currentWave,
