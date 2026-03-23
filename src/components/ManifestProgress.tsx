@@ -358,7 +358,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
           <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
             {moves.length > 0 ? (
               // Show move-specific usage
-              moves.map((move) => {
+              moves.map((move, moveIdx) => {
                 const usageCount = getMoveUsageCount(playerManifest, move.name);
                 const milestones = [20, 50, 100];
                 const milestoneProgress = getMilestoneProgress(usageCount);
@@ -461,9 +461,10 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                 const moveLevel = findLevelForMove(move.name);
                 const displayName = moveLevel ? `Level ${moveLevel}: ${move.name}` : move.name;
                 
+                const moveKey = `${(move as { id?: string }).id || 'move'}-${move.name}-${moveIdx}`;
                 return (
                   <div
-                    key={move.name}
+                    key={moveKey}
                     style={{
                       padding: '0.75rem',
                       background: `rgba(${manifest.color.replace('#', '')}20, 0.3)`,
@@ -883,7 +884,7 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
             <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
               {moves
                 .filter((move) => (move as ManifestMove).category === 'elemental')
-                .map((move) => {
+                .map((move, elIdx) => {
                   const usageCount = getMoveUsageCount(playerManifest, move.name);
                   const milestones = [...MANIFEST_MILESTONES];
                   const milestoneProgress = getMilestoneProgress(usageCount);
@@ -893,9 +894,10 @@ const ManifestProgress: React.FC<ManifestProgressProps> = ({
                   const hasUnclaimedMilestones = availableToClaim.length > 0;
                   const hasReachedMilestones = reachedMilestones.length > 0;
                   const elementalColor = '#f59e0b';
+                  const elKey = `${(move as { id?: string }).id || 'el'}-${move.name}-${elIdx}`;
                   return (
                     <div
-                      key={move.name}
+                      key={elKey}
                       style={{
                         padding: '0.75rem',
                         background: 'rgba(245, 158, 11, 0.15)',

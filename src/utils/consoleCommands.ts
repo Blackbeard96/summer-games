@@ -63,6 +63,19 @@ if (typeof window !== 'undefined') {
     console.log('%c💡 Try refreshing the Dashboard page and watch for GENERAL category logs', 'color: #6b7280');
   };
 
+  // Restore Eddie Vasquez's manifest skills (Pattern Break, Strategy Matrix) after mistaken reset
+  (window as any).restoreEddieVasquezSkills = async () => {
+    try {
+      const { restoreEddieVasquezManifestSkills } = await import('./fixPlayerManifestAndSkills');
+      const result = await restoreEddieVasquezManifestSkills();
+      console.log(result.success ? `%c✅ ${result.message}` : `%c❌ ${result.message}`, result.success ? 'color: #10b981' : 'color: #ef4444');
+      return result;
+    } catch (e) {
+      console.error('restoreEddieVasquezSkills failed:', e);
+      throw e;
+    }
+  };
+
   // Force refresh role detection in NavBar
   (window as any).refreshRole = () => {
     console.log('%c🔄 FORCING ROLE REFRESH', 'color: #8b5cf6; font-size: 16px; font-weight: bold');

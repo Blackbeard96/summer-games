@@ -2,14 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, query, where, doc, getDoc, updateDoc, arrayUnion, serverTimestamp, getDocs } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
 import { debug } from '../utils/debug';
 import { endSession } from '../utils/inSessionService';
+import {
+  getClassroomIdsForEnrolledStudent,
+  getLiveSessionSnapshotsForClassIds,
+} from '../utils/classroomQueries';
 
 interface InSessionRoom {
   id: string;
   classId: string;
   className: string;
+  hostUid?: string;
   status: 'open' | 'active' | 'closed' | 'live' | 'ended';
   players: Array<{
     userId: string;
@@ -30,6 +35,7 @@ const InSessionNotification: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeSession, setActiveSession] = useState<InSessionRoom | null>(null);
+  const isHostOfActiveSession = Boolean(activeSession?.hostUid && currentUser?.uid && activeSession.hostUid === currentUser.uid);
   const [isJoining, setIsJoining] = useState(false);
   const [isInSession, setIsInSession] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
@@ -49,20 +55,14 @@ const InSessionNotification: React.FC = () => {
     // Function to get user's classrooms
     const getUserClassrooms = async (userId: string): Promise<string[]> => {
       try {
-        const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
-        const userClassrooms = classroomsSnapshot.docs
-          .filter(doc => {
-            const classData = doc.data();
-            return (classData.students || []).includes(userId);
-          })
-          .map(doc => doc.id);
-        
+        const userClassrooms = await getClassroomIdsForEnrolledStudent(userId);
+
         debug.once('user-classrooms-loaded', 'InSessionNotification', 'User classrooms loaded', {
           userId,
           classrooms: userClassrooms,
           count: userClassrooms.length
         });
-        
+
         return userClassrooms;
       } catch (error) {
         debug.error('InSessionNotification', 'Error fetching user classrooms', error);
@@ -99,79 +99,74 @@ const InSessionNotification: React.FC = () => {
           }
         }
 
-        // Get all active sessions
-        // CRITICAL: Query matches session creation status ('live')
-        // Also check 'active' for backward compatibility with legacy sessions
-        let sessionsSnapshot;
+        // Per-class queries only — collection-wide inSessionRooms + status fails rules for students
+        let sessionDocs = [] as Awaited<ReturnType<typeof getLiveSessionSnapshotsForClassIds>>;
         try {
           const DEBUG_SESSION = process.env.REACT_APP_DEBUG_SESSION === 'true';
           if (DEBUG_SESSION) {
-            debug.log('InSessionNotification', '🔍 Session discovery query', {
-              classId: userClassroomsCache,
+            debug.log('InSessionNotification', '🔍 Session discovery (per classId)', {
+              classIds: userClassroomsCache,
               queryStatus: ['active', 'live'],
-              note: 'Sessions are created with status: "live"'
             });
           }
-          
-          // Check for both 'active' (legacy) and 'live' (new) statuses
-          sessionsSnapshot = await getDocs(query(
-            collection(db, 'inSessionRooms'),
-            where('status', 'in', ['active', 'live'])
-          ));
-          
+
+          sessionDocs = await getLiveSessionSnapshotsForClassIds(userClassroomsCache, ['active', 'live']);
+
           if (DEBUG_SESSION) {
             debug.log('InSessionNotification', '📊 Session discovery results', {
-              totalSessions: sessionsSnapshot.size,
-              sessions: sessionsSnapshot.docs.map(d => ({
+              totalSessions: sessionDocs.length,
+              sessions: sessionDocs.map((d) => ({
                 id: d.id,
                 classId: d.data().classId,
                 status: d.data().status,
-                playersCount: d.data().players?.length || 0
-              }))
+                playersCount: d.data().players?.length || 0,
+              })),
             });
           }
         } catch (queryError) {
-          // Suppress Firestore internal assertion errors
-          if (queryError instanceof Error && 
-              (queryError.message?.includes('INTERNAL ASSERTION FAILED') || 
-               queryError.message?.includes('Unexpected state'))) {
+          if (queryError instanceof Error &&
+              (queryError.message?.includes('INTERNAL ASSERTION FAILED') ||
+                queryError.message?.includes('Unexpected state'))) {
             debug.once('firestore-query-error', 'InSessionNotification', 'Firestore query error suppressed, skipping check');
-            return; // Skip this check if there's a Firestore error
+            return;
           }
-          throw queryError; // Re-throw if it's a different error
+          if (
+            queryError instanceof Error &&
+            (queryError.message.includes('permission') || queryError.message.includes('Permission'))
+          ) {
+            debug.error('InSessionNotification', 'Session discovery permission error (check rules / deployment)', queryError);
+            return;
+          }
+          throw queryError;
         }
 
-        debug.throttle('active-sessions-count', 2000, 'InSessionNotification', 'Found active sessions', sessionsSnapshot.size);
+        debug.throttle('active-sessions-count', 2000, 'InSessionNotification', 'Found active sessions', sessionDocs.length);
 
-        if (!sessionsSnapshot.empty) {
-          // Get all active sessions
-          const allSessions = sessionsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          } as InSessionRoom));
+        if (sessionDocs.length > 0) {
+          const allSessions = sessionDocs.map(
+            (docSnap) =>
+              ({
+                id: docSnap.id,
+                ...docSnap.data(),
+              }) as InSessionRoom
+          );
 
-          // Throttle group creation to prevent infinite nesting
           debug.throttle('all-active-sessions-group', 2000, 'InSessionNotification', `All Active Sessions (${allSessions.length})`, {
-            sessions: allSessions.map(s => ({
+            sessions: allSessions.map((s) => ({
               id: s.id,
               classId: s.classId,
               className: s.className,
               playersCount: s.players?.length || 0,
-              playerIds: s.players?.map((p: any) => p.userId) || []
-            }))
+              playerIds: s.players?.map((p: any) => p.userId) || [],
+            })),
           });
 
-          // Only show Live Event invites for classes the user is in. Never show other classes' events.
-          let userSessions: InSessionRoom[] = [];
-          if (userClassroomsCache.length > 0) {
-            userSessions = allSessions.filter(session => userClassroomsCache.includes(session.classId));
-            debug.throttle('filtered-classrooms', 2000, 'InSessionNotification', 'Filtered by classrooms', {
-              userClassrooms: userClassroomsCache,
-              filteredCount: userSessions.length,
-              allSessionsCount: allSessions.length
-            });
-          }
-          // When user has no classrooms (not yet loaded or not in any class), show no invites.
+          const userSessions = allSessions;
+          debug.throttle('filtered-classrooms', 2000, 'InSessionNotification', 'Filtered by classrooms', {
+            userClassrooms: userClassroomsCache,
+            filteredCount: userSessions.length,
+            allSessionsCount: allSessions.length,
+          });
 
           // Throttle group creation to prevent infinite nesting
           debug.throttle('user-sessions-group', 2000, 'InSessionNotification', `User Sessions (${userSessions.length})`, {
@@ -465,10 +460,11 @@ const InSessionNotification: React.FC = () => {
       const success = await endSession(activeSession.id, currentUser.uid, currentUser.email || undefined);
       
       if (success) {
-        debug.log('InSessionNotification', `Session ${activeSession.id} ended by admin ${currentUser.uid}`);
-        // The session will be marked as ended, and the notification will disappear on next poll
-        // Force immediate update by clearing active session
+        debug.log('InSessionNotification', `Session ${activeSession.id} ended by ${isHostOfActiveSession ? 'host' : 'admin'} ${currentUser.uid}`);
+        // Navigate to the live event page so the host/admin sees the session summary modal
+        const endedSessionId = activeSession.id;
         setActiveSession(null);
+        navigate(`/live-events/${endedSessionId}`);
       } else {
         alert('Failed to end session. You may not have permission to end this session, or the session may have already ended.');
       }
@@ -546,7 +542,7 @@ const InSessionNotification: React.FC = () => {
           >
             {isJoining ? 'Joining...' : isInSession ? '🎮 Rejoin Live Event' : '🎮 Join Live Event'}
           </button>
-          {isAdminUser && (
+          {(isAdminUser || isHostOfActiveSession) && (
             <button
               onClick={handleEndSession}
               disabled={isEnding}

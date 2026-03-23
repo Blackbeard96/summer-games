@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BATTLE_CONSTANTS, ACTION_CARD_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange,
@@ -64,7 +64,9 @@ const Battle: React.FC = () => {
     setSuccess
   } = useBattle();
   const navigate = useNavigate();
-  
+  const [searchParams] = useSearchParams();
+  const fromSkillLoadoutTutorial = searchParams.get('tutorial') === 'skill-loadout';
+
   // Check URL hash to set initial tab
   // Support both "moves" and "skills" routes for backward compatibility
   const getInitialTab = (): 'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle' => {
@@ -1448,6 +1450,19 @@ const Battle: React.FC = () => {
 
         {activeTab === 'moves' && (
           <>
+            {fromSkillLoadoutTutorial && (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.75rem 1rem',
+                background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
+                border: '1px solid #4f46e5',
+                borderRadius: '0.5rem',
+                color: '#3730a3',
+                fontSize: '0.875rem'
+              }}>
+                Equip up to 6 skills to finish setting up your Loadout.
+              </div>
+            )}
             {/* Skill Mastery Section */}
             <div style={{ marginBottom: '2rem' }}>
               <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#1f2937', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

@@ -6,195 +6,14 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { activatePPBoost, getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import {
+  MARKETPLACE_STORE_ARTIFACTS,
+  type MarketplaceStoreArtifact
+} from '../data/marketplaceArtifactsCatalog';
+import { mergeMarketplaceStoreItems } from '../utils/marketplaceStoreMerge';
+import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
 
-interface Artifact {
-  id: string;
-  name: string;
-  description: string;
-  price: number;
-  icon: string;
-  image: string;
-  category: 'time' | 'protection' | 'food' | 'special';
-  rarity: 'common' | 'rare' | 'epic' | 'legendary';
-  originalPrice?: number;
-  discount?: number;
-  disabled?: boolean;
-}
-
-const artifacts: Artifact[] = [
-  { 
-    id: 'checkin-free',
-    name: 'Get Out of Check-in Free', 
-    description: 'Skip the next check-in requirement', 
-    price: 50, 
-    icon: '🎫', 
-    image: '/images/Get-Out-of-Check-in-Free.png',
-    category: 'protection',
-    rarity: 'common'
-  },
-  { 
-    id: 'shield',
-    name: 'Shield', 
-    description: 'Block the next incoming attack on your vault', 
-    price: 50, 
-    icon: '🛡️', 
-    image: '/images/Shield Item.jpeg',
-    category: 'protection',
-    rarity: 'common'
-  },
-  { 
-    id: 'health-potion-25',
-    name: 'Health Potion (25)', 
-    description: 'Restore 25 HP to your vault health', 
-    price: 40, 
-    icon: '🧪', 
-    image: '/images/Health Potion - 25.png',
-    category: 'protection',
-    rarity: 'common'
-  },
-  { 
-    id: 'lunch-mosley',
-    name: 'Lunch on Mosley', 
-    description: 'Enjoy a special lunch with Mr. Mosley', 
-    price: 9999, 
-    icon: '🍽️', 
-    image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'food',
-    rarity: 'legendary'
-  },
-  { 
-    id: 'forge-token',
-    name: 'Forge Token', 
-    description: 'Redeem for any custom item you want printed from The Forge (3D Printer)', 
-    price: 2700, 
-    icon: '🛠️', 
-    image: '/images/Forge Token.png',
-    category: 'special',
-    rarity: 'legendary'
-  },
-  { 
-    id: 'uxp-credit-1',
-    name: '+1 UXP Credit', 
-    description: 'Credit to be added to any non-assessment assignment', 
-    price: 1000, 
-    icon: '📕', 
-    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'common'
-  },
-  { 
-    id: 'uxp-credit',
-    name: '+2 UXP Credit',
-    description: 'Credit to be added to any non-assessment assignment', 
-    price: 1800, 
-    icon: '📚', 
-    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'common'
-  },
-  { 
-    id: 'uxp-credit-4',
-    name: '+4 UXP Credit',
-    description: 'Enhanced credit to be added to any non-assessment assignment', 
-    price: 3420, 
-    icon: '📖', 
-    image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'rare'
-  },
-  { 
-    id: 'double-pp',
-    name: 'Double PP Boost', 
-    description: 'Double any PP you receive for the next 4 hours', 
-    price: 75, 
-    icon: '⚡', 
-    image: '/images/Double PP.png',
-    category: 'special',
-    rarity: 'epic',
-    originalPrice: 100,
-    discount: 25
-  },
-  { 
-    id: 'skip-the-line',
-    name: 'Skip the Line', 
-    description: 'Skip the line and be the next up to use the pass to leave', 
-    price: 50, 
-    icon: '🚀', 
-    image: '/images/Skip the Line.png',
-    category: 'special',
-    rarity: 'common'
-  },
-  { 
-    id: 'work-extension',
-    name: 'Work Extension', 
-    description: 'Complete assignments that were past due and normally would no longer be graded', 
-    price: 250, 
-    icon: '📝', 
-    image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=facearea&w=256&h=256&facepad=2',
-    category: 'special',
-    rarity: 'common'
-  },
-  { 
-    id: 'instant-a',
-    name: 'Instant A', 
-    description: 'Grants an automatic A for the trimester, no matter what your grade may actually be. Limited to one user per class.', 
-    price: 99, 
-    icon: '⭐', 
-    image: '/images/Instant A.png',
-    category: 'special',
-    rarity: 'legendary'
-  },
-  { 
-    id: 'blaze-ring',
-    name: 'Blaze Ring', 
-    description: 'Adds +1 Level to all Fire Elemental Moves. Equip to a ring slot to activate.', 
-    price: 540, 
-    icon: '💍', 
-    image: '/images/Blaze Ring.png',
-    category: 'special',
-    rarity: 'epic'
-  },
-  { 
-    id: 'terra-ring',
-    name: 'Terra Ring', 
-    description: 'Adds +1 Level to all Earth Elemental Moves. Equip to a ring slot to activate.', 
-    price: 540, 
-    icon: '💍', 
-    image: '/images/Terra Ring.png',
-    category: 'special',
-    rarity: 'epic'
-  },
-  { 
-    id: 'aqua-ring',
-    name: 'Aqua Ring', 
-    description: 'Adds +1 Level to all Water Elemental Moves. Equip to a ring slot to activate.', 
-    price: 540, 
-    icon: '💍', 
-    image: '/images/Aqua Ring.png',
-    category: 'special',
-    rarity: 'epic'
-  },
-  { 
-    id: 'air-ring',
-    name: 'Air Ring', 
-    description: 'Adds +1 Level to all Air Elemental Moves. Equip to a ring slot to activate.', 
-    price: 540, 
-    icon: '💍', 
-    image: '/images/Air Ring.png',
-    category: 'special',
-    rarity: 'epic'
-  },
-  { 
-    id: 'instant-regrade-pass',
-    name: 'Instant Regrade Pass', 
-    description: 'Allows players to get assignments regraded without coming in person. Lasts for 1 day.', 
-    price: 200, 
-    icon: '📋', 
-    image: '/images/Instant Regrade Pass.png',
-    category: 'special',
-    rarity: 'common'
-  },
-];
+type Artifact = MarketplaceStoreArtifact;
 
 const Marketplace = () => {
   const { currentUser, isAdmin: checkIsAdmin } = useAuth();
@@ -210,6 +29,10 @@ const Marketplace = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
   const [showPPEarningModal, setShowPPEarningModal] = useState(false);
+  const [storeItems, setStoreItems] = useState<MarketplaceStoreArtifact[]>(MARKETPLACE_STORE_ARTIFACTS);
+  /** Listing id → player already owns the linked equippable (students.artifacts). */
+  const [equippableStoreOwned, setEquippableStoreOwned] = useState<Record<string, boolean>>({});
+  const [truthMetal, setTruthMetal] = useState(0);
   const isAdmin = checkIsAdmin ?? false;
 
   // Function to create admin notifications
@@ -237,6 +60,39 @@ const Marketplace = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  /**
+   * Live MST MKT = code catalog merged with adminSettings/marketplaceArtifacts.
+   * Rules require auth to read that doc; signed-out users see the static catalog only.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!currentUser?.uid) {
+        setStoreItems(MARKETPLACE_STORE_ARTIFACTS);
+        return;
+      }
+      try {
+        const marketplaceRef = doc(db, 'adminSettings', 'marketplaceArtifacts');
+        const snap = await getDoc(marketplaceRef);
+        const merged = mergeMarketplaceStoreItems(
+          MARKETPLACE_STORE_ARTIFACTS,
+          snap.exists() ? (snap.data() as Record<string, unknown>) : undefined
+        );
+        if (!cancelled) {
+          setStoreItems(merged);
+        }
+      } catch (e) {
+        console.error('MST MKT: failed to load marketplace catalog from Firestore', e);
+        if (!cancelled) {
+          setStoreItems(MARKETPLACE_STORE_ARTIFACTS);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
   useEffect(() => {
     const fetchData = async () => {
       if (!currentUser) return;
@@ -254,6 +110,7 @@ const Marketplace = () => {
         if (studentsSnap.exists()) {
           const studentsData = studentsSnap.data();
           setPowerPoints(studentsData.powerPoints || 0);
+          setTruthMetal(Math.max(0, Math.floor(Number(studentsData.truthMetal) || 0)));
           setInventory(studentsData.inventory || []);
         }
         
@@ -270,10 +127,10 @@ const Marketplace = () => {
     fetchData();
   }, [currentUser]);
 
-  // Update artifact counts when component mounts or inventory changes
+  // Update artifact counts when catalog, user, or inventory changes
   useEffect(() => {
     updateAllArtifactCounts();
-  }, [currentUser, inventory]);
+  }, [currentUser, inventory, storeItems]);
 
   // Function to count specific artifacts in inventory (including used ones)
   const getArtifactCount = async (artifactName: string) => {
@@ -344,14 +201,32 @@ const Marketplace = () => {
   // Function to update all artifact counts
   const updateAllArtifactCounts = async () => {
     if (!currentUser) return;
-    
+
     const newCounts: Record<string, number> = {};
-    
-    for (const artifact of artifacts) {
-      newCounts[artifact.name] = await getArtifactCount(artifact.name);
+    const newEqOwned: Record<string, boolean> = {};
+
+    let arts: Record<string, unknown> = {};
+    try {
+      const studentsRef = doc(db, 'students', currentUser.uid);
+      const studentsSnap = await getDoc(studentsRef);
+      const raw = studentsSnap.exists() ? studentsSnap.data().artifacts : undefined;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        arts = raw as Record<string, unknown>;
+      }
+    } catch (e) {
+      console.warn('Marketplace: failed to load artifacts for equippable ownership', e);
     }
-    
+
+    for (const artifact of storeItems) {
+      newCounts[artifact.name] = await getArtifactCount(artifact.name);
+      const eqId = artifact.equippableArtifactId?.trim();
+      if (eqId) {
+        newEqOwned[artifact.id] = arts[eqId] === true || Boolean(arts[`${eqId}_purchase`]);
+      }
+    }
+
     setArtifactCounts(newCounts);
+    setEquippableStoreOwned(newEqOwned);
   };
 
   // Debug function to check inventory consistency
@@ -1101,9 +976,15 @@ const Marketplace = () => {
 
   const handlePurchase = async (item: Artifact) => {
     if (!currentUser) return;
-    
+
+    const tmCost = Math.max(0, Math.floor(Number(item.truthMetalPrice) || 0));
+
     if (powerPoints < item.price) {
       alert('Insufficient Power Points!');
+      return;
+    }
+    if (truthMetal < tmCost) {
+      alert(`Insufficient Truth Metal! This item costs ${tmCost} shard(s) in addition to PP.`);
       return;
     }
 
@@ -1146,16 +1027,133 @@ const Marketplace = () => {
 
     try {
       const userRef = doc(db, 'students', currentUser.uid);
-      
+
+      const userSnap = await getDoc(userRef);
+      const currentUserData = userSnap.exists() ? userSnap.data() : {};
+      const currentArtifacts = currentUserData.artifacts || {};
+      const nextTruth = Math.max(0, (currentUserData.truthMetal || 0) - tmCost);
+
+      const equippableGrantId = item.equippableArtifactId?.trim() || '';
+
+      /** Equippable MKT listing: grant catalog id + full stats (Artifacts page / battle). */
+      if (equippableGrantId) {
+        const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+        const equippableDoc = await getDoc(equippableRef);
+        if (!equippableDoc.exists()) {
+          alert('Equippable catalog is unavailable. Please try again later.');
+          return;
+        }
+        const mergedEq = mergeEquippableCatalogLayers(
+          equippableDoc.data() as Record<string, unknown>
+        );
+        const def = mergedEq[equippableGrantId];
+        if (!def || typeof def !== 'object') {
+          alert(
+            'This store listing is misconfigured (equippable not found). Please contact an admin.'
+          );
+          return;
+        }
+        const art = def as Record<string, unknown>;
+
+        if (Array.isArray(currentArtifacts)) {
+          alert('Your account uses a legacy artifact format. Ask an admin to migrate your artifacts.');
+          return;
+        }
+
+        const alreadyOwns =
+          currentArtifacts[equippableGrantId] === true ||
+          Boolean(currentArtifacts[`${equippableGrantId}_purchase`]);
+        if (alreadyOwns) {
+          alert('You already own this equippable artifact!');
+          return;
+        }
+
+        const purchasedEquippable = {
+          id: equippableGrantId,
+          name: item.name || (typeof art.name === 'string' ? art.name : equippableGrantId),
+          description: item.description,
+          price: item.price,
+          truthMetalPrice: tmCost || undefined,
+          icon: item.icon,
+          image: item.image || (typeof art.image === 'string' ? art.image : ''),
+          category: 'equippable',
+          rarity: item.rarity,
+          purchasedAt: new Date(),
+          used: false,
+          fromMarketplace: true,
+          marketplaceListingId: item.id,
+          slot: art.slot ?? 'ring1',
+          powerLevelBonus: art.powerLevelBonus,
+          perks: art.perks,
+          artifactSkill: art.artifactSkill,
+          level: typeof art.level === 'number' ? art.level : 1,
+          stats: art.stats ?? {},
+        };
+
+        const updatedEquippableArtifacts = {
+          ...currentArtifacts,
+          [equippableGrantId]: true,
+          [`${equippableGrantId}_purchase`]: purchasedEquippable,
+        };
+
+        await updateDoc(userRef, {
+          powerPoints: powerPoints - item.price,
+          ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
+          artifacts: updatedEquippableArtifacts,
+        });
+
+        const usersRef = doc(db, 'users', currentUser.uid);
+        const usersSnap = await getDoc(usersRef);
+        if (usersSnap.exists()) {
+          const usersData = usersSnap.data();
+          const usersArtifacts = usersData.artifacts || {};
+          let updatedUsersArtifacts;
+          if (Array.isArray(usersArtifacts)) {
+            updatedUsersArtifacts = [...usersArtifacts, purchasedEquippable];
+          } else {
+            updatedUsersArtifacts = {
+              ...usersArtifacts,
+              [equippableGrantId]: true,
+              [`${equippableGrantId}_purchase`]: purchasedEquippable,
+            };
+          }
+          await updateDoc(usersRef, { artifacts: updatedUsersArtifacts });
+        }
+
+        await createAdminNotification({
+          type: 'artifact_purchase',
+          title: 'Artifact Purchase (Equippable)',
+          message: `${currentUser.displayName || currentUser.email} purchased ${item.name} (grants ${equippableGrantId}) for ${item.price} PP${tmCost ? ` + ${tmCost} Truth Metal` : ''}`,
+          data: {
+            userId: currentUser.uid,
+            userName: currentUser.displayName || currentUser.email,
+            artifactName: item.name,
+            equippableArtifactId: equippableGrantId,
+            marketplaceListingId: item.id,
+            artifactPrice: item.price,
+            truthMetalPrice: tmCost,
+            artifactRarity: item.rarity,
+            purchaseTime: new Date(),
+          },
+        });
+
+        setPowerPoints((prev) => prev - item.price);
+        if (tmCost > 0) setTruthMetal((t) => Math.max(0, t - tmCost));
+        await updateAllArtifactCounts();
+        alert(`Successfully purchased ${item.name}! Equip it on the Artifacts page.`);
+        return;
+      }
+
       // Check if this is a UXP artifact
       const isUXPArtifact = item.name.includes('UXP') || item.id.startsWith('uxp-credit');
-      
+
       // Create detailed artifact purchase record
       const purchasedArtifact = {
         id: item.id,
         name: item.name,
         description: item.description,
         price: item.price,
+        truthMetalPrice: tmCost || undefined,
         icon: item.icon,
         image: item.image,
         category: item.category,
@@ -1165,18 +1163,13 @@ const Marketplace = () => {
         // UXP artifacts require admin approval before being active
         ...(isUXPArtifact && {
           pendingApproval: true,
-          approvalStatus: 'pending'
-        })
+          approvalStatus: 'pending',
+        }),
       };
-      
-      // Get current user data to access existing artifacts
-      const userSnap = await getDoc(userRef);
-      const currentUserData = userSnap.exists() ? userSnap.data() : {};
-      
+
       // Handle artifacts - can be either array or object
-      const currentArtifacts = currentUserData.artifacts || {};
       let updatedArtifacts;
-      
+
       if (Array.isArray(currentArtifacts)) {
         // If artifacts is an array, add to it
         updatedArtifacts = [...currentArtifacts, purchasedArtifact];
@@ -1185,17 +1178,18 @@ const Marketplace = () => {
         updatedArtifacts = {
           ...currentArtifacts,
           [item.id]: true, // Mark as owned
-          [`${item.id}_purchase`]: purchasedArtifact // Store purchase details
+          [`${item.id}_purchase`]: purchasedArtifact, // Store purchase details
         };
       }
-      
-      // Update user's power points and add artifact to inventory
+
+      // Update user's power points (and Truth Metal if required) and add artifact to inventory
       await updateDoc(userRef, {
         powerPoints: powerPoints - item.price,
+        ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
         inventory: [...inventory, item.name],
-        artifacts: updatedArtifacts
+        artifacts: updatedArtifacts,
       });
-      
+
       // Also update the users collection to keep both in sync
       const usersRef = doc(db, 'users', currentUser.uid);
       const usersSnap = await getDoc(usersRef);
@@ -1203,48 +1197,52 @@ const Marketplace = () => {
         const usersData = usersSnap.data();
         const usersArtifacts = usersData.artifacts || {};
         let updatedUsersArtifacts;
-        
+
         if (Array.isArray(usersArtifacts)) {
           updatedUsersArtifacts = [...usersArtifacts, purchasedArtifact];
         } else {
           updatedUsersArtifacts = {
             ...usersArtifacts,
             [item.id]: true,
-            [`${item.id}_purchase`]: purchasedArtifact
+            [`${item.id}_purchase`]: purchasedArtifact,
           };
         }
-        
+
         // For UXP artifacts, show message about pending approval
         if (isUXPArtifact) {
-          alert('Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.');
+          alert(
+            'Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.'
+          );
         }
-        
+
         await updateDoc(usersRef, {
-          artifacts: updatedUsersArtifacts
+          artifacts: updatedUsersArtifacts,
         });
       }
-      
+
       // Create admin notification
       await createAdminNotification({
         type: 'artifact_purchase',
         title: 'Artifact Purchase',
-        message: `${currentUser.displayName || currentUser.email} purchased ${item.name} for ${item.price} PP`,
+        message: `${currentUser.displayName || currentUser.email} purchased ${item.name} for ${item.price} PP${tmCost ? ` + ${tmCost} Truth Metal` : ''}`,
         data: {
           userId: currentUser.uid,
           userName: currentUser.displayName || currentUser.email,
           artifactName: item.name,
           artifactPrice: item.price,
+          truthMetalPrice: tmCost,
           artifactRarity: item.rarity,
-          purchaseTime: new Date()
-        }
+          purchaseTime: new Date(),
+        },
       });
-      
-      setPowerPoints(prev => prev - item.price);
-      setInventory(prev => [...prev, item.name]);
-      
+
+      setPowerPoints((prev) => prev - item.price);
+      if (tmCost > 0) setTruthMetal((t) => Math.max(0, t - tmCost));
+      setInventory((prev) => [...prev, item.name]);
+
       // Refresh artifact counts
       await updateAllArtifactCounts();
-      
+
       alert(`Successfully purchased ${item.name}!`);
     } catch (error) {
       console.error('Error purchasing item:', error);
@@ -1268,11 +1266,12 @@ const Marketplace = () => {
       case 'protection': return '🛡️';
       case 'food': return '🍕';
       case 'special': return '✨';
+      case 'equippable': return '⚔️';
       default: return '📦';
     }
   };
 
-  const filteredArtifacts = artifacts.filter(artifact => {
+  const filteredArtifacts = storeItems.filter(artifact => {
     // Filter out disabled artifacts
     if (artifact.disabled) return false;
     
@@ -1289,7 +1288,8 @@ const Marketplace = () => {
     { id: 'time', name: 'Time Artifacts', icon: '⏰' },
     { id: 'protection', name: 'Protection', icon: '🛡️' },
     { id: 'food', name: 'Food & Rest', icon: '🍕' },
-    { id: 'special', name: 'Special Powers', icon: '✨' }
+    { id: 'special', name: 'Special Powers', icon: '✨' },
+    { id: 'equippable', name: 'Equippable Gear', icon: '⚔️' }
   ];
 
   const rarities = [
@@ -1383,7 +1383,7 @@ const Marketplace = () => {
                 </span>
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <div className="power-points" style={{ 
                 backgroundColor: '#fbbf24', 
                 color: '#1f2937', 
@@ -1394,6 +1394,18 @@ const Marketplace = () => {
                 whiteSpace: 'nowrap'
               }}>
                 ⚡ {powerPoints} Power Points
+              </div>
+              <div style={{
+                backgroundColor: '#e0e7ff',
+                color: '#312e81',
+                padding: '0.5rem 1rem',
+                borderRadius: '0.5rem',
+                fontWeight: 'bold',
+                fontSize: '0.875rem',
+                whiteSpace: 'nowrap',
+                border: '1px solid #a5b4fc'
+              }}>
+                💎 {truthMetal} Truth Metal
               </div>
             </div>
           </div>
@@ -1647,7 +1659,7 @@ const Marketplace = () => {
                 color: '#6b7280',
                 textAlign: isMobile ? 'left' : 'right'
               }}>
-                Showing {filteredArtifacts.length} of {artifacts.length} artifacts
+                Showing {filteredArtifacts.length} of {storeItems.length} artifacts
               </div>
             </div>
 
@@ -1767,11 +1779,17 @@ const Marketplace = () => {
 
               {filteredArtifacts.map((artifact) => {
                 const artifactCount = artifactCounts[artifact.name] || 0;
-                const purchased = artifactCount > 0;
+                const isEquippableListing = Boolean(artifact.equippableArtifactId?.trim());
+                const equippableOwned = isEquippableListing && !!equippableStoreOwned[artifact.id];
+                const purchased = equippableOwned || (!isEquippableListing && artifactCount > 0);
+                const tmCost = Math.max(0, Math.floor(Number(artifact.truthMetalPrice) || 0));
                 const isAtLimit = (artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && artifactCount >= 2;
                 // Shield limit: check both artifact count and active overshield
                 const hasActiveOvershield = artifact.name === 'Shield' && vault && (vault.overshield || 0) > 0;
                 const isShieldAtLimit = artifact.name === 'Shield' && (artifactCount >= 1 || hasActiveOvershield);
+                const equippableAtLimit = isEquippableListing && equippableOwned;
+                const insufficientTm = tmCost > 0 && truthMetal < tmCost;
+                const insufficientPp = powerPoints < artifact.price;
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
                     background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
@@ -1902,7 +1920,31 @@ const Marketplace = () => {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div>
                           {artifact.originalPrice ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ 
+                                  fontSize: isMobile ? '1.125rem' : '1.25rem', 
+                                  fontWeight: 'bold',
+                                  color: '#1f2937'
+                                }}>
+                                  {artifact.price} PP
+                                </span>
+                                <span style={{ 
+                                  fontSize: '0.875rem', 
+                                  color: '#6b7280',
+                                  textDecoration: 'line-through'
+                                }}>
+                                  {artifact.originalPrice} PP
+                                </span>
+                              </div>
+                              {tmCost > 0 && (
+                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#4338ca' }}>
+                                  + {tmCost} 💎 Truth Metal
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.2rem' }}>
                               <span style={{ 
                                 fontSize: isMobile ? '1.125rem' : '1.25rem', 
                                 fontWeight: 'bold',
@@ -1910,22 +1952,12 @@ const Marketplace = () => {
                               }}>
                                 {artifact.price} PP
                               </span>
-                              <span style={{ 
-                                fontSize: '0.875rem', 
-                                color: '#6b7280',
-                                textDecoration: 'line-through'
-                              }}>
-                                {artifact.originalPrice} PP
-                              </span>
+                              {tmCost > 0 && (
+                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#4338ca' }}>
+                                  + {tmCost} 💎 Truth Metal
+                                </span>
+                              )}
                             </div>
-                          ) : (
-                            <span style={{ 
-                              fontSize: isMobile ? '1.125rem' : '1.25rem', 
-                              fontWeight: 'bold',
-                              color: '#1f2937'
-                            }}>
-                              {artifact.price} PP
-                            </span>
                           )}
                         </div>
 
@@ -1936,13 +1968,13 @@ const Marketplace = () => {
                               color: '#6b7280',
                               textAlign: 'right'
                             }}>
-                              Owned: {artifactCount}
+                              {equippableOwned ? 'Owned (equip on Artifacts page)' : `Owned: ${artifactCount}`}
                               {(artifact.name === '+1 UXP Credit' || artifact.name === '+2 UXP Credit' || artifact.name === '+4 UXP Credit' || artifact.name === 'Get Out of Check-in Free') && ` (Max: 2)`}
                               {artifact.name === 'Shield' && ` (Max: 1)`}
                             </div>
                           )}
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            {purchased && (
+                            {purchased && !isEquippableListing && (
                               <button
                                 onClick={() => handleUseArtifact(artifact.name)}
                                 disabled={artifact.name === 'Shield' && vault ? (vault.overshield || 0) > 0 : false}
@@ -1979,23 +2011,23 @@ const Marketplace = () => {
                             )}
                             <button
                               onClick={() => handlePurchase(artifact)}
-                              disabled={isAtLimit || isShieldAtLimit || powerPoints < artifact.price}
+                              disabled={equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm}
                               style={{
-                                backgroundColor: (isAtLimit || isShieldAtLimit) ? '#6b7280' : powerPoints < artifact.price ? '#ef4444' : '#10b981',
+                                backgroundColor: (equippableAtLimit || isAtLimit || isShieldAtLimit) ? '#6b7280' : insufficientPp ? '#ef4444' : insufficientTm ? '#6366f1' : '#10b981',
                                 color: 'white',
                                 border: 'none',
                                 padding: isMobile ? '0.5rem 0.75rem' : '0.5rem 1rem',
                                 borderRadius: '0.375rem',
                                 fontSize: isMobile ? '0.75rem' : '0.875rem',
                                 fontWeight: '500',
-                                cursor: (isAtLimit || isShieldAtLimit || powerPoints < artifact.price) ? 'not-allowed' : 'pointer',
-                                opacity: (isAtLimit || isShieldAtLimit || powerPoints < artifact.price) ? 0.6 : 1,
+                                cursor: (equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm) ? 'not-allowed' : 'pointer',
+                                opacity: (equippableAtLimit || isAtLimit || isShieldAtLimit || insufficientPp || insufficientTm) ? 0.6 : 1,
                                 transition: 'all 0.2s',
                                 minWidth: isMobile ? '80px' : 'auto',
                                 minHeight: isMobile ? '36px' : 'auto'
                               }}
                               onMouseEnter={e => {
-                                if (!isAtLimit && !isShieldAtLimit && powerPoints >= artifact.price && !isMobile) {
+                                if (!equippableAtLimit && !isAtLimit && !isShieldAtLimit && !insufficientPp && !insufficientTm && !isMobile) {
                                   e.currentTarget.style.transform = 'translateY(-1px)';
                                 }
                               }}
@@ -2005,7 +2037,7 @@ const Marketplace = () => {
                                 }
                               }}
                             >
-                              {isAtLimit ? 'At Limit' : isShieldAtLimit ? (hasActiveOvershield ? 'Active' : 'Owned') : powerPoints < artifact.price ? 'Insufficient PP' : 'Purchase'}
+                              {equippableAtLimit ? 'Owned' : isAtLimit ? 'At Limit' : isShieldAtLimit ? (hasActiveOvershield ? 'Active' : 'Owned') : insufficientPp ? 'Insufficient PP' : insufficientTm ? 'Need Truth Metal' : 'Purchase'}
                             </button>
                           </div>
                         </div>

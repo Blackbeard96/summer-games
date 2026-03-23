@@ -37,6 +37,8 @@ interface Squad {
   id: string;
   name: string;
   members: SquadMember[];
+  /** Denormalized UIDs for Firestore security rules (members are objects, not uid strings). */
+  memberUids?: string[];
   leader: string;
   createdAt: Date;
   description?: string;
@@ -62,6 +64,12 @@ const sanitizeForFirestore = (obj: any): any => {
   }
   return obj;
 };
+
+function memberUidsFromMemberList(members: SquadMember[]): string[] {
+  return (members || [])
+    .map((m) => m.uid)
+    .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
+}
 
 const Squads: React.FC = () => {
   const { currentUser } = useAuth();
@@ -539,6 +547,7 @@ const Squads: React.FC = () => {
         name: newSquadName.trim(),
         leader: currentUser.uid,
         members: sanitizeForFirestore([leaderMember]),
+        memberUids: [currentUser.uid],
         createdAt: serverTimestamp(),
         maxMembers: 4
       };
@@ -741,6 +750,7 @@ const Squads: React.FC = () => {
 
       await updateDoc(squadRef, {
         members: sanitizedMembers,
+        memberUids: memberUidsFromMemberList(sanitizedMembers as SquadMember[]),
         updatedAt: serverTimestamp()
       });
 
@@ -803,6 +813,7 @@ const Squads: React.FC = () => {
         
         await updateDoc(doc(db, 'squads', squadId), {
           members: sanitizeForFirestore(updatedMembers),
+          memberUids: memberUidsFromMemberList(updatedMembers),
           leader: newLeader.uid
         });
       }
@@ -832,7 +843,8 @@ const Squads: React.FC = () => {
       );
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: sanitizeForFirestore(updatedMembers)
+        members: sanitizeForFirestore(updatedMembers),
+        memberUids: memberUidsFromMemberList(updatedMembers)
       });
     } catch (error) {
       console.error('Error promoting member:', error);
@@ -860,7 +872,8 @@ const Squads: React.FC = () => {
       );
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: sanitizeForFirestore(updatedMembers)
+        members: sanitizeForFirestore(updatedMembers),
+        memberUids: memberUidsFromMemberList(updatedMembers)
       });
     } catch (error) {
       console.error('Error demoting admin:', error);
@@ -891,7 +904,8 @@ const Squads: React.FC = () => {
       const updatedMembers = squad.members.filter(member => member.uid !== memberId);
 
       await updateDoc(doc(db, 'squads', squadId), {
-        members: sanitizeForFirestore(updatedMembers)
+        members: sanitizeForFirestore(updatedMembers),
+        memberUids: memberUidsFromMemberList(updatedMembers)
       });
     } catch (error) {
       console.error('Error removing member:', error);
@@ -1290,7 +1304,8 @@ const Squads: React.FC = () => {
       if (hasUpdates) {
         console.log('Squads: Updating squad with current member data');
         await updateDoc(doc(db, 'squads', squad.id), {
-          members: sanitizeForFirestore(updatedMembers)
+          members: sanitizeForFirestore(updatedMembers),
+          memberUids: memberUidsFromMemberList(updatedMembers)
         });
       }
     } catch (error) {

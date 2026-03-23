@@ -3,7 +3,7 @@ import { db } from '../firebase';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
 
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -13,6 +13,8 @@ interface StatusEffect {
   chance?: number;
   successChance?: number;
   damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
+  summonElementalType?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  summonDamage?: number;
 }
 
 interface MoveOverrideData {

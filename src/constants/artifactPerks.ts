@@ -17,37 +17,56 @@ export const ARTIFACT_PERK_OPTIONS: ArtifactPerkOption[] = [
   {
     id: 'elemental-access',
     label: 'Elemental Access',
-    description: 'Grants access to a specific elemental move set.'
+    description:
+      'Unlocks a second element in the Artifacts menu. Choose Water, Earth, Air, etc. (not your primary). Matching elemental skills appear in battle and Skills & Mastery.'
   },
   {
     id: 'damage-boost',
     label: 'Damage Boost',
-    description: 'Increases damage dealt by the artifact or linked skill.'
+    description:
+      'Increases damage dealt by all of your skills. Starts at +10% at artifact level 1 and scales with level up to +100% at max level (level 10). Multiple pieces with this perk stack toward the same cap (total +100% from this perk type).'
+  },
+  {
+    id: 'manifest-boost',
+    label: 'Manifest Boost',
+    description:
+      'Increases damage (and offensive manifest shield effects) from manifest-category skills only. +10% at artifact level 1, scaling up to +100% at level 10. Multiple pieces stack toward the same cap (+100% total from this perk type). Artifact Synergy can strengthen this perk.'
+  },
+  {
+    id: 'elemental-boost',
+    label: 'Elemental Boost',
+    description:
+      'Increases damage from elemental-category skills only. +10% at artifact level 1, scaling up to +100% at level 10. Multiple pieces stack toward the same cap (+100% total from this perk type). Stacks multiplicatively with Elemental Ring level bonuses. Artifact Synergy can strengthen this perk.'
   },
   {
     id: 'shield-boost',
     label: 'Shield Boost',
-    description: 'Improves shield strength or shield restoration effects.'
+    description:
+      'Increases vault shield capacity: +100 at level 1, +50 more per artifact level. Applies while equipped.'
   },
   {
     id: 'healing-boost',
     label: 'Healing Boost',
-    description: 'Improves healing effects and recovery amounts.'
+    description:
+      'At the start of each of your turns in battle, restores vault health (or PP when no vault health is used): 10 at artifact level 1, scaling up to 50 at level 10. Multiple pieces stack toward the same cap (50 total per turn from this perk). Artifact Synergy can increase this perk’s strength.'
   },
   {
     id: 'cooldown-reduction',
-    label: 'Cooldown Reduction',
-    description: 'Reduces cooldowns for the artifact-provided skill.'
+    label: 'Cost Reduction',
+    description:
+      'Live Events: each piece reduces skill Participation Point cost by 1, or by 2 at max artifact level (10). Also increases skill damage slightly as the artifact levels, up to +5% total effectiveness at max (stacking across pieces caps at +5%). Artifact Synergy strengthens both effects.'
   },
   {
     id: 'pp-economy',
     label: 'PP Economy',
-    description: 'Improves PP efficiency or lowers activation cost.'
+    description:
+      'Increases all PP you receive in battle (stolen PP, end-of-battle rewards, PP added by healing effects, etc.): +10% at artifact level 1, scaling with level up to +50% per piece. Multiple pieces stack toward the same cap (+50% total bonus from this perk type). Artifact Synergy can increase this perk’s strength.'
   },
   {
     id: 'status-defense',
     label: 'Status Defense',
-    description: 'Reduces the impact of debuffs and status effects.'
+    description:
+      'Mitigates incoming damage (after shields): 5% reduction at level 1, scaling with artifact level up to 30% at max level (level 10). Multiple pieces stack, capped at 30% total mitigation from this perk.'
   },
   {
     id: 'turn-priority',
@@ -57,7 +76,8 @@ export const ARTIFACT_PERK_OPTIONS: ArtifactPerkOption[] = [
   {
     id: 'artifact-synergy',
     label: 'Artifact Synergy',
-    description: 'Improves compatibility with other equipped artifacts.'
+    description:
+      'Matching set bonus: other equipped artifacts whose names share the same leading set word as this item (e.g. “Unveiled” from “Unveiled Leg Armor”) gain +10% effectiveness on their combat perks (damage boost, manifest boost, elemental boost, shield boost, Cost Reduction, etc.) per synergizing piece, up to +30% total. This item does not buff itself.'
   },
   {
     id: 'vault-defense',

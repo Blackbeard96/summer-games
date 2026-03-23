@@ -25,8 +25,10 @@ import {
   TrainingQuizSet, 
   TrainingQuestion, 
   TrainingAttempt,
-  TrainingGroundsStats
+  TrainingGroundsStats,
+  TrainingAnswer,
 } from '../types/trainingGrounds';
+import type { LiveQuizSession } from '../types/liveQuiz';
 
 // ============================================================================
 // Quiz Sets
@@ -247,6 +249,91 @@ export async function getUserAttempts(userId: string, quizSetId?: string): Promi
 export async function getLastAttempt(userId: string, quizSetId: string): Promise<TrainingAttempt | null> {
   const attempts = await getUserAttempts(userId, quizSetId);
   return attempts.length > 0 ? attempts[0] : null;
+}
+
+/**
+ * After a Live Event quiz finishes, each player calls this once so Training Grounds shows the same score/history
+ * as a solo attempt. Does not grant solo PP/XP (live placement rewards are separate). Idempotent per session+quiz.
+ */
+export async function syncLiveEventQuizToTrainingAttempt(
+  liveEventSessionId: string,
+  userId: string,
+  session: LiveQuizSession
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  try {
+    if (session.status !== 'completed' || !session.quizId) {
+      return { ok: true, skipped: true };
+    }
+
+    const quizSetId = session.quizId;
+    const existing = await getUserAttempts(userId, quizSetId);
+    if (existing.some((a) => a.liveEventSourceSessionId === liveEventSessionId)) {
+      return { ok: true, skipped: true };
+    }
+
+    const per = (session.perQuestionResults || {}) as Record<string, { questionId: string; quizRoundIndex: number; isCorrect: boolean; pointsAwarded: number }[]>;
+    const rows = per[userId] ?? [];
+    const correctFromRows = rows.filter((r) => r.isCorrect).length;
+    let scoreCorrect = session.correctCount?.[userId] ?? correctFromRows;
+
+    let scoreTotal = rows.length;
+    if (scoreTotal === 0 && Array.isArray(session.questionOrder) && session.questionOrder.length > 0) {
+      scoreTotal = session.questionOrder.length;
+    }
+
+    const lb = session.leaderboard?.[userId] ?? 0;
+    const hasParticipation =
+      rows.length > 0 ||
+      scoreCorrect > 0 ||
+      (typeof lb === 'number' && lb > 0);
+    if (!hasParticipation) {
+      return { ok: true, skipped: true };
+    }
+
+    if (scoreTotal <= 0) {
+      return { ok: true, skipped: true };
+    }
+
+    scoreCorrect = Math.min(scoreCorrect, scoreTotal);
+    const percent = Math.min(100, Math.max(0, Math.round((scoreCorrect / scoreTotal) * 100)));
+
+    const answers: TrainingAnswer[] = rows.map((e) => ({
+      questionId: e.questionId,
+      selectedIndices: [],
+      isCorrect: e.isCorrect,
+      partialCredit: e.isCorrect ? 1 : 0,
+      timeSpentMs: 0,
+    }));
+
+    const bonuses: string[] = ['live_event'];
+    if (percent >= 100) bonuses.push('perfect');
+
+    const attemptPayload: Omit<TrainingAttempt, 'id'> = {
+      userId,
+      quizSetId,
+      startedAt: serverTimestamp(),
+      completedAt: serverTimestamp(),
+      scoreCorrect,
+      scoreTotal,
+      percent,
+      answers,
+      rewards: {
+        ppGained: 0,
+        xpGained: 0,
+        bonuses,
+      },
+      mode: 'live',
+      liveEventSourceSessionId: liveEventSessionId,
+    };
+
+    const attemptId = await createAttempt(attemptPayload);
+    const createdAttempt: TrainingAttempt = { id: attemptId, ...attemptPayload };
+    await updateTrainingStats(userId, createdAttempt);
+    return { ok: true };
+  } catch (e) {
+    console.error('syncLiveEventQuizToTrainingAttempt', e);
+    return { ok: false, error: String(e) };
+  }
 }
 
 /**

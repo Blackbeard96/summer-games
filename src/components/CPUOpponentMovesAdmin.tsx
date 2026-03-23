@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { db } from '../firebase';
+import React, { useState, useEffect, useRef } from 'react';
+import { db, storage } from '../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
 
 interface CPUOpponentMovesAdminProps {
@@ -9,7 +10,7 @@ interface CPUOpponentMovesAdminProps {
 }
 
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -49,6 +50,12 @@ interface CPUOpponentMove {
 export interface CPUOpponent {
   id: string;
   name: string;
+  /** Image URL for battle display (e.g. /images/Light_Construct.png) */
+  image?: string;
+  /** Starting and max CPU health used in battle engine */
+  health?: number;
+  /** Starting and max CPU shields used in battle engine */
+  shields?: number;
   moves: CPUOpponentMove[];
 }
 
@@ -57,6 +64,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-easy-1',
     name: 'Training Dummy',
+    health: 100,
+    shields: 20,
     moves: [
       { id: 'vault-breach', name: 'Vault Breach', baseDamage: 8, type: 'attack' },
       { id: 'pp-drain', name: 'PP Drain', baseDamage: 6, type: 'attack' },
@@ -67,6 +76,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-easy-2',
     name: 'Novice Guard',
+    health: 150,
+    shields: 30,
     moves: [
       { id: 'vault-breach', name: 'Vault Breach', baseDamage: 8, type: 'attack' },
       { id: 'pp-drain', name: 'PP Drain', baseDamage: 6, type: 'attack' },
@@ -77,6 +88,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-medium-1',
     name: 'Elite Soldier',
+    health: 250,
+    shields: 50,
     moves: [
       { id: 'vault-breach', name: 'Vault Breach', baseDamage: 8, type: 'attack' },
       { id: 'pp-drain', name: 'PP Drain', baseDamage: 6, type: 'attack' },
@@ -87,6 +100,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-medium-2',
     name: 'Vault Keeper',
+    health: 300,
+    shields: 100,
     moves: [
       { id: 'vault-breach', name: 'Vault Breach', baseDamage: 8, type: 'attack' },
       { id: 'pp-drain', name: 'PP Drain', baseDamage: 6, type: 'attack' },
@@ -97,6 +112,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-hard-1',
     name: 'Master Guardian',
+    health: 500,
+    shields: 150,
     moves: [
       { 
         id: 'flameburst', 
@@ -124,6 +141,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'cpu-hard-2',
     name: 'Legendary Protector',
+    health: 750,
+    shields: 250,
     moves: [
       { id: 'vault-breach', name: 'Vault Breach', baseDamage: 8, type: 'attack' },
       { id: 'pp-drain', name: 'PP Drain', baseDamage: 6, type: 'attack' },
@@ -134,6 +153,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'ice-golem',
     name: 'Ice Golem',
+    health: 500,
+    shields: 200,
     moves: [
       { 
         id: 'ice-shard', 
@@ -154,6 +175,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'powered-zombie',
     name: 'Powered Zombie',
+    health: 250,
+    shields: 75,
     moves: [
       { 
         id: 'energy-strike', 
@@ -188,6 +211,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'zombie-captain',
     name: 'Zombie Captain',
+    health: 350,
+    shields: 100,
     moves: [
       { 
         id: 'energy-strike', 
@@ -222,6 +247,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'zombie',
     name: 'Unpowered Zombie',
+    health: 150,
+    shields: 40,
     moves: [
       { 
         id: 'energy-strike', 
@@ -256,6 +283,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'unveiled_elite_luz',
     name: 'Luz, Wielder of Light',
+    health: 600,
+    shields: 180,
     moves: [
       { 
         id: 'light-strike', 
@@ -284,6 +313,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'unveiled_elite_kon',
     name: 'Kon, the Guardian for Config',
+    health: 650,
+    shields: 200,
     moves: [
       { 
         id: 'config-strike', 
@@ -312,6 +343,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
   {
     id: 'unveiled_elite_updown',
     name: 'Up/Down Guardian',
+    health: 620,
+    shields: 190,
     moves: [
       { 
         id: 'updown-strike', 
@@ -336,6 +369,37 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
         description: 'Creates a protective shield of up/down energy'
       }
     ]
+  },
+  {
+    id: 'light-construct',
+    name: 'Light Construct',
+    image: '/images/Light_Construct.png',
+    health: 100,
+    shields: 50,
+    moves: [
+      { 
+        id: 'radiant-strike', 
+        name: 'Radiant Strike', 
+        damageRange: { min: 40, max: 70 }, 
+        type: 'attack',
+        description: 'A strike of pure light'
+      },
+      { 
+        id: 'holy-slash', 
+        name: 'Holy Slash', 
+        damageRange: { min: 55, max: 90 }, 
+        type: 'attack',
+        description: 'A slashing attack imbued with divine light'
+      },
+      { 
+        id: 'light-shield', 
+        name: 'Light Shield', 
+        type: 'defense',
+        damageReduction: { percentage: 20 },
+        duration: 2,
+        description: 'A shield of radiant light'
+      }
+    ]
   }
 ];
 
@@ -347,6 +411,8 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
   const [loading, setLoading] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string>('');
+  const [imageUploading, setImageUploading] = useState<boolean>(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -529,6 +595,76 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
     });
   };
 
+  const handleOpponentEdit = (
+    opponentId: string,
+    field: 'name' | 'image' | 'health' | 'shields',
+    value: string | number
+  ) => {
+    const normalizedValue =
+      typeof value === 'string'
+        ? (value.trim() === '' ? undefined : value)
+        : (Number.isFinite(value) ? value : undefined);
+    setOpponents(prev => prev.map(opp =>
+      opp.id === opponentId ? { ...opp, [field]: normalizedValue } : opp
+    ));
+  };
+
+  const handleAddOpponent = () => {
+    const newId = `custom-${Date.now()}`;
+    const newOpponent: CPUOpponent = {
+      id: newId,
+      name: 'New Opponent',
+      health: 100,
+      shields: 25,
+      moves: [
+        { id: 'move-1', name: 'Attack', baseDamage: 10, type: 'attack' },
+        { id: 'move-2', name: 'Shield Bash', baseDamage: 7, type: 'attack' }
+      ]
+    };
+    setOpponents(prev => [...prev, newOpponent]);
+    setSelectedOpponent(newId);
+  };
+
+  const handleRemoveOpponent = (opponentId: string) => {
+    setOpponents(prev => prev.filter(opp => opp.id !== opponentId));
+    if (selectedOpponent === opponentId) {
+      const remaining = opponents.filter(o => o.id !== opponentId);
+      setSelectedOpponent(remaining.length > 0 ? remaining[0].id : null);
+    }
+  };
+
+  const handleOpponentImageUpload = async (opponentId: string, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file (PNG, JPEG, WebP, or GIF).');
+      return;
+    }
+    setImageUploading(true);
+    try {
+      const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const path = `cpu_opponents/${opponentId}_${Date.now()}_${sanitizedName}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file, {
+        contentType: file.type || 'image/png'
+      });
+      const downloadUrl = await getDownloadURL(storageRef);
+      handleOpponentEdit(opponentId, 'image', downloadUrl);
+    } catch (err) {
+      console.error('Opponent image upload failed:', err);
+      setImageUploading(false);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      const message = err && typeof err === 'object' && 'code' in err
+        ? (err as { code?: string }).code === 'storage/unauthorized'
+          ? 'Storage permission denied. Allow write access to cpu_opponents/ in Firebase Storage rules, or paste an Image URL below.'
+          : 'Image upload failed. You can paste an Image URL below instead.'
+        : 'Image upload failed. Check Firebase Storage rules for cpu_opponents/, or paste an Image URL below.';
+      setTimeout(() => alert(message), 0);
+      return;
+    } finally {
+      setImageUploading(false);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+    }
+  };
+
   const getMoveEffects = (move: CPUOpponentMove): StatusEffect[] => {
     if (move.statusEffects) {
       return move.statusEffects;
@@ -621,7 +757,24 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
           <>
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
               <div style={{ flex: '0 0 250px', border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '1rem' }}>
-                <h3 style={{ marginTop: 0, marginBottom: '1rem' }}>Opponents</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0 }}>Opponents</h3>
+                  <button
+                    onClick={handleAddOpponent}
+                    style={{
+                      background: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: '500'
+                    }}
+                  >
+                    + Add
+                  </button>
+                </div>
                 {opponents.map(opp => (
                   <div
                     key={opp.id}
@@ -644,6 +797,153 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
               <div style={{ flex: 1, border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '1rem' }}>
                 {selectedOpponentData ? (
                   <>
+                    <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f8fafc', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
+                      <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '1rem' }}>Opponent details</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Name</label>
+                          <input
+                            type="text"
+                            value={selectedOpponentData.name}
+                            onChange={(e) => handleOpponentEdit(selectedOpponentData.id, 'name', e.target.value)}
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              border: '1px solid #d1d5db',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.875rem'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Health</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={selectedOpponentData.health ?? ''}
+                            onChange={(e) => handleOpponentEdit(selectedOpponentData.id, 'health', parseInt(e.target.value, 10) || 0)}
+                            placeholder="e.g. 250"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              border: '1px solid #d1d5db',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.875rem'
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Shields</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={selectedOpponentData.shields ?? ''}
+                            onChange={(e) => handleOpponentEdit(selectedOpponentData.id, 'shields', parseInt(e.target.value, 10) || 0)}
+                            placeholder="e.g. 50"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              border: '1px solid #d1d5db',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.875rem'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Image</label>
+                          <input
+                            ref={imageInputRef}
+                            type="file"
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file && selectedOpponentData) handleOpponentImageUpload(selectedOpponentData.id, file);
+                            }}
+                          />
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <button
+                              type="button"
+                              onClick={() => imageInputRef.current?.click()}
+                              disabled={imageUploading}
+                              style={{
+                                background: imageUploading ? '#9ca3af' : '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: '0.375rem',
+                                cursor: imageUploading ? 'not-allowed' : 'pointer',
+                                fontSize: '0.875rem'
+                              }}
+                            >
+                              {imageUploading ? 'Uploading...' : 'Upload image'}
+                            </button>
+                            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>or paste URL below</span>
+                          </div>
+                          <input
+                            type="text"
+                            value={selectedOpponentData.image || ''}
+                            onChange={(e) => handleOpponentEdit(selectedOpponentData.id, 'image', e.target.value)}
+                            placeholder="/images/MyOpponent.png or https://..."
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              border: '1px solid #d1d5db',
+                              borderRadius: '0.25rem',
+                              fontSize: '0.875rem'
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {selectedOpponentData.image && (
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Preview: </span>
+                          <img
+                            key={selectedOpponentData.image}
+                            src={selectedOpponentData.image}
+                            alt={selectedOpponentData.name}
+                            style={{ height: 48, width: 'auto', maxWidth: 80, objectFit: 'contain', verticalAlign: 'middle' }}
+                            onError={(e) => {
+                              const el = e.target as HTMLImageElement;
+                              el.style.display = 'none';
+                              const parent = el.parentElement;
+                              if (parent && !parent.querySelector('.preview-error')) {
+                                const span = document.createElement('span');
+                                span.className = 'preview-error';
+                                span.style.cssText = 'font-size: 0.75rem; color: #b91c1c; margin-left: 0.25rem;';
+                                span.textContent = 'Image failed to load';
+                                parent.appendChild(span);
+                              }
+                            }}
+                            onLoad={(e) => {
+                              const parent = (e.target as HTMLImageElement).parentElement;
+                              const err = parent?.querySelector('.preview-error');
+                              if (err) err.remove();
+                            }}
+                          />
+                        </div>
+                      )}
+                      {selectedOpponentData.id.startsWith('custom-') && (
+                        <div style={{ marginTop: '0.75rem' }}>
+                          <button
+                            onClick={() => { if (window.confirm('Remove this opponent?')) handleRemoveOpponent(selectedOpponentData.id); }}
+                            style={{
+                              background: '#ef4444',
+                              color: 'white',
+                              border: 'none',
+                              padding: '0.35rem 0.75rem',
+                              borderRadius: '0.375rem',
+                              cursor: 'pointer',
+                              fontSize: '0.875rem'
+                            }}
+                          >
+                            Delete opponent
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                       <h3 style={{ margin: 0 }}>{selectedOpponentData.name} Moves</h3>
                       <button
@@ -1212,6 +1512,7 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                                       <option value="cleanse">Cleanse (Removes all negative effects)</option>
                                       <option value="freeze">Freeze (Legacy)</option>
                                       <option value="reduce">Reduce (Reduce incoming damage)</option>
+                                      <option value="summon">Summon (Construct ally)</option>
                                     </select>
                                   </div>
                                   <div>

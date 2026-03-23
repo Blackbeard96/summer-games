@@ -13,6 +13,10 @@ import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getManifestDamag
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
 import { getUserSquadAbbreviations } from '../utils/squadUtils';
 import { formatOpponentName } from '../utils/opponentNameFormatter';
+import {
+  computeLiveEventParticipationSkillCost,
+  getSkillCostReductionFromBattleEffects,
+} from '../utils/liveEventSkillCost';
 
 interface Participant {
   id: string;
@@ -27,6 +31,8 @@ interface Participant {
   vaultHealth?: number;
   maxVaultHealth?: number;
   isPlayer?: boolean; // True if this is the current player
+  /** Live Events: participation points available for skills */
+  movesEarned?: number;
 }
 
 interface MultiplayerBattleArenaProps {
@@ -206,6 +212,11 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   const renderParticipantCard = (participant: Participant, isAlly: boolean, index: number) => {
     const isSelected = selectedTarget === participant.id;
     const isCurrentPlayer = participant.isPlayer === true; // Explicitly check for true
+    const isLightConstruct =
+      participant.id === 'light-construct' ||
+      (participant.name || '').toLowerCase().includes('light construct') ||
+      (participant.avatar || '').includes('Light_Construct.png') ||
+      (participant.avatar || '') === '/images/Light_Construct.png';
     // Defensive moves (shield boost, healing) only target self - only the current player's card is clickable
     const isDefensiveMove = !!(selectedMove?.shieldBoost || selectedMove?.healing);
     const canClick = selectedMove && isPlayerTurn && (
@@ -257,7 +268,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         }}
         style={{
           width: '100%',
-          minHeight: '140px',
+          minHeight: isLightConstruct ? '280px' : '140px',
           maxWidth: '100%',
           background: 'rgba(255, 255, 255, 1)', // White background for all cards for better visibility
           border: isSelected 
@@ -1043,20 +1054,40 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   if (move.healing && move.healing > 0) {
                     healingRange = calculateHealingRange(move.healing, move.level, effectiveMasteryLevel);
                   }
-                  
+
+                  const isConstructMove = !!move.id?.startsWith('construct-skill::');
+                  const liveLe =
+                    isInSession && !isConstructMove
+                      ? computeLiveEventParticipationSkillCost(
+                          move,
+                          equippedArtifacts,
+                          null,
+                          getSkillCostReductionFromBattleEffects(playerEffects as never)
+                        )
+                      : null;
+                  const participationAvailable =
+                    (allies.find((a) => a.id === currentUser?.uid)?.movesEarned as number | undefined) ?? 0;
+                  const cannotAffordLive =
+                    !!liveLe && participationAvailable < liveLe.finalCost;
+
                   return (
                     <button
                       key={move.id}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (onCooldown) return;
+                        if (onCooldown || cannotAffordLive) return;
                         console.log(`🎯 [MultiplayerBattleArena] Move selected: ${move.name} (${move.id})`);
                         onMoveSelect(move);
                         setShowMoveMenu(false);
                         console.log(`✅ [MultiplayerBattleArena] Move menu closed. Enemies should now be clickable.`);
                       }}
-                      disabled={onCooldown}
+                      disabled={onCooldown || cannotAffordLive}
+                      title={
+                        cannotAffordLive && liveLe
+                          ? `Need ${liveLe.finalCost} Participation Points to use this skill (have ${participationAvailable}, short by ${liveLe.finalCost - participationAvailable})`
+                          : undefined
+                      }
                       style={{
                         padding: '0.75rem',
                         background: isSelected 
@@ -1065,16 +1096,16 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                         color: isSelected ? 'white' : '#1f2937',
                         border: `2px solid ${isSelected ? moveColor : moveColor}`,
                         borderRadius: '0.5rem',
-                        cursor: onCooldown ? 'not-allowed' : 'pointer',
+                        cursor: onCooldown || cannotAffordLive ? 'not-allowed' : 'pointer',
                         fontSize: '0.875rem',
                         fontWeight: '500',
                         textAlign: 'left',
                         transition: 'all 0.2s ease',
                         position: 'relative',
-                        opacity: onCooldown ? 0.6 : 1
+                        opacity: onCooldown || cannotAffordLive ? 0.6 : 1
                       }}
                       onMouseEnter={(e) => {
-                        if (!isSelected && !onCooldown) {
+                        if (!isSelected && !onCooldown && !cannotAffordLive) {
                           e.currentTarget.style.background = getMoveBackgroundColor(move, true);
                           e.currentTarget.style.borderColor = moveColor;
                         }
@@ -1116,7 +1147,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                               Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
                             </span>
                             <span style={{ fontSize: '0.65rem' }}>
-                              Cost: {move.cost} PP
+                              {liveLe
+                                ? `Skill Cost (PP): ${liveLe.finalCost} (base ${liveLe.baseCost}, −${liveLe.reductionFromArtifacts + liveLe.reductionFromEffects})`
+                                : `Cost: ${move.cost} PP`}
                             </span>
                           </div>
                         </div>

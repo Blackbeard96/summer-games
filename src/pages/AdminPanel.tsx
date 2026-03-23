@@ -12,7 +12,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import { MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import { MOVE_TEMPLATES, ACTION_CARD_TEMPLATES } from '../types/battle';
-import { fixBlackbeardManifestAndSkills, findPlayerByName, fixPlayerManifestAndSkills } from '../utils/fixPlayerManifestAndSkills';
+import { fixBlackbeardManifestAndSkills, findPlayerByName, fixPlayerManifestAndSkills, restoreEddieVasquezManifestSkills } from '../utils/fixPlayerManifestAndSkills';
 import { useLevelUp } from '../context/LevelUpContext';
 import { useAuth } from '../context/AuthContext';
 import ClassroomManagement from '../components/ClassroomManagement';
@@ -2603,6 +2603,32 @@ const AdminPanel: React.FC = () => {
             }}
           >
             Fix Blackbeard's Manifest & Skills
+          </button>
+          <button
+            onClick={async () => {
+              if (!window.confirm('Restore Eddie Vasquez\'s manifest skills?\n\nThis will set Pattern Break and Strategy Matrix to level 2 in battleMoves (fixes mistaken reset).')) {
+                return;
+              }
+              try {
+                const result = await restoreEddieVasquezManifestSkills();
+                alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+              } catch (error) {
+                alert('Error: ' + (error instanceof Error ? error.message : 'Unknown error'));
+              }
+            }}
+            style={{
+              backgroundColor: '#8b5cf6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              marginLeft: '0.5rem'
+            }}
+          >
+            Restore Eddie Vasquez Manifest Skills
           </button>
         </div>
       </div>

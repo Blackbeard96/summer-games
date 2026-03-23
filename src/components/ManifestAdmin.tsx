@@ -11,8 +11,10 @@ interface ManifestAdminProps {
   asModal?: boolean; // If false, render directly without modal overlay
 }
 
+const ELEMENTAL_TYPES = ['fire', 'water', 'air', 'earth', 'lightning', 'light', 'shadow', 'metal'] as const;
+
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -21,7 +23,9 @@ interface StatusEffect {
   healPerTurn?: number;
   chance?: number;
   successChance?: number;
-  damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
+  damageReduction?: number;
+  summonElementalType?: typeof ELEMENTAL_TYPES[number];
+  summonDamage?: number;
 }
 
 interface MoveEditData {
@@ -1230,10 +1234,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          background: '#ffffff',
+                          border: '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: asModal ? '#f8fafc' : '#111827',
+                          color: '#111827',
                           fontSize: '0.875rem'
                         }}
                       />
@@ -1249,10 +1253,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          background: '#ffffff',
+                          border: '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: asModal ? '#f8fafc' : '#111827',
+                          color: '#111827',
                           fontSize: '0.875rem'
                         }}
                       >
@@ -1274,10 +1278,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                       style={{
                         width: '100%',
                         padding: '0.5rem',
-                        background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                        border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                        background: '#ffffff',
+                        border: '1px solid #d1d5db',
                         borderRadius: '0.25rem',
-                        color: asModal ? '#f8fafc' : '#111827',
+                        color: '#111827',
                         fontSize: '0.875rem'
                       }}
                     />
@@ -1295,10 +1299,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                       style={{
                         width: '100%',
                         padding: '0.5rem',
-                        background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                        border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                        background: '#ffffff',
+                        border: '1px solid #d1d5db',
                         borderRadius: '0.25rem',
-                        color: asModal ? '#f8fafc' : '#111827',
+                        color: '#111827',
                         fontSize: '0.875rem',
                         resize: 'vertical'
                       }}
@@ -1468,10 +1472,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          background: '#ffffff',
+                          border: '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: asModal ? '#f8fafc' : '#111827',
+                          color: '#111827',
                           fontSize: '0.875rem'
                         }}
                       />
@@ -1490,16 +1494,16 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                         style={{
                           width: '100%',
                           padding: '0.5rem',
-                          background: asModal ? 'rgba(255,255,255,0.1)' : 'white',
-                          border: asModal ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
+                          background: '#ffffff',
+                          border: '1px solid #d1d5db',
                           borderRadius: '0.25rem',
-                          color: asModal ? '#f8fafc' : '#111827',
+                          color: '#111827',
                           fontSize: '0.875rem'
                         }}
                       >
-                        <option value="attack" style={{ background: '#1f2937', color: 'white' }}>Attack</option>
-                        <option value="defense" style={{ background: '#1f2937', color: 'white' }}>Defense</option>
-                        <option value="heal" style={{ background: '#1f2937', color: 'white' }}>Heal</option>
+                        <option value="attack">Attack</option>
+                        <option value="defense">Defense</option>
+                        <option value="heal">Heal</option>
                       </select>
                     </div>
                     </div>
@@ -1523,10 +1527,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                            background: '#ffffff',
+                            border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
+                            color: '#111827',
                             fontSize: '0.875rem'
                           }}
                         />
@@ -1548,10 +1552,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                            background: '#ffffff',
+                            border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
+                            color: '#111827',
                             fontSize: '0.875rem'
                           }}
                         />
@@ -1575,15 +1579,15 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                             handleMoveEdit(move.id, 'damage', newValue);
                           }}
                           disabled={typeof (moveEdits[move.id]?.damage || move.damage) === 'object'}
-                          style={{
-                            width: '100%',
-                            padding: '0.5rem',
-                            background: typeof (moveEdits[move.id]?.damage || move.damage) === 'object' ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
-                            borderRadius: '0.25rem',
-                            color: 'white',
-                            fontSize: '0.875rem'
-                          }}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        background: typeof (moveEdits[move.id]?.damage || move.damage) === 'object' ? '#f3f4f6' : '#ffffff',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.25rem',
+                        color: '#111827',
+                        fontSize: '0.875rem'
+                      }}
                         />
                       </div>
                         </div>
@@ -1606,10 +1610,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                            background: '#ffffff',
+                            border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
+                            color: '#111827',
                             fontSize: '0.875rem'
                           }}
                         />
@@ -1629,10 +1633,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                           style={{
                             width: '100%',
                             padding: '0.5rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            border: '1px solid rgba(255,255,255,0.3)',
+                            background: '#ffffff',
+                            border: '1px solid #d1d5db',
                             borderRadius: '0.25rem',
-                            color: 'white',
+                            color: '#111827',
                             fontSize: '0.875rem'
                           }}
                         />
@@ -1654,10 +1658,10 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                       style={{
                         width: '100%',
                         padding: '0.5rem',
-                        background: 'rgba(255,255,255,0.1)',
-                        border: '1px solid rgba(255,255,255,0.3)',
+                        background: '#ffffff',
+                        border: '1px solid #d1d5db',
                         borderRadius: '0.25rem',
-                        color: 'white',
+                        color: '#111827',
                         fontSize: '0.9rem',
                         resize: 'vertical'
                       }}
@@ -1730,6 +1734,12 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                                             updateStatusEffect(move.id, effectIndex, 'ppStealPerTurn', undefined);
                                             updateStatusEffect(move.id, effectIndex, 'healPerTurn', undefined);
                                             updateStatusEffect(move.id, effectIndex, 'chance', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'summonElementalType', undefined);
+                                            updateStatusEffect(move.id, effectIndex, 'summonDamage', undefined);
+                                          }
+                                          if (effectType === 'summon' && (effect.summonElementalType === undefined || effect.summonDamage === undefined)) {
+                                            if (effect.summonElementalType === undefined) updateStatusEffect(move.id, effectIndex, 'summonElementalType', 'fire');
+                                            if (effect.summonDamage === undefined) updateStatusEffect(move.id, effectIndex, 'summonDamage', 100);
                                           }
                                           if (effectType !== 'none' && effect.successChance === undefined) {
                                             updateStatusEffect(move.id, effectIndex, 'successChance', 100);
@@ -1753,6 +1763,7 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                                         <option value="cleanse">Cleanse (Removes all negative effects)</option>
                                         <option value="freeze">Freeze (Legacy)</option>
                                         <option value="reduce">Reduce (Reduce incoming damage)</option>
+                                        <option value="summon">Summon (Construct ally attacks with elemental damage)</option>
                         </select>
                       </div>
                       <div>
@@ -1945,6 +1956,49 @@ const ManifestAdmin: React.FC<ManifestAdminProps> = ({ isOpen, onClose, asModal 
                                           fontSize: '0.875rem'
                                         }}
                                       />
+                                    </div>
+                                  )}
+
+                                  {effect.type === 'summon' && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                                      <div>
+                                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                          Elemental Type
+                                        </label>
+                                        <select
+                                          value={effect.summonElementalType || 'fire'}
+                                          onChange={(e) => updateStatusEffect(move.id, effectIndex, 'summonElementalType', e.target.value as typeof ELEMENTAL_TYPES[number])}
+                                          style={{
+                                            width: '100%',
+                                            padding: '0.5rem',
+                                            border: '1px solid #d1d5db',
+                                            borderRadius: '0.25rem',
+                                            fontSize: '0.875rem'
+                                          }}
+                                        >
+                                          {ELEMENTAL_TYPES.map((elem) => (
+                                            <option key={elem} value={elem}>{elem.charAt(0).toUpperCase() + elem.slice(1)}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                          Construct Damage
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={effect.summonDamage ?? 100}
+                                          onChange={(e) => updateStatusEffect(move.id, effectIndex, 'summonDamage', parseInt(e.target.value) || 0)}
+                                          style={{
+                                            width: '100%',
+                                            padding: '0.5rem',
+                                            border: '1px solid #d1d5db',
+                                            borderRadius: '0.25rem',
+                                            fontSize: '0.875rem'
+                                          }}
+                                        />
+                                      </div>
                                     </div>
                                   )}
                                 </div>

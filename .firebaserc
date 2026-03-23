@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "summer-games-99fba"
-  }
+    "default": "summer-games-99fba",
+    "rules": "summer-games-99fba"
+  },
+  "targets": {},
+  "etags": {}
 }

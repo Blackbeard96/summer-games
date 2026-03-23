@@ -54,6 +54,8 @@ export interface TrainingAttempt {
     bonuses: string[]; // e.g., ['streak', 'perfect']
   };
   mode: 'solo' | 'live'; // Phase 2: 'live' for Kahoot-style
+  /** Set when this attempt was synced from a completed Live Event quiz (dedupe + provenance). */
+  liveEventSourceSessionId?: string;
 }
 
 export interface TrainingAnswer {

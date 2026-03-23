@@ -1,12 +1,94 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { calculateUpgradeCost, getArtifactDamageMultiplier, getManifestDamageBoost, normalizeArtifact } from '../utils/artifactUtils';
-import { getPowerLevelBonusForRarity } from '../constants/artifactRarity';
+import {
+  enrichEquippedArtifactsFromCatalog,
+  equippableCatalogFromDoc,
+  findEquippableDefinitionRow,
+  findEquippableRow,
+  mergeEquippableCatalogLayers,
+  resolveArtifactSkillWithCatalog,
+  skillPayloadFromEquippableCatalogForArtifact,
+} from '../utils/battleSkillsService';
+import { getPowerLevelBonusForRarity, normalizeArtifactRarity } from '../constants/artifactRarity';
+import { ARTIFACT_PERK_OPTIONS, type ArtifactPerkOption } from '../constants/artifactPerks';
+import {
+  ELEMENTAL_ACCESS_ELEMENT_OPTIONS,
+  hasElementalAccessPerkEquipped,
+} from '../utils/artifactPerkEffects';
 
 // Artifact price definitions for refund calculations
+/** Ownership: catalog key may be magical-paintbrush while student has magical_paintbrush_purchase. */
+function studentOwnsEquippableArtifact(
+  artifacts: Record<string, unknown> | undefined,
+  catalogKey: string
+): boolean {
+  if (!artifacts || typeof artifacts !== 'object') return false;
+  if (artifacts[catalogKey] === true) return true;
+  if (artifacts[`${catalogKey}_purchase`]) return true;
+  const norm = (s: string) => s.replace(/[-_\s]/g, '').toLowerCase();
+  const t = norm(catalogKey);
+  for (const key of Object.keys(artifacts)) {
+    if (key.endsWith('_purchase')) {
+      if (norm(key.slice(0, -9)) === t) return true;
+    } else if (artifacts[key] === true && norm(key) === t) return true;
+  }
+  return false;
+}
+
+function slotEquippedMatchesCatalogId(equipped: unknown, catalogKey: string): boolean {
+  if (!equipped || typeof equipped !== 'object') return false;
+  const id = (equipped as { id?: string }).id;
+  if (!id || typeof id !== 'string') return false;
+  const norm = (s: string) => s.replace(/[-_\s]/g, '').toLowerCase();
+  return id === catalogKey || norm(id) === norm(catalogKey);
+}
+
+/** Map stored perk string (id like elemental-access OR admin label like "Elemental Access") to catalog option. */
+function resolveStoredPerkToOption(raw: string): ArtifactPerkOption | undefined {
+  const s = raw.trim();
+  if (!s) return undefined;
+  const byId = ARTIFACT_PERK_OPTIONS.find((o) => o.id === s);
+  if (byId) return byId;
+  const lower = s.toLowerCase();
+  return ARTIFACT_PERK_OPTIONS.find(
+    (o) => o.label === s || o.label.toLowerCase() === lower
+  );
+}
+
+/** Resolve perks for an equipped artifact from the equippable catalog. */
+function getPerksForEquippedArtifact(
+  art: { id?: string; name?: string; perks?: string[] } | null | undefined,
+  catalogRaw: Record<string, unknown> | null | undefined
+): Array<{ id: string; label: string; description: string }> {
+  if (!art) return [];
+  const fromEquipped = Array.isArray(art.perks)
+    ? art.perks
+        .filter((p): p is string => typeof p === 'string')
+        .map(resolveStoredPerkToOption)
+        .filter((opt): opt is ArtifactPerkOption => opt != null)
+        .map((opt) => ({ id: opt.id, label: opt.label, description: opt.description }))
+    : [];
+  if (fromEquipped.length > 0) return fromEquipped;
+
+  if (!catalogRaw) return [];
+  const catalog = mergeEquippableCatalogLayers(catalogRaw);
+  const row = findEquippableDefinitionRow(catalog, {
+    id: art.id != null ? String(art.id) : undefined,
+    name: typeof art.name === 'string' ? art.name : undefined,
+  });
+  if (!row || !Array.isArray(row.perks)) return [];
+  return row.perks
+    .filter((pid: unknown): pid is string => typeof pid === 'string')
+    .map((pid) => resolveStoredPerkToOption(pid))
+    .filter((opt): opt is ArtifactPerkOption => opt != null)
+    .map((opt) => ({ id: opt.id, label: opt.label, description: opt.description }));
+}
+
 const artifactPrices: { [key: string]: number } = {
   'blaze-ring': 540,
   'terra-ring': 540,
@@ -26,6 +108,12 @@ const artifactPrices: { [key: string]: number } = {
   'instant-a': 99
 };
 
+/** Minimal artifact skill for display (Legendary artifacts can grant a skill). */
+interface ArtifactSkillInfo {
+  name: string;
+  description?: string;
+}
+
 interface Artifact {
   id: string;
   name: string;
@@ -39,6 +127,8 @@ interface Artifact {
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
   powerLevelBonus?: number;
   perks?: string[];
+  /** Legendary artifact skill (e.g. Stroke of Creation from Magical Paintbrush) */
+  artifactSkill?: ArtifactSkillInfo | null;
 }
 
 interface EquippedArtifacts {
@@ -55,7 +145,7 @@ interface EquippedArtifacts {
 }
 
 const Artifacts: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, loading: authLoading } = useAuth();
   const { unlockElementalMoves } = useBattle();
   const [equippedArtifacts, setEquippedArtifacts] = useState<EquippedArtifacts>({});
   const [availableArtifacts, setAvailableArtifacts] = useState<Artifact[]>([]);
@@ -65,9 +155,21 @@ const Artifacts: React.FC = () => {
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
   const [powerPoints, setPowerPoints] = useState(0);
   const [truthMetal, setTruthMetal] = useState(0);
+  /** students.artifacts — resolve Legendary skills when purchase rows hold skill. */
+  const [studentArtifactsRecord, setStudentArtifactsRecord] = useState<Record<string, unknown>>({});
+  /** Same doc used to enrich; Active Perks resolves catalog skill even if equip doc omits it. */
+  const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
+  const [elementalAccessBusy, setElementalAccessBusy] = useState(false);
 
   useEffect(() => {
-    if (!currentUser) return;
+    // Wait for Firebase Auth to finish; otherwise we'd never clear local `loading`.
+    if (authLoading) return;
+
+    if (!currentUser) {
+      setLoading(false);
+      setArtifactsUnlocked(false);
+      return;
+    }
 
     // Helper to check for Firestore internal errors
     const isFirestoreInternalError = (error: any): boolean => {
@@ -110,6 +212,7 @@ const Artifacts: React.FC = () => {
         
         if (studentDoc.exists()) {
           const studentData = studentDoc.data();
+          setStudentArtifactsRecord((studentData.artifacts || {}) as Record<string, unknown>);
           let loadedEquipped = studentData.equippedArtifacts || {};
           
           // If player has chosen an element and has the ring artifact but it's not equipped, auto-equip it
@@ -137,6 +240,38 @@ const Artifacts: React.FC = () => {
             await updateDoc(studentRef, {
               equippedArtifacts: loadedEquipped
             });
+          }
+
+          // Enrich from equippable catalog (fuzzy id match) — artifactSkill + rarity for Power Level
+          try {
+            const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+            const equippableDoc = await getDoc(equippableRef);
+            if (equippableDoc.exists()) {
+              const raw = equippableDoc.data() as Record<string, unknown>;
+              setEquippableCatalogRaw(raw);
+              loadedEquipped = enrichEquippedArtifactsFromCatalog(
+                loadedEquipped as Record<string, any>,
+                raw
+              ) as EquippedArtifacts;
+              const cat = equippableCatalogFromDoc(raw);
+              const slotKeys: (keyof EquippedArtifacts)[] = [
+                'head', 'chest', 'ring1', 'ring2', 'ring3', 'ring4', 'legs', 'shoes', 'jacket', 'weapon',
+              ];
+              for (const key of slotKeys) {
+                const art = loadedEquipped[key] as Artifact | null | undefined;
+                if (!art?.id) continue;
+                const row = findEquippableRow(cat, art.id) as { rarity?: string } | null;
+                const r = row?.rarity;
+                if (r && !art.rarity) {
+                  loadedEquipped = {
+                    ...loadedEquipped,
+                    [key]: { ...art, rarity: normalizeArtifactRarity(r) },
+                  };
+                }
+              }
+            }
+          } catch (_) {
+            setEquippableCatalogRaw(null);
           }
           
           setEquippedArtifacts(loadedEquipped);
@@ -259,55 +394,54 @@ const Artifacts: React.FC = () => {
               available.push(airRing);
             }
           }
-          
-          // Check for Captain's Helmet (can be equipped to head slot)
-          // Check both hyphen and underscore formats for compatibility
-          const hasCaptainsHelmet = studentData.artifacts?.['captains-helmet'] === true || 
-                                     studentData.artifacts?.captains_helmet === true ||
-                                     studentData.artifacts?.['captain-helmet'] === true ||
-                                     studentData.artifacts?.captain_helmet === true ||
-                                     studentData.artifacts?.['captains-helmet_purchase'] ||
-                                     studentData.artifacts?.captains_helmet_purchase ||
-                                     studentData.artifacts?.['captain-helmet_purchase'] ||
-                                     studentData.artifacts?.captain_helmet_purchase;
-          
-          if (hasCaptainsHelmet) {
-            const purchaseData = studentData.artifacts?.['captains-helmet_purchase'] || 
-                                studentData.artifacts?.captains_helmet_purchase ||
-                                studentData.artifacts?.['captain-helmet_purchase'] ||
-                                studentData.artifacts?.captain_helmet_purchase;
-            // Check if it's already equipped
-            const isEquipped = Object.values(loadedEquipped).some(
-              (eq) => {
-                if (!eq || typeof eq !== 'object') return false;
-                const artifact = eq as Artifact;
-                if (artifact.id && (artifact.id === 'captains-helmet' || artifact.id === 'captain-helmet')) {
-                  return true;
-                }
-                if (artifact.name && typeof artifact.name === 'string') {
-                  const nameLower = artifact.name.toLowerCase();
-                  return nameLower.includes('captain') && nameLower.includes('helmet');
-                }
-                return false;
-              }
-            );
-            
-            if (!isEquipped) {
-              const captainsHelmet: Artifact = {
-                id: 'captains-helmet',
-                name: purchaseData?.name || "Captain's Helmet",
-                slot: 'head',
-                level: 1,
-                image: purchaseData?.image || '/images/Captains Helmet.png',
-                stats: {},
-                price: purchaseData?.price || 0
-              };
-              available.push(captainsHelmet);
+
+          // Equippable artifacts from admin + built-in catalog (e.g. Captain's Helmet) – compensation, MKT, chapters
+          try {
+            const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+            const equippableDoc = await getDoc(equippableRef);
+            const data = equippableDoc.exists() ? (equippableDoc.data() as Record<string, unknown>) : {};
+            const mergedEquippable = mergeEquippableCatalogLayers(data);
+            for (const [eqId, def] of Object.entries(mergedEquippable)) {
+                if (!def || typeof def !== 'object') continue;
+                const art = def as Record<string, unknown>;
+                const hasIt = studentOwnsEquippableArtifact(
+                  studentData.artifacts as Record<string, unknown> | undefined,
+                  eqId
+                );
+                if (!hasIt) continue;
+                const isEquipped = Object.values(loadedEquipped).some((eq) =>
+                  slotEquippedMatchesCatalogId(eq, eqId)
+                );
+                if (isEquipped) continue;
+                const purchaseData = studentData.artifacts?.[`${eqId}_purchase`] as Record<string, unknown> | undefined;
+                const slot = (purchaseData?.slot || art.slot || 'ring1') as Artifact['slot'];
+                const name = (purchaseData?.name || art.name || eqId) as string;
+                const image = (purchaseData?.image ?? art.image ?? '') as string;
+                const level = typeof (purchaseData?.level ?? art.level) === 'number' ? (purchaseData?.level ?? art.level) as number : 1;
+                const stats = (purchaseData?.stats ?? art.stats ?? {}) as Record<string, number>;
+                const skillDef = (purchaseData?.artifactSkill ?? art.artifactSkill) as { name?: string; description?: string } | undefined;
+                const artifactSkillInfo: ArtifactSkillInfo | undefined =
+                  skillDef && typeof skillDef.name === 'string' && skillDef.name
+                    ? { name: skillDef.name, description: typeof skillDef.description === 'string' ? skillDef.description : undefined }
+                    : undefined;
+                available.push({
+                  id: eqId,
+                  name,
+                  slot,
+                  level,
+                  image: image || undefined,
+                  stats: Object.keys(stats).length ? stats : undefined,
+                  rarity: (purchaseData?.rarity ?? art.rarity) as Artifact['rarity'],
+                  powerLevelBonus: typeof (purchaseData?.powerLevelBonus ?? art.powerLevelBonus) === 'number'
+                    ? (purchaseData?.powerLevelBonus ?? art.powerLevelBonus) as number
+                    : undefined,
+                  perks: Array.isArray(purchaseData?.perks ?? art.perks) ? (purchaseData?.perks ?? art.perks) as string[] : undefined,
+                  ...(artifactSkillInfo && { artifactSkill: artifactSkillInfo })
+                });
             }
+          } catch (e) {
+            console.warn('Artifacts: failed to load equippable list for available', e);
           }
-          
-          // Check for other wearable artifacts that might be purchased
-          // Add more wearable artifacts here as they're added to the marketplace
           
           setAvailableArtifacts(available);
           
@@ -336,8 +470,9 @@ const Artifacts: React.FC = () => {
       }
     };
 
+    setLoading(true);
     checkArtifactsUnlocked();
-  }, [currentUser]);
+  }, [currentUser, authLoading]);
 
   const slotConfig = [
     { key: 'head' as const, label: 'Head', icon: '👑' },
@@ -352,10 +487,36 @@ const Artifacts: React.FC = () => {
     { key: 'weapon' as const, label: 'Weapon', icon: '⚔️' },
   ];
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <div>Loading...</div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', maxWidth: '480px', margin: '0 auto' }}>
+        <h1 style={{ fontSize: '1.5rem', marginBottom: '0.75rem' }}>Sign in required</h1>
+        <p style={{ color: '#6b7280', marginBottom: '1.25rem' }}>
+          Log in to load your artifacts and equipment. Firestore permission errors in the console are normal if you are
+          not signed in.
+        </p>
+        <Link
+          to="/login"
+          style={{
+            display: 'inline-block',
+            background: '#4f46e5',
+            color: 'white',
+            padding: '0.6rem 1.25rem',
+            borderRadius: '0.5rem',
+            textDecoration: 'none',
+            fontWeight: 600,
+          }}
+        >
+          Go to Login
+        </Link>
       </div>
     );
   }
@@ -434,18 +595,52 @@ const Artifacts: React.FC = () => {
         }
       }
       
-      // Create artifact with correct slot
+      // Build artifact for Firestore: no undefined values (Firestore rejects undefined)
       const artifactToEquip: Artifact = {
-        ...artifact,
-        slot: slot
+        id: artifact.id,
+        name: artifact.name,
+        slot: slot,
+        stats: (artifact.stats != null && Object.keys(artifact.stats).length > 0) ? artifact.stats : {},
+        ...(artifact.level != null && { level: artifact.level }),
+        ...(artifact.image != null && artifact.image !== '' && { image: artifact.image }),
+        ...(artifact.price != null && { price: artifact.price }),
+        ...(artifact.rarity != null && { rarity: artifact.rarity }),
+        ...(artifact.powerLevelBonus != null && { powerLevelBonus: artifact.powerLevelBonus }),
+        ...(artifact.perks != null && artifact.perks.length > 0 && { perks: artifact.perks }),
+        ...(artifact.artifactSkill && artifact.artifactSkill.name && {
+          artifactSkill: {
+            name: artifact.artifactSkill.name,
+            ...(artifact.artifactSkill.description != null && artifact.artifactSkill.description !== '' && { description: artifact.artifactSkill.description })
+          }
+        })
       };
-      
+
+      try {
+        const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+        const equippableDoc = await getDoc(equippableRef);
+        if (equippableDoc.exists()) {
+          const fromCatalog = skillPayloadFromEquippableCatalogForArtifact(
+            equippableDoc.data() as Record<string, unknown>,
+            { id: artifact.id, name: artifact.name }
+          );
+          if (fromCatalog) {
+            artifactToEquip.artifactSkill = {
+              name: fromCatalog.name,
+              ...(fromCatalog.description && { description: fromCatalog.description }),
+              ...(fromCatalog.id && { id: fromCatalog.id }),
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('Artifacts: could not merge catalog skill on equip', e);
+      }
+
       // Update equipped artifacts
       const updatedEquipped = {
         ...currentEquipped,
         [slot]: artifactToEquip
       };
-      
+
       await updateDoc(studentRef, {
         equippedArtifacts: updatedEquipped
       });
@@ -632,6 +827,54 @@ const Artifacts: React.FC = () => {
             };
             available.push(airRing);
           }
+        }
+
+        // Equippable from admin + defaults (Captain's Helmet, etc.) – so unequipped gear reappears
+        try {
+          const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+          const equippableDoc = await getDoc(equippableRef);
+          const data = equippableDoc.exists() ? (equippableDoc.data() as Record<string, unknown>) : {};
+          const mergedEquippable = mergeEquippableCatalogLayers(data);
+          for (const [eqId, def] of Object.entries(mergedEquippable)) {
+              if (!def || typeof def !== 'object') continue;
+              const art = def as Record<string, unknown>;
+              const hasIt = studentOwnsEquippableArtifact(
+                refreshedStudentData.artifacts as Record<string, unknown> | undefined,
+                eqId
+              );
+              if (!hasIt) continue;
+              const isEquipped = Object.values(updatedEquipped).some((eq) =>
+                slotEquippedMatchesCatalogId(eq, eqId)
+              );
+              if (isEquipped) continue;
+              const purchaseData = refreshedStudentData.artifacts?.[`${eqId}_purchase`] as Record<string, unknown> | undefined;
+              const slot = (purchaseData?.slot || art.slot || 'ring1') as Artifact['slot'];
+              const name = (purchaseData?.name || art.name || eqId) as string;
+              const image = (purchaseData?.image ?? art.image ?? '') as string;
+              const level = typeof (purchaseData?.level ?? art.level) === 'number' ? (purchaseData?.level ?? art.level) as number : 1;
+              const stats = (purchaseData?.stats ?? art.stats ?? {}) as Record<string, number>;
+              const skillDef = (purchaseData?.artifactSkill ?? art.artifactSkill) as { name?: string; description?: string } | undefined;
+              const artifactSkillInfo: ArtifactSkillInfo | undefined =
+                skillDef && typeof skillDef.name === 'string' && skillDef.name
+                  ? { name: skillDef.name, description: typeof skillDef.description === 'string' ? skillDef.description : undefined }
+                  : undefined;
+              available.push({
+                id: eqId,
+                name,
+                slot,
+                level,
+                image: image || undefined,
+                stats: Object.keys(stats).length ? stats : undefined,
+                rarity: (purchaseData?.rarity ?? art.rarity) as Artifact['rarity'],
+                powerLevelBonus: typeof (purchaseData?.powerLevelBonus ?? art.powerLevelBonus) === 'number'
+                  ? (purchaseData?.powerLevelBonus ?? art.powerLevelBonus) as number
+                  : undefined,
+                perks: Array.isArray(purchaseData?.perks ?? art.perks) ? (purchaseData?.perks ?? art.perks) as string[] : undefined,
+                ...(artifactSkillInfo && { artifactSkill: artifactSkillInfo })
+              });
+          }
+        } catch (e) {
+          console.warn('Artifacts: failed to load equippable list after unequip', e);
         }
         
         setAvailableArtifacts(available);
@@ -992,6 +1235,37 @@ const Artifacts: React.FC = () => {
     }
     
     setShowElementalRingModal(false);
+  };
+
+  const formatElementLabel = (id: string) =>
+    id ? id.charAt(0).toUpperCase() + id.slice(1) : '';
+
+  /** Elemental Access perk: persist secondary element + unlock L1 moves for that affinity. */
+  const handleElementalAccessChange = async (elementKey: string) => {
+    if (!currentUser || elementalAccessBusy) return;
+    const v = elementKey.trim().toLowerCase();
+    if (!v) return;
+    setElementalAccessBusy(true);
+    try {
+      const studentRef = doc(db, 'students', currentUser.uid);
+      const studentDoc = await getDoc(studentRef);
+      if (!studentDoc.exists()) return;
+      const studentData = studentDoc.data();
+      const prevArtifacts = (studentData.artifacts || {}) as Record<string, unknown>;
+      await updateDoc(studentRef, {
+        artifacts: {
+          ...prevArtifacts,
+          elemental_access_element: v,
+        },
+      });
+      setStudentArtifactsRecord((prev) => ({ ...prev, elemental_access_element: v }));
+      await unlockElementalMoves(v);
+    } catch (e) {
+      console.error('Error saving Elemental Access element:', e);
+      alert('Could not save secondary element. Please try again.');
+    } finally {
+      setElementalAccessBusy(false);
+    }
   };
 
 
@@ -1508,6 +1782,93 @@ const Artifacts: React.FC = () => {
               );
             })}
           </div>
+
+          {(() => {
+            const primaryEl = String(studentArtifactsRecord.chosen_element || '').toLowerCase();
+            const showElementalAccessPicker = hasElementalAccessPerkEquipped(
+              equippedArtifacts as unknown as Record<string, unknown>,
+              equippableCatalogRaw
+            );
+            const currentSecondary = String(
+              studentArtifactsRecord.elemental_access_element || ''
+            ).toLowerCase();
+            if (!showElementalAccessPicker) return null;
+            const secondaryValid =
+              currentSecondary &&
+              (ELEMENTAL_ACCESS_ELEMENT_OPTIONS as readonly string[]).includes(currentSecondary);
+            return (
+              <div
+                style={{
+                  marginTop: '1.75rem',
+                  padding: '1rem',
+                  background: '#f5f3ff',
+                  borderRadius: '0.75rem',
+                  border: '1px solid #ddd6fe',
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: '1.125rem',
+                    fontWeight: 700,
+                    color: '#5b21b6',
+                    marginBottom: '0.5rem',
+                  }}
+                >
+                  Elemental Access
+                </h3>
+                {!primaryEl ? (
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                    Choose your primary element (Elemental Ring) first. Then you can pick a second element here.
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '0.8rem', color: '#4c1d95', marginBottom: '0.75rem' }}>
+                      Your equipped artifact grants a <strong>second elemental affinity</strong> (in addition to{' '}
+                      <strong>{formatElementLabel(primaryEl)}</strong>).
+                    </p>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        color: '#374151',
+                        marginBottom: '0.35rem',
+                      }}
+                    >
+                      Secondary element
+                    </label>
+                    <select
+                      value={secondaryValid ? currentSecondary : ''}
+                      disabled={elementalAccessBusy}
+                      onChange={async (e) => {
+                        const next = e.target.value;
+                        if (!next) return;
+                        await handleElementalAccessChange(next);
+                      }}
+                      style={{
+                        width: '100%',
+                        maxWidth: '280px',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #c4b5fd',
+                        fontSize: '0.875rem',
+                      }}
+                    >
+                      <option value="">— Select element —</option>
+                      {ELEMENTAL_ACCESS_ELEMENT_OPTIONS.filter((el) => el !== primaryEl).map((el) => (
+                        <option key={el} value={el}>
+                          {formatElementLabel(el)}
+                        </option>
+                      ))}
+                    </select>
+                    {elementalAccessBusy && (
+                      <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#6b7280' }}>Saving…</p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
           
           {/* Available Artifacts Section */}
           {availableArtifacts.length > 0 && (
@@ -1876,7 +2237,8 @@ const Artifacts: React.FC = () => {
                             );
                           })()}
                         {/* Show perk for Elemental Ring */}
-                        {equipped.id === 'elemental-ring-level-1' && (
+                        {(equipped.id === 'elemental-ring-level-1' ||
+                          (equipped.name && equipped.name.includes('Elemental Ring'))) && (
                           <div style={{
                             marginTop: '0.75rem',
                             paddingTop: '0.75rem',
@@ -1892,11 +2254,18 @@ const Artifacts: React.FC = () => {
                             </div>
                             <div style={{
                               fontSize: '0.75rem',
+                              fontWeight: '600',
+                              color: '#10b981',
+                              marginBottom: '0.35rem'
+                            }}>
+                              +{getPowerLevelBonusForRarity(equipped.rarity ?? 'common')} Power Level
+                            </div>
+                            <div style={{
+                              fontSize: '0.75rem',
                               color: '#6b7280',
                               fontStyle: 'italic'
                             }}>
                               {(() => {
-                                // Extract element from name (e.g., "Elemental Ring: Fire (Level 1)" -> "Fire")
                                 const elementMatch = equipped.name.match(/Elemental Ring: (\w+)/);
                                 const element = elementMatch ? elementMatch[1] : 'Element';
                                 return `Grants access to ${element} element moves`;
@@ -1904,6 +2273,48 @@ const Artifacts: React.FC = () => {
                             </div>
                           </div>
                         )}
+                        {/* Perks from equippable catalog (e.g. Unveiled Boots, Magical Paintbrush) */}
+                        {(() => {
+                          const catalogPerks = getPerksForEquippedArtifact(equipped, equippableCatalogRaw);
+                          if (catalogPerks.length === 0) return null;
+                          return (
+                            <div style={{
+                              marginTop: '0.75rem',
+                              paddingTop: '0.75rem',
+                              borderTop: '1px solid #e5e7eb'
+                            }}>
+                              <div style={{
+                                fontSize: '0.75rem',
+                                fontWeight: '600',
+                                color: '#9333ea',
+                                marginBottom: '0.5rem'
+                              }}>
+                                Perks:
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                {catalogPerks.map((p) => (
+                                  <div
+                                    key={p.id}
+                                    style={{
+                                      fontSize: '0.75rem',
+                                      color: '#6b7280',
+                                      background: 'rgba(147, 51, 234, 0.06)',
+                                      padding: '0.35rem 0.5rem',
+                                      borderRadius: '0.25rem'
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: '600', color: '#7c3aed' }}>{p.label}</span>
+                                    {p.description && (
+                                      <span style={{ marginLeft: '0.25rem', fontStyle: 'italic' }}>
+                                        — {p.description}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                         {equipped.level && (
                           <div style={{
                             marginTop: '0.5rem',
@@ -2030,59 +2441,131 @@ const Artifacts: React.FC = () => {
                 </div>
               </div>
               
-              {/* Perks Section */}
+              {/* Active Perks & Skills Section */}
               {(() => {
-                // Check if Elemental Ring is equipped
-                const elementalRing = equippedArtifacts.ring1;
-                if (elementalRing && elementalRing.id === 'elemental-ring-level-1') {
+                const perks: Array<{
+                  icon: string;
+                  title: string;
+                  description: string;
+                  powerLevel?: number;
+                }> = [];
+                const ringSlots: (keyof EquippedArtifacts)[] = ['ring1', 'ring2', 'ring3', 'ring4'];
+                let elementalRing: Artifact | null = null;
+                for (const rk of ringSlots) {
+                  const a = equippedArtifacts[rk];
+                  if (!a) continue;
+                  if (
+                    a.id === 'elemental-ring-level-1' ||
+                    (typeof a.name === 'string' && a.name.includes('Elemental Ring'))
+                  ) {
+                    elementalRing = a;
+                    break;
+                  }
+                }
+                if (elementalRing) {
                   const elementMatch = elementalRing.name.match(/Elemental Ring: (\w+)/);
                   const element = elementMatch ? elementMatch[1] : 'Element';
-                  
-                  return (
-                    <div style={{ marginTop: '2rem' }}>
-                      <h3 style={{
-                        fontSize: '1.125rem',
-                        fontWeight: 'bold',
-                        marginBottom: '1rem',
-                        color: '#374151'
-                      }}>
-                        Active Perks
-                      </h3>
-                      <div style={{
-                        background: 'white',
-                        border: '1px solid #9333ea',
-                        borderRadius: '0.75rem',
-                        padding: '1rem'
-                      }}>
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.75rem',
-                          marginBottom: '0.5rem'
-                        }}>
-                          <div style={{ fontSize: '1.5rem' }}>💍</div>
-                          <div>
-                            <div style={{
-                              fontSize: '0.875rem',
-                              fontWeight: 'bold',
-                              color: '#9333ea'
-                            }}>
-                              {elementalRing.name}
-                            </div>
-                            <div style={{
-                              fontSize: '0.75rem',
-                              color: '#6b7280',
-                              marginTop: '0.25rem'
-                            }}>
-                              Grants access to {element} element moves
+                  perks.push({
+                    icon: '💍',
+                    title: elementalRing.name,
+                    description: `Grants access to ${element} element moves`,
+                    powerLevel: getPowerLevelBonusForRarity(elementalRing.rarity ?? 'common'),
+                  });
+                }
+                // Perks from equippable catalog (e.g. Unveiled Boots: Elemental Access, Shield Boost, Cost Reduction)
+                const slotKeys: (keyof EquippedArtifacts)[] = ['head', 'chest', 'ring1', 'ring2', 'ring3', 'ring4', 'legs', 'shoes', 'jacket', 'weapon'];
+                for (const key of slotKeys) {
+                  const art = equippedArtifacts[key];
+                  if (!art) continue;
+                  const catalogPerks = getPerksForEquippedArtifact(art, equippableCatalogRaw);
+                  for (const p of catalogPerks) {
+                    perks.push({
+                      icon: '✨',
+                      title: `${art.name || 'Artifact'}: ${p.label}`,
+                      description: p.description,
+                      powerLevel: getPowerLevelBonusForRarity(art.rarity ?? 'common'),
+                    });
+                  }
+                }
+                // Artifact skills from equipped Legendary artifacts (e.g. Stroke of Creation from Magical Paintbrush)
+                for (const key of slotKeys) {
+                  const art = equippedArtifacts[key];
+                  if (!art) continue;
+                  const raw = resolveArtifactSkillWithCatalog(
+                    art,
+                    studentArtifactsRecord as Record<string, any>,
+                    equippableCatalogRaw
+                  );
+                  if (!raw || typeof raw.name !== 'string' || !raw.name) continue;
+                  perks.push({
+                    icon: '⚔️',
+                    title: raw.name,
+                    description:
+                      (typeof raw.description === 'string' && raw.description) ||
+                      `Skill granted by ${art.name || 'equipped artifact'}`,
+                    powerLevel: getPowerLevelBonusForRarity(art.rarity ?? 'legendary'),
+                  });
+                }
+                if (perks.length === 0) return null;
+                return (
+                  <div style={{ marginTop: '2rem' }}>
+                    <h3 style={{
+                      fontSize: '1.125rem',
+                      fontWeight: 'bold',
+                      marginBottom: '1rem',
+                      color: '#374151'
+                    }}>
+                      Active Perks &amp; Skills
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {perks.map((perk, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            background: 'white',
+                            border: '1px solid #9333ea',
+                            borderRadius: '0.75rem',
+                            padding: '1rem'
+                          }}
+                        >
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.75rem'
+                          }}>
+                            <div style={{ fontSize: '1.5rem' }}>{perk.icon}</div>
+                            <div>
+                              <div style={{
+                                fontSize: '0.875rem',
+                                fontWeight: 'bold',
+                                color: '#9333ea'
+                              }}>
+                                {perk.title}
+                              </div>
+                              {perk.powerLevel != null && (
+                                <div style={{
+                                  fontSize: '0.75rem',
+                                  fontWeight: '600',
+                                  color: '#10b981',
+                                  marginTop: '0.25rem'
+                                }}>
+                                  +{perk.powerLevel} Power Level
+                                </div>
+                              )}
+                              <div style={{
+                                fontSize: '0.75rem',
+                                color: '#6b7280',
+                                marginTop: '0.25rem'
+                              }}>
+                                {perk.description}
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
+                      ))}
                     </div>
-                  );
-                }
-                return null;
+                  </div>
+                );
               })()}
             </div>
           )}

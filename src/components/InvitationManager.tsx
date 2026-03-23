@@ -249,6 +249,7 @@ const InvitationManager: React.FC = () => {
       try {
         await updateDoc(squadRef, {
           members: sanitizedMembers,
+          memberUids: sanitizedMembers.map((m: { uid?: string }) => m.uid).filter(Boolean) as string[],
           updatedAt: serverTimestamp()
         });
         

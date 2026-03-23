@@ -4,6 +4,24 @@ import { doc, getDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firest
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ARTIFACT_PERK_OPTIONS, getArtifactPerkLimit } from '../constants/artifactPerks';
 import { getPowerLevelBonusForRarity, normalizeArtifactRarity, type ArtifactRarity } from '../constants/artifactRarity';
+import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
+import { buildMarketplaceAdminMap } from '../utils/marketplaceStoreMerge';
+import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
+
+/** Firestore rejects `undefined` in document data */
+function stripUndefinedDeep<T>(value: T): T {
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((v) => stripUndefinedDeep(v)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefinedDeep(v);
+  }
+  return out as T;
+}
 
 interface ArtifactsAdminProps {
   isOpen: boolean;
@@ -15,13 +33,48 @@ interface MarketplaceArtifact {
   name: string;
   description: string;
   price: number;
+  truthMetalPrice?: number;
   icon: string;
   image: string;
-  category: 'time' | 'protection' | 'food' | 'special';
+  category: 'time' | 'protection' | 'food' | 'special' | 'equippable';
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   originalPrice?: number;
   discount?: number;
+  disabled?: boolean;
+  /** Grants this equippable catalog id on purchase (MST MKT). */
+  equippableArtifactId?: string;
 }
+
+const ARTIFACT_ELEMENTAL_TYPES = ['fire', 'water', 'air', 'earth', 'lightning', 'light', 'shadow', 'metal'] as const;
+
+/** Show human-readable perk labels (Firestore may store id or legacy label). */
+function formatPerksForDisplay(perks: string[]): string {
+  return perks
+    .map((p) => {
+      const opt = ARTIFACT_PERK_OPTIONS.find((o) => o.id === p);
+      if (opt) return opt.label;
+      const byLabel = ARTIFACT_PERK_OPTIONS.find(
+        (o) => o.label === p || o.label.toLowerCase() === p.trim().toLowerCase()
+      );
+      return byLabel ? byLabel.label : p;
+    })
+    .join(', ');
+}
+
+type ArtifactStatusEffect = {
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
+  duration: number;
+  intensity?: number;
+  damagePerTurn?: number;
+  ppLossPerTurn?: number;
+  ppStealPerTurn?: number;
+  healPerTurn?: number;
+  chance?: number;
+  successChance?: number;
+  damageReduction?: number;
+  summonElementalType?: typeof ARTIFACT_ELEMENTAL_TYPES[number];
+  summonDamage?: number;
+};
 
 interface EquippableArtifactSkill {
   id: string;
@@ -31,6 +84,10 @@ interface EquippableArtifactSkill {
   cost?: number;
   cooldown?: number;
   targetType?: 'self' | 'single' | 'team' | 'enemy' | 'enemy_team' | 'all';
+  damage?: number;
+  healing?: number;
+  shieldBoost?: number;
+  statusEffects?: ArtifactStatusEffect[];
 }
 
 interface EquippableArtifact {
@@ -73,30 +130,37 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       // Load marketplace artifacts
       const marketplaceRef = doc(db, 'adminSettings', 'marketplaceArtifacts');
       const marketplaceDoc = await getDoc(marketplaceRef);
-      if (marketplaceDoc.exists()) {
-        const data = marketplaceDoc.data();
-        // Remove metadata fields
-        const { lastUpdated, updatedBy, ...artifacts } = data;
-        setMarketplaceArtifacts(artifacts);
-      }
+      const mktData = marketplaceDoc.exists() ? marketplaceDoc.data() : {};
+      setMarketplaceArtifacts(buildMarketplaceAdminMap(MARKETPLACE_STORE_ARTIFACTS, mktData as Record<string, unknown>));
 
-      // Load equippable artifacts
+      // Load equippable artifacts (Firestore overrides built-in defaults, e.g. Captain's Helmet)
       const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
       const equippableDoc = await getDoc(equippableRef);
-      if (equippableDoc.exists()) {
-        const data = equippableDoc.data();
-        // Remove metadata fields
-        const { lastUpdated, updatedBy, ...artifacts } = data;
-        setEquippableArtifacts(Object.fromEntries(Object.entries(artifacts).map(([key, artifact]: any) => {
-          const rarity = normalizeArtifactRarity(artifact?.rarity);
-          return [key, {
-            ...artifact,
-            rarity,
-            powerLevelBonus: typeof artifact?.powerLevelBonus === 'number' ? artifact.powerLevelBonus : getPowerLevelBonusForRarity(rarity),
-            perks: Array.isArray(artifact?.perks) ? artifact.perks : [],
-          }];
-        })));
-      }
+      const rawEq = equippableDoc.exists() ? (equippableDoc.data() as Record<string, unknown>) : {};
+      const mergedEquippable = mergeEquippableCatalogLayers(rawEq);
+      setEquippableArtifacts(
+        Object.fromEntries(
+          Object.entries(mergedEquippable)
+            .filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+            .map(([key, artifact]: [string, any]) => {
+              const rarity = normalizeArtifactRarity(artifact?.rarity);
+              return [
+                key,
+                {
+                  ...artifact,
+                  id: typeof artifact?.id === 'string' && artifact.id.trim() ? artifact.id.trim() : key,
+                  slot: artifact?.slot || 'ring1',
+                  rarity,
+                  powerLevelBonus:
+                    typeof artifact?.powerLevelBonus === 'number'
+                      ? artifact.powerLevelBonus
+                      : getPowerLevelBonusForRarity(rarity),
+                  perks: Array.isArray(artifact?.perks) ? artifact.perks : [],
+                } as EquippableArtifact,
+              ];
+            })
+        )
+      );
     } catch (error) {
       console.error('Error loading artifacts:', error);
       alert('❌ Failed to load artifacts. Please try again.');
@@ -129,16 +193,30 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     setLoading(true);
     try {
       const marketplaceRef = doc(db, 'adminSettings', 'marketplaceArtifacts');
-      await setDoc(marketplaceRef, {
-        ...marketplaceArtifacts,
+      const payload: Record<string, unknown> = {
         lastUpdated: serverTimestamp(),
-        updatedBy: 'admin'
-      });
+        updatedBy: 'admin',
+      };
+      for (const [key, art] of Object.entries(marketplaceArtifacts)) {
+        const row = { ...art } as Record<string, unknown>;
+        if (typeof row.price === 'string') {
+          row.price = Number(row.price) || 0;
+        }
+        if (row.truthMetalPrice === undefined || row.truthMetalPrice === null || row.truthMetalPrice === '') {
+          delete row.truthMetalPrice;
+        }
+        if (row.disabled === false || row.disabled === undefined) delete row.disabled;
+        if (row.originalPrice === undefined || row.originalPrice === null) delete row.originalPrice;
+        if (row.discount === undefined || row.discount === null) delete row.discount;
+        payload[key] = stripUndefinedDeep(row);
+      }
+      await setDoc(marketplaceRef, payload);
       alert('✅ Marketplace artifacts saved successfully!');
       await loadArtifacts();
     } catch (error) {
       console.error('Error saving marketplace artifacts:', error);
-      alert('❌ Failed to save artifacts. Please try again.');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`❌ Failed to save artifacts: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -148,16 +226,18 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     setLoading(true);
     try {
       const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+      const cleanedCatalog = stripUndefinedDeep(equippableArtifacts);
       await setDoc(equippableRef, {
-        ...equippableArtifacts,
+        ...cleanedCatalog,
         lastUpdated: serverTimestamp(),
-        updatedBy: 'admin'
+        updatedBy: 'admin',
       });
       alert('✅ Equippable artifacts saved successfully!');
       await loadArtifacts();
     } catch (error) {
       console.error('Error saving equippable artifacts:', error);
-      alert('❌ Failed to save artifacts. Please try again.');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`❌ Failed to save artifacts: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -169,17 +249,25 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       return;
     }
 
+    const eqPick = (newArtifact as MarketplaceArtifact).equippableArtifactId?.trim() || undefined;
     const artifact: MarketplaceArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
       description: (newArtifact as MarketplaceArtifact).description || '',
       price: (newArtifact as MarketplaceArtifact).price || 0,
+      truthMetalPrice:
+        (newArtifact as MarketplaceArtifact).truthMetalPrice != null &&
+        (newArtifact as MarketplaceArtifact).truthMetalPrice! > 0
+          ? Math.floor(Number((newArtifact as MarketplaceArtifact).truthMetalPrice) || 0)
+          : undefined,
       icon: (newArtifact as MarketplaceArtifact).icon || '📦',
       image: (newArtifact as MarketplaceArtifact).image || '',
       category: (newArtifact as MarketplaceArtifact).category || 'special',
       rarity: (newArtifact as MarketplaceArtifact).rarity || 'common',
       originalPrice: (newArtifact as MarketplaceArtifact).originalPrice,
-      discount: (newArtifact as MarketplaceArtifact).discount
+      discount: (newArtifact as MarketplaceArtifact).discount,
+      disabled: (newArtifact as MarketplaceArtifact).disabled === true,
+      equippableArtifactId: eqPick,
     };
 
     setMarketplaceArtifacts(prev => ({
@@ -252,17 +340,25 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       return;
     }
 
+    const eqPick = (newArtifact as MarketplaceArtifact).equippableArtifactId?.trim() || undefined;
     const artifact: MarketplaceArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
       description: (newArtifact as MarketplaceArtifact).description || '',
       price: (newArtifact as MarketplaceArtifact).price || 0,
+      truthMetalPrice:
+        (newArtifact as MarketplaceArtifact).truthMetalPrice != null &&
+        (newArtifact as MarketplaceArtifact).truthMetalPrice! > 0
+          ? Math.floor(Number((newArtifact as MarketplaceArtifact).truthMetalPrice) || 0)
+          : undefined,
       icon: (newArtifact as MarketplaceArtifact).icon || '📦',
       image: (newArtifact as MarketplaceArtifact).image || '',
       category: (newArtifact as MarketplaceArtifact).category || 'special',
       rarity: (newArtifact as MarketplaceArtifact).rarity || 'common',
       originalPrice: (newArtifact as MarketplaceArtifact).originalPrice,
-      discount: (newArtifact as MarketplaceArtifact).discount
+      discount: (newArtifact as MarketplaceArtifact).discount,
+      disabled: (newArtifact as MarketplaceArtifact).disabled === true,
+      equippableArtifactId: eqPick,
     };
 
     setMarketplaceArtifacts(prev => ({
@@ -331,6 +427,71 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     setEquippableArtifacts(updated);
   };
 
+  const SLOT_ICON_FOR_MKT: Record<EquippableArtifact['slot'], string> = {
+    head: '👑',
+    chest: '🦺',
+    ring1: '💍',
+    ring2: '💍',
+    ring3: '💍',
+    ring4: '💍',
+    legs: '👖',
+    shoes: '👟',
+    jacket: '🧥',
+    weapon: '⚔️',
+  };
+
+  function toMarketplaceRarity(r: ArtifactRarity): MarketplaceArtifact['rarity'] {
+    if (r === 'uncommon') return 'rare';
+    return r;
+  }
+
+  /** Draft or update an MST MKT row that grants this equippable, then open the Marketplace tab. */
+  const handleAddEquippableToMarketplace = (eq: EquippableArtifact) => {
+    const eqId = eq.id;
+    const existing = marketplaceArtifacts[eqId];
+
+    if (existing?.equippableArtifactId === eqId) {
+      setActiveTab('marketplace');
+      setNewArtifact({ ...existing });
+      setEditingArtifact(eqId);
+      setPerkPickerValue('');
+      alert(
+        'This equippable already uses listing id "' +
+          eqId +
+          '" with Grants equippable set. Switched to MST MKT — adjust prices and Save.'
+      );
+      return;
+    }
+
+    const eqRarity = normalizeArtifactRarity(eq.rarity);
+    const mkt: MarketplaceArtifact = {
+      id: eqId,
+      name: existing?.name ?? eq.name,
+      description:
+        existing?.description?.trim() ||
+        (eq.description?.trim() ? eq.description.trim() : `Unlock ${eq.name} for your loadout.`),
+      price: existing?.price ?? 0,
+      truthMetalPrice: existing?.truthMetalPrice,
+      icon: existing?.icon || SLOT_ICON_FOR_MKT[eq.slot] || '⚔️',
+      image: existing?.image ?? eq.image ?? '',
+      category: 'equippable',
+      rarity: existing?.rarity ?? toMarketplaceRarity(eqRarity),
+      equippableArtifactId: eqId,
+      originalPrice: existing?.originalPrice,
+      discount: existing?.discount,
+      disabled: existing?.disabled === true,
+    };
+
+    setMarketplaceArtifacts((prev) => ({ ...prev, [eqId]: mkt }));
+    setActiveTab('marketplace');
+    setNewArtifact(mkt);
+    setEditingArtifact(eqId);
+    setPerkPickerValue('');
+    alert(
+      'MST MKT listing drafted (listing id = equippable id). Set PP / Truth Metal on the Marketplace tab, then click Save for MST MKT.'
+    );
+  };
+
   const handleCancelEdit = () => {
     setNewArtifact({});
     setPerkPickerValue('');
@@ -385,7 +546,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
         color: '#fff'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Artifacts Admin</h2>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Artifacts Admin · MST MKT &amp; Equippable</h2>
           <button
             onClick={onClose}
             style={{
@@ -416,7 +577,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
               borderBottom: activeTab === 'marketplace' ? '3px solid #60a5fa' : 'none'
             }}
           >
-            Marketplace Artifacts
+            MST MKT (Marketplace)
           </button>
           <button
             onClick={() => setActiveTab('equippable')}
@@ -442,7 +603,14 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
 
         {activeTab === 'marketplace' && (
           <div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Marketplace Artifacts</h3>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>MST MKT — Store items</h3>
+            <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginBottom: '1rem', lineHeight: 1.5 }}>
+              Catalog defaults load from code; your edits save to Firestore and override the live store.
+              Add new rows for items that only exist in the database. Use <strong>Save</strong> to persist.
+              To sell an equippable ring/armor from the <strong>Equippable</strong> tab, set{' '}
+              <strong>Grants equippable</strong> to that artifact&apos;s id — purchase unlocks it on the Artifacts page
+              (no consumable inventory entry).
+            </p>
             
             {/* Add/Edit Form */}
             <div style={{
@@ -489,20 +657,22 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                     }}
                   />
                 </div>
-                <div>
+                <div style={{ gridColumn: '1 / -1' }}>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Description</label>
-                  <input
-                    type="text"
+                  <textarea
                     value={(newArtifact as MarketplaceArtifact).description || ''}
                     onChange={(e) => setNewArtifact({ ...newArtifact, description: e.target.value })}
-                    placeholder="Artifact description"
+                    placeholder="Artifact description (shown in MST MKT)"
+                    rows={3}
                     style={{
                       width: '100%',
                       padding: '0.5rem',
                       borderRadius: '0.25rem',
                       border: '1px solid #4b5563',
                       background: '#1f2937',
-                      color: 'white'
+                      color: 'white',
+                      resize: 'vertical',
+                      fontFamily: 'inherit'
                     }}
                   />
                 </div>
@@ -522,6 +692,42 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       color: 'white'
                     }}
                   />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Truth Metal (optional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={(newArtifact as MarketplaceArtifact).truthMetalPrice ?? ''}
+                    onChange={(e) =>
+                      setNewArtifact((prev) => ({
+                        ...(prev as any),
+                        truthMetalPrice: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0,
+                      }))
+                    }
+                    placeholder="0 = PP only"
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#1f2937',
+                      color: 'white'
+                    }}
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    id="mkt-disabled"
+                    checked={(newArtifact as MarketplaceArtifact).disabled === true}
+                    onChange={(e) =>
+                      setNewArtifact((prev) => ({ ...(prev as any), disabled: e.target.checked }))
+                    }
+                  />
+                  <label htmlFor="mkt-disabled" style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
+                    Hidden in MST MKT (disabled — players won&apos;t see this item)
+                  </label>
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Icon (Emoji)</label>
@@ -585,6 +791,46 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                     {imageUploading ? 'Uploading…' : '📤 Upload image'}
                   </button>
                 </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+                    Grants equippable (optional)
+                  </label>
+                  <select
+                    value={(newArtifact as MarketplaceArtifact).equippableArtifactId || ''}
+                    onChange={(e) =>
+                      setNewArtifact((prev) => ({
+                        ...(prev as any),
+                        equippableArtifactId: e.target.value || undefined,
+                      }))
+                    }
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#1f2937',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">— None (consumable / normal store item) —</option>
+                    {Object.keys(equippableArtifacts)
+                      .sort((a, b) =>
+                        (equippableArtifacts[a]?.name || a).localeCompare(
+                          equippableArtifacts[b]?.name || b,
+                          undefined,
+                          { sensitivity: 'base' }
+                        )
+                      )
+                      .map((eqId) => (
+                        <option key={eqId} value={eqId}>
+                          {eqId} — {equippableArtifacts[eqId]?.name || eqId}
+                        </option>
+                      ))}
+                  </select>
+                  <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.35rem' }}>
+                    Must match an id from the Equippable Artifacts tab. Store listing id can differ (e.g. promo sku).
+                  </div>
+                </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Category</label>
                   <select
@@ -603,6 +849,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                     <option value="protection">Protection</option>
                     <option value="food">Food</option>
                     <option value="special">Special</option>
+                    <option value="equippable">Equippable (gear)</option>
                   </select>
                 </div>
                 <div>
@@ -735,7 +982,14 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                         {artifact.description}
                       </div>
                       <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                        Price: {artifact.price} PP | Category: {artifact.category} | Rarity: {artifact.rarity}
+                        {artifact.price} PP
+                        {artifact.truthMetalPrice ? ` + ${artifact.truthMetalPrice} Truth Metal` : ''}
+                        {' | '}
+                        {artifact.category} | {artifact.rarity}
+                        {artifact.disabled ? ' | 🚫 hidden' : ''}
+                        {artifact.equippableArtifactId
+                          ? ` | ⚔️ grants equippable: ${artifact.equippableArtifactId}`
+                          : ''}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1022,7 +1276,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                     >
                       <option value="">Select a perk...</option>
                       {ARTIFACT_PERK_OPTIONS.map((perk) => (
-                        <option key={perk.id} value={perk.label}>
+                        <option key={perk.id} value={perk.id}>
                           {perk.label} - {perk.description}
                         </option>
                       ))}
@@ -1057,7 +1311,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                         color: 'white',
                         fontSize: '0.8rem'
                       }}>
-                        <span>{perk}</span>
+                        <span>{formatPerksForDisplay([perk])}</span>
                         <button
                           type="button"
                           onClick={() => removeDraftPerk(perk)}
@@ -1079,85 +1333,477 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   </p>
                 </div>
                 {draftArtifactRarity === 'legendary' && (
-                  <div style={{ gridColumn: '1 / -1', background: '#111827', border: '1px solid #f59e0b', borderRadius: '0.75rem', padding: '1rem' }}>
-                    <h5 style={{ margin: '0 0 0.75rem 0', color: '#fbbf24' }}>Legendary New Skill</h5>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                      <input
-                        type="text"
-                        value={draftArtifactSkill?.name || ''}
-                        onChange={(e) => setNewArtifact({
-                          ...newArtifact,
-                          artifactSkill: {
-                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
-                            name: e.target.value,
-                            description: draftArtifactSkill?.description || '',
-                            type: draftArtifactSkill?.type || 'utility',
-                            cost: draftArtifactSkill?.cost || 0,
-                            cooldown: draftArtifactSkill?.cooldown || 0,
-                            targetType: draftArtifactSkill?.targetType || 'self'
-                          }
-                        })}
-                        placeholder="Skill name"
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
-                      />
-                      <input
-                        type="text"
+                  <div style={{ gridColumn: '1 / -1', padding: '1rem', background: 'rgba(251, 191, 36, 0.12)', borderRadius: '0.75rem', border: '1px solid #f59e0b' }}>
+                    <h5 style={{ margin: '0 0 1rem 0', fontSize: '0.95rem', fontWeight: 'bold', color: '#b45309' }}>Legendary New Skill</h5>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Skill Name *</label>
+                        <input
+                          type="text"
+                          value={draftArtifactSkill?.name || ''}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: e.target.value,
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          placeholder="Skill name"
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Type</label>
+                        <select
+                          value={draftArtifactSkill?.type || 'utility'}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: e.target.value as EquippableArtifactSkill['type'],
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        >
+                          <option value="attack">Attack</option>
+                          <option value="defense">Defense</option>
+                          <option value="utility">Utility</option>
+                          <option value="support">Support</option>
+                          <option value="control">Control</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Cost (PP)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={draftArtifactSkill?.cost ?? 0}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: parseInt(e.target.value, 10) || 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Cooldown (turns)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={draftArtifactSkill?.cooldown ?? 0}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: parseInt(e.target.value, 10) || 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Target</label>
+                        <select
+                          value={draftArtifactSkill?.targetType || 'self'}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: e.target.value as EquippableArtifactSkill['targetType'],
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        >
+                          <option value="self">Self</option>
+                          <option value="single">Single</option>
+                          <option value="team">Team</option>
+                          <option value="enemy">Enemy</option>
+                          <option value="enemy_team">Enemy Team</option>
+                          <option value="all">All</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Damage</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={draftArtifactSkill?.damage ?? ''}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          placeholder="0"
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Healing</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={draftArtifactSkill?.healing ?? ''}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0,
+                              shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          placeholder="0"
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Shield Boost</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={draftArtifactSkill?.shieldBoost ?? ''}
+                          onChange={(e) => setNewArtifact((prev) => ({
+                            ...prev,
+                            artifactSkill: {
+                              id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                              name: (prev as EquippableArtifact).artifactSkill?.name || '',
+                              description: (prev as EquippableArtifact).artifactSkill?.description || '',
+                              type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                              cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                              cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                              targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                              damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                              healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                              shieldBoost: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0,
+                              statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
+                            }
+                          }))}
+                          placeholder="0"
+                          style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Description</label>
+                      <textarea
                         value={draftArtifactSkill?.description || ''}
-                        onChange={(e) => setNewArtifact({
-                          ...newArtifact,
+                        onChange={(e) => setNewArtifact((prev) => ({
+                          ...prev,
                           artifactSkill: {
-                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
-                            name: draftArtifactSkill?.name || '',
+                            id: (prev as EquippableArtifact).artifactSkill?.id || `${(prev as EquippableArtifact).id || 'artifact'}-skill`,
+                            name: (prev as EquippableArtifact).artifactSkill?.name || '',
                             description: e.target.value,
-                            type: draftArtifactSkill?.type || 'utility',
-                            cost: draftArtifactSkill?.cost || 0,
-                            cooldown: draftArtifactSkill?.cooldown || 0,
-                            targetType: draftArtifactSkill?.targetType || 'self'
+                            type: (prev as EquippableArtifact).artifactSkill?.type || 'utility',
+                            cost: (prev as EquippableArtifact).artifactSkill?.cost ?? 0,
+                            cooldown: (prev as EquippableArtifact).artifactSkill?.cooldown ?? 0,
+                            targetType: (prev as EquippableArtifact).artifactSkill?.targetType || 'self',
+                            damage: (prev as EquippableArtifact).artifactSkill?.damage,
+                            healing: (prev as EquippableArtifact).artifactSkill?.healing,
+                            shieldBoost: (prev as EquippableArtifact).artifactSkill?.shieldBoost,
+                            statusEffects: (prev as EquippableArtifact).artifactSkill?.statusEffects ?? []
                           }
-                        })}
+                        }))}
                         placeholder="Skill description"
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
+                        rows={3}
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', background: '#ffffff', color: '#111827', fontSize: '0.875rem', resize: 'vertical' }}
                       />
-                      <select
-                        value={draftArtifactSkill?.type || 'utility'}
-                        onChange={(e) => setNewArtifact({
-                          ...newArtifact,
-                          artifactSkill: {
-                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
-                            name: draftArtifactSkill?.name || '',
-                            description: draftArtifactSkill?.description || '',
-                            type: e.target.value as any,
-                            cost: draftArtifactSkill?.cost || 0,
-                            cooldown: draftArtifactSkill?.cooldown || 0,
-                            targetType: draftArtifactSkill?.targetType || 'self'
-                          }
-                        })}
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
-                      >
-                        <option value="attack">Attack</option>
-                        <option value="defense">Defense</option>
-                        <option value="utility">Utility</option>
-                        <option value="support">Support</option>
-                        <option value="control">Control</option>
-                      </select>
-                      <input
-                        type="number"
-                        value={draftArtifactSkill?.cooldown || 0}
-                        onChange={(e) => setNewArtifact({
-                          ...newArtifact,
-                          artifactSkill: {
-                            id: draftArtifactSkill?.id || `${newArtifact.id || 'artifact'}-skill`,
-                            name: draftArtifactSkill?.name || '',
-                            description: draftArtifactSkill?.description || '',
-                            type: draftArtifactSkill?.type || 'utility',
-                            cost: draftArtifactSkill?.cost || 0,
-                            cooldown: parseInt(e.target.value) || 0,
-                            targetType: draftArtifactSkill?.targetType || 'self'
-                          }
-                        })}
-                        placeholder="Cooldown"
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #4b5563', background: '#1f2937', color: 'white' }}
-                      />
+                    </div>
+                    {/* Status Effects - same as Manifest Move Editor */}
+                    <div style={{ marginTop: '1rem', padding: '1rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #f59e0b' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <h5 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>Status Effects</h5>
+                        <button
+                          type="button"
+                          onClick={() => setNewArtifact((prev) => {
+                            const skill = (prev as EquippableArtifact).artifactSkill;
+                            const effects = [...(skill?.statusEffects ?? []), { type: 'burn' as const, duration: 1, successChance: 100 }];
+                            return { ...prev, artifactSkill: skill ? { ...skill, statusEffects: effects } : { id: `${(prev as EquippableArtifact).id || 'artifact'}-skill`, name: '', description: '', type: 'utility', cost: 0, cooldown: 0, targetType: 'self', statusEffects: effects } };
+                          })}
+                          style={{ padding: '0.25rem 0.75rem', background: '#10b981', border: 'none', borderRadius: '0.25rem', color: 'white', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 'bold' }}
+                        >
+                          + Add Effect
+                        </button>
+                      </div>
+                      {(draftArtifactSkill?.statusEffects ?? []).length === 0 ? (
+                        <div style={{ color: '#92400e', fontSize: '0.875rem', fontStyle: 'italic', textAlign: 'center', padding: '1rem' }}>No effects. Click &quot;Add Effect&quot; to add one.</div>
+                      ) : (
+                        (draftArtifactSkill?.statusEffects ?? []).map((effect, effectIndex) => (
+                          <div key={effectIndex} style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.5)', borderRadius: '0.5rem', border: '1px solid rgba(0,0,0,0.1)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                              <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>Effect {effectIndex + 1}</span>
+                              <button
+                                type="button"
+                                onClick={() => setNewArtifact((prev) => {
+                                  const skill = (prev as EquippableArtifact).artifactSkill;
+                                  if (!skill) return prev;
+                                  const effects = (skill.statusEffects ?? []).filter((_, i) => i !== effectIndex);
+                                  return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                })}
+                                style={{ padding: '0.25rem 0.5rem', background: '#ef4444', border: 'none', borderRadius: '0.25rem', color: 'white', fontSize: '0.7rem', cursor: 'pointer' }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                              <div>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Effect Type</label>
+                                <select
+                                  value={effect.type || 'none'}
+                                  onChange={(e) => {
+                                    const effectType = e.target.value as ArtifactStatusEffect['type'];
+                                    setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], type: effectType, duration: effects[effectIndex].duration ?? 1, successChance: effectType === 'none' ? undefined : (effects[effectIndex].successChance ?? 100) };
+                                      if (effectType === 'none') { effects[effectIndex].intensity = undefined; effects[effectIndex].damagePerTurn = undefined; effects[effectIndex].ppLossPerTurn = undefined; effects[effectIndex].ppStealPerTurn = undefined; effects[effectIndex].healPerTurn = undefined; effects[effectIndex].chance = undefined; }
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    });
+                                  }}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                >
+                                  <option value="none">None</option>
+                                  <option value="burn">Burn (Damage over time)</option>
+                                  <option value="stun">Stun (Skip turn)</option>
+                                  <option value="bleed">Bleed (Lose PP each turn)</option>
+                                  <option value="poison">Poison (Minor damage over time, stacks)</option>
+                                  <option value="confuse">Confuse (50% wrong move/attack self)</option>
+                                  <option value="drain">Drain (Steal PP and heal each turn)</option>
+                                  <option value="cleanse">Cleanse (Removes all negative effects)</option>
+                                  <option value="freeze">Freeze (Legacy)</option>
+                                  <option value="reduce">Reduce (Reduce incoming damage)</option>
+                                  <option value="summon">Summon (Construct ally attacks with elemental damage)</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Duration (Turns)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={effect.duration ?? 0}
+                                  onChange={(e) => setNewArtifact((prev) => {
+                                    const skill = (prev as EquippableArtifact).artifactSkill;
+                                    if (!skill) return prev;
+                                    const effects = [...(skill.statusEffects ?? [])];
+                                    effects[effectIndex] = { ...effects[effectIndex], duration: parseInt(e.target.value, 10) || 0 };
+                                    return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                  })}
+                                  disabled={effect.type === 'none'}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: effect.type === 'none' ? '#f3f4f6' : '#fff', color: '#111827' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Success Chance (%)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={effect.successChance !== undefined ? effect.successChance : 100}
+                                  onChange={(e) => setNewArtifact((prev) => {
+                                    const skill = (prev as EquippableArtifact).artifactSkill;
+                                    if (!skill) return prev;
+                                    const effects = [...(skill.statusEffects ?? [])];
+                                    effects[effectIndex] = { ...effects[effectIndex], successChance: parseInt(e.target.value, 10) || 100 };
+                                    return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                  })}
+                                  disabled={effect.type === 'none'}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: effect.type === 'none' ? '#f3f4f6' : '#fff', color: '#111827' }}
+                                />
+                              </div>
+                            </div>
+                            {(effect.type === 'burn' || effect.type === 'poison') && (
+                              <div style={{ marginBottom: '0.5rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Damage Per Turn</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={effect.damagePerTurn ?? effect.intensity ?? ''}
+                                  onChange={(e) => {
+                                    const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                                    setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], damagePerTurn: value, intensity: value };
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    });
+                                  }}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                />
+                              </div>
+                            )}
+                            {effect.type === 'bleed' && (
+                              <div style={{ marginBottom: '0.5rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>PP Loss per turn</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={effect.ppLossPerTurn ?? effect.intensity ?? ''}
+                                  onChange={(e) => {
+                                    const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                                    setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], ppLossPerTurn: value, intensity: value };
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    });
+                                  }}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                />
+                              </div>
+                            )}
+                            {effect.type === 'confuse' && (
+                              <div style={{ marginBottom: '0.5rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Confusion Chance (%)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={effect.chance ?? effect.intensity ?? 50}
+                                  onChange={(e) => {
+                                    const value = e.target.value === '' ? 50 : parseInt(e.target.value, 10) || 50;
+                                    setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], chance: value, intensity: value };
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    });
+                                  }}
+                                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                />
+                              </div>
+                            )}
+                            {effect.type === 'drain' && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                                <div>
+                                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>PP Steal Per Turn</label>
+                                  <input type="number" min={0} value={effect.ppStealPerTurn ?? effect.intensity ?? ''} onChange={(e) => { const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0; setNewArtifact((prev) => { const skill = (prev as EquippableArtifact).artifactSkill; if (!skill) return prev; const effects = [...(skill.statusEffects ?? [])]; effects[effectIndex] = { ...effects[effectIndex], ppStealPerTurn: value, intensity: value }; return { ...prev, artifactSkill: { ...skill, statusEffects: effects } }; }); }} style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }} />
+                                </div>
+                                <div>
+                                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Heal Per Turn</label>
+                                  <input type="number" min={0} value={effect.healPerTurn ?? ''} onChange={(e) => { const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0; setNewArtifact((prev) => { const skill = (prev as EquippableArtifact).artifactSkill; if (!skill) return prev; const effects = [...(skill.statusEffects ?? [])]; effects[effectIndex] = { ...effects[effectIndex], healPerTurn: value }; return { ...prev, artifactSkill: { ...skill, statusEffects: effects } }; }); }} style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }} />
+                                </div>
+                              </div>
+                            )}
+                            {effect.type === 'reduce' && (
+                              <div style={{ marginBottom: '0.5rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Damage Reduction (%)</label>
+                                <input type="number" min={0} max={100} value={effect.damageReduction ?? ''} onChange={(e) => { const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0; setNewArtifact((prev) => { const skill = (prev as EquippableArtifact).artifactSkill; if (!skill) return prev; const effects = [...(skill.statusEffects ?? [])]; effects[effectIndex] = { ...effects[effectIndex], damageReduction: value }; return { ...prev, artifactSkill: { ...skill, statusEffects: effects } }; }); }} style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }} />
+                              </div>
+                            )}
+                            {effect.type === 'summon' && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                                <div>
+                                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Elemental Type</label>
+                                  <select
+                                    value={effect.summonElementalType ?? 'fire'}
+                                    onChange={(e) => setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], summonElementalType: e.target.value as typeof ARTIFACT_ELEMENTAL_TYPES[number] };
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    })}
+                                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                  >
+                                    {ARTIFACT_ELEMENTAL_TYPES.map((elem) => (
+                                      <option key={elem} value={elem}>{elem.charAt(0).toUpperCase() + elem.slice(1)}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500', color: '#1f2937' }}>Construct Damage</label>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={effect.summonDamage ?? 100}
+                                    onChange={(e) => setNewArtifact((prev) => {
+                                      const skill = (prev as EquippableArtifact).artifactSkill;
+                                      if (!skill) return prev;
+                                      const effects = [...(skill.statusEffects ?? [])];
+                                      effects[effectIndex] = { ...effects[effectIndex], summonDamage: parseInt(e.target.value, 10) || 0 };
+                                      return { ...prev, artifactSkill: { ...skill, statusEffects: effects } };
+                                    })}
+                                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem', background: '#fff', color: '#111827' }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 )}
@@ -1217,9 +1863,14 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
             <div style={{ marginBottom: '2rem' }}>
               <h4 style={{ marginBottom: '1rem' }}>Existing Artifacts ({Object.keys(equippableArtifacts).length})</h4>
               <div style={{ display: 'grid', gap: '1rem' }}>
-                {Object.values(equippableArtifacts).map((artifact) => (
+                {Object.entries(equippableArtifacts).map(([catalogKey, artifact]) => {
+                  const eq: EquippableArtifact = {
+                    ...artifact,
+                    id: artifact.id || catalogKey,
+                  };
+                  return (
                   <div
-                    key={artifact.id}
+                    key={catalogKey}
                     style={{
                       background: '#374151',
                       padding: '1rem',
@@ -1228,37 +1879,61 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
                       <div>
-                        <div style={{ fontWeight: 'bold', fontSize: '1.125rem' }}>{artifact.name}</div>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.125rem' }}>{eq.name}</div>
                         <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                          Slot: {artifact.slot} | Level: {artifact.level || 1}
+                          Slot: {eq.slot} | Level: {eq.level || 1}
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#60a5fa', marginTop: '0.25rem', fontWeight: 600 }}>
-                          {String(artifact.rarity || 'common').charAt(0).toUpperCase() + String(artifact.rarity || 'common').slice(1)} · +{artifact.powerLevelBonus ?? getPowerLevelBonusForRarity(artifact.rarity || 'common')} Power Level
+                          {String(eq.rarity || 'common').charAt(0).toUpperCase() + String(eq.rarity || 'common').slice(1)} · +{eq.powerLevelBonus ?? getPowerLevelBonusForRarity(eq.rarity || 'common')} Power Level
                         </div>
-                        {artifact.description && (
+                        {eq.description && (
                           <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                            {artifact.description}
+                            {eq.description}
                           </div>
                         )}
-                        {artifact.stats && Object.keys(artifact.stats).length > 0 && (
+                        {eq.stats && Object.keys(eq.stats).length > 0 && (
                           <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                            Stats: {JSON.stringify(artifact.stats)}
+                            Stats: {JSON.stringify(eq.stats)}
                           </div>
                         )}
-                        {artifact.perks && artifact.perks.length > 0 && (
+                        {eq.perks && eq.perks.length > 0 && (
                           <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                            Perks: {artifact.perks.join(', ')}
+                            Perks: {formatPerksForDisplay(eq.perks)}
                           </div>
                         )}
-                        {artifact.rarity === 'legendary' && artifact.artifactSkill?.name && (
+                        {eq.rarity === 'legendary' && eq.artifactSkill?.name && (
                           <div style={{ fontSize: '0.875rem', color: '#f59e0b', marginTop: '0.25rem', fontWeight: 600 }}>
-                            New Skill: {artifact.artifactSkill.name}
+                            New Skill: {eq.artifactSkill.name}
                           </div>
                         )}
                       </div>
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: '0.5rem',
+                          flexWrap: 'wrap',
+                          justifyContent: 'flex-end',
+                        }}
+                      >
                         <button
-                          onClick={() => handleEditEquippableArtifact(artifact.id)}
+                          type="button"
+                          onClick={() => handleAddEquippableToMarketplace(eq)}
+                          style={{
+                            background: '#8b5cf6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            padding: '0.5rem 1rem',
+                            cursor: 'pointer',
+                            fontSize: '0.875rem',
+                            fontWeight: 600,
+                          }}
+                          title="Create or update an MST MKT store row that grants this equippable"
+                        >
+                          Add to MKT
+                        </button>
+                        <button
+                          onClick={() => handleEditEquippableArtifact(catalogKey)}
                           style={{
                             background: '#3b82f6',
                             color: 'white',
@@ -1272,7 +1947,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                           Edit
                         </button>
                         <button
-                          onClick={() => handleDeleteEquippableArtifact(artifact.id)}
+                          onClick={() => handleDeleteEquippableArtifact(catalogKey)}
                           style={{
                             background: '#ef4444',
                             color: 'white',
@@ -1288,7 +1963,8 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

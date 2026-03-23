@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where, onSnapshot, doc, getDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { joinSession } from '../utils/inSessionService';
+import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
 
 interface LiveEvent {
   id: string;
@@ -37,14 +38,7 @@ const LiveEvents: React.FC = () => {
       if (!currentUser) return;
 
       try {
-        const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
-        const userClassIds = classroomsSnapshot.docs
-          .filter(doc => {
-            const classData = doc.data();
-            return (classData.students || []).includes(currentUser.uid);
-          })
-          .map(doc => doc.id);
-
+        const userClassIds = await getClassroomIdsForEnrolledStudent(currentUser.uid);
         setUserClassrooms(userClassIds);
       } catch (error) {
         console.error('Error fetching user classrooms:', error);

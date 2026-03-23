@@ -4,6 +4,7 @@ import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { CHAPTERS, Chapter } from '../types/chapters';
+import { getChapterProgress } from '../utils/journeyProgress';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterTrackerProps {
@@ -116,9 +117,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
       case 'profile':
         return studentData?.displayName && studentData?.photoURL;
       case 'previousChapter':
-        // Check if previous chapter is completed
+        // Check if previous chapter is completed (Firestore may use string keys)
         const prevChapterId = requirement.value;
-        const prevChapterProgress = userProgress?.chapters?.[prevChapterId];
+        const prevChapterProgress =
+          userProgress?.chapters?.[String(prevChapterId)] ?? userProgress?.chapters?.[prevChapterId];
         return prevChapterProgress?.isCompleted || false;
       default:
         debug.warn('ChapterTracker', `Unknown requirement type: ${requirement.type}`);
@@ -135,13 +137,13 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     
     // Chapter 1 and 2 are always available to all players - no requirements
     if (chapter.id === 1 || chapter.id === 2) {
-      const chapterProgress = userProgress.chapters?.[chapter.id];
+      const chapterProgress = getChapterProgress(userProgress, chapter.id);
       if (chapterProgress?.isCompleted) return 'completed';
       if (chapterProgress?.isActive) return 'active';
       return 'available'; // Always available, even if not active yet
     }
     
-    const chapterProgress = userProgress.chapters?.[chapter.id];
+    const chapterProgress = getChapterProgress(userProgress, chapter.id);
     if (chapterProgress?.isCompleted) return 'completed';
     if (chapterProgress?.isActive) return 'active';
     
@@ -158,10 +160,10 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     return requirementsMet ? 'available' : 'locked';
   };
 
-  const getChapterProgress = (chapter: Chapter) => {
+  const getChapterProgressPercent = (chapter: Chapter) => {
     if (!userProgress) return 0;
     
-    const chapterProgress = userProgress.chapters?.[chapter.id];
+    const chapterProgress = getChapterProgress(userProgress, chapter.id);
     if (!chapterProgress) return 0;
     
     const completedChallenges = chapter.challenges.filter(challenge => 
@@ -324,7 +326,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
         {CHAPTERS.map((chapter, index) => {
           const status = getChapterStatus(chapter);
-          const progress = getChapterProgress(chapter);
+          const progress = getChapterProgressPercent(chapter);
           
           // Determine card styling based on status
           let cardStyle = {};

@@ -4,11 +4,12 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { updateManifestAscensionLevel, unlockManifestLevel } from './manifestAscensionService';
 import { updateSkillLevel, updateSkillMastery } from './skillService';
 import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
+import { Move } from '../types/battle';
 
 export interface FixPlayerManifestOptions {
   manifestId: string; // e.g., 'reading', 'writing', 'gaming', etc.
@@ -138,6 +139,82 @@ export async function fixPlayerManifestAndSkills(
       message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` 
     };
   }
+}
+
+/**
+ * Update move levels in battleMoves collection (source of truth for Battle UI).
+ * Prevents skill level resets when only the legacy moves collection was updated.
+ */
+export async function updateBattleMoveLevels(
+  userId: string,
+  skillLevels: { [skillId: string]: { level: number; mastery: number } }
+): Promise<void> {
+  const battleMovesRef = doc(db, 'battleMoves', userId);
+  const battleMovesDoc = await getDoc(battleMovesRef);
+  if (!battleMovesDoc.exists()) return;
+  const moves: Move[] = battleMovesDoc.data().moves || [];
+  if (!moves.length) return;
+  let updated = false;
+  const updatedMoves = moves.map((m) => {
+    const spec = skillLevels[m.id ?? ''];
+    if (!spec) return m;
+    if (m.level === spec.level && m.masteryLevel === spec.mastery) return m;
+    updated = true;
+    return { ...m, level: spec.level, masteryLevel: spec.mastery };
+  });
+  if (updated) await updateDoc(battleMovesRef, { moves: updatedMoves });
+}
+
+/**
+ * Restore a player's manifest skill levels in battleMoves by display name.
+ * Use when a player's manifest skills were incorrectly reset to level 1.
+ */
+export async function restorePlayerManifestSkillLevels(
+  displayName: string,
+  manifestMoveLevels: { moveName: string; level: number; masteryLevel?: number }[]
+): Promise<{ success: boolean; message: string }> {
+  const userId = await findPlayerByName(displayName);
+  if (!userId) {
+    return { success: false, message: `Could not find player "${displayName}".` };
+  }
+  const battleMovesRef = doc(db, 'battleMoves', userId);
+  const battleMovesDoc = await getDoc(battleMovesRef);
+  if (!battleMovesDoc.exists()) {
+    return { success: false, message: `No battleMoves document for ${displayName}.` };
+  }
+  const moves: Move[] = battleMovesDoc.data().moves || [];
+  const nameToSpec = new Map(manifestMoveLevels.map((s) => [s.moveName.toLowerCase().trim(), s]));
+  let changed = false;
+  const updatedMoves = moves.map((m) => {
+    const spec = nameToSpec.get((m.name ?? '').toLowerCase().trim());
+    if (!spec || (m.level === spec.level && (m.masteryLevel ?? 1) === (spec.masteryLevel ?? 1))) return m;
+    changed = true;
+    return {
+      ...m,
+      level: spec.level,
+      masteryLevel: spec.masteryLevel ?? 1
+    };
+  });
+  if (!changed) {
+    return { success: true, message: `${displayName}: manifest move levels already correct.` };
+  }
+  await updateDoc(battleMovesRef, { moves: updatedMoves });
+  await recalculatePowerLevel(userId);
+  return {
+    success: true,
+    message: `Restored manifest skill levels for ${displayName}: ${manifestMoveLevels.map((s) => `${s.moveName} → level ${s.level}`).join(', ')}.`
+  };
+}
+
+/**
+ * Restore Eddie Vasquez's Gaming manifest skills (Pattern Break, Strategy Matrix) to level 2.
+ * Run once after a mistaken reset; safe to call multiple times.
+ */
+export async function restoreEddieVasquezManifestSkills(): Promise<{ success: boolean; message: string }> {
+  return restorePlayerManifestSkillLevels('Eddie Vasquez', [
+    { moveName: 'Pattern Break', level: 2, masteryLevel: 1 },
+    { moveName: 'Strategy Matrix', level: 2, masteryLevel: 1 }
+  ]);
 }
 
 /**

@@ -50,6 +50,34 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
   return moves;
 }
 
+/** Known On/Off RR Candy move ids → display names (independent of chapter candyType; fixes "Vault Hack" in UI). */
+const RR_CANDY_ON_OFF_DISPLAY: Record<string, string> = {
+  'rr-candy-on-off-shields-off': 'Shield OFF',
+  'rr-candy-on-off-shields-on': 'Shield ON',
+};
+
+/**
+ * Human-readable name for an RR Candy move for UI (loadout preview, lists).
+ * Uses move id first so legacy stored names like "Vault Hack" never show when ids are canonical.
+ */
+export function getRRCandyDisplayName(move: Pick<Move, 'id' | 'name'>): string {
+  const id = move.id || '';
+  if (RR_CANDY_ON_OFF_DISPLAY[id]) return RR_CANDY_ON_OFF_DISPLAY[id];
+  if (!id.startsWith('rr-candy-')) return move.name;
+
+  for (const ct of ['on-off', 'up-down', 'config'] as const) {
+    const found = getRRCandyMoves(ct).find((m) => m.id === id);
+    if (found) return found.name;
+  }
+
+  const n = move.name;
+  if (n === 'Vault Hack' || n === 'Shield Restoration') {
+    if (id.includes('shields-off')) return 'Shield OFF';
+    if (id.includes('shields-on')) return 'Shield ON';
+  }
+  return n;
+}
+
 /**
  * Checks if a player has unlocked an RR Candy
  */

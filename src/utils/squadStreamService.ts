@@ -23,6 +23,36 @@ export function getDateKey(): string {
   return `${year}-${month}-${day}`;
 }
 
+/** UIDs from squad `members` (objects or legacy string ids) — used for Firestore rules `memberUids`. */
+export function memberUidsFromSquadMembers(members: unknown): string[] {
+  if (!Array.isArray(members)) return [];
+  return members
+    .map((m: { uid?: string } | string) => (typeof m === 'string' ? m : m?.uid))
+    .filter((u: unknown): u is string => typeof u === 'string' && u.length > 0);
+}
+
+/**
+ * Rules check `memberUids` (legacy docs only had `members` objects, so rules never matched).
+ * Call before transactions on subcollections (dailyCheckins, streamMessages).
+ */
+export async function ensureSquadHasMemberUids(squadId: string): Promise<void> {
+  const squadRef = doc(db, 'squads', squadId);
+  const snap = await getDoc(squadRef);
+  if (!snap.exists()) return;
+  const d = snap.data();
+  const uids = memberUidsFromSquadMembers(d.members);
+  if (uids.length === 0) return;
+  const existing = d.memberUids;
+  if (
+    Array.isArray(existing) &&
+    existing.length === uids.length &&
+    uids.every((u) => existing.includes(u))
+  ) {
+    return;
+  }
+  await updateDoc(squadRef, { memberUids: uids });
+}
+
 /**
  * Send a chat message to the squad stream
  */
@@ -33,6 +63,7 @@ export async function sendChatMessage(
   senderAvatarUrl: string | undefined,
   text: string
 ): Promise<void> {
+  await ensureSquadHasMemberUids(squadId);
   const messagesRef = collection(db, 'squads', squadId, 'streamMessages');
   
   await addDoc(messagesRef, {
@@ -53,6 +84,7 @@ export async function createSystemMessage(
   text: string,
   eventKey?: string
 ): Promise<void> {
+  await ensureSquadHasMemberUids(squadId);
   const messagesRef = collection(db, 'squads', squadId, 'streamMessages');
   
   await addDoc(messagesRef, {
@@ -73,9 +105,9 @@ export async function checkInToSquad(
   userName: string
 ): Promise<{ success: boolean; error?: string; count?: number; checkedInUserIds?: string[] }> {
   try {
+    await ensureSquadHasMemberUids(squadId);
     const dateKey = getDateKey();
     const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
-    const userRef = doc(db, 'users', userId);
 
     return await runTransaction(db, async (transaction) => {
       // PHASE 1: ALL READS FIRST (Firestore requirement)

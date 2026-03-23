@@ -7,6 +7,7 @@
 
 import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { computeLiveEventParticipationSkillCostServer } from './liveEventSkillCost';
 import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDebug';
 import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
@@ -25,6 +26,9 @@ export interface InSessionMoveResult {
   shieldBoost?: number;
   ppStolen?: number;
   ppCost?: number;
+  /** Live Events: Participation Points (movesEarned) spent for this skill */
+  participationPointsSpent?: number;
+  participationCostDiscount?: number;
   battleLogEntry?: string;
   stateChanges?: {
     targetHpBefore?: number;
@@ -56,6 +60,8 @@ export interface ApplyMoveParams {
   traceId?: string; // Optional traceId for debugging
   classId?: string; // Optional classId for debug mirror
   eventId?: string; // Optional eventId for debug mirror
+  /** When true, skill cost is taken from session movesEarned (authoritative); vault powerPoints is not reduced for that cost */
+  useLiveEventParticipationForSkillCost?: boolean;
 }
 
 /**
@@ -80,7 +86,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     resolvedAction,
     traceId,
     classId,
-    eventId
+    eventId,
+    useLiveEventParticipationForSkillCost = false
   } = params;
 
   const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -228,9 +235,30 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       const actorCopy = { ...actor };
       const targetCopy = { ...target };
 
-      // Validate actor has enough participation points (if required)
-      // For now, we assume moves are consumed via handleMoveConsumption before this is called
-      // But we can add validation here if needed
+      let participationPointsSpent = 0;
+      let participationCostDiscount = 0;
+      const vaultPpCostToDeduct = useLiveEventParticipationForSkillCost ? 0 : ppCost;
+
+      if (useLiveEventParticipationForSkillCost) {
+        const studentRef = doc(db, 'students', actorUid);
+        const studentSnap = await transaction.get(studentRef);
+        const equipped = studentSnap.exists()
+          ? ((studentSnap.data() as { equippedArtifacts?: unknown }).equippedArtifacts ?? {})
+          : {};
+        const costBreakdown = computeLiveEventParticipationSkillCostServer(move, equipped);
+        participationCostDiscount = costBreakdown.totalDiscount;
+        const finalParticipationCost = costBreakdown.finalCost;
+        const movesEarned = Math.max(0, Math.floor(Number(actorCopy.movesEarned) || 0));
+
+        if (finalParticipationCost > movesEarned) {
+          throw new Error(
+            `Need ${finalParticipationCost} Participation Points to use this skill (have ${movesEarned})`
+          );
+        }
+
+        actorCopy.movesEarned = movesEarned - finalParticipationCost;
+        participationPointsSpent = finalParticipationCost;
+      }
 
       // Initialize target vault data if missing (based on level if available)
       if (targetCopy.maxHp === undefined) {
@@ -308,9 +336,9 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         actorCopy.powerPoints = (actorCopy.powerPoints || 0) + actualSteal;
       }
 
-      // Deduct PP cost from actor
-      if (ppCost > 0) {
-        actorCopy.powerPoints = Math.max(0, (actorCopy.powerPoints || 0) - ppCost);
+      // Deduct vault PP cost from actor (skipped for Live Event skill cost when useLiveEventParticipationForSkillCost)
+      if (vaultPpCostToDeduct > 0) {
+        actorCopy.powerPoints = Math.max(0, (actorCopy.powerPoints || 0) - vaultPpCostToDeduct);
       }
 
       // Check for elimination (health + shield = 0)
@@ -367,6 +395,20 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           console.warn('[applyInSessionMove] ⚠️ Using fallback battle log message');
         }
       }
+
+      if (participationPointsSpent > 0) {
+        const discountPart =
+          participationCostDiscount > 0
+            ? ` (-${participationCostDiscount} cost reduction)`
+            : '';
+        const ppPart = ` for ${participationPointsSpent} PP${discountPart}`;
+        if (finalBattleLogMessage.endsWith('!')) {
+          finalBattleLogMessage = finalBattleLogMessage.slice(0, -1) + ppPart + '!';
+        } else {
+          finalBattleLogMessage = `${finalBattleLogMessage}${ppPart}`;
+        }
+      }
+
       const updatedBattleLog = [...battleLog, finalBattleLogMessage];
       
       if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
@@ -446,7 +488,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           targetShieldAfter: targetCopy.shield,
           targetPPBefore: players[targetIndex].powerPoints,
           targetPPAfter: targetCopy.powerPoints,
-          actorPPBefore: actor.powerPoints + ppCost - (ppStolen > 0 ? ppStolen : 0),
+          actorPPBefore: actor.powerPoints + vaultPpCostToDeduct - (ppStolen > 0 ? ppStolen : 0),
           actorPPAfter: actorCopy.powerPoints,
           wasEliminated
         });
@@ -460,7 +502,9 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         healing,
         shieldBoost,
         ppStolen,
-        ppCost,
+        ppCost: vaultPpCostToDeduct,
+        participationPointsSpent,
+        participationCostDiscount,
         battleLogEntry: finalBattleLogMessage,
         // Include state changes for debug mirror
         stateChanges: {
@@ -621,12 +665,15 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }));
     }
     
-    // Show user-friendly error
-    const userMessage = errorCode === 'permission-denied' 
-      ? 'You do not have permission to perform this action.'
-      : errorCode === 'failed-precondition'
-      ? 'The session state has changed. Please try again.'
-      : 'Failed to apply move. Please try again.';
+    // Show user-friendly error (preserve Live Event PP messages from transaction)
+    const userMessage =
+      typeof errorMessage === 'string' && errorMessage.includes('Participation Points')
+        ? errorMessage
+        : errorCode === 'permission-denied'
+          ? 'You do not have permission to perform this action.'
+          : errorCode === 'failed-precondition'
+            ? 'The session state has changed. Please try again.'
+            : 'Failed to apply move. Please try again.';
     
     return {
       success: false,

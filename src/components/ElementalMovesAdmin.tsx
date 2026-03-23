@@ -10,7 +10,7 @@ interface ElementalMovesAdminProps {
 }
 
 interface StatusEffect {
-  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'none';
+  type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
   duration: number;
   intensity?: number;
   damagePerTurn?: number;
@@ -780,6 +780,7 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
                                         <option value="cleanse">Cleanse (Removes all negative effects)</option>
                                         <option value="freeze">Freeze (Legacy)</option>
                                         <option value="reduce">Reduce (Reduce incoming damage)</option>
+                                        <option value="summon">Summon (Construct ally)</option>
                                       </select>
                                     </div>
                                     <div>

@@ -32,6 +32,36 @@ export interface RRCandyStatus {
 }
 
 /**
+ * Chapter progress is sometimes under chapters[2], sometimes under another numeric key.
+ * Scan all chapter objects for ep2-its-all-a-game (RR Candy unlock challenge).
+ */
+function findEp2ItsAllAGameChallenge(userData: any): { challenge: any; parentChapter: any } {
+  const chapters = userData?.chapters || {};
+  if (!chapters || typeof chapters !== 'object') return { challenge: {}, parentChapter: {} };
+
+  for (const key of Object.keys(chapters)) {
+    const ch = chapters[key];
+    if (!ch || typeof ch !== 'object') continue;
+    const challenges = ch.challenges;
+    if (!challenges || typeof challenges !== 'object') continue;
+    const direct = challenges['ep2-its-all-a-game'];
+    if (direct && typeof direct === 'object' && Object.keys(direct).length > 0) {
+      return { challenge: direct, parentChapter: ch };
+    }
+    for (const ck of Object.keys(challenges)) {
+      const low = ck.toLowerCase();
+      if (low.includes('its-all-a-game') || low.includes('all-a-game')) {
+        const c = challenges[ck];
+        if (c && typeof c === 'object' && Object.keys(c).length > 0) {
+          return { challenge: c, parentChapter: ch };
+        }
+      }
+    }
+  }
+  return { challenge: {}, parentChapter: {} };
+}
+
+/**
  * Get RR Candy unlock status from user data
  * This is the single source of truth for RR Candy unlock detection
  */
@@ -41,28 +71,28 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
     return { unlocked: false, candyType: null };
   }
 
-  // Check Chapter 2-4 completion (ep2-its-all-a-game challenge)
-  // Try multiple possible paths to handle different data structures
   const chapters = userData.chapters || {};
-  const chapter2 = chapters[2] || chapters['2'] || {};
+  const { challenge: foundChallenge, parentChapter: foundChapter } = findEp2ItsAllAGameChallenge(userData);
+
+  // Legacy path: chapter keyed as "2" only
+  const chapter2 = foundChapter && Object.keys(foundChapter).length > 0
+    ? foundChapter
+    : chapters[2] || chapters['2'] || {};
   const challenges = chapter2.challenges || {};
-  
-  // Try the standard challenge ID first
-  let challenge = challenges['ep2-its-all-a-game'] || {};
-  
-  // If not found, try alternative challenge IDs that might exist
+
+  let challenge =
+    foundChallenge && Object.keys(foundChallenge).length > 0
+      ? foundChallenge
+      : challenges['ep2-its-all-a-game'] || {};
+
   if (!challenge || Object.keys(challenge).length === 0) {
-    // Try finding any challenge that might be Chapter 2-4
     const challengeKeys = Object.keys(challenges);
-    console.log('getRRCandyStatus: Available challenge keys:', challengeKeys);
-    
-    // Look for challenge with "its-all-a-game" or similar
-    const matchingKey = challengeKeys.find(key => 
-      key.toLowerCase().includes('its-all-a-game') || 
-      key.toLowerCase().includes('all-a-game') ||
-      key.toLowerCase().includes('2-4')
+    const matchingKey = challengeKeys.find(
+      (key) =>
+        key.toLowerCase().includes('its-all-a-game') ||
+        key.toLowerCase().includes('all-a-game') ||
+        key.toLowerCase().includes('2-4')
     );
-    
     if (matchingKey) {
       challenge = challenges[matchingKey];
       console.log('getRRCandyStatus: Found alternative challenge key:', matchingKey);
@@ -73,11 +103,25 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
   // Also check if chapter itself is marked as completed (fallback)
   const challengeCompleted = challenge?.isCompleted === true || challenge?.status === 'approved';
   const chapterCompleted = chapter2?.isCompleted === true;
-  const isCompleted = challengeCompleted || chapterCompleted;
+  let isCompleted = challengeCompleted || chapterCompleted;
+
+  // Reward grants rr_candy artifact — treat as unlocked if present (progress may live only in students.artifacts)
+  const artifacts = userData.artifacts || {};
+  const hasRRCandyArtifact =
+    artifacts.rr_candy === true ||
+    artifacts['rr_candy'] === true ||
+    artifacts.rrCandy === true;
+  if (hasRRCandyArtifact) {
+    isCompleted = true;
+  }
   
   // Get candyType - default to 'on-off' if challenge is completed but candyChoice is missing
   // This matches Profile page behavior: const candyType = challenge?.candyChoice || 'on-off';
-  let candyType = challenge?.candyChoice;
+  let candyType =
+    challenge?.candyChoice ||
+    artifacts.candy_choice ||
+    artifacts.candyChoice ||
+    userData.candyChoice;
   if (isCompleted && !candyType) {
     // If challenge is completed but no candyChoice was saved, default to 'on-off'
     // This handles cases where the completion happened before candyChoice was properly saved
@@ -133,39 +177,28 @@ export async function getRRCandyStatusAsync(userId: string): Promise<RRCandyStat
   try {
     const userRef = doc(db, 'users', userId);
     const userDoc = await getDoc(userRef);
+    const userData = userDoc.exists() ? userDoc.data() : {};
 
-    if (!userDoc.exists()) {
-      console.warn('getRRCandyStatusAsync: User document does not exist:', userId);
-      return { unlocked: false, candyType: null };
+    let result = getRRCandyStatus(userData);
+
+    // Chapter / artifact progress is sometimes written only on students/{uid}
+    if (!result.unlocked) {
+      try {
+        const studentRef = doc(db, 'students', userId);
+        const studentDoc = await getDoc(studentRef);
+        if (studentDoc.exists()) {
+          const sResult = getRRCandyStatus(studentDoc.data());
+          if (sResult.unlocked) {
+            result = sResult;
+            console.log('getRRCandyStatusAsync: Unlocked from students doc');
+          }
+        }
+      } catch (e) {
+        console.warn('getRRCandyStatusAsync: students doc read skipped', e);
+      }
     }
 
-    const userData = userDoc.data();
-    
-    // Add detailed logging to debug unlock detection
-    const chapters = userData?.chapters || {};
-    const chapter2 = chapters[2] || chapters['2'] || {};
-    const challenges = chapter2?.challenges || {};
-    const challenge = challenges['ep2-its-all-a-game'] || {};
-    
-    console.log('getRRCandyStatusAsync: Debug data:', {
-      userId,
-      hasUserData: !!userData,
-      hasChapters: !!userData?.chapters,
-      hasChapter2: !!chapter2,
-      chapter2Keys: Object.keys(chapter2),
-      hasChallenges: !!challenges,
-      challengeKeys: Object.keys(challenges),
-      hasChallenge: !!challenge,
-      challengeData: challenge,
-      isCompleted: challenge?.isCompleted,
-      status: challenge?.status,
-      candyChoice: challenge?.candyChoice
-    });
-    
-    const result = getRRCandyStatus(userData);
-    
     console.log('getRRCandyStatusAsync: Result:', result);
-    
     return result;
   } catch (error) {
     console.error('Error fetching RR Candy status:', error);

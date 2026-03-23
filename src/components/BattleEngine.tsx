@@ -26,7 +26,25 @@ import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
-import { getEquippedSkillsForBattle } from '../utils/battleSkillsService';
+import { getEquippedSkillsForBattle, enrichEquippedArtifactsFromCatalog } from '../utils/battleSkillsService';
+import {
+  applyPpEconomyToPPGain,
+  effectiveSkillCooldownTurns,
+  getHealingBoostRegenPerTurn,
+  getOutgoingDamageMultiplierFromDamageBoostPerk,
+  getOutgoingDamageMultiplierFromCostReductionPerk,
+  getOutgoingDamageMultiplierFromElementalBoostPerk,
+  getOutgoingDamageMultiplierFromManifestBoostPerk,
+  getStatusDefenseMitigationFraction,
+} from '../utils/artifactPerkEffects';
+import {
+  getFirstSummonEffectFromMove,
+  resolveConstructStatsForSummonEffect,
+} from '../utils/summonConstructStats';
+import {
+  computeLiveEventParticipationSkillCost,
+  getSkillCostReductionFromBattleEffects,
+} from '../utils/liveEventSkillCost';
 import { SpacesModeState, SpaceId } from '../types/battleSession';
 import SpacesModeUI from './SpacesModeUI';
 import { 
@@ -55,6 +73,12 @@ interface Opponent {
   isAI?: boolean; // Optional flag to indicate if this is an AI-controlled ally/opponent
   isPlayer?: boolean; // Optional flag to indicate if this is the current player
   controller?: 'human' | 'ai'; // Controller type: 'human' for human players, 'ai' for AI-controlled allies/opponents
+  // Summoned construct (assists the summoner like Kon's clone)
+  isSummon?: boolean;
+  summonDuration?: number; // Turns remaining before the construct fades
+  summonDamage?: number;
+  summonElementalType?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  summonerId?: string; // Ally id who summoned this construct
 }
 
 interface BattleEngineProps {
@@ -167,6 +191,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const [userLevel, setUserLevel] = useState(1);
   const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
+  /** For Cost Reduction / other perk resolution (merges catalog perks onto equipped). */
+  const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
   const [battleSkills, setBattleSkills] = useState<Move[]>([]); // Canonical battle skills (all unlocked)
   const [userElement, setUserElement] = useState<string | undefined>(undefined); // User's elemental affinity
   const [skillCooldowns, setSkillCooldowns] = useState<Map<string, number>>(new Map()); // Track cooldowns in battle state
@@ -190,6 +216,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     currentTurnIndex: undefined,
     cooldowns: {} // Initialize cooldowns tracking
   });
+  const [turnActionsUsed, setTurnActionsUsed] = useState<{ player: boolean; construct: boolean }>({
+    player: false,
+    construct: false
+  });
+  const actionTurnRef = useRef<number>(0);
+  /** One Healing Boost regen tick per battle turn count (avoids Strict Mode double-fire). */
+  const lastHealingRegenTurnRef = useRef<number | null>(null);
 
   // Spaces Mode state
   const [spacesModeState, setSpacesModeState] = useState<SpacesModeState | null>(propSpacesModeState || null);
@@ -282,6 +315,90 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   
   // Allies state (for multiplayer mode, includes current player)
   const [allies, setAllies] = useState<Opponent[]>(propAllies || []);
+
+  /** PvP 1v1 with spaces state: grid UI + space targeting (not the Raid arena) */
+  const showSpacesBattleLayout = !!(isPvP && !isMultiplayer && currentUser && opponent && spacesModeState);
+
+  /** 1v1 / single-opponent battles use the same arena layout as Island Raid (allies left, enemies right) */
+  const useRaidStyleArena =
+    !isMultiplayer &&
+    !!opponent &&
+    !!currentUser &&
+    !!vault &&
+    !showSpacesBattleLayout;
+
+  /** Participant rows for 1v1 Raid-style arena (mirrors Island Raid layout) */
+  const raidStyleArenaRows = useMemo(() => {
+    if (!useRaidStyleArena || !currentUser || !vault || !opponent) return null;
+    return {
+      allies: [
+        {
+          id: currentUser.uid,
+          name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Player',
+          avatar: userPhotoURL || '🏰',
+          currentPP: vault.currentPP,
+          shieldStrength: vault.shieldStrength,
+          maxPP: vault.capacity,
+          maxShieldStrength: vault.maxShieldStrength,
+          level: userLevel,
+          vaultHealth: vault.vaultHealth,
+          maxVaultHealth: vault.maxVaultHealth,
+          isPlayer: true
+        }
+      ],
+      enemies: [
+        {
+          id: opponent.id,
+          name: opponent.name,
+          avatar: opponent.image || opponent.photoURL || '🏰',
+          currentPP: opponent.currentPP,
+          shieldStrength: opponent.shieldStrength,
+          maxPP: opponent.maxPP,
+          maxShieldStrength: opponent.maxShieldStrength,
+          level: opponent.level,
+          vaultHealth: opponent.vaultHealth,
+          maxVaultHealth:
+            opponent.maxVaultHealth !== undefined
+              ? opponent.maxVaultHealth
+              : Math.floor((opponent.maxPP || 1000) * 0.1),
+          isPlayer: false
+        }
+      ]
+    };
+  }, [useRaidStyleArena, currentUser, vault, opponent, userPhotoURL, userLevel]);
+
+  // For non-multiplayer 1v1 raid-style arena, initialize `allies` with the current player
+  // so summons (like Light Construct from Stroke of Creation) show up in the same arena UI.
+  useEffect(() => {
+    if (!useRaidStyleArena || !currentUser || !vault) return;
+
+    setAllies(prev => {
+      const playerId = currentUser.uid;
+      const hasPlayerRow = prev.some(a => a.id === playerId);
+
+      const playerRow: Opponent = {
+        id: playerId,
+        name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Player',
+        photoURL: userPhotoURL || undefined,
+        image: userPhotoURL || undefined,
+        currentPP: vault.currentPP,
+        maxPP: vault.capacity,
+        shieldStrength: vault.shieldStrength,
+        maxShieldStrength: vault.maxShieldStrength,
+        level: userLevel,
+        vaultHealth: vault.vaultHealth,
+        maxVaultHealth: vault.maxVaultHealth,
+        isPlayer: true
+      };
+
+      if (!hasPlayerRow) {
+        return [playerRow, ...prev];
+      }
+
+      // Keep any summoned constructs already present, but refresh the player's stats.
+      return prev.map(a => (a.id === playerId ? { ...a, ...playerRow } : a));
+    });
+  }, [useRaidStyleArena, currentUser, vault, userPhotoURL, userLevel]);
   
   // Track selected moves for all participants in multiplayer mode
   // Key: participantId, Value: { move: Move | null, targetId: string | null }
@@ -299,8 +416,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const waveTransitioningRef = useRef(false);
   // Ref to track internal updates to prevent circular sync with props
   const isInternalUpdateRef = useRef(false);
+  // Prevent re-applying admin CPU stat overrides every render (which would reset battle damage).
+  const cpuStatsAppliedRef = useRef<Set<string>>(new Set());
   // Ref to track when we're syncing from props (to prevent notifying parent)
   const isSyncingFromPropsRef = useRef(false);
+  // Refs for latest allies/opponents so timeouts can read current state (e.g. summon execution)
+  const alliesRef = useRef<Opponent[]>(allies);
+  const opponentsRef = useRef<Opponent[]>(opponents);
+  useEffect(() => {
+    alliesRef.current = allies;
+    opponentsRef.current = opponents;
+  }, [allies, opponents]);
   
   // Update wave state from props
   useEffect(() => {
@@ -400,7 +526,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Active status effects on player and opponent
   interface ActiveEffect {
-    type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce';
+    type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'skill_cost_reduction';
     duration: number;
     damagePerTurn?: number;
     ppLossPerTurn?: number;
@@ -409,6 +535,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     chance?: number; // For confuse
     intensity?: number; // Legacy support
     damageReduction?: number; // For reduce effect - percentage of damage to reduce (0-100)
+    summonElementalType?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+    summonDamage?: number;
+    /** Live Events: flat PP cost reduction for skills while effect active */
+    skillCostReduction?: number;
   }
 
   const [playerEffects, setPlayerEffects] = useState<ActiveEffect[]>([]);
@@ -693,16 +823,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       
       if (totalPPStolen > 0) {
-        // Opponent loses PP, player gains it
+        // Opponent loses PP, player gains it (PP Economy bonuses extra without stealing more)
         const actualPPStolen = Math.min(totalPPStolen, opponent.currentPP);
         setOpponent(prev => ({
           ...prev,
-          currentPP: Math.max(0, prev.currentPP - totalPPStolen)
+          currentPP: Math.max(0, prev.currentPP - actualPPStolen)
         }));
         if (vault) {
-          const playerGained = Math.min(vault.capacity || 1000 - vault.currentPP, totalPPStolen);
+          const boostedGain = applyPpEconomyToPPGain(
+            actualPPStolen,
+            equippedArtifacts as Record<string, unknown> | null,
+            equippableCatalogRaw
+          );
           await updateVault({
-            currentPP: Math.min(vault.capacity || 1000, vault.currentPP + totalPPStolen)
+            currentPP: Math.min(vault.capacity || 1000, vault.currentPP + boostedGain)
           });
           await refreshVaultData();
         }
@@ -750,7 +884,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     setEffects(updatedEffects);
     return { skipTurn, newLog };
-  }, [playerEffects, opponentEffects, vault, opponent, currentUser, updateVault, refreshVaultData]);
+  }, [
+    playerEffects,
+    opponentEffects,
+    vault,
+    opponent,
+    currentUser,
+    updateVault,
+    refreshVaultData,
+    equippedArtifacts,
+    equippableCatalogRaw,
+    isForestStageActive,
+  ]);
 
   // Add status effect from a move
   const addStatusEffect = useCallback((target: 'player' | 'opponent', effect: ActiveEffect, successChance: number = 100) => {
@@ -801,7 +946,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           setUserLevel(calculatedLevel);
           setUserPhotoURL(finalPhotoURL);
           // Load equipped artifacts for artifact damage multiplier
-          setEquippedArtifacts(userData.equippedArtifacts || null);
+          let equipped = userData.equippedArtifacts || null;
+          try {
+            const eqDoc = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+            const raw = eqDoc.exists() ? (eqDoc.data() as Record<string, unknown>) : null;
+            setEquippableCatalogRaw(raw);
+            if (equipped && raw) {
+              equipped = enrichEquippedArtifactsFromCatalog(equipped as Record<string, unknown>, raw);
+            }
+          } catch {
+            setEquippableCatalogRaw(null);
+          }
+          setEquippedArtifacts(equipped);
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -810,6 +966,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     fetchUserData();
   }, [currentUser]);
+
+  const getBattleSkillCooldownTurns = useCallback(
+    (move: Move) =>
+      effectiveSkillCooldownTurns(move.cooldown || 0, equippedArtifacts, equippableCatalogRaw),
+    [equippedArtifacts, equippableCatalogRaw]
+  );
 
   // Load CPU opponent moves from Firestore with real-time listener
   useEffect(() => {
@@ -856,6 +1018,83 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
     return () => unsubscribe();
   }, []);
+
+  // Resolve admin-configured CPU health/shields by opponent id/name.
+  const getConfiguredCPUStats = useCallback((opp: Opponent): { health?: number; shields?: number } | null => {
+    if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return null;
+    const oppId = (opp.id || '').toLowerCase();
+    const oppName = (opp.name || '').toLowerCase().trim();
+    const normalizedName = oppName.replace(/\s*\d+\s*$/, '').trim();
+    const normalizedIdFromName = normalizedName.replace(/\s+/g, '-');
+
+    const config = cpuOpponentMoves.find((cfg: any) => {
+      const cfgId = (cfg?.id || '').toLowerCase();
+      const cfgName = (cfg?.name || '').toLowerCase().trim();
+      return (
+        cfgId === oppId ||
+        cfgName === oppName ||
+        cfgName === normalizedName ||
+        cfgId === normalizedIdFromName
+      );
+    });
+    if (!config) return null;
+
+    const health = Number(config.health);
+    const shields = Number(config.shields);
+    return {
+      health: Number.isFinite(health) && health > 0 ? health : undefined,
+      shields: Number.isFinite(shields) && shields >= 0 ? shields : undefined
+    };
+  }, [cpuOpponentMoves]);
+
+  // Apply admin-configured CPU health/shields once per opponent at battle start.
+  useEffect(() => {
+    if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return;
+
+    if (isMultiplayer) {
+      setOpponents(prev => {
+        let changed = false;
+        const next = prev.map(opp => {
+          const key = `multi:${opp.id}`;
+          if (cpuStatsAppliedRef.current.has(key)) return opp;
+          const cfg = getConfiguredCPUStats(opp);
+          if (!cfg || (cfg.health === undefined && cfg.shields === undefined)) return opp;
+
+          cpuStatsAppliedRef.current.add(key);
+          changed = true;
+          return {
+            ...opp,
+            currentPP: cfg.health ?? opp.currentPP,
+            maxPP: cfg.health ?? opp.maxPP,
+            shieldStrength: cfg.shields ?? opp.shieldStrength,
+            maxShieldStrength: cfg.shields ?? opp.maxShieldStrength
+          };
+        });
+
+        if (changed && onOpponentsUpdate) {
+          setTimeout(() => onOpponentsUpdate(next), 0);
+        }
+        return changed ? next : prev;
+      });
+      return;
+    }
+
+    setOpponent(prev => {
+      const key = `single:${prev.id}`;
+      if (cpuStatsAppliedRef.current.has(key)) return prev;
+      const cfg = getConfiguredCPUStats(prev);
+      if (!cfg || (cfg.health === undefined && cfg.shields === undefined)) return prev;
+
+      cpuStatsAppliedRef.current.add(key);
+      return {
+        ...prev,
+        currentPP: cfg.health ?? prev.currentPP,
+        maxPP: cfg.health ?? prev.maxPP,
+        shieldStrength: cfg.shields ?? prev.shieldStrength,
+        maxShieldStrength: cfg.shields ?? prev.maxShieldStrength
+      };
+    });
+  }, [cpuOpponentMoves, getConfiguredCPUStats, isMultiplayer, onOpponentsUpdate]);
 
   // Update parent component with battle log changes (for Mindforge mode, In Session, and multiplayer)
   useEffect(() => {
@@ -1183,7 +1422,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const newAlliesCount = propAllies.length;
       
       console.log('BattleEngine: Updating allies from props:', newAlliesCount, propAllies.map(a => a.name));
-      setAllies(propAllies);
+      // Live Event: never wipe summons that exist in local state but not yet in props (timing / id sync).
+      if (isInSession) {
+        setAllies(prev => {
+          const propIds = new Set(propAllies.map(a => a.id));
+          const carryOverSummons = prev.filter(
+            a => a.isSummon && a.summonerId && !propIds.has(a.id)
+          );
+          return carryOverSummons.length > 0 ? [...propAllies, ...carryOverSummons] : propAllies;
+        });
+      } else {
+        setAllies(propAllies);
+      }
       
       // If a new player joined (allies count increased), reset to selection phase
       // This ensures the new player can select moves and existing players can still select/change moves
@@ -1223,7 +1473,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         });
       }
     }
-  }, [propAllies, isMultiplayer, allies.length]);
+  }, [propAllies, isMultiplayer, isInSession, allies.length]);
 
   // Apply opponent move from Firestore
   const applyOpponentMove = useCallback(async (moveData: any) => {
@@ -1589,17 +1839,158 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   }, [battleState.isPlayerTurn, battleState.phase, battleState.turnCount]);
 
-  // Available moves: all unlocked skills, with currentCooldown so UI can show cooldown timer (don't remove skills on cooldown)
+  // Healing Boost: restore vault health (or PP) once at the start of each player turn
+  useEffect(() => {
+    if (battleState.phase === 'victory' || battleState.phase === 'defeat') return;
+    if (!battleState.isPlayerTurn || battleState.phase !== 'selection') return;
+    if (!currentUser || !vault) return;
+
+    const regen = getHealingBoostRegenPerTurn(
+      equippedArtifacts as Record<string, unknown> | null,
+      equippableCatalogRaw
+    );
+    if (regen <= 0) return;
+
+    if (lastHealingRegenTurnRef.current === battleState.turnCount) return;
+    lastHealingRegenTurnRef.current = battleState.turnCount;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const maxPP = vault.capacity || 1000;
+        const maxVH = Math.floor(maxPP * 0.1);
+        const hasVaultHealth = vault.vaultHealth !== undefined && vault.vaultHealth !== null;
+
+        if (hasVaultHealth) {
+          const cur = Math.min(Math.max(0, Number(vault.vaultHealth) || 0), maxVH);
+          const next = Math.min(maxVH, cur + regen);
+          if (next <= cur || cancelled) return;
+          await updateVault({ vaultHealth: next });
+          await refreshVaultData();
+          const line = `💚 Healing Boost restores ${next - cur} health at the start of your turn!`;
+          setBattleState((prev) => {
+            const battleLog = [...prev.battleLog, line];
+            onBattleLogUpdate?.(battleLog);
+            return { ...prev, battleLog };
+          });
+        } else {
+          const cap = vault.capacity || 1000;
+          const cur = Math.max(0, Number(vault.currentPP) || 0);
+          const next = Math.min(cap, cur + regen);
+          if (next <= cur || cancelled) return;
+          await updateVault({ currentPP: next });
+          await refreshVaultData();
+          const line = `💚 Healing Boost restores ${next - cur} PP at the start of your turn!`;
+          setBattleState((prev) => {
+            const battleLog = [...prev.battleLog, line];
+            onBattleLogUpdate?.(battleLog);
+            return { ...prev, battleLog };
+          });
+        }
+      } catch (e) {
+        console.error('Healing Boost turn regen failed:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    battleState.isPlayerTurn,
+    battleState.phase,
+    battleState.turnCount,
+    currentUser,
+    vault,
+    equippedArtifacts,
+    equippableCatalogRaw,
+    updateVault,
+    refreshVaultData,
+    onBattleLogUpdate,
+  ]);
+
+  // Reset per-turn action usage once when a new player turn starts.
+  useEffect(() => {
+    if (!battleState.isPlayerTurn) return;
+    if (actionTurnRef.current === battleState.turnCount) return;
+    actionTurnRef.current = battleState.turnCount;
+    setTurnActionsUsed({ player: false, construct: false });
+  }, [battleState.isPlayerTurn, battleState.turnCount]);
+
+  const isConstructSkillId = useCallback((moveId?: string) => !!moveId?.startsWith('construct-skill::'), []);
+
+  // Build active summon skill list from CPU opponent move definitions.
+  const constructSkillMoves = useMemo(() => {
+    if (!currentUser || !Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return [] as Move[];
+    const summons = allies.filter(a => a.isSummon && a.summonerId === currentUser.uid);
+    if (summons.length === 0) return [] as Move[];
+
+    const normalize = (s?: string) => (s || '').toLowerCase().trim();
+    const constructMoves: Move[] = [];
+
+    summons.forEach((summon) => {
+      const summonName = normalize(summon.name);
+      const summonElem = normalize(summon.summonElementalType);
+      const source = cpuOpponentMoves.find((opp: any) => {
+        const oppId = normalize(opp?.id);
+        const oppName = normalize(opp?.name);
+        if (summonName && oppName === summonName) return true;
+        if (summonName && oppId === summonName.replace(/\s+/g, '-')) return true;
+        if (summonElem === 'light' && (oppId === 'light-construct' || oppName === 'light construct')) return true;
+        return false;
+      });
+
+      const sourceMoves = Array.isArray(source?.moves) ? source.moves : [];
+      sourceMoves.forEach((m: any, idx: number) => {
+        // Start with attack moves so construct turns remain intuitive.
+        if ((m?.type || 'attack') !== 'attack') return;
+
+        const min = typeof m?.damageRange?.min === 'number' ? m.damageRange.min : undefined;
+        const max = typeof m?.damageRange?.max === 'number' ? m.damageRange.max : undefined;
+        const baseDamage = typeof m?.baseDamage === 'number'
+          ? m.baseDamage
+          : (min !== undefined && max !== undefined ? Math.floor((min + max) / 2) : 0);
+        const constructMoveId = `construct-skill::${summon.id}::${m?.id || idx}`;
+        constructMoves.push({
+          id: constructMoveId,
+          name: `${summon.name}: ${m?.name || 'Construct Attack'}`,
+          description: m?.description || `${summon.name} attacks the enemy.`,
+          category: 'system',
+          type: 'attack',
+          level: 1,
+          cost: 0,
+          damage: baseDamage,
+          cooldown: 0,
+          currentCooldown: 0,
+          unlocked: true,
+          masteryLevel: 1,
+          targetType: 'single'
+        } as Move);
+      });
+    });
+
+    return constructMoves;
+  }, [allies, currentUser, cpuOpponentMoves]);
+
+  // Available moves: own unlocked skills + active construct skills.
   const availableMoves = useMemo(() => {
-    const skillsToUse = battleSkills.length > 0 ? battleSkills : moves.filter(m => m.unlocked);
-    
-    return skillsToUse
+    const playerSkills = (battleSkills.length > 0 ? battleSkills : moves.filter(m => m.unlocked))
       .filter(skill => skill.unlocked)
       .map(skill => {
         const currentCooldown = skillCooldowns.get(skill.id) || 0;
         return { ...skill, currentCooldown };
       });
-  }, [battleSkills, moves, skillCooldowns]);
+
+    let merged = [...playerSkills, ...constructSkillMoves];
+
+    // Enforce one player skill + one construct skill per turn when constructs are active.
+    if (turnActionsUsed.player && !turnActionsUsed.construct) {
+      merged = merged.filter(skill => isConstructSkillId(skill.id));
+    } else if (turnActionsUsed.construct && !turnActionsUsed.player) {
+      merged = merged.filter(skill => !isConstructSkillId(skill.id));
+    }
+
+    return merged;
+  }, [battleSkills, moves, skillCooldowns, constructSkillMoves, turnActionsUsed, isConstructSkillId]);
   
   // Create availableTargets from current opponent state - this will update when opponent changes
   // For single player mode, use single opponent. For multiplayer, use opponents array.
@@ -2437,6 +2828,36 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
         return; // Skip regular move selection for Kon
       }
+
+      // Summoned construct: attack with elemental damage
+      if ((participant as Opponent).isSummon) {
+        const summon = participant as Opponent;
+        const aliveEnemies = opponents.filter(opp => {
+          const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
+          const shield = opp.shieldStrength || 0;
+          return health > 0 || shield > 0;
+        });
+        const targetEnemy = aliveEnemies.length > 0 ? aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)] : null;
+        if (targetEnemy) {
+          const dmg = summon.summonDamage ?? 100;
+          const elem = summon.summonElementalType || 'fire';
+          const constructMove = {
+            id: `summon_attack_${summon.id}`,
+            name: `${elem} Strike`,
+            type: 'system' as const,
+            damage: dmg,
+            cooldown: 0,
+            cost: 0,
+            description: `Summoned construct attacks with ${elem} damage.`
+          };
+          setParticipantMoves(prev => {
+            const newMap = new Map(prev);
+            newMap.set(participant.id, { move: constructMove as any, targetId: targetEnemy.id });
+            return newMap;
+          });
+        }
+        return;
+      }
       
       // Regular AI ally move selection (for other AI allies if any)
       const availableMoves = moves || [];
@@ -2872,6 +3293,60 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         continue;
       }
 
+      // Summoned construct move: apply fixed elemental damage, then decrement duration
+      const isSummonMove = (participant as Opponent).isSummon && moveData.move.id?.startsWith?.('summon_attack_');
+      if (isSummonMove && target) {
+        const summon = participant as Opponent;
+        const summonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
+        const elem = summon.summonElementalType || 'fire';
+        const targetId = target.id;
+        const targetName = target.name || 'Unknown';
+        const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
+        const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
+        const targetShieldDamage = Math.min(summonDmg, target.shieldStrength || 0);
+        const remainingDamage = summonDmg - targetShieldDamage;
+        const targetHealthDamage = Math.min(remainingDamage, targetHealth);
+        const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
+        const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
+        isInternalUpdateRef.current = true;
+        setOpponents(prev => {
+          const updated = prev.map(opp => {
+            if (opp.id !== targetId) return opp;
+            const updatedOpp = { ...opp, shieldStrength: newTargetShield };
+            if (opp.vaultHealth !== undefined) {
+              updatedOpp.vaultHealth = newTargetHealth;
+              updatedOpp.maxVaultHealth = targetMaxHealth;
+              if (checkIsCPUOpponent(opp)) updatedOpp.currentPP = newTargetHealth;
+            } else {
+              updatedOpp.currentPP = newTargetHealth;
+            }
+            const finalHealth = updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : updatedOpp.currentPP;
+            updatedOpp.isDefeated = (finalHealth <= 0 && (updatedOpp.shieldStrength || 0) <= 0);
+            updatedOpp.defeatedAt = updatedOpp.isDefeated ? new Date() : undefined;
+            return updatedOpp;
+          });
+          if (onOpponentsUpdate) onOpponentsUpdate(updated);
+          setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
+          return updated;
+        });
+        const newDuration = Math.max(0, (summon.summonDuration ?? 1) - 1);
+        setAllies(prev => {
+          const next = newDuration <= 0 ? prev.filter(a => a.id !== participant.id) : prev.map(a => a.id === participant.id ? { ...a, summonDuration: newDuration } : a);
+          if (onAlliesUpdate) onAlliesUpdate(next);
+          return next;
+        });
+        const summonLog = newDuration <= 0
+          ? `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage and then faded!`
+          : `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage!`;
+        setBattleState(prev => {
+          const newLog = [...prev.battleLog, summonLog];
+          if (onBattleLogUpdate) onBattleLogUpdate(newLog);
+          return { ...prev, battleLog: newLog };
+        });
+        await new Promise(resolve => setTimeout(resolve, 400));
+        continue;
+      }
+
       // Execute the move
       if (isPlayerMove) {
         // Player move execution in multiplayer mode (for both current user and invited players)
@@ -2894,16 +3369,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const damageRange = calculateDamageRange(baseDamage, playerMove.level, effectiveMasteryLevel);
           const damageResult = rollDamage(damageRange, playerLevel, playerMove.level, effectiveMasteryLevel);
           totalDamage = damageResult.damage;
-          
-          // Apply artifact damage multiplier for elemental moves
-          if (playerMove.category === 'elemental' && equippedArtifacts) {
-            const ringLevel = equippedArtifacts.elementalRing?.level || 0;
-            const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
-            if (artifactMultiplier > 1.0) {
-              totalDamage = Math.floor(totalDamage * artifactMultiplier);
-            }
+
+          let dmgMult = 1.0;
+          const eqRec = equippedArtifacts as Record<string, unknown> | null;
+          if (playerMove.category === 'manifest' && equippedArtifacts) {
+            dmgMult *= getManifestDamageBoost(equippedArtifacts);
+            dmgMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(eqRec, equippableCatalogRaw);
           }
-          
+          if (playerMove.category === 'elemental' && equippedArtifacts) {
+            const ringLevel = getElementalRingLevel(equippedArtifacts);
+            dmgMult *= getArtifactDamageMultiplier(ringLevel);
+            dmgMult *= getOutgoingDamageMultiplierFromElementalBoostPerk(eqRec, equippableCatalogRaw);
+          }
+          dmgMult *= getOutgoingDamageMultiplierFromDamageBoostPerk(eqRec, equippableCatalogRaw);
+          dmgMult *= getOutgoingDamageMultiplierFromCostReductionPerk(eqRec, equippableCatalogRaw);
+          if (dmgMult > 1.001) {
+            totalDamage = Math.floor(totalDamage * dmgMult);
+          }
+
           console.log(`🎯 Player move damage calculation: ${playerMove.name}, baseDamage: ${baseDamage}, level: ${playerMove.level}, mastery: ${effectiveMasteryLevel}, finalDamage: ${totalDamage}`);
         } else {
           console.warn(`⚠️ Player move ${playerMove.name} has no damage (damage: ${playerMove.damage})`);
@@ -3556,7 +4039,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     const moveForTarget = battleState.selectedMove;
-    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing || moveForTarget?.targetType === 'self');
+    const hasSummonEffect = Array.isArray(moveForTarget?.statusEffects) && moveForTarget.statusEffects.some((e) => e?.type === 'summon');
+    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing || moveForTarget?.targetType === 'self' || hasSummonEffect);
 
     // Find the target opponent based on selectedTarget ID
     // Defensive moves (shield boost, healing) ALWAYS target the player - ignore any enemy selection
@@ -3640,7 +4124,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     // Check if offline moves are available before executing the move
-    if (onMoveConsumption) {
+    // Live Events: skill PP cost is deducted atomically in applyInSessionMove (movesEarned), not here
+    if (
+      onMoveConsumption &&
+      !isInSession &&
+      !(battleState.selectedMove?.id?.startsWith('construct-skill::'))
+    ) {
       try {
         // First, try to consume a move to validate availability
         const moveConsumed = await onMoveConsumption();
@@ -3666,7 +4155,45 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     const move = battleState.selectedMove;
+
+    // Live Events: afford participation cost before heavy execution (server still authoritative)
+    if (
+      isInSession &&
+      currentUser &&
+      move &&
+      !(move.id?.startsWith('construct-skill::'))
+    ) {
+      const effectRed = getSkillCostReductionFromBattleEffects(playerEffects as never);
+      const preBreakdown = computeLiveEventParticipationSkillCost(
+        move,
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw,
+        effectRed
+      );
+      const currentMe =
+        (allies.find(a => a.id === currentUser.uid) as { movesEarned?: number } | undefined)?.movesEarned ?? 0;
+      if (preBreakdown.finalCost > currentMe) {
+        alert(
+          `Need ${preBreakdown.finalCost} Participation Points to use this skill (have ${currentMe}).`
+        );
+        setBattleState(prev => ({
+          ...prev,
+          battleLog: [
+            ...prev.battleLog,
+            `❌ Need ${preBreakdown.finalCost} Participation Points to use ${move.name} (have ${currentMe}).`,
+          ],
+          phase: 'selection',
+          selectedMove: null,
+          selectedTarget: null,
+          currentAnimation: null,
+          isAnimating: false,
+        }));
+        return;
+      }
+    }
     const isSelfTarget = targetOpponent.id === currentUser?.uid;
+    const isConstructSkill = isConstructSkillId(move.id);
+    const constructIdFromMove = isConstructSkill ? move.id.split('::')[1] : undefined;
     console.log('Move Execution Debug:', {
       moveName: move.name,
       moveType: move.type,
@@ -3725,11 +4252,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
     }
     
-    if (currentUser?.uid) {
+    if (currentUser?.uid && !isConstructSkill) {
       trackMoveUsage(currentUser.uid, moveName).catch(err => {
         console.error('[BattleEngine] Error tracking move usage:', err);
       });
-    } else {
+    } else if (!currentUser?.uid) {
       console.warn('[BattleEngine] No currentUser.uid available for tracking');
     }
     
@@ -3740,7 +4267,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Get player name from allies array (which has correct profile data from session)
     // Find the current player in allies to get their correct name
     const currentPlayerInAllies = allies.find(a => a.id === currentUser?.uid);
-    const playerName = currentPlayerInAllies?.name || currentUser?.displayName || 'Player';
+    const constructActor = constructIdFromMove ? allies.find(a => a.id === constructIdFromMove) : undefined;
+    const playerName = constructActor?.name || currentPlayerInAllies?.name || currentUser?.displayName || 'Player';
     
     // Use the component-level checkIsCPUOpponent function (defined above)
     
@@ -3757,8 +4285,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     let wasPPStolen = false;
     let wasShieldAttacked = false;
     
-    // Get the overridden move name for battle log messages
-    const overriddenMoveName = await getMoveName(move.name);
+    // Use the actual move name for battle log so the player sees what they selected (e.g. "Stroke of Creation" not override)
+    const displayMoveName = move.name;
     
     // SPECIAL HANDLING FOR RR CANDY MOVES - Must happen BEFORE normal damage calculation
     // This ensures these moves work correctly and don't get overwritten by normal damage logic
@@ -3773,7 +4301,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       damage = 0; // No damage from this move
       shieldDamage = 0; // No shield damage from this move
       wasAttacked = false;
-      newLog.push(`🔋 ${playerName} used ${overriddenMoveName} to restore ${actualRestore} shields (50% of max)!`);
+      newLog.push(`🔋 ${playerName} used ${displayMoveName} to restore ${actualRestore} shields (50% of max)!`);
       console.log('🔋 [Shield ON] Shield restore calculation:', {
         maxShields,
         shieldRestoreAmount,
@@ -3796,7 +4324,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       damage = 0; // No health damage from this move
       wasShieldAttacked = true;
       wasAttacked = false; // This is shield-only damage, not a health attack
-      newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
+      newLog.push(`🛡️ ${playerName} used ${displayMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
       console.log('🛡️ [Shield OFF] Shield removal calculation:', {
         opponentMaxShields,
         shieldRemoveAmount,
@@ -3857,23 +4385,66 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // Apply artifact damage multipliers
       let artifactMultiplier = 1.0;
       
-      // Apply manifest damage boost for manifest moves (Captain's Helmet)
+      // Apply manifest damage boost for manifest moves (Captain's Helmet + Manifest Boost perk)
       if (move.category === 'manifest' && equippedArtifacts) {
         const manifestBoost = getManifestDamageBoost(equippedArtifacts);
         if (manifestBoost > 1.0) {
           artifactMultiplier *= manifestBoost;
-          newLog.push(`🪖 Captain's Helmet boosts ${overriddenMoveName} damage by ${Math.round((manifestBoost - 1) * 100)}%!`);
+          newLog.push(`🪖 Captain's Helmet boosts ${displayMoveName} damage by ${Math.round((manifestBoost - 1) * 100)}%!`);
+        }
+        const manifestPerkMult = getOutgoingDamageMultiplierFromManifestBoostPerk(
+          equippedArtifacts as Record<string, unknown> | null,
+          equippableCatalogRaw
+        );
+        if (manifestPerkMult > 1.001) {
+          artifactMultiplier *= manifestPerkMult;
+          newLog.push(
+            `✨ Manifest Boost increases ${displayMoveName} damage by ${Math.round((manifestPerkMult - 1) * 100)}%!`
+          );
         }
       }
-      
-      // Apply elemental ring multiplier for elemental moves
+
+      // Apply elemental ring multiplier + Elemental Boost perk for elemental moves
       if (move.category === 'elemental' && equippedArtifacts) {
         const ringLevel = getElementalRingLevel(equippedArtifacts);
         const ringMultiplier = getArtifactDamageMultiplier(ringLevel);
         if (ringMultiplier > 1.0) {
           artifactMultiplier *= ringMultiplier;
-          newLog.push(`💍 Elemental Ring (Level ${ringLevel}) boosts ${overriddenMoveName} damage by ${Math.round((ringMultiplier - 1) * 100)}%!`);
+          newLog.push(`💍 Elemental Ring (Level ${ringLevel}) boosts ${displayMoveName} damage by ${Math.round((ringMultiplier - 1) * 100)}%!`);
         }
+        const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(
+          equippedArtifacts as Record<string, unknown> | null,
+          equippableCatalogRaw
+        );
+        if (elementalPerkMult > 1.001) {
+          artifactMultiplier *= elementalPerkMult;
+          newLog.push(
+            `🔥 Elemental Boost increases ${displayMoveName} damage by ${Math.round((elementalPerkMult - 1) * 100)}%!`
+          );
+        }
+      }
+
+      // Damage Boost perk: all skills, scales with level; matching-set Artifact Synergy buffs this piece
+      const dmgBoostMult = getOutgoingDamageMultiplierFromDamageBoostPerk(
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      );
+      if (dmgBoostMult > 1.001) {
+        artifactMultiplier *= dmgBoostMult;
+        newLog.push(
+          `⚔️ Damage Boost perks increase all skill damage by ${Math.round((dmgBoostMult - 1) * 100)}%!`
+        );
+      }
+
+      const costRedDmgMult = getOutgoingDamageMultiplierFromCostReductionPerk(
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      );
+      if (costRedDmgMult > 1.001) {
+        artifactMultiplier *= costRedDmgMult;
+        newLog.push(
+          `📉 Cost Reduction increases ${displayMoveName} effectiveness by ${Math.round((costRedDmgMult - 1) * 100)}%!`
+        );
       }
       
       // Apply Mindforge damage multiplier
@@ -3882,7 +4453,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // Log damage reduction/increase for Mindforge mode
       if (mindforgeMode && !questionCorrect) {
         const originalDamage = damageResult.damage;
-        newLog.push(`❌ ${playerName} tried to use ${overriddenMoveName}, but the answer was wrong! Power reduced by ${Math.round((1 - playerDamageMultiplier) * 100)}%!`);
+        newLog.push(`❌ ${playerName} tried to use ${displayMoveName}, but the answer was wrong! Power reduced by ${Math.round((1 - playerDamageMultiplier) * 100)}%!`);
       }
       
       // Apply defensive move damage reduction
@@ -4070,13 +4641,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const healthLabel = isCPUOpponentForLabel ? 'health' : 'vault health';
       let playerLogMessage = '';
       if (shieldDamage > 0 && remainingDamage > 0) {
-        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to ${healthLabel})${rangeInfo}!`;
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${damage} damage (${shieldDamage} to shields, ${remainingDamage} to ${healthLabel})${rangeInfo}!`;
       } else if (shieldDamage > 0) {
-        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields${rangeInfo}!`;
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${shieldDamage} damage to shields${rangeInfo}!`;
       } else if (remainingDamage > 0) {
-        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${remainingDamage} damage to ${healthLabel}${rangeInfo}!`;
+        playerLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${remainingDamage} damage to ${healthLabel}${rangeInfo}!`;
       } else {
-        playerLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}${rangeInfo}!`;
+        playerLogMessage = `⚔️ ${playerName} used ${displayMoveName} on ${targetOpponent.name}${rangeInfo}!`;
       }
       newLog.push(playerLogMessage);
       console.log(`📝 [Player Move] Adding to battle log: ${playerLogMessage}`);
@@ -4135,7 +4706,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       wasShieldAttacked = false; // This is a defensive move, not an attack
       damage = 0; // No damage from this move
       shieldDamage = 0; // No shield damage from this move
-      newLog.push(`🔋 ${playerName} used ${overriddenMoveName} to restore ${actualRestore} shields (50% of max)!`);
+      newLog.push(`🔋 ${playerName} used ${displayMoveName} to restore ${actualRestore} shields (50% of max)!`);
     } else if (move.id === 'rr-candy-on-off-shields-off') {
       // Shield OFF - Remove 25% of opponent's MAX shields (not current shields)
       // This is a percentage-based shield removal that bypasses normal damage calculation
@@ -4148,7 +4719,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       damage = 0; // No health damage from this move
       wasShieldAttacked = true;
       wasAttacked = false; // This is shield-only damage, not a health attack
-      newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
+      newLog.push(`🛡️ ${playerName} used ${displayMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
       console.log('🛡️ [Shield OFF] Shield removal calculation:', {
         opponentMaxShields,
         shieldRemoveAmount,
@@ -4167,17 +4738,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (move.shieldBoost && move.id !== 'rr-candy-on-off-shields-on') {
       let shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, move.masteryLevel);
       
-      // Apply manifest damage boost for manifest moves (Captain's Helmet)
-      // This also boosts shield values for manifest defensive moves
+      // Manifest helmet + Manifest Boost perk scale shield granted by manifest moves
       if (move.category === 'manifest' && equippedArtifacts) {
-        const manifestBoost = getManifestDamageBoost(equippedArtifacts);
-        if (manifestBoost > 1.0) {
+        let shieldMult = getManifestDamageBoost(equippedArtifacts);
+        shieldMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(
+          equippedArtifacts as Record<string, unknown> | null,
+          equippableCatalogRaw
+        );
+        if (shieldMult > 1.001) {
           shieldRange = {
-            min: Math.floor(shieldRange.min * manifestBoost),
-            max: Math.floor(shieldRange.max * manifestBoost),
-            average: Math.floor(shieldRange.average * manifestBoost)
+            min: Math.floor(shieldRange.min * shieldMult),
+            max: Math.floor(shieldRange.max * shieldMult),
+            average: Math.floor(shieldRange.average * shieldMult),
           };
-          newLog.push(`🪖 Captain's Helmet boosts ${overriddenMoveName} shield boost by ${Math.round((manifestBoost - 1) * 100)}%!`);
+          newLog.push(
+            `🪖 Manifest bonuses boost ${displayMoveName} shield boost by ${Math.round((shieldMult - 1) * 100)}%!`
+          );
         }
       }
       
@@ -4185,7 +4761,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       playerShieldBoost = shieldResult.damage; // Using damage field for shield boost amount
       const rangeInfo = shieldResult.isMaxDamage ? ' (MAX BOOST!)' : '';
-      newLog.push(`🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}${rangeInfo}!`);
+      newLog.push(`🛡️ ${playerName} used ${displayMoveName} to boost shields by ${playerShieldBoost}${rangeInfo}!`);
       
       console.log('Shield Boost Debug:', {
         moveName: move.name,
@@ -4206,15 +4782,29 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       playerHealing = healingResult.damage; // Using damage field for healing amount
       const rangeInfo = healingResult.isMaxDamage ? ' (MAX HEAL!)' : '';
-      newLog.push(`💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP${rangeInfo}!`);
+      newLog.push(`💚 ${playerName} used ${displayMoveName} to heal for ${playerHealing} PP${rangeInfo}!`);
     }
     
-    // Apply status effects from move (check move overrides for statusEffect/statusEffects)
+    // Apply status effects from move (move overrides for Manifest, or move.statusEffects for artifact skills)
     const { getMoveStatusEffectSync } = await import('../utils/moveOverrides');
     const moveStatusEffect = getMoveStatusEffectSync(moveName);
-    
-    // Support both single effect (legacy) and multiple effects (new)
-    const effectsToApply = moveStatusEffect?.statusEffects || (moveStatusEffect?.statusEffect && moveStatusEffect.statusEffect.type !== 'none' ? [moveStatusEffect.statusEffect] : []);
+    const moveStatusEffects = (move as any)?.statusEffects;
+
+    // Support both single effect (legacy) and multiple effects (new); artifact skills use move.statusEffects.
+    // IMPORTANT: Some overrides may return `statusEffects: []` which is truthy; we must treat it as "no override"
+    // so we don't accidentally discard the summon/status effects embedded on the move itself.
+    const overrideStatusEffects = (moveStatusEffect as any)?.statusEffects;
+    const overrideSingleEffect = (moveStatusEffect as any)?.statusEffect;
+    const hasOverrideStatusEffects =
+      Array.isArray(overrideStatusEffects) && overrideStatusEffects.length > 0;
+    const hasOverrideSingleEffect =
+      !!overrideSingleEffect && overrideSingleEffect.type !== 'none';
+    const hasMoveStatusEffects =
+      Array.isArray(moveStatusEffects) && moveStatusEffects.length > 0;
+
+    const effectsToApply = hasOverrideStatusEffects
+      ? overrideStatusEffects
+      : (hasOverrideSingleEffect ? [overrideSingleEffect] : (hasMoveStatusEffects ? moveStatusEffects : []));
     
     // Apply all effects
     for (const statusEffect of effectsToApply) {
@@ -4228,8 +4818,61 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           healPerTurn: statusEffect.healPerTurn,
           chance: statusEffect.chance || statusEffect.intensity,
           intensity: statusEffect.intensity,
-          damageReduction: statusEffect.damageReduction // For reduce effect
+          damageReduction: statusEffect.damageReduction,
+          summonElementalType: (statusEffect as any).summonElementalType,
+          summonDamage: (statusEffect as any).summonDamage
         };
+        // Summon: spawn a construct ally instead of applying a status to the opponent
+        if (effect.type === 'summon' && currentUser?.uid) {
+          const summonEffectSource =
+            getFirstSummonEffectFromMove(move) ||
+            ({
+              type: 'summon',
+              duration: effect.duration || 2,
+              summonDamage: effect.summonDamage ?? 100,
+              summonElementalType: effect.summonElementalType || 'fire',
+              summonName: (statusEffect as any).summonName,
+            } as const);
+          const artifactLevelForSummon = move.artifactGrant?.artifactLevel ?? 1;
+          const stats = resolveConstructStatsForSummonEffect(summonEffectSource, artifactLevelForSummon);
+          const summonElementalType = stats.elementalType as NonNullable<Opponent['summonElementalType']>;
+          const summonName = stats.displayName;
+          const constructId = `summon_${currentUser.uid}_${Date.now()}`;
+          const isLightConstruct =
+            summonElementalType === 'light' ||
+            summonName === 'Construct of Light' ||
+            summonName === 'Light Construct';
+          const newConstruct: Opponent = {
+            id: constructId,
+            name: summonName,
+            currentPP: stats.maxHealth,
+            maxPP: stats.maxHealth,
+            vaultHealth: stats.maxHealth,
+            maxVaultHealth: stats.maxHealth,
+            shieldStrength: stats.maxShield,
+            maxShieldStrength: stats.maxShield,
+            level: 1,
+            isAI: true,
+            controller: 'ai',
+            isSummon: true,
+            summonDuration: stats.durationTurns,
+            summonDamage: stats.attackDamage,
+            summonElementalType,
+            summonerId: currentUser.uid,
+            ...(isLightConstruct && { image: '/images/Light_Construct.png', photoURL: '/images/Light_Construct.png' })
+          };
+          setAllies(prev => {
+            const next = [...prev, newConstruct];
+            if (onAlliesUpdate) {
+              onAlliesUpdate(next);
+            }
+            return next;
+          });
+          newLog.push(
+            `✨ You summoned ${summonName} to assist you for ${stats.durationTurns} turn(s)! (artifact level ${stats.artifactLevelUsed} · ${stats.attackDamage} atk · ${stats.maxHealth} HP · ${stats.maxShield} shields)`
+          );
+          continue;
+        }
         const successChance = statusEffect.successChance !== undefined ? statusEffect.successChance : 100;
         const applied = addStatusEffect('opponent', effect, successChance);
         if (applied) {
@@ -4279,7 +4922,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // This ensures all clients see the same state updates
     if (isInSession && sessionId && currentUser) {
       // ALWAYS log move execution start (critical for debugging) - concise
-      console.log('🚀 [BattleEngine] ⚡ EXECUTION START ⚡', overriddenMoveName, '→', targetOpponent.name, '| Dmg:', damage || 0, '| Shield:', shieldDamage || 0, '| Heal:', playerHealing || 0, '| Cost:', move.cost || 0);
+      console.log('🚀 [BattleEngine] ⚡ EXECUTION START ⚡', displayMoveName, '→', targetOpponent.name, '| Dmg:', damage || 0, '| Shield:', shieldDamage || 0, '| Heal:', playerHealing || 0, '| Cost:', move.cost || 0);
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
                                  process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -4296,7 +4939,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           actorName: playerName,
           targetUid: targetOpponent.id,
           targetName: targetOpponent.name,
-          moveName: overriddenMoveName,
+          moveName: displayMoveName,
           moveId: move.id,
           damage,
           shieldDamage,
@@ -4350,8 +4993,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           return;
         }
         
-        // Calculate PP cost (if move has cost property)
-        const ppCost = (move.cost || 0);
+        // Vault PP cost (Live Events: skill activation uses participation in applyInSessionMove, not vault)
+        const ppCost = move.cost || 0;
+        const liveEventEffectRed = getSkillCostReductionFromBattleEffects(playerEffects as never);
+        const liveEventCostPreview = computeLiveEventParticipationSkillCost(
+          move,
+          equippedArtifacts as Record<string, unknown> | null,
+          equippableCatalogRaw,
+          liveEventEffectRed
+        );
         
         // In-Session: Always build the skill/attack message explicitly for the battle log.
         // (newLog may end with a status-effect line like "X is now affected by burn!" so we must not use last entry.)
@@ -4359,18 +5009,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         let battleLogMessage: string;
         if (damage > 0 || shieldDamage > 0) {
           if (shieldDamage > 0 && damage > 0) {
-            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage (${shieldDamage} to shields, ${damage - shieldDamage} to ${healthLabel})!`;
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${damage} damage (${shieldDamage} to shields, ${damage - shieldDamage} to ${healthLabel})!`;
           } else if (shieldDamage > 0) {
-            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${shieldDamage} damage to shields!`;
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${shieldDamage} damage to shields!`;
           } else {
-            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${overriddenMoveName} for ${damage} damage to ${healthLabel}!`;
+            battleLogMessage = `⚔️ ${playerName} attacked ${targetOpponent.name} with ${displayMoveName} for ${damage} damage to ${healthLabel}!`;
           }
         } else if (playerHealing > 0) {
-          battleLogMessage = `💚 ${playerName} used ${overriddenMoveName} to heal for ${playerHealing} PP!`;
+          battleLogMessage = `💚 ${playerName} used ${displayMoveName} to heal for ${playerHealing} PP!`;
         } else if (playerShieldBoost > 0) {
-          battleLogMessage = `🛡️ ${playerName} used ${overriddenMoveName} to boost shields by ${playerShieldBoost}!`;
+          battleLogMessage = `🛡️ ${playerName} used ${displayMoveName} to boost shields by ${playerShieldBoost}!`;
         } else {
-          battleLogMessage = `⚔️ ${playerName} used ${overriddenMoveName} on ${targetOpponent.name}!`;
+          battleLogMessage = `⚔️ ${playerName} used ${displayMoveName} on ${targetOpponent.name}!`;
         }
         
         if (DEBUG_LIVE_EVENTS) {
@@ -4451,7 +5101,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           shieldBoost: finalShieldBoost,
           ppStolen: finalPPStolen,
           ppCost,
-          battleLogMessage
+          battleLogMessage,
+          useLiveEventParticipationForSkillCost: true,
         });
         
         // ALWAYS log result (critical for debugging) - concise
@@ -4486,12 +5137,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               const totalDamage = damage + (shieldDamage || 0);
               
               // Track skill usage
+              const ppForStats =
+                moveResult.participationPointsSpent ??
+                moveResult.ppCost ??
+                ppCost ??
+                0;
               await trackSkillUsage(
                 sessionId,
                 currentUser.uid,
                 move.id || move.name, // Use move.id if available, otherwise use name as ID
                 move.name,
-                ppCost || 0,
+                ppForStats,
                 totalDamage, // Total damage dealt (health + shield)
                 playerHealing || 0 // Healing given
               );
@@ -4549,11 +5205,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
           
           // Set skill cooldown locally (will be synced via session state if needed)
-          if (move.cooldown && move.cooldown > 0) {
+          const effCd = getBattleSkillCooldownTurns(move);
+          if (effCd > 0) {
             setSkillCooldowns(prev => {
               const updated = new Map(prev);
-              updated.set(move.id, move.cooldown);
-              console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${move.cooldown} turns`);
+              updated.set(move.id, effCd);
+              console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${effCd} turns (perk-adjusted)`);
               return updated;
             });
           }
@@ -4749,8 +5406,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newTargetOpponent = applyDamageToCurrent(targetOpponent);
       newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
       if (newTargetOpponent.isDefeated) (newTargetOpponent as any).defeatedAt = new Date();
-      setOpponent(newTargetOpponent);
+      // Self-targeted skills (e.g. Stroke of Creation summon) must not overwrite the actual enemy.
+      if (!isSelfTarget) {
+        setOpponent(newTargetOpponent);
+      }
     }
+
+    // For self-targeted moves, opponent turns should still run against the real enemy.
+    const opponentForTurn = isSelfTarget ? opponent : newTargetOpponent;
 
     // Check if Terra reaches 50% health and trigger awakened state
     if (onTerraAwakened && !isTerraAwakened && !terraAwakenedTriggeredRef.current && targetOpponent.name?.toLowerCase().includes('terra')) {
@@ -4765,7 +5428,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       onOpponentUpdate(newTargetOpponent);
     }
 
-    if (isPvP && targetOpponent.id) {
+    if (isPvP && targetOpponent.id && !isSelfTarget) {
       try {
         const opponentVaultRef = doc(db, 'vaults', targetOpponent.id);
         const opponentVaultDoc = await getDoc(opponentVaultRef);
@@ -4799,11 +5462,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Set skill cooldown in battle state (not in skill library)
-    if (move.cooldown && move.cooldown > 0) {
+    const effCdAfterMove = getBattleSkillCooldownTurns(move);
+    if (effCdAfterMove > 0) {
       setSkillCooldowns(prev => {
         const updated = new Map(prev);
-        updated.set(move.id, move.cooldown);
-        console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${move.cooldown} turns`);
+        updated.set(move.id, effCdAfterMove);
+        console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${effCdAfterMove} turns (perk-adjusted)`);
         return updated;
       });
     }
@@ -4832,7 +5496,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     }
     if (playerHealing > 0) {
-      newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + playerHealing);
+      const healPP = applyPpEconomyToPPGain(
+        playerHealing,
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      );
+      newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + healPP);
     }
     
     // Execute the actual vault siege attack in the database
@@ -5036,7 +5705,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Get accumulated PP stolen during battle
       const totalPPReward = battleState.accumulatedPPStolen + defeatedOpponentPP;
-      
+      const ppAfterEconomy = applyPpEconomyToPPGain(
+        totalPPReward,
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      );
+      const ppEconomyBonus = ppAfterEconomy - totalPPReward;
+
       // Calculate XP reward (if applicable)
       let xpReward = 0;
       if (isPvP && currentUser) {
@@ -5052,18 +5727,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
       
-      // Apply rival bonus if opponent is a rival
-      let finalPPReward = totalPPReward;
+      // Apply rival bonus if opponent is a rival (PP Economy applied first on base reward)
+      let finalPPReward = ppAfterEconomy;
       let finalXPReward = xpReward;
       let isRivalBonus = false;
-      
+
       if (currentUser && targetOpponent.id && !checkIsCPUOpponent(targetOpponent)) {
         try {
           const { applyRivalBonus } = await import('../utils/rivalBonus');
           const bonusResult = await applyRivalBonus(
             currentUser.uid,
             targetOpponent.id,
-            totalPPReward,
+            ppAfterEconomy,
             xpReward
           );
           finalPPReward = bonusResult.ppEarned;
@@ -5085,7 +5760,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           });
           
           let rewardMessage = `💰 You gained ${finalPPReward} PP from the battle!`;
-          if (totalPPReward !== finalPPReward) {
+          if (ppEconomyBonus > 0) {
+            rewardMessage += ` (+${ppEconomyBonus} from PP Economy on ${totalPPReward} base: ${battleState.accumulatedPPStolen} stolen + ${defeatedOpponentPP} from defeated)`;
+          } else if (battleState.accumulatedPPStolen > 0 || defeatedOpponentPP > 0) {
             rewardMessage += ` (${battleState.accumulatedPPStolen} stolen + ${defeatedOpponentPP} from defeated opponent)`;
           }
           if (isRivalBonus) {
@@ -5228,109 +5905,118 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Check if this is single-player with AI allies (like Chapter 2-5)
     const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || (!ally.isAI && ally.controller !== 'ai')).length;
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    const hasOwnedSummon = allies.some(ally => ally.isSummon && ally.summonerId === currentUser?.uid);
+    const nextTurnActionsUsed = {
+      player: turnActionsUsed.player || !isConstructSkill,
+      construct: turnActionsUsed.construct || isConstructSkill
+    };
+    const shouldContinueSameTurn =
+      hasOwnedSummon &&
+      !mindforgeMode &&
+      !isInSession &&
+      !isPvP &&
+      !isSinglePlayerWithAI &&
+      (!nextTurnActionsUsed.player || !nextTurnActionsUsed.construct);
+    setTurnActionsUsed(nextTurnActionsUsed);
     
-    // If single-player with AI, trigger Kon's move immediately after player's move completes
+    // If single-player with AI, trigger Kon and summoned constructs after player's move (assist logic)
     if (isSinglePlayerWithAI) {
-      const konAlly = allies.find(ally => ally.id === 'kon_ally' || ally.name === 'Kon');
-      if (konAlly) {
-        // Build updated opponents array with player's damage applied
-        const updatedOpponentsAfterPlayerMove = opponents.map(opp => {
-          if (opp.id === targetOpponent.id) {
-            return newTargetOpponent; // Use the updated opponent from player's move
-          }
-          return opp;
-        });
-        
-        // Find a random alive enemy from the updated state
-        const aliveEnemies = updatedOpponentsAfterPlayerMove.filter(opp => {
+      setTimeout(() => {
+        const currentAllies = alliesRef.current;
+        const currentOpponents = opponentsRef.current;
+        const aliveEnemies = currentOpponents.filter(opp => {
           const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
           const shield = opp.shieldStrength || 0;
           return health > 0 || shield > 0;
         });
-        
-        if (aliveEnemies.length > 0) {
+        if (aliveEnemies.length === 0) return;
+
+        const logEntries: string[] = [];
+        const damageByTargetId: Record<string, number> = {};
+        const summonUpdates: { id: string; newDuration: number }[] = [];
+
+        // Kon's Force Push (same as before)
+        const konAlly = currentAllies.find((ally: Opponent) => ally.id === 'kon_ally' || ally.name === 'Kon');
+        if (konAlly) {
           const targetEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-          const targetId = targetEnemy.id;
-          
-          // Execute Kon's move immediately after player's move (short delay for visual feedback)
-          setTimeout(() => {
-            console.log(`⚡ [AI] Executing Kon's Force Push on ${targetEnemy.name} after player move`);
-            
-            // Apply 2500 damage
-            const targetHealth = targetEnemy.vaultHealth !== undefined ? targetEnemy.vaultHealth : (targetEnemy.currentPP || 0);
-            const targetMaxHealth = targetEnemy.maxVaultHealth !== undefined ? targetEnemy.maxVaultHealth : (targetEnemy.maxPP || 100);
-            
-            const targetShieldDamage = Math.min(2500, targetEnemy.shieldStrength || 0);
-            const remainingDamage = 2500 - targetShieldDamage;
-            const targetHealthDamage = Math.min(remainingDamage, targetHealth);
-            
-            const newTargetShield = Math.max(0, (targetEnemy.shieldStrength || 0) - targetShieldDamage);
-            const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
-            
-            // Update opponents state
-            isInternalUpdateRef.current = true;
-            setOpponents(prev => {
-              const updated = prev.map(opp => {
-                if (opp.id === targetId) {
-                  const updatedOpp = {
-                    ...opp,
-                    shieldStrength: newTargetShield
-                  };
-                  
-                  if (opp.vaultHealth !== undefined) {
-                    updatedOpp.vaultHealth = newTargetHealth;
-                    updatedOpp.maxVaultHealth = targetMaxHealth;
-                    const isCPUOpponent = checkIsCPUOpponent(opp);
-                    if (isCPUOpponent) {
-                      updatedOpp.currentPP = newTargetHealth;
-                    }
-                  } else {
-                    updatedOpp.currentPP = newTargetHealth;
-                  }
-                  
-                  const finalHealth = updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : updatedOpp.currentPP;
-                  const finalShield = updatedOpp.shieldStrength;
-                  
-                  if (finalHealth <= 0 && finalShield <= 0) {
-                    updatedOpp.isDefeated = true;
-                    updatedOpp.defeatedAt = new Date();
-                  } else {
-                    updatedOpp.isDefeated = false;
-                    updatedOpp.defeatedAt = undefined;
-                  }
-                  
-                  return updatedOpp;
-                }
-                return opp;
-              });
-              
-              // Notify parent of opponent updates
-              if (onOpponentsUpdate) {
-                onOpponentsUpdate(updated);
-              }
-              
-              setTimeout(() => {
-                isInternalUpdateRef.current = false;
-              }, 100);
-              
-              return updated;
-            });
-            
-            // Add battle log entry
-            const konLogEntry = `⚡ Kon attacked ${targetEnemy.name} with Force Push for 2500 damage!`;
-            setBattleState(prev => {
-              const newLog = [...prev.battleLog, konLogEntry];
-              if (onBattleLogUpdate) {
-                onBattleLogUpdate(newLog);
-              }
-              return {
-                ...prev,
-                battleLog: newLog
-              };
-            });
-          }, 400); // Short delay for visual feedback after player's move
+          damageByTargetId[targetEnemy.id] = (damageByTargetId[targetEnemy.id] || 0) + 2500;
+          logEntries.push(`⚡ Kon attacked ${targetEnemy.name} with Force Push for 2500 damage!`);
         }
-      }
+
+        // Summoned constructs: each attacks with its elemental damage
+        const summons = currentAllies.filter((a: Opponent) => a.isSummon && a.summonerId === currentUser?.uid);
+        for (const summon of summons) {
+          const targetEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+          const dmg = summon.summonDamage ?? 100;
+          damageByTargetId[targetEnemy.id] = (damageByTargetId[targetEnemy.id] || 0) + dmg;
+          const elem = summon.summonElementalType || 'fire';
+          logEntries.push(`⚡ ${summon.name} struck ${targetEnemy.name} for ${dmg} ${elem} damage!`);
+          const newDuration = Math.max(0, (summon.summonDuration ?? 1) - 1);
+          summonUpdates.push({ id: summon.id, newDuration });
+        }
+
+        if (Object.keys(damageByTargetId).length === 0) return;
+
+        isInternalUpdateRef.current = true;
+        setOpponents(prev => {
+          let updated = prev;
+          for (const [targetId, totalDamage] of Object.entries(damageByTargetId)) {
+            const opp = updated.find(o => o.id === targetId);
+            if (!opp) continue;
+            const targetHealth = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
+            const targetMaxHealth = opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxPP || 100);
+            const targetShieldDamage = Math.min(totalDamage, opp.shieldStrength || 0);
+            const remainingDamage = totalDamage - targetShieldDamage;
+            const targetHealthDamage = Math.min(remainingDamage, targetHealth);
+            const newTargetShield = Math.max(0, (opp.shieldStrength || 0) - targetShieldDamage);
+            const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
+            updated = updated.map(o => {
+              if (o.id !== targetId) return o;
+              const updatedOpp = { ...o, shieldStrength: newTargetShield };
+              if (o.vaultHealth !== undefined) {
+                updatedOpp.vaultHealth = newTargetHealth;
+                updatedOpp.maxVaultHealth = targetMaxHealth;
+                if (checkIsCPUOpponent(o)) updatedOpp.currentPP = newTargetHealth;
+              } else {
+                updatedOpp.currentPP = newTargetHealth;
+              }
+              const finalHealth = updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : updatedOpp.currentPP;
+              const finalShield = updatedOpp.shieldStrength || 0;
+              updatedOpp.isDefeated = finalHealth <= 0 && finalShield <= 0;
+              updatedOpp.defeatedAt = updatedOpp.isDefeated ? new Date() : undefined;
+              return updatedOpp;
+            });
+          }
+          if (onOpponentsUpdate) onOpponentsUpdate(updated);
+          setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
+          return updated;
+        });
+
+        // Decrement summon durations and remove expired
+        if (summonUpdates.length > 0) {
+          setAllies(prev => {
+            let next = prev;
+            for (const { id, newDuration } of summonUpdates) {
+              if (newDuration <= 0) {
+                next = next.filter(a => a.id !== id);
+                logEntries.push(`✨ A summoned construct faded.`);
+              } else {
+                next = next.map(a => a.id === id ? { ...a, summonDuration: newDuration } : a);
+              }
+            }
+            if (onAlliesUpdate) onAlliesUpdate(next);
+            return next;
+          });
+        }
+
+        if (logEntries.length > 0) {
+          setBattleState(prev => {
+            const newLog = [...prev.battleLog, ...logEntries];
+            if (onBattleLogUpdate) onBattleLogUpdate(newLog);
+            return { ...prev, battleLog: newLog };
+          });
+        }
+      }, 400);
     }
     
     // Update battle state - keep animation state so BattleAnimations can play
@@ -5340,9 +6026,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     setBattleState(prev => {
       const updatedState: BattleState = {
         ...prev,
-        phase: mindforgeMode ? 'execution' : (isSinglePlayerWithAI ? 'selection' : 'opponent_turn'), // Return to selection for single-player with AI
+        phase: shouldContinueSameTurn
+          ? 'selection'
+          : (mindforgeMode ? 'execution' : (isSinglePlayerWithAI ? 'selection' : 'opponent_turn')),
         battleLog: newLog,
-        isPlayerTurn: mindforgeMode ? true : (isSinglePlayerWithAI ? true : false), // Keep player turn for single-player with AI
+        isPlayerTurn: shouldContinueSameTurn
+          ? true
+          : (mindforgeMode ? true : (isSinglePlayerWithAI ? true : false)),
         selectedMove: null, // Clear selected move but keep animation
         selectedTarget: null, // Clear selected target but keep animation
         // Keep currentAnimation and isAnimating so BattleAnimations component can display
@@ -5350,6 +6040,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       console.log(`📝 [Player Move] Battle state updated. New log length: ${updatedState.battleLog.length}`);
       return updatedState;
     });
+
+    if (shouldContinueSameTurn) {
+      if (onBattleLogUpdate) {
+        onBattleLogUpdate(newLog);
+      }
+      return;
+    }
     
     // In Mindforge mode, execute opponent turn after animation completes
     if (mindforgeMode) {
@@ -5371,7 +6068,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Execute opponent turn after a short delay to show damage
       setTimeout(() => {
-        executeOpponentTurn(newLog, newTargetOpponent, opponentDamageMultiplier);
+        executeOpponentTurn(newLog, opponentForTurn, opponentDamageMultiplier);
       }, 500);
       
       // Exit early - opponent turn will handle the rest
@@ -5437,7 +6134,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // CPU: Start opponent turn after a delay (non-Mindforge mode uses default multiplier of 1.0)
       setTimeout(() => {
-        executeOpponentTurn(newLog, newTargetOpponent, 1.0);
+        executeOpponentTurn(newLog, opponentForTurn, 1.0);
       }, 2000);
     }
   };
@@ -5458,10 +6155,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const opponentEffectResult = await applyTurnEffects('opponent', currentLog);
     const newLog = [...opponentEffectResult.newLog];
     
+    // Use the passed-in opponent for names/logs (e.g. "Powered Zombie" in Island Raid, not state "Rival Vault")
+    const opp = currentOpponent;
+    
     // Check if opponent is stunned
     const isStunned = opponentEffects.some(e => e.type === 'stun' && e.duration > 0);
     if (isStunned) {
-      newLog.push(`⚡ ${opponent.name} is stunned and cannot act!`);
+      newLog.push(`⚡ ${opp.name} is stunned and cannot act!`);
       // Update battle state to player's turn
       setBattleState(prev => ({
         ...prev,
@@ -5477,12 +6177,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Try to load moves from Firestore first
     if (cpuOpponentMoves && Array.isArray(cpuOpponentMoves)) {
-      const opponentId = opponent.id || opponent.name?.toLowerCase().replace(/\s+/g, '-');
-      const opponentName = opponent.name?.toLowerCase() || '';
+      const opponentId = opp.id || opp.name?.toLowerCase().replace(/\s+/g, '-');
+      const opponentName = opp.name?.toLowerCase() || '';
       // Normalize opponent name by stripping trailing numbers (e.g., "Unpowered Zombie 1" -> "unpowered zombie")
       const normalizedOpponentName = opponentName.replace(/\s*\d+\s*$/, '').trim();
       
-      console.log(`🔍 executeOpponentTurn: Looking for moves for ${opponent.name} (ID: ${opponentId}, Name: ${opponentName}, Normalized: ${normalizedOpponentName})`);
+      console.log(`🔍 executeOpponentTurn: Looking for moves for ${opp.name} (ID: ${opponentId}, Name: ${opponentName}, Normalized: ${normalizedOpponentName})`);
       console.log(`🔍 executeOpponentTurn: Available opponents in Firestore:`, cpuOpponentMoves.map((opp: any) => ({ 
         id: opp.id, 
         name: opp.name,
@@ -5528,11 +6228,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           return true;
         }
         
-        // Master Guardian / Flame Keeper matching
-        if (opp.name?.toLowerCase().includes('master guardian') && (opponent.name?.toLowerCase().includes('flame keeper') || opponent.name?.toLowerCase().includes('flame thrower'))) {
+        // For Light Construct
+        if ((normalizedOpponentName === 'light construct' || opponentName.includes('light construct')) && (oppName === 'light construct' || oppId === 'light-construct')) {
           return true;
         }
-        if ((opp.name?.toLowerCase().includes('flame keeper') || opp.name?.toLowerCase().includes('flame thrower')) && opponent.name?.toLowerCase().includes('master guardian')) {
+        
+        // Master Guardian / Flame Keeper matching
+        if (opp.name?.toLowerCase().includes('master guardian') && (opp.name?.toLowerCase().includes('flame keeper') || opp.name?.toLowerCase().includes('flame thrower'))) {
+          return true;
+        }
+        if ((opp.name?.toLowerCase().includes('flame keeper') || opp.name?.toLowerCase().includes('flame thrower')) && opp.name?.toLowerCase().includes('master guardian')) {
           return true;
         }
         
@@ -5540,14 +6245,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
       
       if (opponentData) {
-        console.log(`✅ executeOpponentTurn: Matched ${opponent.name} to opponent in Firestore:`, {
+        console.log(`✅ executeOpponentTurn: Matched ${opp.name} to opponent in Firestore:`, {
           id: opponentData.id,
           name: opponentData.name,
           moveCount: opponentData.moves?.length || 0,
           moveNames: opponentData.moves?.map((m: any) => m.name) || []
         });
       } else {
-        console.log(`❌ executeOpponentTurn: No match found for ${opponent.name} (normalized: ${normalizedOpponentName})`);
+        console.log(`❌ executeOpponentTurn: No match found for ${opp.name} (normalized: ${normalizedOpponentName})`);
         console.log(`🔍 executeOpponentTurn: Looking for: normalizedOpponentName="${normalizedOpponentName}", opponentName="${opponentName}", opponentId="${opponentId}"`);
       }
       
@@ -5597,10 +6302,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             description: move.description || ''
           };
         });
-        console.log(`✅ Loaded moves for ${opponent.name} from Firestore:`, opponentMoves.map((m: any) => `${m.name} (${m.damageRange ? `${m.damageRange.min}-${m.damageRange.max}` : m.baseDamage} damage)`));
+        console.log(`✅ Loaded moves for ${opp.name} from Firestore:`, opponentMoves.map((m: any) => `${m.name} (${m.damageRange ? `${m.damageRange.min}-${m.damageRange.max}` : m.baseDamage} damage)`));
         
         // CRITICAL: Log all move names to verify they're preserved
-        console.debug(`[Moveset Loaded] Opponent: ${opponent.name} (executeOpponentTurn)`, opponentMoves.map((m: any) => ({ id: m.id, name: m.name })));
+        console.debug(`[Moveset Loaded] Opponent: ${opp.name} (executeOpponentTurn)`, opponentMoves.map((m: any) => ({ id: m.id, name: m.name })));
         
         // Assert that all moves have names
         opponentMoves.forEach((m: any) => {
@@ -5609,26 +6314,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
         });
       } else {
-        console.warn(`⚠️ No moves found in Firestore for ${opponent.name} (ID: ${opponentId}, Name: ${opponentName})`);
+        console.warn(`⚠️ No moves found in Firestore for ${opp.name} (ID: ${opponentId}, Name: ${opponentName})`);
         console.log(`🔍 Available opponents in Firestore:`, cpuOpponentMoves.map((opp: any) => ({ id: opp.id, name: opp.name })));
       }
     }
     
     // Fallback to hardcoded moves if Firestore data not available
     if (!opponentMoves || opponentMoves.length === 0) {
-    if (opponent.id === 'hela') {
+    if (opp.id === 'hela') {
       // Hela's ice-based moves
       opponentMoves = [
         { name: 'Ice Shard', baseDamage: 7, level: 1, masteryLevel: 1, type: 'attack' },
         { name: 'Ice Wall', baseDamage: 0, level: 1, masteryLevel: 1, type: 'defense' }
       ];
-      } else if (opponent.name?.toLowerCase().includes('ice golem') || opponent.id?.toLowerCase().includes('ice-golem')) {
+      } else if (opp.name?.toLowerCase().includes('ice golem') || opp.id?.toLowerCase().includes('ice-golem')) {
         // Ice Golem's moves
         opponentMoves = [
           { name: 'Ice Shard', damageRange: { min: 20, max: 50 }, level: 1, masteryLevel: 1, type: 'attack' },
           { name: 'Ice Punch', damageRange: { min: 25, max: 40 }, level: 1, masteryLevel: 1, type: 'attack' }
         ];
-      } else if (opponent.name?.toLowerCase().includes('flame keeper') || opponent.name?.toLowerCase().includes('flame thrower') || opponent.name?.toLowerCase().includes('master guardian')) {
+      } else if (opp.name?.toLowerCase().includes('flame keeper') || opp.name?.toLowerCase().includes('flame thrower') || opp.name?.toLowerCase().includes('master guardian')) {
         // Flame Keeper's fire-based moves
         opponentMoves = [
           { name: 'Flameburst', baseDamage: 32, level: 1, masteryLevel: 1, type: 'attack', damageRange: { min: 28, max: 36 } },
@@ -5649,7 +6354,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const opponentMove = opponentMoves[Math.floor(Math.random() * opponentMoves.length)];
     
     // CRITICAL: Log the selected move name to verify it's from Firestore
-    console.log(`🎲 [CPU Move Selection - executeOpponentTurn] ${opponent.name} selected move: "${opponentMove.name}" (ID: ${opponentMove.id})`);
+    console.log(`🎲 [CPU Move Selection - executeOpponentTurn] ${opp.name} selected move: "${opponentMove.name}" (ID: ${opponentMove.id})`);
     if (!opponentMove.name || opponentMove.name === 'Unknown Move') {
       console.error(`❌ [CPU Move Selection - executeOpponentTurn] Selected move is missing name!`, opponentMove);
     }
@@ -5663,7 +6368,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         remainingTurns: opponentMove.duration || 1
       };
       setActiveDefensiveMoves(prev => [...prev, defensiveMoveData]);
-      newLog.push(`🛡️ ${opponent.name} activated ${opponentMove.name}!`);
+      newLog.push(`🛡️ ${opp.name} activated ${opponentMove.name}!`);
       if (opponentMove.duration && opponentMove.duration > 1) {
         newLog.push(`   Effect lasts for ${opponentMove.duration} turn${opponentMove.duration !== 1 ? 's' : ''}.`);
       }
@@ -5683,7 +6388,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     } else {
       // Use standard damage calculation for other moves
       damageRange = calculateDamageRange(opponentMove.baseDamage, opponentMove.level, opponentMove.masteryLevel);
-      damageResult = rollDamage(damageRange, opponent.level, opponentMove.level, opponentMove.masteryLevel);
+      damageResult = rollDamage(damageRange, opp.level, opponentMove.level, opponentMove.masteryLevel);
       totalDamage = damageResult.damage;
     }
     
@@ -5699,11 +6404,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     let opponentHealing = 0;
     let overshieldAbsorbed = false;
     
-    // Use formatted opponent name for battle log
-    const formattedOpponentName = formatOpponentName(opponent.name);
+    // Use formatted opponent name for battle log (e.g. "Powered Zombie | 1")
+    const formattedOpponentName = formatOpponentName(opp.name);
     
     // Special handling for Hela's Ice Wall move
-    if (opponent.id === 'hela' && opponentMove.name === 'Ice Wall') {
+    if (opp.id === 'hela' && opponentMove.name === 'Ice Wall') {
       // Ice Wall restores 5-10 shields for Hela
       const shieldRange = { min: 5, max: 10 };
       opponentShieldRestore = Math.floor(Math.random() * (shieldRange.max - shieldRange.min + 1)) + shieldRange.min;
@@ -5711,9 +6416,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     } else if (opponentMove.type === 'heal' && healingAmount > 0) {
       // Phoenix Regeneration - heal the opponent
       opponentHealing = healingAmount;
-      const maxHealth = opponent.maxPP || opponent.currentPP;
-      const newHealth = Math.min(maxHealth, opponent.currentPP + opponentHealing);
-      opponentHealing = newHealth - opponent.currentPP; // Actual healing applied (capped at max)
+      const maxHealth = opp.maxPP || opp.currentPP;
+      const newHealth = Math.min(maxHealth, opp.currentPP + opponentHealing);
+      opponentHealing = newHealth - opp.currentPP; // Actual healing applied (capped at max)
       newLog.push(`🔥 ${formattedOpponentName} used ${opponentMove.name} and restored ${opponentHealing} health!`);
     }
     
@@ -5759,6 +6464,21 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           newLog.push(`🛡️ Your Reduce effect reduced incoming damage by ${reductionAmount} (${reductionPercentage}%)!`);
         }
       }
+
+      // Status Defense perk: mitigates a portion of all incoming damage (after Reduce); scales with level + synergy
+      const statusMit = getStatusDefenseMitigationFraction(
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      );
+      if (statusMit > 0) {
+        const mitAmount = Math.floor(totalDamage * statusMit);
+        totalDamage = Math.max(0, totalDamage - mitAmount);
+        if (mitAmount > 0) {
+          newLog.push(
+            `🛡️ Status Defense mitigated ${mitAmount} damage (~${Math.round(statusMit * 100)}% of hit)!`
+          );
+        }
+      }
       
       // Check for overshield first (from Shield artifact)
       let remainingDamage = totalDamage;
@@ -5771,7 +6491,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         ppStolen = 0;
         
         // Overshield is consumed (set to 0) after absorbing an attack
-        newLog.push(`✨ Your overshield absorbed ${opponent.name}'s ${opponentMove.name} attack! (0 overshields remaining)`);
+        newLog.push(`✨ Your overshield absorbed ${opp.name}'s ${opponentMove.name} attack! (0 overshields remaining)`);
         
         // Update vault with overshield consumed
         try {
@@ -5803,8 +6523,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       
       // Log attack with damage breakdown and range info
-      // Use formatted opponent name (e.g., "Unpowered Zombie | 1" instead of "Unpowered Zombie 1")
-      const formattedOpponentName = formatOpponentName(opponent.name);
       const rangeInfo = damageResult?.isMaxDamage ? ' (MAX DAMAGE!)' : '';
       let cpuLogMessage = '';
       if (shieldDamage > 0 && ppStolen > 0) {
@@ -5820,7 +6538,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
       }
     } else {
-      const formattedOpponentName = formatOpponentName(opponent.name);
       const cpuLogMessage = `⚔️ ${formattedOpponentName} used ${opponentMove.name}!`;
       newLog.push(cpuLogMessage);
       console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
@@ -5879,7 +6596,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (opponentShieldRestore > 0) {
       setOpponent(prev => {
         const newOpponentShieldStrength = Math.min(prev.maxShieldStrength, prev.shieldStrength + opponentShieldRestore);
-        console.log(`✅ ${opponent.name}'s shields restored: ${prev.shieldStrength} → ${newOpponentShieldStrength}`);
+        console.log(`✅ ${opp.name}'s shields restored: ${prev.shieldStrength} → ${newOpponentShieldStrength}`);
         const updatedOpponent = {
           ...prev,
           shieldStrength: newOpponentShieldStrength
@@ -5899,7 +6616,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       setOpponent(prev => {
         const maxHealth = prev.maxPP || prev.currentPP;
         const newHealth = Math.min(maxHealth, prev.currentPP + opponentHealing);
-        console.log(`✅ ${opponent.name}'s health restored: ${prev.currentPP} → ${newHealth}`);
+        console.log(`✅ ${opp.name}'s health restored: ${prev.currentPP} → ${newHealth}`);
         const updatedOpponent = {
           ...prev,
           currentPP: newHealth
@@ -5919,9 +6636,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newLog.push('💀 Your vault health has been completely depleted!');
       if (isPvP) {
         newLog.push(`💸 Your vault has been bankrupted!`);
-        newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
+        newLog.push(`💀 Defeat! ${opp.name} won the PvP battle!`);
       } else {
-        newLog.push(`💀 Defeat! ${opponent.name} has successfully raided your vault!`);
+        newLog.push(`💀 Defeat! ${opp.name} has successfully raided your vault!`);
       }
       setBattleState(prev => ({
         ...prev,
@@ -5932,7 +6649,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // For PvP, pass winner/loser IDs
       if (isPvP && currentUser) {
-        onBattleEnd('defeat', opponent.id, currentUser.uid);
+        onBattleEnd('defeat', opp.id, currentUser.uid);
       } else {
         onBattleEnd('defeat');
       }
@@ -5988,6 +6705,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   const handleMoveSelect = (move: Move | null) => {
     if (move && (move.currentCooldown ?? 0) > 0) return;
+    if (move && turnActionsUsed.player && !turnActionsUsed.construct && !isConstructSkillId(move.id)) return;
+    if (move && turnActionsUsed.construct && !turnActionsUsed.player && isConstructSkillId(move.id)) return;
     // Instrument: Skill clicked
     (async () => {
       const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
@@ -6005,7 +6724,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     })();
     
-    const isDefensiveMove = !!(move?.shieldBoost || move?.healing || move?.targetType === 'self');
+    const hasSummonEffect = move != null && Array.isArray(move.statusEffects) && move.statusEffects.some((e) => e?.type === 'summon');
+    const isDefensiveMove = !!(move?.shieldBoost || move?.healing || move?.targetType === 'self' || hasSummonEffect);
     const isIslandRaidOrSession = !!gameId && !isInSession || !!sessionId;
     setBattleState(prev => ({
       ...prev,
@@ -6063,8 +6783,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       timestamp: new Date().toISOString()
     });
     
-    // If Spaces Mode, don't use regular target selection
-    if (isSpacesMode) {
+    // If Spaces grid layout is active, don't use regular target selection
+    if (showSpacesBattleLayout) {
       console.warn('⚠️ [BattleEngine] Regular target selection disabled in Spaces Mode. Use handleSpaceTargetSelect instead.');
       return;
     }
@@ -6079,8 +6799,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // Validate target ID exists in current opponents or allies
-    // Defensive / self-directed moves (shield boost, healing, targetType === 'self') ONLY target self
-    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing || battleState.selectedMove?.targetType === 'self');
+    // Defensive / self-directed moves (shield boost, healing, targetType === 'self', summon) ONLY target self
+    const selectedMove = battleState.selectedMove;
+    const hasSummonEffect = selectedMove != null && Array.isArray(selectedMove.statusEffects) && selectedMove.statusEffects.some((e) => e?.type === 'summon');
+    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing || battleState.selectedMove?.targetType === 'self' || hasSummonEffect);
     const isSelfTarget = targetId === 'self' || targetId === currentUser?.uid;
     const isValidTarget = isDefensiveMove
       ? isSelfTarget
@@ -6433,7 +7155,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   };
 
   return (
-    <div style={{ width: '100%', maxWidth: isMultiplayer ? '1400px' : '800px', margin: '0 auto' }}>
+    <div style={{ width: '100%', maxWidth: isMultiplayer || useRaidStyleArena ? '1400px' : '800px', margin: '0 auto' }}>
       {/* Spaces Mode Layout - Replace BattleArena for PvP 1v1 */}
       {/* For PvP 1v1 battles, always use Spaces Mode (initialize if needed) */}
       {isPvP && !isMultiplayer && currentUser && opponent && spacesModeState ? (
@@ -6578,6 +7300,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               }
               
               const manifestBoost = move.category === 'manifest' ? getManifestDamageBoost(equippedArtifacts) : 1.0;
+              const manifestPerkPreview =
+                move.category === 'manifest'
+                  ? getOutgoingDamageMultiplierFromManifestBoostPerk(
+                      equippedArtifacts as Record<string, unknown> | null,
+                      equippableCatalogRaw
+                    )
+                  : 1.0;
+              const elementalPerkPreview =
+                move.category === 'elemental'
+                  ? getOutgoingDamageMultiplierFromElementalBoostPerk(
+                      equippedArtifacts as Record<string, unknown> | null,
+                      equippableCatalogRaw
+                    )
+                  : 1.0;
 
               return (
                 <div style={{
@@ -6608,18 +7344,61 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                       flexDirection: 'column',
                       gap: '0.5rem'
                     }}>
-                      {/* Cost */}
+                      {/* Cost — Live Events: Participation Point cost; otherwise vault PP */}
+                      {(() => {
+                        const effectRed = getSkillCostReductionFromBattleEffects(playerEffects as never);
+                        const le = isInSession
+                          ? computeLiveEventParticipationSkillCost(
+                              move,
+                              equippedArtifacts as Record<string, unknown> | null,
+                              equippableCatalogRaw,
+                              effectRed
+                            )
+                          : null;
+                        const me =
+                          (allies.find(a => a.id === currentUser?.uid) as { movesEarned?: number } | undefined)
+                            ?.movesEarned ?? 0;
+                        const canAffordLive = !isInSession || !le || me >= le.finalCost;
+                        return (
                       <div style={{
                         display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
+                        flexDirection: 'column',
+                        gap: '0.35rem',
                         padding: '0.5rem',
                         background: 'rgba(255,255,255,0.5)',
                         borderRadius: '0.25rem'
                       }}>
-                        <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>Cost:</span>
-                        <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'bold' }}>{move.cost} PP</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>
+                          {isInSession ? 'PP Cost (participation):' : 'Cost:'}
+                        </span>
+                        <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'bold' }}>
+                          {isInSession && le
+                            ? `${le.finalCost} PP`
+                            : `${move.cost} PP`}
+                        </span>
+                        </div>
+                        {isInSession && le && (
+                          <>
+                            <div style={{ fontSize: '0.65rem', color: '#6b7280', display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Base</span><span>{le.baseCost}</span>
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: '#6b7280', display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Cost reduction</span><span>{le.reductionFromArtifacts + le.reductionFromEffects}</span>
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: '#059669', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Final</span><span>{le.finalCost} PP</span>
+                            </div>
+                            {!canAffordLive && (
+                              <div style={{ fontSize: '0.65rem', color: '#dc2626' }}>
+                                Need {le.finalCost - me} more Participation Points
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
+                        );
+                      })()}
 
                       {/* Damage */}
                       {damageRange && (
@@ -6644,6 +7423,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                             {manifestBoost > 1.0 && move.category === 'manifest' && (
                               <span style={{ fontSize: '0.65rem', color: '#8b5cf6' }}>
                                 🪖 +{Math.round((manifestBoost - 1) * 100)}%
+                              </span>
+                            )}
+                            {manifestPerkPreview > 1.001 && move.category === 'manifest' && (
+                              <span style={{ fontSize: '0.65rem', color: '#6366f1' }}>
+                                ✨ +{Math.round((manifestPerkPreview - 1) * 100)}%
+                              </span>
+                            )}
+                            {elementalPerkPreview > 1.001 && move.category === 'elemental' && (
+                              <span style={{ fontSize: '0.65rem', color: '#ea580c' }}>
+                                🔥 +{Math.round((elementalPerkPreview - 1) * 100)}%
                               </span>
                             )}
                           </div>
@@ -6701,8 +7490,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                         </div>
                       )}
 
-                      {/* Cooldown */}
-                      {move.cooldown && move.cooldown > 0 && (
+                      {/* Cooldown (base turns; Cost Reduction no longer shortens cooldown) */}
+                      {getBattleSkillCooldownTurns(move) > 0 && (
                         <div style={{
                           display: 'flex',
                           justifyContent: 'space-between',
@@ -6713,7 +7502,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                         }}>
                           <span style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 'bold' }}>⏱️ Cooldown:</span>
                           <span style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 'bold' }}>
-                            {move.cooldown} turns
+                            {getBattleSkillCooldownTurns(move)} turns
                           </span>
                         </div>
                       )}
@@ -6834,7 +7623,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             </div>
           </div>
         </div>
-      ) : isMultiplayer ? (
+      ) : isMultiplayer || useRaidStyleArena ? (
         <MultiplayerBattleArena
           onMoveSelect={handleMoveSelect}
           onTargetSelect={handleTargetSelect}
@@ -6842,41 +7631,49 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           selectedMove={battleState.selectedMove}
           selectedTarget={battleState.selectedTarget}
           availableMoves={availableMoves}
+          isInSession={isInSession}
           onArtifactUsed={handleArtifactUsed}
-          allies={allies.map(ally => ({
-            id: ally.id,
-            name: ally.name,
-            avatar: ally.id === currentUser?.uid 
-              ? (userPhotoURL || ally.photoURL || '🏰')
-              : (ally.photoURL || '🏰'),
-            currentPP: ally.currentPP,
-            shieldStrength: ally.shieldStrength,
-            maxPP: ally.maxPP,
-            maxShieldStrength: ally.maxShieldStrength,
-            level: ally.level,
-            vaultHealth: ally.vaultHealth,
-            maxVaultHealth: ally.maxVaultHealth !== undefined 
-              ? ally.maxVaultHealth 
-              : Math.floor((ally.maxPP || 1000) * 0.1), // Use provided maxVaultHealth or calculate from maxPP
-            isPlayer: ally.id === currentUser?.uid
-          }))}
-          enemies={opponents.map(opp => {
-            // For Island Raid enemies, vaultHealth and maxVaultHealth are set in IslandRaidBattle.tsx
-            // For other enemies, use vaultHealth if available, otherwise calculate from maxPP
-            return {
-              id: opp.id,
-              name: opp.name,
-              avatar: opp.image || '🏰',
-              currentPP: opp.currentPP,
-              shieldStrength: opp.shieldStrength,
-              maxPP: opp.maxPP,
-              maxShieldStrength: opp.maxShieldStrength,
-              level: opp.level,
-              vaultHealth: opp.vaultHealth,
-              maxVaultHealth: opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : Math.floor((opp.maxPP || 1000) * 0.1),
-              isPlayer: false // Explicitly mark enemies as not players for targeting logic
-            };
-          })}
+          allies={
+            allies.map(ally => ({
+              id: ally.id,
+              name: ally.name,
+              avatar:
+                ally.id === currentUser?.uid
+                  ? (userPhotoURL || ally.photoURL || '🏰')
+                  : (ally.photoURL || ally.image || '🏰'),
+              currentPP: ally.currentPP,
+              shieldStrength: ally.shieldStrength,
+              maxPP: ally.maxPP,
+              maxShieldStrength: ally.maxShieldStrength,
+              level: ally.level,
+              vaultHealth: ally.vaultHealth,
+              maxVaultHealth:
+                ally.maxVaultHealth !== undefined
+                  ? ally.maxVaultHealth
+                  : Math.floor((ally.maxPP || 1000) * 0.1),
+              isPlayer: ally.id === currentUser?.uid
+            }))
+          }
+          enemies={
+            isMultiplayer
+              ? opponents.map(opp => ({
+                  id: opp.id,
+                  name: opp.name,
+                  avatar: opp.image || '🏰',
+                  currentPP: opp.currentPP,
+                  shieldStrength: opp.shieldStrength,
+                  maxPP: opp.maxPP,
+                  maxShieldStrength: opp.maxShieldStrength,
+                  level: opp.level,
+                  vaultHealth: opp.vaultHealth,
+                  maxVaultHealth:
+                    opp.maxVaultHealth !== undefined
+                      ? opp.maxVaultHealth
+                      : Math.floor((opp.maxPP || 1000) * 0.1),
+                  isPlayer: false
+                }))
+              : raidStyleArenaRows?.enemies ?? []
+          }
           isPlayerTurn={battleState.isPlayerTurn}
           battleLog={battleState.battleLog}
           customBackground={getCustomBackground()}
@@ -6912,8 +7709,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       )}
       
       {/* Battle Status */}
-      {/* Battle Log - Hide in Mindforge mode (Mindforge has its own log), Multiplayer mode (MultiplayerBattleArena has its own log), and Spaces Mode */}
-      {!mindforgeMode && !isMultiplayer && !isSpacesMode && (
+      {/* Battle Log - Hide when the arena or spaces layout already embeds a log */}
+      {!mindforgeMode && !(isMultiplayer || useRaidStyleArena || showSpacesBattleLayout) && (
       <div style={{
         marginTop: '1rem',
         padding: '1rem',

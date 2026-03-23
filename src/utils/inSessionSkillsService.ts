@@ -6,6 +6,7 @@
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
+import { computeLiveEventParticipationSkillCost } from './liveEventSkillCost';
 import { getEquippedSkillsForBattle } from './battleSkillsService';
 import { debug, debugError } from './inSessionDebug';
 
@@ -128,14 +129,15 @@ export async function getAvailableSkillsForSession(
 }
 
 /**
- * Validate if a skill can be used (PP cost check)
+ * Validate if a skill can be used (Live Events: Participation Point cost from movesEarned)
  * Returns { valid: boolean, reason?: string }
  */
 export async function validateSkillUsage(
   sessionId: string,
   userId: string,
   skillId: string,
-  currentPP: number
+  participationPointsAvailable: number,
+  equippedArtifacts?: Record<string, unknown> | null
 ): Promise<{ valid: boolean; reason?: string }> {
   try {
     const skills = await getAvailableSkillsForSession(sessionId, userId);
@@ -149,10 +151,17 @@ export async function validateSkillUsage(
       return { valid: false, reason: 'Skill is locked' };
     }
     
-    // Check PP cost
-    const cost = skill.cost || 0;
-    if (currentPP < cost) {
-      return { valid: false, reason: `Insufficient PP. Need ${cost}, have ${currentPP}` };
+    const breakdown = computeLiveEventParticipationSkillCost(
+      skill,
+      equippedArtifacts ?? null,
+      null,
+      0
+    );
+    if (participationPointsAvailable < breakdown.finalCost) {
+      return {
+        valid: false,
+        reason: `Need ${breakdown.finalCost} Participation Points to use this skill (have ${participationPointsAvailable})`,
+      };
     }
     
     // Check cooldown (if provided)

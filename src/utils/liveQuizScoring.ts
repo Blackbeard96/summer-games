@@ -47,3 +47,19 @@ export function calculateLiveQuizPoints(params: CalculateLiveQuizPointsParams): 
   const points = LIVE_QUIZ_BASE_POINTS + speedBonus;
   return Math.min(LIVE_QUIZ_MAX_POINTS_PER_QUESTION, Math.max(0, points));
 }
+
+/** Battle royale / team BR: 1 PP per correct + streak milestones (wrong / skip resets streak elsewhere). */
+export function computeBattleRoyaleStreakRewards(prevStreak: number): {
+  newStreak: number;
+  ppAwarded: number;
+  energyDelta: number;
+  strongUnlockedNow: boolean;
+} {
+  const newStreak = prevStreak + 1;
+  let ppAwarded = 1;
+  if (newStreak > 0 && newStreak % 3 === 0) ppAwarded += 1;
+  let energyDelta = 0;
+  if (newStreak > 0 && newStreak % 5 === 0) energyDelta += 1;
+  const strongUnlockedNow = newStreak > 0 && newStreak % 7 === 0;
+  return { newStreak, ppAwarded, energyDelta, strongUnlockedNow };
+}

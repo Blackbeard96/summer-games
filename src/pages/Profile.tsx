@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -12,7 +12,7 @@ import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
-import { CHAPTERS } from '../types/chapters';
+import { findNextChallenge } from '../utils/journeyProgress';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import { normalizePlayerData } from '../utils/playerData';
@@ -21,6 +21,7 @@ import { MOVE_TEMPLATES } from '../types/battle';
 import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
 import { UniversalLawSkillTreePage } from '../components/skillTree/UniversalLawSkillTreePage';
+import { getRRCandyStatus } from '../utils/rrCandyUtils';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -143,6 +144,8 @@ const Profile = () => {
   const [showPPEarningModal, setShowPPEarningModal] = useState(false);
   const [squadAbbreviation, setSquadAbbreviation] = useState<string | null>(null);
   const [isSkillTreeShowing, setIsSkillTreeShowing] = useState(false);
+  /** True if battleMoves already has RR Candy skills (unlock even when journey chapter shape differs) */
+  const [skillTreeUnlockedFromBattleMoves, setSkillTreeUnlockedFromBattleMoves] = useState(false);
   const [showEditRivalModal, setShowEditRivalModal] = useState(false);
   const [rivals, setRivals] = useState<{ chosen?: any; inbound?: any }>({});
   const [showPowerBreakdown, setShowPowerBreakdown] = useState(false);
@@ -166,143 +169,6 @@ const Profile = () => {
       'Metal': '#9CA3AF'
     };
     return elementColors[elementName] || '#6b7280'; // Default gray if not found
-  };
-
-  // Function to check if a challenge's requirements are met
-  const isChallengeUnlocked = (challenge: any, userProgress: any) => {
-    // Always unlock challenges with no requirements
-    if (!challenge.requirements || challenge.requirements.length === 0) {
-      return true;
-    }
-
-    // Special case: Chapter 1 Challenge 1 should ALWAYS be unlocked for new players
-    if (challenge.id === 'ep1-get-letter') {
-      return true;
-    }
-
-    // Check each requirement
-    for (const requirement of challenge.requirements) {
-      let requirementMet = false;
-      
-      switch (requirement.type) {
-        case 'artifact':
-          if (requirement.value === 'letter_received') {
-            const letterChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-get-letter'];
-            requirementMet = letterChallenge?.isCompleted && letterChallenge?.letterReceived;
-          } else if (requirement.value === 'chose_truth_metal') {
-            const truthMetalChoice = userProgress?.chapters?.[1]?.challenges?.['ep1-truth-metal-choice'];
-            requirementMet = truthMetalChoice?.isCompleted;
-          } else if (requirement.value === 'truth_metal_currency') {
-            const truthMetalTouch = userProgress?.chapters?.[1]?.challenges?.['ep1-touch-truth-metal'];
-            requirementMet = truthMetalTouch?.isCompleted;
-          } else if (requirement.value === 'ui_explored') {
-            const uiChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-mst-ui'];
-            requirementMet = uiChallenge?.isCompleted;
-          } else if (requirement.value === 'first_combat') {
-            const combatChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-combat-drill'];
-            requirementMet = combatChallenge?.isCompleted;
-          } else if (requirement.value === 'power_card_discovered') {
-            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-power-card-intro'];
-            requirementMet = powerCardChallenge?.isCompleted;
-          } else if (requirement.value === 'elemental_ring_level_1') {
-            // Check if Challenge 8 is completed (which grants the Elemental Ring)
-            const challenge8Completed = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card']?.isCompleted;
-            requirementMet = challenge8Completed === true;
-          }
-          break;
-        case 'manifest':
-          if (requirement.value === 'chosen') {
-            requirementMet = !!userProgress?.manifest || !!userProgress?.manifestationType;
-          }
-          break;
-        case 'profile':
-          if (requirement.value === 'completed') {
-            const profileChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-update-profile'];
-            requirementMet = profileChallenge?.isCompleted;
-          } else if (requirement.value === 'power_card_viewed') {
-            const powerCardChallenge = userProgress?.chapters?.[1]?.challenges?.['ep1-view-power-card'];
-            requirementMet = powerCardChallenge?.isCompleted;
-          }
-          break;
-        case 'team':
-          if (requirement.value === 'formed') {
-            const teamChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
-            requirementMet = teamChallenge?.isCompleted;
-          }
-          break;
-        case 'rival':
-          if (requirement.value === 'chosen') {
-            const rivalChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-rival-selection'];
-            requirementMet = rivalChallenge?.isCompleted;
-          }
-          break;
-        case 'level':
-          const userLevel = getLevelFromXP(userProgress?.xp || 0);
-          requirementMet = userLevel >= requirement.value;
-          break;
-        case 'previousChapter':
-          const prevChapter = userProgress?.chapters?.[requirement.value];
-          requirementMet = prevChapter?.isCompleted;
-          break;
-        case 'challenge':
-          // Check if a specific challenge is completed
-          // requirement.value should be the challenge ID (e.g., 'ch2-team-trial')
-          const requiredChallengeId = requirement.value;
-          // Find which chapter contains this challenge
-          let challengeFound = false;
-          for (const chapterId in userProgress?.chapters || {}) {
-            const chapterChallenges = userProgress?.chapters?.[chapterId]?.challenges || {};
-            if (chapterChallenges[requiredChallengeId]) {
-              const requiredChallenge = chapterChallenges[requiredChallengeId];
-              requirementMet = requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
-              challengeFound = true;
-              break;
-            }
-          }
-          if (!challengeFound) {
-            requirementMet = false;
-          }
-          break;
-      }
-      
-      if (!requirementMet) {
-        return false;
-      }
-    }
-    
-    return true;
-  };
-
-  // Function to find the next available challenge
-  const findNextChallenge = (userProgress: any) => {
-    if (!userProgress?.chapters) return null;
-
-    // Find the first active chapter
-    const activeChapter = CHAPTERS.find(chapter => 
-      userProgress.chapters[chapter.id]?.isActive
-    );
-
-    if (!activeChapter) return null;
-
-    // Find the first unlocked but not completed challenge in the active chapter
-    for (const challenge of activeChapter.challenges) {
-      const challengeProgress = userProgress.chapters[activeChapter.id]?.challenges?.[challenge.id];
-      
-      // Skip if already completed
-      if (challengeProgress?.isCompleted) {
-        continue;
-      }
-
-      // Check if challenge is unlocked
-      if (isChallengeUnlocked(challenge, userProgress)) {
-        return {
-          ...challenge,
-          chapter: activeChapter
-        };
-      }
-    }
-
-    return null;
   };
 
   const fetchUserData = async () => {
@@ -335,6 +201,17 @@ const Profile = () => {
         getDoc(usersRef),
         getDoc(battleMovesRef)
       ]);
+
+      // RR Candy / skill-tree unlock from moves (same idea as Skill Mastery)
+      if (battleMovesSnap.exists()) {
+        const rawMoves = battleMovesSnap.data().moves;
+        const hasRrCandy =
+          Array.isArray(rawMoves) &&
+          rawMoves.some((m: any) => String(m?.id || '').toLowerCase().startsWith('rr-candy-'));
+        setSkillTreeUnlockedFromBattleMoves(hasRrCandy);
+      } else {
+        setSkillTreeUnlockedFromBattleMoves(false);
+      }
       
       if (studentsSnap.exists()) {
         const userDataFromDB = studentsSnap.data();
@@ -372,11 +249,20 @@ const Profile = () => {
           }
         }
         
-        // Merge students data with users artifacts and chapters
+        // Merge students + users chapters so we never wipe journey data when users/{uid}.chapters is missing/empty
+        const studentsChapters =
+          userDataFromDB.chapters && typeof userDataFromDB.chapters === 'object' ? userDataFromDB.chapters : {};
+        const usersChapters =
+          usersSnap.exists() && usersSnap.data().chapters && typeof usersSnap.data().chapters === 'object'
+            ? usersSnap.data().chapters
+            : {};
+        const mergedChapters = { ...studentsChapters, ...usersChapters };
+
+        // Merge students data with users artifacts and merged chapters
         const mergedUserData = {
           ...userDataFromDB,
           artifacts: artifacts,
-          chapters: usersSnap.exists() ? usersSnap.data().chapters : userDataFromDB.chapters
+          chapters: mergedChapters
         };
         
         // Determine element: prioritize chosen_element from artifacts (in students collection), then elementalAffinity, then manifestationType
@@ -445,6 +331,27 @@ const Profile = () => {
         // Fetch rivals
         const rivalsData = await getRivals(currentUser.uid);
         setRivals(rivalsData);
+
+        // Recompute PL from equipped artifacts/skills (fixes stale Firestore + merge bugs) then refresh UI
+        try {
+          const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
+          await recalculatePowerLevel(currentUser.uid);
+          const refreshedStudent = await getDoc(doc(db, 'students', currentUser.uid));
+          if (refreshedStudent.exists()) {
+            const sd = refreshedStudent.data();
+            setUserData((prev: any) =>
+              prev
+                ? {
+                    ...prev,
+                    powerLevel: sd.powerLevel ?? prev.powerLevel,
+                    powerBreakdown: sd.powerBreakdown ?? prev.powerBreakdown,
+                  }
+                : prev
+            );
+          }
+        } catch (plErr) {
+          console.error('Profile: Power level sync failed', plErr);
+        }
       } else {
         // Create user document if it doesn't exist
         setUserData({ xp: 0, powerPoints: 0, truthMetal: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
@@ -577,6 +484,15 @@ const Profile = () => {
       setIsSkillTreeShowing(true);
     }
   }, [skillTreeView]);
+
+  /** Skill tree on Profile: same robust unlock as RR Candy + any rr-candy-* moves in battleMoves */
+  const rrProfileSkill = useMemo(() => {
+    const rr = getRRCandyStatus(userData || {});
+    return {
+      hasAccess: skillTreeUnlockedFromBattleMoves || rr.unlocked,
+      candyType: rr.candyType || 'on-off',
+    };
+  }, [userData, skillTreeUnlockedFromBattleMoves]);
 
   // Note: RR Candy moves are now managed entirely in Skill Mastery (Battle Arena)
   // No longer needed to ensure RR Candy moves in Profile
@@ -955,15 +871,6 @@ const Profile = () => {
   const powerLevel = userData?.powerLevel || null;
   const powerBreakdown = userData?.powerBreakdown || null;
   const avatarUrl = userData?.photoURL || currentUser.photoURL || `https://ui-avatars.com/api/?name=${currentUser.displayName || currentUser.email}&background=4f46e5&color=fff&size=128`;
-  
-  // Debug logging for avatar URL
-  console.log('Profile: Avatar URL debug:', {
-    userDataPhotoURL: userData?.photoURL,
-    currentUserPhotoURL: currentUser.photoURL,
-    finalAvatarUrl: avatarUrl,
-    displayName: displayName || currentUser.displayName,
-    email: currentUser.email
-  });
 
   // Get the current manifest name from playerManifest state
   const currentManifest = playerManifest ? 
@@ -1222,8 +1129,8 @@ const Profile = () => {
               ordinaryWorld={userData?.ordinaryWorld}
               journeyStageContent={userData?.journeyStageContent}
               squadAbbreviation={squadAbbreviation}
-              hasSkillTreeAccess={!!userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.isCompleted}
-              candyType={userData?.chapters?.[2]?.challenges?.['ep2-its-all-a-game']?.candyChoice || 'on-off'} // Get from challenge data or default to on-off
+              hasSkillTreeAccess={rrProfileSkill.hasAccess}
+              candyType={rrProfileSkill.candyType}
               onSkillTreeToggle={setIsSkillTreeShowing}
               initialSkillTreeMode={(skillTreeModeParam === 'irl' ? 'irl' : 'in-game') as 'in-game' | 'irl'}
             />
@@ -1266,13 +1173,31 @@ const Profile = () => {
                 opacity: 0.3
               }} />
               
-              {/* Title */}
+              {/* Title + back */}
               <div style={{
                 position: 'relative',
                 zIndex: 1,
                 marginBottom: '2rem',
                 textAlign: 'center'
               }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '0.75rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsSkillTreeShowing(false)}
+                    style={{
+                      background: 'rgba(255,255,255,0.12)',
+                      border: '1px solid rgba(255,255,255,0.25)',
+                      color: '#e5e7eb',
+                      borderRadius: '0.5rem',
+                      padding: '0.5rem 1rem',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    ← Back to profile
+                  </button>
+                </div>
                 <h2 style={{
                   fontSize: '2rem',
                   fontWeight: 'bold',
@@ -1351,6 +1276,54 @@ const Profile = () => {
             </div>
           ) : (
             /* Profile Settings */
+          <>
+          {rrProfileSkill.hasAccess && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '1rem 1.25rem',
+                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                borderRadius: '0.75rem',
+                border: '1px solid #6ee7b7',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem',
+                }}
+              >
+                <div>
+                  <strong style={{ color: '#065f46' }}>🌳 Skill tree</strong>
+                  <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#047857', maxWidth: '36rem' }}>
+                    Open your Universal Law skill tree here, or use the green <strong>Skill Tree</strong> button on your player card (front).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSkillTreeShowing(true)}
+                  style={{
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.65rem 1.25rem',
+                    fontWeight: 700,
+                    fontSize: '0.9rem',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Open skill tree
+                </button>
+              </div>
+            </div>
+          )}
           <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
               👤 Profile Settings
@@ -1703,6 +1676,7 @@ const Profile = () => {
             </div>
           </div>
         </div>
+          </>
           )}
         </div>
       </div>
@@ -2697,7 +2671,7 @@ const Profile = () => {
                         </p>
                       );
                     }
-                    return elementalMoves.map((move: any) => {
+                    return elementalMoves.map((move: any, elIdx: number) => {
                     const usageCount = getMoveUsageCount(playerManifest, move.name);
                     const milestones = [...MANIFEST_MILESTONES];
                     const milestoneProgress = getMilestoneProgress(usageCount);
@@ -2707,9 +2681,10 @@ const Profile = () => {
                     const hasUnclaimedMilestones = availableToClaim.length > 0;
                     const hasReachedMilestones = reachedMilestones.length > 0;
                     const elementalColor = '#f59e0b';
+                    const moveRowKey = `${move.id || 'move'}-${move.name}-${elIdx}`;
                     return (
                       <div
-                        key={move.name}
+                        key={moveRowKey}
                         style={{
                           padding: '1rem',
                           background: 'rgba(255,255,255,0.6)',

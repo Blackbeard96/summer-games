@@ -39,7 +39,9 @@ export interface Move {
   elementalAffinity?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
   manifestType?: 'reading' | 'writing' | 'drawing' | 'athletics' | 'singing' | 'gaming' | 'observation' | 'empathy' | 'creating' | 'cooking';
   level: number; // 1-4 for elemental moves, 1-5 for others
-  cost: number; // PP cost
+  cost: number; // Vault PP cost (non–live-event); in Live Events this is Participation Point (movesEarned) base cost
+  /** When true, Live Event final skill cost may be 0 (otherwise minimum 1 PP when base cost is positive) */
+  liveEventAllowZeroCost?: boolean;
   damage?: number;
   ppSteal?: number; // PP stolen from target
   healing?: number;
@@ -55,6 +57,14 @@ export interface Move {
   masteryLevel: number; // 1-5, affects power
   targetType?: 'self' | 'single' | 'team' | 'enemy' | 'enemy_team' | 'all';
   priority?: number; // Turn priority modifier (-2 to +2, default 0). Higher priority acts first.
+  /** Status effects (e.g. summon, burn) used by artifact skills and move overrides */
+  statusEffects?: Array<{ type?: string; duration?: number; summonElementalType?: string; summonDamage?: number; summonName?: string; [key: string]: unknown }>;
+  /** Set for artifact-granted skills: used for summon scaling and UI */
+  artifactGrant?: {
+    artifactId: string;
+    artifactLevel: number;
+    artifactName?: string;
+  };
 }
 
 export interface ActionCard {

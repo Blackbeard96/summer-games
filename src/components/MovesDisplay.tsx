@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange, 
@@ -11,12 +12,22 @@ import { useAuth } from '../context/AuthContext';
 import { getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
 import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { getRRCandyMoves } from '../utils/rrCandyMoves';
+import { getRRCandyMoves, getRRCandyDisplayName } from '../utils/rrCandyMoves';
 import { getRRCandyStatus, getRRCandyStatusAsync } from '../utils/rrCandyUtils';
 import { getUserRRCandySkills, checkRRCandyUnlock } from '../utils/rrCandyService';
 import { getPlayerSkillState } from '../utils/skillStateService';
 import { equipSkill, unequipSkill } from '../utils/skillEquipService';
-import { getArtifactSkillsFromEquipped } from '../utils/battleSkillsService';
+import { enrichEquippedArtifactsFromCatalog, getArtifactSkillsFromEquipped } from '../utils/battleSkillsService';
+import {
+  effectiveSkillCooldownTurns,
+  getElementalAccessElementFromStudent,
+  getSkillsMasteryPerkDisplaySnapshot,
+  hasElementalAccessPerkEquipped,
+} from '../utils/artifactPerkEffects';
+import {
+  getFirstSummonEffectFromMove,
+  resolveConstructStatsForSummonEffect,
+} from '../utils/summonConstructStats';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
 
 interface MovesDisplayProps {
@@ -60,15 +71,22 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   getNextElementalMilestone,
   elementalProgress,
 }) => {
+  const location = useLocation();
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [overridesLoaded, setOverridesLoaded] = useState(false);
   const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
   const { currentUser } = useAuth();
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
+  /** students.artifacts map — used to resolve Legendary skills (players cannot read adminSettings). */
+  const [studentOwnedArtifacts, setStudentOwnedArtifacts] = useState<Record<string, any>>({});
   const [truthMetal, setTruthMetal] = useState<number>(0);
   const [userManifest, setUserManifest] = useState<string | null>(null);
   const [equippedSkillIds, setEquippedSkillIds] = useState<string[]>([]);
   const [loadoutBusy, setLoadoutBusy] = useState(false);
+  /** Legendary artifact-granted skills (catalog merge + _purchase resolution). */
+  const [artifactMoves, setArtifactMoves] = useState<Move[]>([]);
+  /** Same doc as equippable catalog — for Elemental Access perk gating. */
+  const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
 
   // Load user's manifest type from both students and users collections
   useEffect(() => {
@@ -180,25 +198,62 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     return () => clearInterval(interval);
   }, [currentUser]);
 
-  // Load equipped artifacts to check for Elemental Ring
+  // Load equipped artifacts + owned artifact grants (non-admins cannot read adminSettings/equippableArtifacts)
   useEffect(() => {
+    let cancelled = false;
     const loadEquippedArtifacts = async () => {
       if (!currentUser) return;
-      
+
       try {
         const studentRef = doc(db, 'students', currentUser.uid);
         const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) {
-          const studentData = studentDoc.data();
-          setEquippedArtifacts(studentData.equippedArtifacts || null);
+        if (!studentDoc.exists() || cancelled) return;
+        const studentData = studentDoc.data();
+        const owned = (studentData.artifacts || {}) as Record<string, any>;
+        if (!cancelled) setStudentOwnedArtifacts(owned);
+        let equipped = studentData.equippedArtifacts || null;
+        if (!equipped || typeof equipped !== 'object') {
+          if (!cancelled) {
+            setEquippedArtifacts(equipped);
+            setEquippableCatalogRaw(null);
+            setArtifactMoves([]);
+          }
+          return;
         }
+        let catalogRaw: Record<string, unknown> | null = null;
+        try {
+          const equippableDoc = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+          if (equippableDoc.exists()) {
+            catalogRaw = equippableDoc.data() as Record<string, unknown>;
+            equipped = enrichEquippedArtifactsFromCatalog(equipped, catalogRaw);
+          }
+        } catch {
+          /* permission denied — catalogRaw stays null */
+        }
+        if (cancelled) return;
+        setEquippableCatalogRaw(catalogRaw);
+        setEquippedArtifacts(equipped);
+        setArtifactMoves(
+          getArtifactSkillsFromEquipped(
+            { ...studentData, equippedArtifacts: equipped, artifacts: owned },
+            catalogRaw
+          )
+        );
       } catch (error) {
         console.error('Error loading equipped artifacts:', error);
       }
     };
 
     loadEquippedArtifacts();
-  }, [currentUser]);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') loadEquippedArtifacts();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [currentUser, location.pathname]);
 
   // Load equipped skill IDs (unified 6-skill loadout)
   useEffect(() => {
@@ -212,7 +267,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       }
     };
     loadEquipped();
-  }, [currentUser]);
+  }, [currentUser, location.pathname]);
 
   // Ensure RR Candy moves are loaded when component mounts
   // This ensures they appear in Skills & Mastery even if they weren't loaded initially
@@ -231,43 +286,44 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       console.log('MovesDisplay: Starting RR Candy skills fetch for user:', currentUser.uid);
       
       try {
-        // Check unlock status
         const unlockStatus = await checkRRCandyUnlock(currentUser.uid);
         console.log('MovesDisplay: Unlock status check result:', unlockStatus);
-        setRRCandyStatus(unlockStatus);
-        
-        if (!unlockStatus.unlocked) {
-          console.warn('MovesDisplay: RR Candy not unlocked. Status:', unlockStatus);
-          setRRCandySkillsFromService([]);
-          return;
+
+        // Always ask the service (it can unlock from battleMoves even if users/{uid} chapter data is missing)
+        const rrSkills = await getUserRRCandySkills(currentUser.uid, moves);
+
+        if (rrSkills.length > 0) {
+          const inferredType =
+            unlockStatus.candyType ||
+            (rrSkills.some((m) => (m.id || '').toLowerCase().includes('up-down')) ? 'up-down' : null) ||
+            (rrSkills.some((m) => (m.id || '').toLowerCase().includes('config')) ? 'config' : null) ||
+            'on-off';
+          setRRCandyStatus({ unlocked: true, candyType: inferredType });
+        } else {
+          setRRCandyStatus(unlockStatus);
         }
 
-        console.log('MovesDisplay: RR Candy is unlocked! Fetching skills...', {
-          candyType: unlockStatus.candyType,
-          movesArrayLength: moves.length
-        });
-
-        // Fetch RR Candy skills using shared service (passes moves array to avoid extra fetch)
-        // The service will generate and persist moves if they don't exist
-        const rrSkills = await getUserRRCandySkills(currentUser.uid, moves);
         setRRCandySkillsFromService(rrSkills);
-        
+
+        if (rrSkills.length === 0 && !unlockStatus.unlocked) {
+          console.warn('MovesDisplay: RR Candy not unlocked and no RR skills in battleMoves.', unlockStatus);
+        }
+
         console.log('MovesDisplay: RR Candy skills fetched from service:', {
           count: rrSkills.length,
-          unlocked: unlockStatus.unlocked,
-          candyType: unlockStatus.candyType,
-          skills: rrSkills.map(s => ({ id: s.id, name: s.name, level: s.masteryLevel, unlocked: s.unlocked }))
+          chapterUnlock: unlockStatus.unlocked,
+          skills: rrSkills.map((s) => ({ id: s.id, name: s.name, level: s.masteryLevel, unlocked: s.unlocked })),
         });
-        
-        // If service generated new moves, they'll be picked up by BattleContext's listener
-        // But we can also trigger a refresh by checking if moves array needs updating
+
         if (rrSkills.length > 0) {
-          const movesInArray = moves.filter(m => m.id?.startsWith('rr-candy-'));
+          const movesInArray = moves.filter((m) => m.id?.startsWith('rr-candy-'));
           if (movesInArray.length < rrSkills.length) {
-            console.log('MovesDisplay: Service returned more RR Candy skills than in moves array. BattleContext listener should pick them up.');
+            console.log(
+              'MovesDisplay: Service returned more RR Candy skills than in moves array. BattleContext listener should pick them up.'
+            );
           }
-        } else {
-          console.warn('MovesDisplay: Service returned 0 RR Candy skills even though unlocked!');
+        } else if (unlockStatus.unlocked) {
+          console.warn('MovesDisplay: Chapter says RR Candy unlocked but service returned 0 skills.');
         }
       } catch (error) {
         console.error('MovesDisplay: Error fetching RR Candy skills:', error);
@@ -358,20 +414,49 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     return filtered;
   }, [moves, userManifest]);
   
-  // Filter elemental moves by player's chosen element - memoized for performance
+  // Saved secondary element (Artifacts → Elemental Access). Shown in section header.
+  const elementalAccessSecondary = useMemo(
+    () =>
+      getElementalAccessElementFromStudent({ artifacts: studentOwnedArtifacts } as Record<string, unknown>),
+    [studentOwnedArtifacts]
+  );
+
+  // Primary + secondary elemental skills for Skills & Mastery.
+  // Note: hasElementalAccessPerkEquipped() needs merged catalog perks; until that loads, rely on
+  // Firestore artifacts.elemental_access_element (only written from Artifacts when the perk applies).
   const elementalMoves = useMemo(() => {
-    return moves.filter(move => {
+    const secondarySaved = elementalAccessSecondary;
+    const perkEquipped = hasElementalAccessPerkEquipped(equippedArtifacts, equippableCatalogRaw);
+    // Perk merge can lag until equippable catalog loads; Firestore elemental_access_element is authoritative for UI.
+    const allowSecondaryListing = perkEquipped || !!secondarySaved;
+
+    return moves.filter((move) => {
       if (move.category !== 'elemental' || !move.unlocked) return false;
-      // If userElement is provided, ONLY show moves matching that element (strict filtering)
+      const moveElement = (move.elementalAffinity || '').toLowerCase();
+
       if (userElement) {
-        const moveElement = move.elementalAffinity?.toLowerCase();
         const userElementLower = userElement.toLowerCase();
-        return moveElement === userElementLower;
+        const primaryMatch = moveElement === userElementLower;
+        const secondaryMatch =
+          allowSecondaryListing &&
+          !!secondarySaved &&
+          moveElement === secondarySaved.toLowerCase();
+        return primaryMatch || secondaryMatch;
       }
-      // If no userElement provided, don't show any elemental moves (user must choose element first)
+
+      // No primary element on file — still show secondary elemental line if applicable
+      if (allowSecondaryListing && secondarySaved) {
+        return moveElement === secondarySaved.toLowerCase();
+      }
       return false;
     });
-  }, [moves, userElement]);
+  }, [
+    moves,
+    userElement,
+    equippedArtifacts,
+    equippableCatalogRaw,
+    elementalAccessSecondary,
+  ]);
   
   // Separate Power Card skills (custom moves from Profile)
   const powerCardMoves = useMemo(() => {
@@ -536,20 +621,31 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     }
   };
 
-  // Artifact skills from equipped artifacts (legendary artifacts with artifactSkill)
-  const artifactMoves = useMemo(
-    () => getArtifactSkillsFromEquipped({ equippedArtifacts: equippedArtifacts || {} }),
-    [equippedArtifacts]
-  );
-
-  // Resolve equipped skill IDs to move objects for loadout preview
+  // Resolve equipped skill IDs to move objects for loadout preview (includes artifact-granted skills)
   const equippedMovesForPreview = useMemo(() => {
-    const pool = [...manifestMoves, ...elementalMoves, ...rrCandyMoves];
+    const pool = [...manifestMoves, ...elementalMoves, ...rrCandyMoves, ...artifactMoves];
     const byId = new Map(pool.map(m => [m.id, m]));
     return equippedSkillIds
       .map(id => byId.get(id))
-      .filter((m): m is Move => m != null);
-  }, [equippedSkillIds, manifestMoves, elementalMoves, rrCandyMoves]);
+      .filter((m): m is Move => m != null)
+      .map((m) => {
+        if (m.id?.startsWith('rr-candy-') || m.id?.includes('rr-candy')) {
+          const displayName = getRRCandyDisplayName(m);
+          if (displayName !== m.name) return { ...m, name: displayName };
+        }
+        return m;
+      });
+  }, [equippedSkillIds, manifestMoves, elementalMoves, rrCandyMoves, artifactMoves]);
+
+  /** Matches battle engine: damage boost on all attacks, status defense summary, synergy lines */
+  const combatPerkUi = useMemo(
+    () =>
+      getSkillsMasteryPerkDisplaySnapshot(
+        equippedArtifacts as Record<string, unknown> | null,
+        equippableCatalogRaw
+      ),
+    [equippedArtifacts, equippableCatalogRaw]
+  );
 
   const renderMoveCard = (move: Move) => {
     // Force unlock RR Candy moves if RR Candy is globally unlocked
@@ -739,6 +835,18 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               return null;
             })()}
           </h3>
+          {move.artifactGrant && move.category === 'system' && (
+            <div style={{
+              fontSize: '0.8rem',
+              color: '#0369a1',
+              fontWeight: 600,
+              marginTop: '0.35rem',
+              textAlign: 'center',
+            }}>
+              🎨 Granting artifact · Level {move.artifactGrant.artifactLevel}
+              {move.artifactGrant.artifactName ? ` (${move.artifactGrant.artifactName})` : ''}
+            </div>
+          )}
           {move.level > 1 && (
             <span style={{ 
               background: 'rgba(255,255,255,0.2)',
@@ -815,6 +923,40 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             )}
           </div>
         </div>
+
+        {/* Summon / construct preview (artifact & other skills with summon status effect) */}
+        {(() => {
+          const se = getFirstSummonEffectFromMove(move);
+          if (!se) return null;
+          const artLv = move.artifactGrant?.artifactLevel ?? 1;
+          const c = resolveConstructStatsForSummonEffect(se, artLv);
+          const elemLabel = c.elementalType.charAt(0).toUpperCase() + c.elementalType.slice(1);
+          return (
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
+                border: '1px solid #a5b4fc',
+                borderRadius: '0.75rem',
+                padding: '0.85rem 1rem',
+                marginBottom: '1rem',
+              }}
+            >
+              <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#3730a3', marginBottom: '0.5rem' }}>
+                ✨ Summoned construct ({elemLabel})
+              </div>
+              <div style={{ fontSize: '0.78rem', color: '#4338ca', lineHeight: 1.55 }}>
+                <div><strong>Name:</strong> {c.displayName}</div>
+                <div><strong>HP / Shields:</strong> {c.maxHealth} / {c.maxShield}</div>
+                <div><strong>Attack damage:</strong> {c.attackDamage} ({elemLabel}, each time the construct acts)</div>
+                <div><strong>Stays on field:</strong> {c.durationTurns} turn{c.durationTurns !== 1 ? 's' : ''}</div>
+                <div style={{ marginTop: '0.45rem', color: '#6366f1', fontSize: '0.72rem' }}>
+                  Power scales with your <strong>artifact level</strong> (L{c.artifactLevelUsed} → ×{c.powerMultiplier.toFixed(1)} vs level 1).
+                  Mastery level affects the skill card, not these construct stats.
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Stats Grid */}
         <div style={{ 
@@ -898,10 +1040,54 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                   };
                 }
               }
+
+              const manifestPerkMult =
+                move.category === 'manifest' ? combatPerkUi.manifestBoostMultiplier : 1.0;
+              if (manifestPerkMult > 1.001) {
+                damageRange = {
+                  min: Math.floor(damageRange.min * manifestPerkMult),
+                  max: Math.floor(damageRange.max * manifestPerkMult),
+                  average: Math.floor(damageRange.average * manifestPerkMult),
+                };
+              }
+
+              const elementalPerkMult =
+                move.category === 'elemental' ? combatPerkUi.elementalBoostMultiplier : 1.0;
+              if (elementalPerkMult > 1.001) {
+                damageRange = {
+                  min: Math.floor(damageRange.min * elementalPerkMult),
+                  max: Math.floor(damageRange.max * elementalPerkMult),
+                  average: Math.floor(damageRange.average * elementalPerkMult),
+                };
+              }
+
+              const damageBoostMult = combatPerkUi.damageBoostMultiplier;
+              if (damageBoostMult > 1.001) {
+                damageRange = {
+                  min: Math.floor(damageRange.min * damageBoostMult),
+                  max: Math.floor(damageRange.max * damageBoostMult),
+                  average: Math.floor(damageRange.average * damageBoostMult),
+                };
+              }
+
+              const costRedMult = combatPerkUi.costReductionSkillMultiplier;
+              if (costRedMult > 1.001) {
+                damageRange = {
+                  min: Math.floor(damageRange.min * costRedMult),
+                  max: Math.floor(damageRange.max * costRedMult),
+                  average: Math.floor(damageRange.average * costRedMult),
+                };
+              }
               
               const rangeString = formatDamageRange(damageRange);
               const baseRangeString = formatDamageRange(baseDamageRange);
-              const hasArtifactBoost = artifactMultiplier > 1.0 || manifestBoost > 1.0;
+              const hasArtifactBoost =
+                artifactMultiplier > 1.0 ||
+                manifestBoost > 1.0 ||
+                manifestPerkMult > 1.001 ||
+                elementalPerkMult > 1.001 ||
+                damageBoostMult > 1.001 ||
+                costRedMult > 1.001;
               
               return (
                 <div style={{
@@ -933,6 +1119,26 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                   {manifestBoost > 1.0 && move.category === 'manifest' && (
                     <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
                       🪖 Captain's Helmet +{Math.round((manifestBoost - 1) * 100)}%
+                    </div>
+                  )}
+                  {manifestPerkMult > 1.001 && move.category === 'manifest' && (
+                    <div style={{ fontSize: '0.7rem', color: '#6366f1', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      ✨ Manifest Boost +{combatPerkUi.manifestBoostPercent}% (manifest skills only)
+                    </div>
+                  )}
+                  {elementalPerkMult > 1.001 && move.category === 'elemental' && (
+                    <div style={{ fontSize: '0.7rem', color: '#ea580c', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      🔥 Elemental Boost +{combatPerkUi.elementalBoostPercent}% (elemental skills only)
+                    </div>
+                  )}
+                  {damageBoostMult > 1.001 && (
+                    <div style={{ fontSize: '0.7rem', color: '#b45309', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      ⚔️ Damage Boost +{combatPerkUi.damageBoostPercent}% (all attack skills; level + set synergy)
+                    </div>
+                  )}
+                  {costRedMult > 1.001 && (
+                    <div style={{ fontSize: '0.7rem', color: '#0d9488', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      📉 Cost Reduction +{combatPerkUi.costReductionSkillEffectivenessPercent}% skill effectiveness (cap 5%)
                     </div>
                   )}
                   {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
@@ -1096,8 +1302,15 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             </div>
           )}
 
-          {/* Cooldown */}
-          {move.cooldown > 0 && (
+          {/* Cooldown (turn-based battle; Cost Reduction perk no longer shortens this) */}
+          {move.cooldown > 0 && (() => {
+            const baseCd = Math.max(0, Math.floor(Number(move.cooldown) || 0));
+            const effCd = effectiveSkillCooldownTurns(
+              baseCd,
+              equippedArtifacts as Record<string, unknown>,
+              equippableCatalogRaw
+            );
+            return (
             <div style={{
               background: 'rgba(255,255,255,0.9)',
               padding: '0.75rem',
@@ -1107,7 +1320,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             }}>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>COOLDOWN</div>
               <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#8b5cf6' }}>
-                {move.cooldown} {move.cooldown === 1 ? 'turn' : 'turns'}
+                {effCd} {effCd === 1 ? 'turn' : 'turns'}
                 {move.currentCooldown > 0 && (
                   <div style={{ fontSize: '0.7rem', color: '#dc2626', marginTop: '0.25rem' }}>
                     ({move.currentCooldown} remaining)
@@ -1115,7 +1328,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 )}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Priority */}
           {move.priority !== undefined && move.priority !== 0 && (
@@ -1358,8 +1572,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }
                 
                 if (currentBaseDamage > 0) {
-                  // Calculate current damage range
-                  const currentRange = calculateDamageRange(currentBaseDamage, move.level, move.masteryLevel);
+                  // Calculate current damage range (use effective mastery so preview matches card)
+                  const currentRange = calculateDamageRange(currentBaseDamage, move.level, effectiveMasteryLevel);
                   
                   // Calculate next level damage based on boost multipliers
                   const nextLevel = move.masteryLevel + 1;
@@ -1422,9 +1636,49 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                     max: nextRangeMax.max,
                     average: Math.floor((nextRangeMin.average + nextRangeMax.average) / 2)
                   };
-                  
+
+                  const dbm = combatPerkUi.damageBoostMultiplier;
+                  const mbm = combatPerkUi.manifestBoostMultiplier;
+                  const ebm = combatPerkUi.elementalBoostMultiplier;
+                  const crm = combatPerkUi.costReductionSkillMultiplier;
+                  const applyCombatPerks = (r: { min: number; max: number; average: number }) => {
+                    let m = 1.0;
+                    if (move.category === 'manifest' && mbm > 1.001) m *= mbm;
+                    if (move.category === 'elemental' && ebm > 1.001) m *= ebm;
+                    if (dbm > 1.001) m *= dbm;
+                    if (crm > 1.001) m *= crm;
+                    if (m <= 1.001) return r;
+                    return {
+                      min: Math.floor(r.min * m),
+                      max: Math.floor(r.max * m),
+                      average: Math.floor(r.average * m),
+                    };
+                  };
+                  const curShow = applyCombatPerks(currentRange);
+                  const nextShow = applyCombatPerks(nextRange);
+                  const perkLineParts: string[] = [];
+                  if (move.category === 'manifest' && mbm > 1.001) {
+                    perkLineParts.push(`Manifest Boost +${combatPerkUi.manifestBoostPercent}%`);
+                  }
+                  if (move.category === 'elemental' && ebm > 1.001) {
+                    perkLineParts.push(`Elemental Boost +${combatPerkUi.elementalBoostPercent}%`);
+                  }
+                  if (dbm > 1.001) {
+                    perkLineParts.push(`Damage Boost +${combatPerkUi.damageBoostPercent}%`);
+                  }
+                  if (crm > 1.001) {
+                    perkLineParts.push(`Cost Reduction +${combatPerkUi.costReductionSkillEffectivenessPercent}%`);
+                  }
+
                   return (
-                    <div>Damage: {formatDamageRange(currentRange)} → {formatDamageRange(nextRange)}</div>
+                    <div>
+                      Damage: {formatDamageRange(curShow)} → {formatDamageRange(nextShow)}
+                      {perkLineParts.length > 0 && (
+                        <span style={{ display: 'block', fontSize: '0.65rem', opacity: 0.85, marginTop: '0.2rem' }}>
+                          (includes {perkLineParts.join(' · ')})
+                        </span>
+                      )}
+                    </div>
                   );
                 }
                 return null;
@@ -2043,7 +2297,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         color: '#1f2937',
         textAlign: 'center'
       }}>
-        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length} Skills Unlocked)
+        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + artifactMoves.length} Skills Unlocked)
       </h3>
 
       {/* Loadout: X/6 — only equipped skills appear in battle */}
@@ -2067,6 +2321,93 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         </span>
       </div>
 
+      {(combatPerkUi.damageBoostPercent > 0 ||
+        combatPerkUi.manifestBoostPercent > 0 ||
+        combatPerkUi.elementalBoostPercent > 0 ||
+        combatPerkUi.statusDefensePercent > 0 ||
+        combatPerkUi.liveEventPpCostReduction > 0 ||
+        combatPerkUi.costReductionSkillEffectivenessPercent > 0 ||
+        combatPerkUi.healingRegenPerTurn > 0 ||
+        combatPerkUi.ppEconomyPercent > 0 ||
+        combatPerkUi.synergyNotes.length > 0) && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.75rem 1rem',
+            background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+            border: '1px solid #fcd34d',
+            borderRadius: '0.5rem',
+          }}
+        >
+          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#92400e', marginBottom: '0.35rem' }}>
+            ⚔️ Equipped artifact perks (reflected in damage & Live Event costs on cards below)
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: '1.1rem',
+              fontSize: '0.8rem',
+              color: '#78350f',
+              lineHeight: 1.5,
+            }}
+          >
+            {combatPerkUi.damageBoostPercent > 0 && (
+              <li>
+                <strong>Damage Boost:</strong> +{combatPerkUi.damageBoostPercent}% to all attack skill damage
+                shown on cards (same as battle).
+              </li>
+            )}
+            {combatPerkUi.manifestBoostPercent > 0 && (
+              <li>
+                <strong>Manifest Boost:</strong> +{combatPerkUi.manifestBoostPercent}% to manifest-category
+                attack damage (and manifest shield boosts), same scaling as battle.
+              </li>
+            )}
+            {combatPerkUi.elementalBoostPercent > 0 && (
+              <li>
+                <strong>Elemental Boost:</strong> +{combatPerkUi.elementalBoostPercent}% to elemental-category
+                attack damage; stacks with Elemental Ring (same as battle).
+              </li>
+            )}
+            {combatPerkUi.statusDefensePercent > 0 && (
+              <li>
+                <strong>Status Defense:</strong> ~{combatPerkUi.statusDefensePercent}% of incoming hit damage
+                mitigated in battle (after your Reduce effects, before shields).
+              </li>
+            )}
+            {(combatPerkUi.liveEventPpCostReduction > 0 || combatPerkUi.costReductionSkillEffectivenessPercent > 0) && (
+              <li>
+                <strong>Cost Reduction:</strong>
+                {combatPerkUi.liveEventPpCostReduction > 0 && (
+                  <> reduces Live Event skill Participation Point cost by up to {combatPerkUi.liveEventPpCostReduction} total (per piece: −1, or −2 at max artifact level; synergy applies).</>
+                )}
+                {combatPerkUi.liveEventPpCostReduction > 0 && combatPerkUi.costReductionSkillEffectivenessPercent > 0 && <> </>}
+                {combatPerkUi.costReductionSkillEffectivenessPercent > 0 && (
+                  <> Increases attack skill damage by up to +{combatPerkUi.costReductionSkillEffectivenessPercent}% (scales with artifact level, max +5% total from this perk).</>
+                )}
+              </li>
+            )}
+            {combatPerkUi.healingRegenPerTurn > 0 && (
+              <li>
+                <strong>Healing Boost:</strong> +{combatPerkUi.healingRegenPerTurn} health (or PP) at the start
+                of each your turn in battle (scales with artifact level; cap 50/turn from this perk).
+              </li>
+            )}
+            {combatPerkUi.ppEconomyPercent > 0 && (
+              <li>
+                <strong>PP Economy:</strong> +{combatPerkUi.ppEconomyPercent}% on all PP you receive in battle
+                (steals, victory payout, heal-to-PP, etc.; cap +50% from this perk type).
+              </li>
+            )}
+            {combatPerkUi.synergyNotes.map((line, i) => (
+              <li key={i}>
+                <strong>Artifact Synergy:</strong> {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Equipped loadout preview */}
       <div style={{
         marginBottom: '1.5rem',
@@ -2089,9 +2430,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             if (move) {
               const isManifest = move.category === 'manifest';
               const isElemental = move.category === 'elemental';
-              const isRRCandy = move.id?.startsWith('rr-candy-');
+              const isRRCandy = move.id?.startsWith('rr-candy-') || move.id?.includes('rr-candy');
               const icon = isManifest ? '⭐' : isElemental ? getElementalIcon(move.elementalAffinity || '') : isRRCandy ? '🍬' : '⚔️';
               const bg = isManifest ? getManifestColor(move.manifestType || '') : isElemental ? getElementalColor(move.elementalAffinity || '') : '#ec4899';
+              const slotLabel = isRRCandy ? getRRCandyDisplayName(move) : move.name;
               return (
                 <div
                   key={move.id}
@@ -2110,7 +2452,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 >
                   <span style={{ fontSize: '1.25rem' }}>{icon}</span>
                   <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {move.name}
+                    {slotLabel}
                   </span>
                 </div>
               );
@@ -2195,11 +2537,12 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           candyType: rrCandyStatus.candyType
         });
         
-        if (rrCandyStatus.unlocked && skillsCount > 0) {
+        // Show skills whenever we have any to render (battleMoves path can unlock without chapter doc)
+        if (skillsCount > 0) {
           return renderMoveSection(
-            `RR Candy Skills (${skillsCount} Available)`, 
-            skillsToDisplay, 
-            '🍬', 
+            'RR Candy Skills',
+            skillsToDisplay,
+            '🍬',
             '#ec4899'
           );
         } else if (rrCandyStatus.unlocked && skillsCount === 0) {
@@ -2266,15 +2609,25 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       {/* Manifest Skills Section */}
       {renderMoveSection('Manifest Skills', manifestMoves, '🌟', '#8b5cf6')}
 
-      {/* Element Skills Section */}
-      {elementalMoves.length > 0 && userElement && (
-        renderMoveSection(
-          `Element Skills (${elementalMoves.length} Available)`, 
-          elementalMoves, 
-          getElementalIcon(userElement), 
-          getElementalColor(userElement)
-        )
-      )}
+      {/* Element Skills Section — primary + Elemental Access secondary */}
+      {elementalMoves.length > 0 && (userElement || elementalAccessSecondary) && (() => {
+        const primary = userElement || '';
+        const secondary = elementalAccessSecondary || '';
+        const dual =
+          primary &&
+          secondary &&
+          primary.toLowerCase() !== secondary.toLowerCase();
+        const title = dual
+          ? `Element Skills (${elementalMoves.length}) — ${primary.charAt(0).toUpperCase() + primary.slice(1)} & ${secondary.charAt(0).toUpperCase() + secondary.slice(1)}`
+          : `Element Skills (${elementalMoves.length} Available)`;
+        const iconKey = (dual ? primary : userElement || secondary || 'fire').toLowerCase();
+        return renderMoveSection(
+          title,
+          elementalMoves,
+          getElementalIcon(iconKey),
+          getElementalColor(iconKey)
+        );
+      })()}
 
       {/* Artifact Skills Section — from equipped legendary artifacts; blank if none */}
       <div style={{ marginBottom: '2rem' }}>
@@ -2296,7 +2649,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             Artifact Skills ({artifactMoves.length} Available)
           </h4>
         </div>
-        {artifactMoves.length > 0 && (
+        {artifactMoves.length > 0 ? (
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, 380px)',
@@ -2305,6 +2658,19 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           }}>
             {artifactMoves.map(renderMoveCard)}
           </div>
+        ) : (
+          <p style={{
+            fontSize: '0.875rem',
+            color: '#64748b',
+            margin: '0 0 1rem 0',
+            padding: '0 0.5rem',
+            lineHeight: 1.5
+          }}>
+            <strong>Legendary</strong> equippable items with a <strong>granted skill</strong> in the admin catalog appear here
+            (e.g. Magical Paintbrush). Items like <strong>Blaze Ring</strong> boost mastery and damage but do not add a separate
+            loadout skill. If you use a legendary item with a skill and still see 0, open this tab again after equipping or
+            confirm the skill is saved on that artifact in <strong>Admin → Equippable Artifacts</strong>.
+          </p>
         )}
       </div>
       
@@ -2353,7 +2719,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       )}
 
       {/* No Skills Message */}
-      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && (
+      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && artifactMoves.length === 0 && (
         <div style={{ 
           textAlign: 'center', 
           padding: '3rem',

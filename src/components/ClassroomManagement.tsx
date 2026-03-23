@@ -1,7 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+  serverTimestamp,
+  writeBatch,
+  deleteField,
+} from 'firebase/firestore';
+import type { DocumentData, UpdateData } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import OAuthSetupModal from './OAuthSetupModal';
 import StudentListItem from './StudentListItem';
@@ -18,6 +33,8 @@ interface Classroom {
   description?: string;
   maxStudents?: number;
   students: string[];
+  /** Denormalized display names so classmates can render roster without reading each other's user docs */
+  studentDisplayNames?: Record<string, string>;
 }
 
 // Google Classroom API types
@@ -101,6 +118,7 @@ interface Classroom {
   name: string;
   description?: string;
   students: string[];
+  studentDisplayNames?: Record<string, string>;
   createdAt: Date;
   maxStudents?: number;
 }
@@ -304,6 +322,25 @@ const ClassroomManagement: React.FC = () => {
         console.log('ClassroomManagement: Sample students:', studentsData.slice(0, 5));
         
         setStudents(studentsData);
+
+        // Backfill denormalized roster names so classmates can see real names in Live Events without reading each other's user docs.
+        try {
+          for (const classroom of classroomsData) {
+            const names = classroom.studentDisplayNames || {};
+            const ids = classroom.students || [];
+            const patch: UpdateData<DocumentData> = {};
+            for (const sid of ids) {
+              if (names[sid]) continue;
+              const st = studentsData.find((s) => s.id === sid);
+              if (st) patch[`studentDisplayNames.${sid}`] = st.displayName || st.email?.split('@')[0] || 'Student';
+            }
+            if (Object.keys(patch).length > 0) {
+              await updateDoc(doc(db, 'classrooms', classroom.id), patch);
+            }
+          }
+        } catch (backfillErr) {
+          console.warn('ClassroomManagement: roster name backfill failed', backfillErr);
+        }
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
@@ -358,6 +395,7 @@ const ClassroomManagement: React.FC = () => {
         description: newClassroom.description.trim(),
         maxStudents: newClassroom.maxStudents,
         students: [],
+        studentDisplayNames: {},
         createdAt: new Date()
       });
 
@@ -424,10 +462,14 @@ const ClassroomManagement: React.FC = () => {
       if (!classroom) return;
 
       const updatedStudents = Array.from(new Set([...classroom.students, ...selectedStudents]));
-      
-      await updateDoc(classroomRef, {
-        students: updatedStudents
-      });
+      const newlyAdded = selectedStudents.filter((id) => !classroom.students.includes(id));
+      const rosterPatch: UpdateData<DocumentData> = { students: updatedStudents };
+      for (const id of newlyAdded) {
+        const st = students.find((s) => s.id === id);
+        const label = st?.displayName || st?.email?.split('@')[0] || 'Student';
+        rosterPatch[`studentDisplayNames.${id}`] = label;
+      }
+      await updateDoc(classroomRef, rosterPatch as UpdateData<DocumentData>);
 
       setSelectedStudents([]);
       setShowAddStudentsModal(null);
@@ -447,7 +489,8 @@ const ClassroomManagement: React.FC = () => {
       const updatedStudents = classroom.students.filter(id => id !== studentId);
       
       await updateDoc(classroomRef, {
-        students: updatedStudents
+        students: updatedStudents,
+        [`studentDisplayNames.${studentId}`]: deleteField(),
       });
     } catch (error) {
       console.error('Error removing student from classroom:', error);
@@ -951,7 +994,8 @@ const ClassroomManagement: React.FC = () => {
 
                           // Add to classroom
             await updateDoc(doc(db, 'classrooms', classroomId), {
-              students: [...classroom!.students, userRef.id]
+              students: [...classroom!.students, userRef.id],
+              [`studentDisplayNames.${userRef.id}`]: googleStudent.profile.name.fullName,
             });
               console.log(`Added student ${userRef.id} to classroom ${classroomId}`);
             } else {
@@ -959,7 +1003,10 @@ const ClassroomManagement: React.FC = () => {
                           // Add existing student to classroom if not already there
             if (!classroom!.students.includes(existingStudent.id)) {
               await updateDoc(doc(db, 'classrooms', classroomId), {
-                students: [...classroom!.students, existingStudent.id]
+                students: [...classroom!.students, existingStudent.id],
+                [`studentDisplayNames.${existingStudent.id}`]:
+                  existingStudent.displayName ||
+                  googleStudent.profile.name.fullName,
               });
                 console.log(`Added existing student ${existingStudent.id} to classroom ${classroomId}`);
               } else {

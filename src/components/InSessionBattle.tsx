@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
@@ -13,6 +13,8 @@ import { isUserScorekeeper, isUserAdmin, canEndLiveEventSession } from '../utils
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { getMoveDamageSync } from '../utils/moveOverrides';
+import { getEquippedSkillsForBattle } from '../utils/battleSkillsService';
+import { getRRCandyDisplayName } from '../utils/rrCandyMoves';
 // New service imports
 import { 
   subscribeToSession, 
@@ -33,7 +35,6 @@ import {
 } from '../utils/inSessionPresenceService';
 import { 
   getAvailableSkillsForSession,
-  validateSkillUsage,
   createSessionLoadout
 } from '../utils/inSessionSkillsService';
 import { 
@@ -67,11 +68,25 @@ import {
   submitQuizResponse,
   getMyResponse,
   subscribeResponseCount,
+  submitBattleRoyaleQuickAction,
+  DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
+  DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG,
+  isBattleQuizMode,
+  type BrQuickActionId,
 } from '../utils/liveQuizService';
-import { getPublishedQuizSets, getQuestions } from '../utils/trainingGroundsService';
-import type { LiveQuizSession as LiveQuizSessionType, LiveQuizRewardConfig, LiveQuizPlacementKey } from '../types/liveQuiz';
+import { getPublishedQuizSets, getQuestions, syncLiveEventQuizToTrainingAttempt } from '../utils/trainingGroundsService';
+import type {
+  LiveQuizSession as LiveQuizSessionType,
+  LiveQuizRewardConfig,
+  LiveQuizPlacementKey,
+  LiveQuizGameMode,
+  BattleRoyaleHostConfig,
+  TeamBattleRoyaleHostConfig,
+} from '../types/liveQuiz';
 import type { TrainingQuestion } from '../types/trainingGrounds';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
+import type { Move as BattleMove } from '../types/battle';
+import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 
 interface Student {
   id: string;
@@ -100,6 +115,8 @@ interface SessionPlayer {
   powerPoints: number;
   participationCount: number;
   movesEarned: number;
+  /** Mirrored from quiz battleRoyaleState.energy for UI */
+  brEnergy?: number;
   hp?: number;
   maxHp?: number;
   shield?: number;
@@ -127,6 +144,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [selectedMove, setSelectedMove] = useState<any>(null);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [equippedBattleSkills, setEquippedBattleSkills] = useState<any[]>([]);
+  const [sessionSummons, setSessionSummons] = useState<Array<{
+    id: string;
+    summonerId: string;
+    name: string;
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    image?: string;
+    summonElementalType?: string;
+  }>>([]);
+  /** Same shape as BattleEngine: adminSettings/cpuOpponentMoves → data.opponents */
+  const [cpuOpponentMoves, setCpuOpponentMoves] = useState<any[] | null>(null);
   const [currentTraceId, setCurrentTraceId] = useState<string | null>(null);
   const [activeViewers, setActiveViewers] = useState<string[]>([]);
   const [presenceMap, setPresenceMap] = useState<Map<string, { connected: boolean; lastSeenAt: any }>>(new Map());
@@ -150,9 +181,73 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [userProfiles, setUserProfiles] = useState<Map<string, { displayName: string; photoURL?: string }>>(new Map());
   const isUpdatingViewersRef = useRef(false); // Prevent concurrent updates
   
-  // Session summary modal state
+  // Session summary modal state (ref ensures host sees summary when they end session - avoids stale closure)
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const hasShownSummaryForEndedRef = useRef(false);
+
+  useEffect(() => {
+    hasShownSummaryForEndedRef.current = false;
+  }, [sessionId]);
+
+  /**
+   * When status becomes `ended`, show the Live Event summary for everyone (including host).
+   * Do not set hasShownSummaryForEndedRef until we actually open the modal — the first snapshot
+   * can have status ended before `sessionSummary` is readable, which previously blocked the modal forever.
+   */
+  const showLiveEventSummaryIfEnded = useCallback(
+    async (sessionFromSnapshot: { status?: string; sessionSummary?: SessionSummary } | null) => {
+      if (hasShownSummaryForEndedRef.current) return;
+      const status = sessionFromSnapshot?.status;
+      const embedded = sessionFromSnapshot?.sessionSummary;
+      if (status === 'ended' && embedded) {
+        setSessionSummary(embedded);
+        setShowSessionSummary(true);
+        hasShownSummaryForEndedRef.current = true;
+        return;
+      }
+      if (
+        sessionFromSnapshot != null &&
+        sessionFromSnapshot.status != null &&
+        sessionFromSnapshot.status !== 'ended'
+      ) {
+        return;
+      }
+
+      for (let attempt = 0; attempt < 15; attempt++) {
+        if (hasShownSummaryForEndedRef.current) return;
+        if (attempt > 0) await new Promise(r => setTimeout(r, 280 * Math.min(attempt, 4)));
+
+        let summary: SessionSummary | null = await getSessionSummary(sessionId);
+        if (!summary) {
+          const room = await getSession(sessionId);
+          if (room?.status === 'ended') {
+            const fromDoc = (room as { sessionSummary?: SessionSummary }).sessionSummary;
+            if (fromDoc) summary = fromDoc;
+            else {
+              summary = {
+                sessionId,
+                classId: room.classId,
+                className: room.className,
+                startedAt: room.startedAt || room.createdAt,
+                endedAt: room.endedAt,
+                duration: 0,
+                totalPlayers: room.players?.length ?? 0,
+                stats: {}
+              };
+            }
+          }
+        }
+        if (summary) {
+          setSessionSummary(summary);
+          setShowSessionSummary(true);
+          hasShownSummaryForEndedRef.current = true;
+          return;
+        }
+      }
+    },
+    [sessionId]
+  );
 
   // Live Quiz Mode state
   const [quizSession, setQuizSession] = useState<LiveQuizSessionType | null>(null);
@@ -163,6 +258,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [selectedQuizId, setSelectedQuizId] = useState<string>('');
   const [quizNumQuestions, setQuizNumQuestions] = useState<number>(0);
   const [quizTimeLimit, setQuizTimeLimit] = useState<number>(20);
+  const [liveEventGameMode, setLiveEventGameMode] = useState<LiveQuizGameMode>('regular');
+  const [brHostConfig, setBrHostConfig] = useState<BattleRoyaleHostConfig>(() => ({
+    ...DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
+  }));
+  const [teamBrHostConfig, setTeamBrHostConfig] = useState<TeamBattleRoyaleHostConfig>(() => ({
+    ...DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG,
+  }));
+  const [brSurvivorPreset, setBrSurvivorPreset] = useState<'1' | '3' | '5' | '10' | 'custom'>('1');
+  const [brCustomSurvivorTarget, setBrCustomSurvivorTarget] = useState(2);
+  const [brQuickTargetUid, setBrQuickTargetUid] = useState<string | null>(null);
+  const brAutoAdvanceRoundRef = useRef<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
@@ -171,6 +277,67 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /** When a quiz is active, players/host can swap between Quiz view and Battle Log view. Persist in sessionStorage so it survives remounts and toggling works reliably. */
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
+
+  // Use canonical equipped battle skills for Live Event UI so RR Candy/artifact skills match BattleEngine.
+  useEffect(() => {
+    let cancelled = false;
+    const loadEquippedBattleSkills = async () => {
+      if (!currentUser) return;
+      try {
+        const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        const userElement = studentData.elementalAffinity || studentData.manifestationType || undefined;
+        setEquippedArtifacts(studentData.equippedArtifacts || null);
+        const equipped = await getEquippedSkillsForBattle(currentUser.uid, userElement);
+        if (!cancelled) {
+          // Defensive fallback: if RR Candy exists in unlocked context but canonical list is missing it,
+          // merge them so Live Event still shows equipped candy skills.
+          const equippedHasRRCandy = equipped.some((m: any) => m.id?.includes('rr-candy'));
+          const supplementalRRCandy = equippedHasRRCandy
+            ? []
+            : moves.filter((m: any) => m.unlocked && m.id?.includes('rr-candy'));
+          const merged = [...equipped, ...supplementalRRCandy].filter(
+            (m: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === m.id) === idx
+          );
+          setEquippedBattleSkills(merged);
+        }
+      } catch (error) {
+        console.error('InSessionBattle: Failed to load equipped battle skills', error);
+        if (!cancelled) setEquippedBattleSkills(moves.filter((m: any) => m.unlocked));
+      }
+    };
+    loadEquippedBattleSkills();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, moves]);
+
+  // CPU opponent definitions (Light Construct moves, etc.) — matches BattleEngine Firestore path
+  useEffect(() => {
+    const cpuMovesRef = doc(db, 'adminSettings', 'cpuOpponentMoves');
+    const unsubscribe = onSnapshot(cpuMovesRef, (docSnapshot) => {
+      try {
+        if (docSnapshot.exists()) {
+          const data = docSnapshot.data();
+          if (data.opponents && Array.isArray(data.opponents)) {
+            setCpuOpponentMoves(data.opponents);
+          } else {
+            setCpuOpponentMoves([]);
+          }
+        } else {
+          setCpuOpponentMoves([]);
+        }
+      } catch (e) {
+        console.error('InSessionBattle: cpuOpponentMoves snapshot error', e);
+        setCpuOpponentMoves([]);
+      }
+    }, (err) => {
+      console.error('InSessionBattle: cpuOpponentMoves listener error', err);
+      setCpuOpponentMoves([]);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const setCenterView = useCallback((next: 'quiz' | 'battleLog' | ((prev: 'quiz' | 'battleLog') => 'quiz' | 'battleLog')) => {
     setCenterViewState((prev) => {
       const value = typeof next === 'function' ? next(prev) : next;
@@ -480,31 +647,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         setIsSessionHost(isHost);
       }
       
-      // Check if session ended and show summary modal
-      if (session.status === 'ended' && !showSessionSummary) {
-        debug('inSessionBattle', `Session ${sessionId} ended, fetching summary...`);
-        
-        // Try to get summary from session doc first
-        const summaryData = (session as any).sessionSummary;
-        if (summaryData) {
-          setSessionSummary(summaryData);
-          setShowSessionSummary(true);
-        } else {
-          // Fallback: try to get summary
-          getSessionSummary(sessionId).then(summary => {
-            if (summary) {
-              setSessionSummary(summary);
-              setShowSessionSummary(true);
-            }
-          });
-        }
+      if (session.status === 'ended') {
+        debug('inSessionBattle', `Session ${sessionId} ended, opening summary if needed...`);
+        void showLiveEventSummaryIfEnded(session as { status?: string; sessionSummary?: SessionSummary });
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [sessionId, currentUser, userProfiles]);
+  }, [sessionId, currentUser, userProfiles, showLiveEventSummaryIfEnded]);
 
   // Append entry to Live Event battle log
   const appendBattleLog = useCallback(async (entry: string) => {
@@ -542,6 +694,32 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     });
     return () => unsub();
   }, [sessionId]);
+
+  // When a live quiz completes, mirror results to Training Grounds for this user (solo-style history/stats).
+  const liveTrainingSyncKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!quizSession) {
+      liveTrainingSyncKeyRef.current = null;
+      return;
+    }
+    if (quizSession.status !== 'completed') {
+      liveTrainingSyncKeyRef.current = null;
+      return;
+    }
+    if (!sessionId || !currentUser || !quizSession.quizId) return;
+    const key = `${sessionId}:${quizSession.quizId}`;
+    if (liveTrainingSyncKeyRef.current === key) return;
+    liveTrainingSyncKeyRef.current = key;
+    let cancelled = false;
+    syncLiveEventQuizToTrainingAttempt(sessionId, currentUser.uid, quizSession).then((res) => {
+      if (cancelled || res.skipped) return;
+      if (!res.ok) debugError('inSessionBattle', 'Training Grounds sync failed', res.error);
+      else debug('inSessionBattle', 'Live quiz synced to Training Grounds', { sessionId, quizId: quizSession.quizId });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, currentUser, quizSession]);
 
   // Load quiz questions when session has quizId
   useEffect(() => {
@@ -583,20 +761,65 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       setQuizAnswerSubmitted(false);
       setQuizMyResponse(null);
       setQuizSelectedIndices([]);
+      const round = quizSession.quizRoundIndex ?? 1;
       getMyResponse(sessionId, currentUser?.uid ?? '').then((r) => {
-        if (r && r.currentQuestionId === quizSession.currentQuestionId) {
+        if (
+          r &&
+          r.currentQuestionId === quizSession.currentQuestionId &&
+          (r.quizRoundIndex ?? 1) === round
+        ) {
           setQuizAnswerSubmitted(true);
           setQuizMyResponse({ selectedIndices: r.selectedIndices, isCorrect: r.isCorrect, pointsAwarded: r.pointsAwarded });
         }
       });
     }
-  }, [sessionId, currentUser?.uid, quizSession?.status, quizSession?.currentQuestionId]);
+  }, [sessionId, currentUser?.uid, quizSession?.status, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
 
   // Subscribe to response count (host)
   useEffect(() => {
     if (!quizSession || !isSessionHost || !quizSession.currentQuestionId) return;
-    return subscribeResponseCount(sessionId, quizSession.currentQuestionId, setQuizResponseCount);
-  }, [sessionId, isSessionHost, quizSession?.currentQuestionId]);
+    return subscribeResponseCount(
+      sessionId,
+      quizSession.currentQuestionId,
+      setQuizResponseCount,
+      quizSession.quizRoundIndex ?? null
+    );
+  }, [sessionId, isSessionHost, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
+
+  // Battle modes: host auto-advances after timer + delay
+  useEffect(() => {
+    if (!isSessionHost || !currentUser || !quizSession || !isBattleQuizMode(quizSession.gameMode)) return;
+    const delay =
+      quizSession.gameMode === 'battle_royale'
+        ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
+        : quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs;
+    if (delay == null || delay <= 0) return;
+    if (quizSession.status !== 'question_live' || !quizSession.currentQuestionId) return;
+    const ends = quizSession.questionEndsAt ?? 0;
+    if (!ends || Date.now() <= ends) return;
+    const round = quizSession.quizRoundIndex ?? 1;
+    if (brAutoAdvanceRoundRef.current === round) return;
+    const timer = window.setTimeout(async () => {
+      brAutoAdvanceRoundRef.current = round;
+      try {
+        await advanceQuiz(sessionId, currentUser.uid);
+      } catch (e) {
+        console.error('auto advance quiz', e);
+      }
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [
+    isSessionHost,
+    currentUser,
+    sessionId,
+    quizSession?.gameMode,
+    quizSession?.status,
+    quizSession?.currentQuestionId,
+    quizSession?.questionEndsAt,
+    quizSession?.quizRoundIndex,
+    quizSession?.battleRoyaleConfig?.autoAdvanceDelayMs,
+    quizSession?.teamBattleRoyaleConfig?.autoAdvanceDelayMs,
+  ]);
 
   // Load vault data for all players
   const [playerVaultData, setPlayerVaultData] = useState<Record<string, {
@@ -924,65 +1147,167 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       };
     });
 
-  const allies = sessionPlayers
-    .filter(p => p.userId === currentUser?.uid)
-    .map(player => {
-      const student = students.find(s => s.id === player.userId);
-      const profile = userProfiles.get(player.userId);
-      
-      // In-Session mode: Use hp/shield from session player if available
-      // Otherwise fall back to vault data
-      const useSessionHealth = (player.hp !== undefined || player.shield !== undefined);
-      
-      let health, maxHealth, shield, maxShield, pp, maxPP;
-      
-      if (useSessionHealth) {
-        health = player.hp ?? 100;
-        shield = player.shield ?? 100;
-        pp = player.powerPoints ?? 0;
-        maxPP = vault?.capacity || student?.powerPoints || player.powerPoints || 1000;
-        const vaultForMax = playerVaultData[player.userId];
-        maxHealth = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
-        maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
-      } else {
-        const vaultData = playerVaultData[player.userId] || (vault ? {
-          vaultHealth: Math.floor(vault.currentPP * 0.1),
-          maxVaultHealth: Math.floor((vault.capacity || vault.currentPP) * 0.1),
-          shieldStrength: vault.shieldStrength || 100,
-          maxShieldStrength: vault.maxShieldStrength || 100,
-          currentPP: vault.currentPP,
-          maxPP: vault.capacity || 1000
-        } : {
-          vaultHealth: 100,
-          maxVaultHealth: 100,
-          shieldStrength: 100,
-          maxShieldStrength: 100,
-          currentPP: student?.powerPoints || player.powerPoints,
-          maxPP: student?.powerPoints || player.powerPoints
+  const allies = useMemo(
+    () =>
+      sessionPlayers
+        .filter(p => p.userId === currentUser?.uid)
+        .map(player => {
+          const student = students.find(s => s.id === player.userId);
+          const profile = userProfiles.get(player.userId);
+
+          // In-Session mode: Use hp/shield from session player if available
+          // Otherwise fall back to vault data
+          const useSessionHealth = player.hp !== undefined || player.shield !== undefined;
+
+          let health, maxHealth, shield, maxShield, pp, maxPP;
+
+          if (useSessionHealth) {
+            health = player.hp ?? 100;
+            shield = player.shield ?? 100;
+            pp = player.powerPoints ?? 0;
+            maxPP = vault?.capacity || student?.powerPoints || player.powerPoints || 1000;
+            const vaultForMax = playerVaultData[player.userId];
+            maxHealth = vaultForMax?.maxVaultHealth ?? player.maxHp ?? 100;
+            maxShield = vaultForMax?.maxShieldStrength ?? player.maxShield ?? 100;
+          } else {
+            const vaultData =
+              playerVaultData[player.userId] ||
+              (vault
+                ? {
+                    vaultHealth: Math.floor(vault.currentPP * 0.1),
+                    maxVaultHealth: Math.floor((vault.capacity || vault.currentPP) * 0.1),
+                    shieldStrength: vault.shieldStrength || 100,
+                    maxShieldStrength: vault.maxShieldStrength || 100,
+                    currentPP: vault.currentPP,
+                    maxPP: vault.capacity || 1000
+                  }
+                : {
+                    vaultHealth: 100,
+                    maxVaultHealth: 100,
+                    shieldStrength: 100,
+                    maxShieldStrength: 100,
+                    currentPP: student?.powerPoints || player.powerPoints,
+                    maxPP: student?.powerPoints || player.powerPoints
+                  });
+            health = vaultData.vaultHealth;
+            maxHealth = vaultData.maxVaultHealth;
+            shield = vaultData.shieldStrength;
+            maxShield = vaultData.maxShieldStrength;
+            pp = vaultData.currentPP;
+            maxPP = vaultData.maxPP;
+          }
+
+          return {
+            id: player.userId,
+            name: profile?.displayName || player.displayName,
+            currentPP: pp,
+            maxPP: maxPP,
+            vaultHealth: health,
+            maxVaultHealth: maxHealth,
+            shieldStrength: shield,
+            maxShieldStrength: maxShield,
+            level: player.level,
+            photoURL: profile?.photoURL || player.photoURL,
+            isPlayer: true,
+            speed: 50,
+            movesEarned: player.movesEarned ?? 0
+          };
+        }),
+    [sessionPlayers, currentUser?.uid, students, userProfiles, playerVaultData, vault]
+  );
+
+  /** Active construct attack skills — same IDs as BattleEngine (`construct-skill::…`). */
+  const constructSkillMoves = useMemo(() => {
+    if (!currentUser || !Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return [] as any[];
+    const summons = sessionSummons.filter(s => s.summonerId === currentUser.uid);
+    if (summons.length === 0) return [];
+
+    const normalize = (s?: string) => (s || '').toLowerCase().trim();
+    const out: any[] = [];
+
+    summons.forEach(summon => {
+      const summonName = normalize(summon.name);
+      const summonElem = normalize(summon.summonElementalType);
+      const source = cpuOpponentMoves.find((opp: any) => {
+        const oppId = normalize(opp?.id);
+        const oppName = normalize(opp?.name);
+        if (summonName && oppName === summonName) return true;
+        if (summonName && oppId === summonName.replace(/\s+/g, '-')) return true;
+        if (summonElem === 'light' && (oppId === 'light-construct' || oppName === 'light construct')) return true;
+        return false;
+      });
+
+      const sourceMoves = Array.isArray(source?.moves) ? source.moves : [];
+      sourceMoves.forEach((m: any, idx: number) => {
+        if ((m?.type || 'attack') !== 'attack') return;
+        const min = typeof m?.damageRange?.min === 'number' ? m.damageRange.min : undefined;
+        const max = typeof m?.damageRange?.max === 'number' ? m.damageRange.max : undefined;
+        const baseDamage =
+          typeof m?.baseDamage === 'number'
+            ? m.baseDamage
+            : min !== undefined && max !== undefined
+              ? Math.floor((min + max) / 2)
+              : 0;
+        const constructMoveId = `construct-skill::${summon.id}::${m?.id || idx}`;
+        out.push({
+          id: constructMoveId,
+          name: `${summon.name}: ${m?.name || 'Construct Attack'}`,
+          description: m?.description || `${summon.name} attacks the enemy.`,
+          category: 'system',
+          type: 'attack',
+          level: 1,
+          cost: 0,
+          damage: baseDamage,
+          cooldown: 0,
+          currentCooldown: 0,
+          unlocked: true,
+          masteryLevel: 1,
+          targetType: 'single'
         });
-        health = vaultData.vaultHealth;
-        maxHealth = vaultData.maxVaultHealth;
-        shield = vaultData.shieldStrength;
-        maxShield = vaultData.maxShieldStrength;
-        pp = vaultData.currentPP;
-        maxPP = vaultData.maxPP;
-      }
-      
-      return {
-        id: player.userId,
-        name: profile?.displayName || player.displayName,
-        currentPP: pp,
-        maxPP: maxPP,
-        vaultHealth: health,
-        maxVaultHealth: maxHealth,
-        shieldStrength: shield,
-        maxShieldStrength: maxShield,
-        level: player.level,
-        photoURL: profile?.photoURL || player.photoURL,
-        isPlayer: true,
-        speed: 50
-      };
+      });
     });
+
+    return out;
+  }, [currentUser, cpuOpponentMoves, sessionSummons]);
+
+  const alliesForBattleEngine = useMemo(() => {
+    const summonOps = sessionSummons.map(s => ({
+      id: s.id,
+      name: s.name,
+      isSummon: true,
+      summonerId: s.summonerId,
+      summonElementalType: (s.summonElementalType || 'light') as any,
+      vaultHealth: s.hp,
+      maxVaultHealth: s.maxHp,
+      shieldStrength: s.shield,
+      maxShieldStrength: s.maxShield,
+      currentPP: 100,
+      maxPP: 100,
+      level: 1,
+      isAI: true,
+      controller: 'ai' as const,
+      photoURL: s.image,
+      image: s.image
+    }));
+    return [...allies, ...summonOps];
+  }, [allies, sessionSummons]);
+
+  const handleAlliesUpdateFromBattle = useCallback((updated: any[]) => {
+    const summons = updated.filter((a: any) => a.isSummon && a.summonerId);
+    setSessionSummons(
+      summons.map(s => ({
+        id: s.id,
+        summonerId: s.summonerId,
+        name: s.name,
+        hp: s.vaultHealth ?? 100,
+        maxHp: s.maxVaultHealth ?? 100,
+        shield: s.shieldStrength ?? 0,
+        maxShield: s.maxShieldStrength ?? 0,
+        summonElementalType: s.summonElementalType,
+        image: s.photoURL || s.image
+      }))
+    );
+  }, []);
 
   // Handle participation tracking
   const handleAddParticipation = async (userId: string) => {
@@ -1301,20 +1626,37 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   // Get all students in the class (not just those in session)
   // Create a combined list with session players and non-session students
   // Always use the latest profile data from userProfiles to ensure consistency
-  const allClassStudents = students.map(student => {
-    const sessionPlayer = sessionPlayers.find(p => p.userId === student.id);
-    const latestProfile = userProfiles.get(student.id);
-    
-    // Use latest profile data if available, otherwise fall back to student data
-    const displayName = latestProfile?.displayName || student.displayName;
-    const photoURL = latestProfile?.photoURL || student.photoURL;
-    
+  const classStudentById = new Map(students.map((s) => [s.id, s]));
+  const allKnownIds = new Set<string>([
+    ...students.map((s) => s.id),
+    ...sessionPlayers.map((p) => p.userId),
+  ]);
+  const allClassStudents = Array.from(allKnownIds).map((id) => {
+    const classStudent = classStudentById.get(id);
+    const sessionPlayer = sessionPlayers.find((p) => p.userId === id) || null;
+    const latestProfile = userProfiles.get(id);
+
+    // Build a resilient base row: class roster data when available, otherwise fall back to in-session data.
+    const base: Student = classStudent || {
+      id,
+      displayName: sessionPlayer?.displayName || latestProfile?.displayName || 'Unknown',
+      email: '',
+      powerPoints: sessionPlayer?.powerPoints ?? 0,
+      photoURL: sessionPlayer?.photoURL || latestProfile?.photoURL,
+      level: sessionPlayer?.level,
+      xp: undefined,
+    };
+
+    // Use latest profile data if available, otherwise fall back to row/session data
+    const displayName = latestProfile?.displayName || sessionPlayer?.displayName || base.displayName;
+    const photoURL = latestProfile?.photoURL || sessionPlayer?.photoURL || base.photoURL;
+
     return {
-      ...student,
-      displayName, // Override with latest profile data
-      photoURL, // Override with latest profile data
+      ...base,
+      displayName,
+      photoURL,
       isInSession: !!sessionPlayer,
-      sessionData: sessionPlayer || null
+      sessionData: sessionPlayer,
     };
   });
 
@@ -1322,6 +1664,52 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const midPoint = Math.ceil(allClassStudents.length / 2);
   const leftStudents = allClassStudents.slice(0, midPoint);
   const rightStudents = allClassStudents.slice(midPoint);
+
+  const renderSummonCard = (summon: {
+    id: string;
+    name: string;
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    image?: string;
+  }) => (
+    <div
+      key={summon.id}
+      style={{
+        marginTop: '-0.25rem',
+        marginLeft: '1.5rem',
+        background: '#f8fafc',
+        border: '1px solid #dbeafe',
+        borderLeft: '4px solid #a78bfa',
+        borderRadius: '0.5rem',
+        padding: '0.5rem',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        {summon.image ? (
+          <img
+            src={summon.image}
+            alt={summon.name}
+            style={{ width: '28px', height: '28px', borderRadius: '6px', objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '6px',
+            background: 'linear-gradient(135deg, #c4b5fd 0%, #8b5cf6 100%)',
+          }} />
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#4c1d95' }}>{summon.name}</div>
+          <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+            HP {summon.hp}/{summon.maxHp} · SH {summon.shield}/{summon.maxShield}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   // Helper function to render a player card
   const renderPlayerCard = (student: Student & { isInSession: boolean; sessionData: SessionPlayer | null }, isLeft: boolean) => {
@@ -1528,7 +1916,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               classId,
               eventId: sessionId // Using sessionId as eventId for now
             };
-            
+
             // ALWAYS log event dispatch (critical - must see this)
             console.log('📤 [InSessionBattle] ⚡ DISPATCHING EVENT ⚡', selectedMove?.name, '→', student.displayName, '| TraceId:', traceId);
             console.log('📤 [InSessionBattle] Event detail:', eventDetail);
@@ -2065,11 +2453,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <button
               onClick={() => {
                 setQuizModalOpen(true);
-                getPublishedQuizSets().then((sets) => {
-                  setQuizList(sets.map((s) => ({ id: s.id, title: s.title, questionCount: s.questionCount || 0 })));
-                  if (sets.length > 0 && !selectedQuizId) setSelectedQuizId(sets[0].id);
-                  if (sets.length > 0 && quizNumQuestions === 0) setQuizNumQuestions(Math.min(10, sets[0].questionCount || 10));
-                });
+                getPublishedQuizSets()
+                  .then((sets) => {
+                    setQuizList(sets.map((s) => ({ id: s.id, title: s.title, questionCount: s.questionCount || 0 })));
+                    if (sets.length > 0 && !selectedQuizId) setSelectedQuizId(sets[0].id);
+                    if (sets.length > 0 && quizNumQuestions === 0) setQuizNumQuestions(Math.min(10, sets[0].questionCount || 10));
+                  })
+                  .catch((err) => {
+                    console.error('Failed to load quiz list:', err);
+                    alert('Could not load quizzes. If this persists, ensure Firestore rules allow reads on published trainingQuizSets.');
+                  });
               }}
               style={{
                 background: 'rgba(139, 92, 246, 0.9)',
@@ -2082,7 +2475,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 cursor: 'pointer',
               }}
             >
-              📋 Start Quiz
+              📋 Start Live Event
             </button>
           )}
           <button
@@ -2117,7 +2510,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           >
             Leave Live Event
           </button>
-          {permissionsChecked && canEndLiveEventSession(currentUser?.email ?? null) && (
+          {permissionsChecked && (canEndLiveEventSession(currentUser?.email ?? null) || isSessionHost) && (
             <button
               onClick={async () => {
                 if (!currentUser || showSessionSummary) return;
@@ -2125,8 +2518,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
                   if (ended) {
                     debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
-                    // Do not call onEndSession() here — keep host on the page so the Live Event Overview
-                    // modal stays visible until they dismiss it. They can leave via "Leave Live Event" after.
+                    const room = await getSession(sessionId);
+                    await showLiveEventSummaryIfEnded(
+                      room
+                        ? { status: room.status, sessionSummary: (room as { sessionSummary?: SessionSummary }).sessionSummary }
+                        : { status: 'ended' }
+                    );
                   } else {
                     debugError('inSessionBattle', `Failed to end session ${sessionId}`);
                     alert('Failed to end session. Only the designated host can end the session.');
@@ -2175,18 +2572,189 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               background: 'white',
               borderRadius: '1rem',
               padding: '1.5rem',
-              maxWidth: '420px',
-              width: '90%',
+              maxWidth: '560px',
+              width: '92%',
               maxHeight: '90vh',
               overflow: 'auto',
               boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)',
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Start Quiz Mode</h3>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Live Event — Quiz &amp; Battle</h3>
             <p style={{ marginBottom: '1rem', color: '#64748b', fontSize: '0.9rem' }}>
-              Choose a Training Grounds quiz. All players in the event will answer in real time.
+              Choose a Training Grounds quiz. Battle modes: 1 PP per correct + streak bonuses; spend PP on quick actions; questions can repeat until the match ends.
             </p>
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Mode</span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {([
+                  { id: 'regular' as LiveQuizGameMode, label: 'Regular Quiz' },
+                  { id: 'battle_royale' as LiveQuizGameMode, label: 'Battle Royale' },
+                  { id: 'team_battle_royale' as LiveQuizGameMode, label: 'Team Battle Royale' },
+                ]).map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setLiveEventGameMode(id)}
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: '0.5rem',
+                      border: liveEventGameMode === id ? '2px solid #4f46e5' : '1px solid #cbd5e1',
+                      background: liveEventGameMode === id ? '#eef2ff' : '#fff',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {liveEventGameMode === 'battle_royale' && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
+                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Battle Royale host settings</div>
+                <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>End when survivors ≤</label>
+                <select
+                  value={brSurvivorPreset}
+                  onChange={(e) => setBrSurvivorPreset(e.target.value as typeof brSurvivorPreset)}
+                  style={{ width: '100%', marginBottom: '0.5rem', padding: '0.35rem', borderRadius: '0.35rem' }}
+                >
+                  <option value="1">Top 1</option>
+                  <option value="3">Top 3</option>
+                  <option value="5">Top 5</option>
+                  <option value="10">Top 10</option>
+                  <option value="custom">Custom</option>
+                </select>
+                {brSurvivorPreset === 'custom' && (
+                  <input
+                    type="number"
+                    min={1}
+                    value={brCustomSurvivorTarget}
+                    onChange={(e) => setBrCustomSurvivorTarget(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    style={{ width: '100%', marginBottom: '0.5rem', padding: '0.35rem', borderRadius: '0.35rem' }}
+                  />
+                )}
+                {(
+                  [
+                    ['shuffleAnswers', 'Shuffle answer choices'],
+                    ['autoRepeatQuestions', 'Loop question bank until match ends'],
+                    ['spectatorsOnElimination', 'Eliminated players cannot use combat'],
+                    ['allowEliminatedQuizAnswering', 'Eliminated may still answer for PP'],
+                  ] as const
+                ).map(([key, lab]) => (
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.25rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!brHostConfig[key]}
+                      onChange={(e) => setBrHostConfig((c) => ({ ...c, [key]: e.target.checked }))}
+                    />
+                    {lab}
+                  </label>
+                ))}
+                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>Auto-advance after timer (ms, 0 = host manual only)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={120000}
+                  value={brHostConfig.autoAdvanceDelayMs}
+                  onChange={(e) =>
+                    setBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: Math.max(0, parseInt(e.target.value, 10) || 0) }))
+                  }
+                  style={{ width: '100%', padding: '0.35rem', borderRadius: '0.35rem' }}
+                />
+              </div>
+            )}
+
+            {liveEventGameMode === 'team_battle_royale' && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f0fdf4', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
+                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Team Battle Royale host settings</div>
+                <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>Number of teams</label>
+                <input
+                  type="number"
+                  min={2}
+                  max={6}
+                  value={teamBrHostConfig.teamCount}
+                  onChange={(e) => {
+                    const n = Math.min(6, Math.max(2, parseInt(e.target.value, 10) || 2));
+                    setTeamBrHostConfig((c) => {
+                      const colors = ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#db2777'];
+                      let teams = [...c.teams];
+                      if (teams.length > n) teams = teams.slice(0, n);
+                      while (teams.length < n) {
+                        const i = teams.length;
+                        teams.push({
+                          id: `team-${i + 1}`,
+                          name: `Team ${i + 1}`,
+                          color: colors[i % colors.length],
+                        });
+                      }
+                      return { ...c, teamCount: n, teams };
+                    });
+                  }}
+                  style={{ width: '100%', marginBottom: '0.75rem', padding: '0.35rem', borderRadius: '0.35rem' }}
+                />
+                {teamBrHostConfig.teams.map((tm, idx) => (
+                  <div key={tm.id} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.35rem', alignItems: 'center' }}>
+                    <input
+                      type="color"
+                      value={tm.color}
+                      onChange={(e) =>
+                        setTeamBrHostConfig((c) => ({
+                          ...c,
+                          teams: c.teams.map((t, i) => (i === idx ? { ...t, color: e.target.value } : t)),
+                        }))
+                      }
+                      title="Team color"
+                      style={{ width: 36, height: 28, padding: 0, border: 'none' }}
+                    />
+                    <input
+                      type="text"
+                      value={tm.name}
+                      onChange={(e) =>
+                        setTeamBrHostConfig((c) => ({
+                          ...c,
+                          teams: c.teams.map((t, i) => (i === idx ? { ...t, name: e.target.value } : t)),
+                        }))
+                      }
+                      style={{ flex: 1, padding: '0.35rem', borderRadius: '0.35rem' }}
+                    />
+                  </div>
+                ))}
+                {(
+                  [
+                    ['autoBalanceTeams', 'Auto-balance teams'],
+                    ['supportAlliesEnabled', 'Support allies (heal rules)'],
+                    ['sharedTeamHealth', 'Shared team health (UI flag; MVP uses per-player HP)'],
+                    ['shuffleAnswers', 'Shuffle answer choices'],
+                    ['autoRepeatQuestions', 'Loop question bank'],
+                    ['spectatorsOnElimination', 'Eliminated cannot use combat'],
+                    ['allowEliminatedQuizAnswering', 'Eliminated may still answer for PP'],
+                  ] as const
+                ).map(([key, lab]) => (
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.25rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!teamBrHostConfig[key]}
+                      onChange={(e) => setTeamBrHostConfig((c) => ({ ...c, [key]: e.target.checked }))}
+                    />
+                    {lab}
+                  </label>
+                ))}
+                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>Auto-advance after timer (ms)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={120000}
+                  value={teamBrHostConfig.autoAdvanceDelayMs}
+                  onChange={(e) =>
+                    setTeamBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: Math.max(0, parseInt(e.target.value, 10) || 0) }))
+                  }
+                  style={{ width: '100%', padding: '0.35rem', borderRadius: '0.35rem' }}
+                />
+              </div>
+            )}
             <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Quiz</label>
             <select
               value={selectedQuizId}
@@ -2312,7 +2880,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     (p) => (p.pp > 0 || p.xp > 0 || !!(p.artifactId || p.artifactName))
                   );
                   const rewardConfigToSave = hasRewards ? { ...quizRewardConfig } : undefined;
-                  const res = await startQuizSession(sessionId, currentUser.uid, selectedQuizId, quizNumQuestions, quizTimeLimit, rewardConfigToSave);
+                  const finalSurvivors =
+                    brSurvivorPreset === 'custom'
+                      ? Math.max(1, brCustomSurvivorTarget)
+                      : parseInt(brSurvivorPreset, 10);
+                  const startOptions =
+                    liveEventGameMode === 'regular'
+                      ? undefined
+                      : liveEventGameMode === 'battle_royale'
+                        ? {
+                            gameMode: 'battle_royale' as const,
+                            battleRoyale: { ...brHostConfig, finalSurvivorsTarget: finalSurvivors },
+                            roomPlayerUids: sessionPlayers.map((p) => p.userId),
+                          }
+                        : {
+                            gameMode: 'team_battle_royale' as const,
+                            teamBattleRoyale: { ...teamBrHostConfig },
+                            roomPlayerUids: sessionPlayers.map((p) => p.userId),
+                          };
+                  const res = await startQuizSession(
+                    sessionId,
+                    currentUser.uid,
+                    selectedQuizId,
+                    quizNumQuestions,
+                    quizTimeLimit,
+                    rewardConfigToSave,
+                    startOptions
+                  );
                   if (!res.ok) {
                     alert(res.error || 'Failed to start quiz');
                     setQuizStartLoading(false);
@@ -2324,7 +2918,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     alert(launch.error || 'Failed to launch first question');
                     return;
                   }
-                  await appendBattleLog(`📋 Quiz started: ${quizList.find((q) => q.id === selectedQuizId)?.title ?? 'Quiz'} (${quizNumQuestions} questions, ${quizTimeLimit}s each)`);
+                  const modeLabel =
+                    liveEventGameMode === 'regular'
+                      ? 'Regular Quiz'
+                      : liveEventGameMode === 'battle_royale'
+                        ? 'Battle Royale'
+                        : 'Team Battle Royale';
+                  await appendBattleLog(
+                    `📋 ${modeLabel} started: ${quizList.find((q) => q.id === selectedQuizId)?.title ?? 'Quiz'} (${quizNumQuestions} in bank, ${quizTimeLimit}s each)`
+                  );
                   setQuizModalOpen(false);
                 }}
                 style={{
@@ -2337,7 +2939,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   cursor: quizStartLoading ? 'not-allowed' : 'pointer',
                 }}
               >
-                {quizStartLoading ? 'Starting...' : 'Start Quiz'}
+                {quizStartLoading ? 'Starting...' : 'Start'}
               </button>
             </div>
           </div>
@@ -2365,7 +2967,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             gap: '0.75rem',
             paddingRight: '0.5rem'
           }}>
-            {leftStudents.map((student) => renderPlayerCard(student, true))}
+            {leftStudents.map((student) => (
+              <React.Fragment key={student.id}>
+                {renderPlayerCard(student, true)}
+                {sessionSummons
+                  .filter(summon => summon.summonerId === student.id)
+                  .map(summon => renderSummonCard(summon))}
+              </React.Fragment>
+            ))}
           </div>
         </div>
 
@@ -2456,8 +3065,47 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const currentQ = quizQuestions.find((q) => q.id === quizSession.currentQuestionId);
                 const timeExpired = quizSession.questionEndsAt != null && Date.now() > quizSession.questionEndsAt;
                 const correctIndices = currentQ?.correctIndices ?? (currentQ?.correctIndex !== undefined ? [currentQ.correctIndex] : []);
+                const isBattle = isBattleQuizMode(quizSession.gameMode);
+                const shuffleOn =
+                  (quizSession.gameMode === 'battle_royale' && quizSession.battleRoyaleConfig?.shuffleAnswers) ||
+                  (quizSession.gameMode === 'team_battle_royale' && quizSession.teamBattleRoyaleConfig?.shuffleAnswers);
+                const brRepeat =
+                  (quizSession.gameMode === 'battle_royale' && quizSession.battleRoyaleConfig?.autoRepeatQuestions) ||
+                  (quizSession.gameMode === 'team_battle_royale' && quizSession.teamBattleRoyaleConfig?.autoRepeatQuestions);
+                const atBankEnd = (quizSession.questionIndex ?? 0) + 1 >= (quizSession.questionOrder?.length ?? 0);
+                const nextBtnLabel = isBattle && brRepeat ? 'Next Question →' : atBankEnd ? 'Finish Quiz' : 'Next Question →';
+                const myStreak = quizSession.battleRoyaleState?.streaks?.[currentUser?.uid ?? ''] ?? 0;
+                const myEnergy = quizSession.battleRoyaleState?.energy?.[currentUser?.uid ?? ''] ?? 0;
+                const myStrong = quizSession.battleRoyaleState?.strongUnlocked?.[currentUser?.uid ?? ''] ?? false;
+                const canBrCombat = isBattle && currentUser && !currentPlayer?.eliminated;
+                const runBrAction = async (action: BrQuickActionId) => {
+                  if (!currentUser || !brQuickTargetUid) {
+                    alert('Select a target player first (or yourself for Shield).');
+                    return;
+                  }
+                  const targetP = sessionPlayers.find((p) => p.userId === brQuickTargetUid);
+                  const res = await submitBattleRoyaleQuickAction(
+                    sessionId,
+                    currentUser.uid,
+                    currentUser.displayName || 'Player',
+                    action,
+                    brQuickTargetUid,
+                    targetP?.displayName || 'Target'
+                  );
+                  if (!res.ok) alert(res.error || 'Action failed');
+                };
                 return currentQ ? (
-                  <div key={quizSession.currentQuestionId}>
+                  <div key={`${quizSession.currentQuestionId}-${quizSession.quizRoundIndex ?? 0}`}>
+                    {isBattle && (
+                      <div style={{ padding: '0.5rem 0.75rem', background: '#1e293b', color: '#e2e8f0', borderRadius: '0.5rem', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                        <strong>
+                          {quizSession.gameMode === 'battle_royale' ? 'Battle Royale' : 'Team Battle Royale'}
+                        </strong>
+                        {' · '}
+                        Streak {myStreak} · Energy {myEnergy}
+                        {myStrong ? ' · Strong ready' : ''}
+                      </div>
+                    )}
                     <LiveQuizQuestionCard
                       question={currentQ}
                       questionNumber={(quizSession.questionIndex ?? 0) + 1}
@@ -2478,6 +3126,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       disabled={quizAnswerSubmitted || timeExpired}
                       reveal={timeExpired || !!quizMyResponse}
                       submittedIndices={quizMyResponse?.selectedIndices}
+                      shuffle={!!shuffleOn}
+                      shuffleKey={String(quizSession.quizRoundIndex ?? 0)}
                     />
                     {!quizAnswerSubmitted && !timeExpired && (
                       <button
@@ -2488,7 +3138,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             currentUser.uid,
                             quizSession.currentQuestionId!,
                             quizSelectedIndices.length ? quizSelectedIndices : [0],
-                            correctIndices
+                            correctIndices,
+                            quizSession.quizRoundIndex ?? 1
                           );
                           if (res.ok) {
                             setQuizAnswerSubmitted(true);
@@ -2527,15 +3178,26 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           {quizMyResponse.isCorrect ? '✓ Correct!' : '✗ Incorrect'}
                         </div>
                         <div style={{ color: '#374151', fontSize: '0.95rem' }}>
-                          {quizMyResponse.pointsAwarded} pts
-                          {quizMyResponse.isCorrect && (
+                          {isBattle ? (
                             <>
-                              <span style={{ margin: '0 0.35rem' }}>•</span>
-                              <strong style={{ color: '#059669' }}>+1 Participation Point</strong>
+                              +{quizMyResponse.pointsAwarded} PP (Participation)
+                              {quizMyResponse.isCorrect && (
+                                <span style={{ marginLeft: '0.35rem', color: '#64748b' }}>(streak bonuses at 3 / 5 / 7)</span>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {quizMyResponse.pointsAwarded} pts
+                              {quizMyResponse.isCorrect && (
+                                <>
+                                  <span style={{ margin: '0 0.35rem' }}>•</span>
+                                  <strong style={{ color: '#059669' }}>+1 Participation Point</strong>
+                                </>
+                              )}
                             </>
                           )}
                         </div>
-                        {quizMyResponse.isCorrect && (
+                        {quizMyResponse.isCorrect && !isBattle && (
                           <div style={{
                             marginTop: '0.75rem',
                             padding: '0.6rem 0.75rem',
@@ -2548,6 +3210,71 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             🗡️ You can now use <strong>Skills</strong> to attack other players and spend points — try the FIGHT button!
                           </div>
                         )}
+                        {quizMyResponse.isCorrect && isBattle && (
+                          <div style={{
+                            marginTop: '0.75rem',
+                            padding: '0.6rem 0.75rem',
+                            background: 'rgba(5, 150, 105, 0.15)',
+                            borderRadius: '0.5rem',
+                            fontSize: '0.9rem',
+                            color: '#065f46',
+                            fontWeight: 600,
+                          }}>
+                            ⚔️ Spend PP on <strong>quick actions</strong> below or use <strong>Fight</strong> for full skills.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {canBrCombat && (
+                      <div style={{ marginTop: '1rem', padding: '1rem', background: '#0f172a', borderRadius: '0.75rem', color: '#e2e8f0' }}>
+                        <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>BR quick actions (cost PP)</div>
+                        <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.25rem' }}>Target</label>
+                        <select
+                          value={brQuickTargetUid ?? ''}
+                          onChange={(e) => setBrQuickTargetUid(e.target.value || null)}
+                          style={{ width: '100%', marginBottom: '0.75rem', padding: '0.4rem', borderRadius: '0.35rem' }}
+                        >
+                          <option value="">Select player…</option>
+                          {sessionPlayers
+                            .filter((p) => !p.eliminated || p.userId === currentUser?.uid)
+                            .map((p) => (
+                              <option key={p.userId} value={p.userId}>
+                                {p.displayName}
+                                {p.userId === currentUser?.uid ? ' (you)' : ''}
+                              </option>
+                            ))}
+                        </select>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                          {(
+                            [
+                              ['attack', 'Attack (1)'],
+                              ['shield', 'Shield (1)'],
+                              ['heal', 'Heal (2)'],
+                              ['control', 'Control (2)'],
+                              ['strong', 'Strong (3+E)'],
+                            ] as const
+                          ).map(([id, label]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => runBrAction(id)}
+                              style={{
+                                padding: '0.4rem 0.6rem',
+                                borderRadius: '0.35rem',
+                                border: '1px solid #475569',
+                                background: '#334155',
+                                color: '#fff',
+                                fontSize: '0.8rem',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <p style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.5rem', marginBottom: 0 }}>
+                          Shield targets yourself. Strong needs 1 Energy (streak ×5) or 7-streak unlock.
+                        </p>
                       </div>
                     )}
                     {isSessionHost && (
@@ -2606,9 +3333,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             if (res.error) alert(res.error);
                           }}
                           style={{ padding: '0.5rem 1rem', background: '#4f46e5', color: 'white', border: 'none', borderRadius: '0.5rem', fontWeight: 600, cursor: 'pointer' }}
-                          title={(quizSession.questionIndex ?? 0) + 1 >= (quizSession.questionOrder?.length ?? 0) ? 'Complete the quiz and show final standings' : 'Show the next question'}
+                          title={atBankEnd && !brRepeat ? 'Complete the quiz and show final standings' : 'Show the next question'}
                         >
-                          {(quizSession.questionIndex ?? 0) + 1 >= (quizSession.questionOrder?.length ?? 0) ? 'Finish Quiz' : 'Next Question →'}
+                          {nextBtnLabel}
                         </button>
                         <button
                           onClick={async () => {
@@ -2645,7 +3372,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 return (
                 <div>
                   <div style={{ marginBottom: '1rem', padding: '1rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '2px solid #10b981', textAlign: 'center' }}>
-                    <strong>Quiz complete!</strong>
+                    <strong>{isBattleQuizMode(quizSession.gameMode) ? 'Match complete!' : 'Quiz complete!'}</strong>
+                    {quizSession.battleEndReason && (
+                      <div style={{ marginTop: '0.35rem', fontSize: '0.9rem', color: '#047857' }}>
+                        End reason: {quizSession.battleEndReason.replace(/_/g, ' ')}
+                      </div>
+                    )}
                   </div>
                   <LiveQuizLeaderboard
                     entries={entriesWithPP}
@@ -3038,7 +3770,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 onMoveConsumption={handleMoveConsumption}
                 onBattleLogUpdate={handleBattleLogUpdate}
                 opponents={opponents}
-                allies={allies}
+                allies={alliesForBattleEngine}
+                onAlliesUpdate={handleAlliesUpdateFromBattle}
                 isMultiplayer={true}
                 isPvP={true}
                 isInSession={true}
@@ -3075,7 +3808,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             gap: '0.75rem',
             paddingRight: '0.5rem'
           }}>
-            {rightStudents.map((student) => renderPlayerCard(student, false))}
+            {rightStudents.map((student) => (
+              <React.Fragment key={student.id}>
+                {renderPlayerCard(student, false)}
+                {sessionSummons
+                  .filter(summon => summon.summonerId === student.id)
+                  .map(summon => renderSummonCard(summon))}
+              </React.Fragment>
+            ))}
           </div>
         </div>
       </div>
@@ -3236,9 +3976,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         {selectedMove.elementalAffinity.toUpperCase()}
                       </span>
                     )}
-                    <span style={{ fontSize: '0.7rem' }}>
-                      Lv.{selectedMove.level} • Mastery {getEffectiveMasteryLevel(selectedMove, equippedArtifacts)} • Cost: {selectedMove.cost} PP
-                    </span>
+                    {(() => {
+                      const selLe = computeLiveEventParticipationSkillCost(selectedMove as BattleMove, equippedArtifacts, null, 0);
+                      return (
+                        <span style={{ fontSize: '0.7rem' }}>
+                          Lv.{selectedMove.level} • Mastery {getEffectiveMasteryLevel(selectedMove, equippedArtifacts)} • Skill Cost (PP): {selLe.finalCost} (base {selLe.baseCost}, reduction {selLe.reductionFromArtifacts + selLe.reductionFromEffects})
+                        </span>
+                      );
+                    })()}
                   </div>
                   {(() => {
                     const effectiveMasteryLevel = getEffectiveMasteryLevel(selectedMove, equippedArtifacts);
@@ -3351,25 +4096,38 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               <div>
                 {/* Filter available moves - unlocked and not on cooldown */}
                 {(() => {
-                  const availableMoves = moves.filter(move => 
-                    move.unlocked && 
+                  const sourceMoves = (equippedBattleSkills.length > 0 ? equippedBattleSkills : moves);
+                  const baseAvailable = sourceMoves.filter(move =>
+                    move.unlocked &&
                     (move.currentCooldown === 0 || move.currentCooldown === undefined)
                   );
-                  
+                  const availableMoves = [...baseAvailable, ...constructSkillMoves];
+
+                  const ppLive = (m: BattleMove) =>
+                    computeLiveEventParticipationSkillCost(m, equippedArtifacts, null, 0);
+                  const participationMe = currentPlayer?.movesEarned ?? 0;
+
+                  const constructMoves = availableMoves.filter(move => move.id?.startsWith('construct-skill::'));
                   const manifestMoves = availableMoves.filter(move => move.category === 'manifest');
                   const elementalMoves = availableMoves.filter(move => move.category === 'elemental');
-                  // RR Candy skills have category='system' but id starts with 'rr-candy-'
-                  const rrCandyMoves = availableMoves.filter(move => move.id?.startsWith('rr-candy-'));
+                  const rrCandyMoves = availableMoves.filter(move => move.id?.includes('rr-candy'));
+                  const artifactMoves = availableMoves.filter(
+                    move =>
+                      move.category === 'system' &&
+                      !move.id?.includes('rr-candy') &&
+                      !move.id?.startsWith('construct-skill::')
+                  );
+                  const manifestAndArtifactMoves = [...manifestMoves, ...artifactMoves];
                   
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                      {manifestMoves.length > 0 && (
+                      {manifestAndArtifactMoves.length > 0 && (
                         <div>
                           <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#8b5cf6' }}>
-                            ✨ Manifest Moves
+                            ✨ Manifest + Artifact Skills
                           </h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            {manifestMoves.map((move) => {
+                            {manifestAndArtifactMoves.map((move) => {
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
                               const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
@@ -3403,13 +4161,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               if (move.healing && move.healing > 0) {
                                 healingRange = calculateHealingRange(move.healing, move.level, effectiveMasteryLevel);
                               }
+
+                              const le = ppLive(move as BattleMove);
+                              const isConstructSkill = move.id?.startsWith('construct-skill::');
+                              const canAffordSkill = isConstructSkill || participationMe >= le.finalCost;
                               
                               return (
                                 <button
                                   key={move.id}
                                   onClick={async (e) => {
+                                    if (!canAffordSkill) return;
                                     // ALWAYS log skill click (critical - must see this)
-                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| Cost:', move.cost, '| Actor:', currentUser?.uid?.substring(0, 8));
+                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| PP Cost:', le.finalCost, '| Actor:', currentUser?.uid?.substring(0, 8));
                                     console.log('🎮 [InSessionBattle] Click event details:', {
                                       buttonClicked: true,
                                       moveId: move.id,
@@ -3424,6 +4187,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}
+                                  disabled={!canAffordSkill}
+                                  title={
+                                    !canAffordSkill
+                                      ? `Need ${le.finalCost} Participation Points to use this skill (have ${participationMe}, short by ${Math.max(0, le.finalCost - participationMe)})`
+                                      : `Base ${le.baseCost} · Reduction ${le.reductionFromArtifacts + le.reductionFromEffects} · Final ${le.finalCost} PP`
+                                  }
                                   style={{
                                     background: selectedMove?.id === move.id 
                                       ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
@@ -3432,14 +4201,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     border: 'none',
                                     borderRadius: '0.5rem',
                                     padding: '0.75rem',
-                                    cursor: 'pointer',
+                                    cursor: canAffordSkill ? 'pointer' : 'not-allowed',
                                     textAlign: 'left',
                                     fontSize: '0.875rem',
                                     fontWeight: 'bold',
-                                    transition: 'all 0.2s'
+                                    transition: 'all 0.2s',
+                                    opacity: canAffordSkill ? 1 : 0.55
                                   }}
                                   onMouseEnter={(e) => {
-                                    if (selectedMove?.id !== move.id) {
+                                    if (selectedMove?.id !== move.id && canAffordSkill) {
                                       e.currentTarget.style.transform = 'scale(1.02)';
                                     }
                                   }}
@@ -3465,7 +4235,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Cost: {move.cost} PP
+                                          PP Cost: {le.finalCost} (base {le.baseCost}, −{le.reductionFromArtifacts + le.reductionFromEffects})
                                         </span>
                                       </div>
                                     </div>
@@ -3565,21 +4335,25 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               if (move.healing && move.healing > 0) {
                                 healingRange = calculateHealingRange(move.healing, move.level, effectiveMasteryLevel);
                               }
+
+                              const leEl = ppLive(move as BattleMove);
+                              const canAffordEl = participationMe >= leEl.finalCost;
                               
                               return (
                                 <button
                                   key={move.id}
                                   onClick={() => {
+                                    if (!canAffordEl) return;
                                     const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                                              process.env.REACT_APP_DEBUG === 'true';
                                     
                                     if (DEBUG_LIVE_EVENTS) {
-                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (RR Candy):', {
+                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (Elemental):', {
                                         skillId: move.id,
                                         skillName: move.name,
                                         skillType: move.type,
                                         category: move.category,
-                                        cost: move.cost,
+                                        ppCost: leEl.finalCost,
                                         cooldown: move.cooldown,
                                         actorUid: currentUser?.uid,
                                         sessionId: sessionId
@@ -3589,6 +4363,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}
+                                  disabled={!canAffordEl}
+                                  title={
+                                    !canAffordEl
+                                      ? `Need ${leEl.finalCost} Participation Points to use this skill (have ${participationMe})`
+                                      : `Base ${leEl.baseCost} · Reduction ${leEl.reductionFromArtifacts + leEl.reductionFromEffects} · Final ${leEl.finalCost} PP`
+                                  }
                                   style={{
                                     background: selectedMove?.id === move.id 
                                       ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
@@ -3597,14 +4377,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     border: 'none',
                                     borderRadius: '0.5rem',
                                     padding: '0.75rem',
-                                    cursor: 'pointer',
+                                    cursor: canAffordEl ? 'pointer' : 'not-allowed',
                                     textAlign: 'left',
                                     fontSize: '0.875rem',
                                     fontWeight: 'bold',
-                                    transition: 'all 0.2s'
+                                    transition: 'all 0.2s',
+                                    opacity: canAffordEl ? 1 : 0.55
                                   }}
                                   onMouseEnter={(e) => {
-                                    if (selectedMove?.id !== move.id) {
+                                    if (selectedMove?.id !== move.id && canAffordEl) {
                                       e.currentTarget.style.transform = 'scale(1.02)';
                                     }
                                   }}
@@ -3640,7 +4421,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Cost: {move.cost} PP
+                                          PP Cost: {leEl.finalCost} (base {leEl.baseCost}, −{leEl.reductionFromArtifacts + leEl.reductionFromEffects})
                                         </span>
                                       </div>
                                     </div>
@@ -3684,6 +4465,81 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           </div>
                         </div>
                       )}
+
+                      {constructMoves.length > 0 && (
+                        <div>
+                          <h4 style={{ fontSize: '1rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#0d9488' }}>
+                            🧱 Construct Skills
+                          </h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {constructMoves.map((move) => {
+                              const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
+                              const baseDamage = typeof move.damage === 'number' && move.damage > 0 ? move.damage : 0;
+                              const damageRange =
+                                move.type === 'attack' && baseDamage > 0
+                                  ? calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel)
+                                  : null;
+                              return (
+                                <button
+                                  key={move.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedMove(move);
+                                    setShowMoveMenu(false);
+                                  }}
+                                  style={{
+                                    background:
+                                      selectedMove?.id === move.id
+                                        ? 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)'
+                                        : 'linear-gradient(135deg, #2dd4bf 0%, #14b8a6 100%)',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0.5rem',
+                                    padding: '0.75rem',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all 0.2s'
+                                  }}
+                                >
+                                  <div style={{ fontWeight: 'bold', marginBottom: '0.125rem' }}>{move.name}</div>
+                                  <div style={{ fontSize: '0.7rem', opacity: 0.95, marginBottom: '0.25rem' }}>
+                                    <span
+                                      style={{
+                                        background: 'rgba(255, 255, 255, 0.25)',
+                                        padding: '0.125rem 0.375rem',
+                                        borderRadius: '0.25rem',
+                                        fontWeight: 'bold'
+                                      }}
+                                    >
+                                      {String(move.type || 'attack').toUpperCase()}
+                                    </span>{' '}
+                                    <span style={{ fontSize: '0.65rem' }}>PP Cost: 0 (construct)</span>
+                                  </div>
+                                  {damageRange && (
+                                    <div style={{ fontSize: '0.7rem', color: '#ccfbf1', fontWeight: 'bold' }}>
+                                      ⚔️ Damage: {damageRange.min}-{damageRange.max} (Avg: {damageRange.average})
+                                    </div>
+                                  )}
+                                  {move.description && (
+                                    <div
+                                      style={{
+                                        fontSize: '0.65rem',
+                                        opacity: 0.95,
+                                        marginTop: '0.25rem',
+                                        fontStyle: 'italic'
+                                      }}
+                                    >
+                                      {move.description}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                       
                       {rrCandyMoves.length > 0 && (
                         <div>
@@ -3692,6 +4548,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           </h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                             {rrCandyMoves.map((move) => {
+                              const rrCandyDisplayName = getRRCandyDisplayName(move as any);
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
                               const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
@@ -3725,6 +4582,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               if (move.healing && move.healing > 0) {
                                 healingRange = calculateHealingRange(move.healing, move.level, effectiveMasteryLevel);
                               }
+
+                              const leRr = ppLive(move as BattleMove);
+                              const canAffordRr = participationMe >= leRr.finalCost;
                               
                               return (
                                 <button
@@ -3732,13 +4592,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   onClick={async (e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
+                                    if (!canAffordRr) return;
                                     
                                     // ALWAYS log skill click (critical - must see this)
-                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', move.name, '| Cost:', move.cost, '| Actor:', currentUser?.uid?.substring(0, 8));
+                                    console.log('🎮 [InSessionBattle] ⚡ SKILL CLICKED ⚡', rrCandyDisplayName, '| PP Cost:', leRr.finalCost, '| Actor:', currentUser?.uid?.substring(0, 8));
                                     console.log('🎮 [InSessionBattle] Click event details:', {
                                       buttonClicked: true,
                                       moveId: move.id,
-                                      moveName: move.name,
+                                      moveName: rrCandyDisplayName,
                                       hasCurrentUser: !!currentUser,
                                       hasSessionId: !!sessionId,
                                       hasClassId: !!classId,
@@ -3781,10 +4642,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     
                                     traceStage('selected', traceId, 'Skill selected', {
                                       skillId: move.id,
-                                      skillName: move.name,
+                                      skillName: rrCandyDisplayName,
                                       skillType: move.type,
                                       category: move.category,
-                                      cost: move.cost,
+                                      cost: leRr.finalCost,
                                       cooldown: move.cooldown,
                                       actorUid: currentUser?.uid,
                                       sessionId: sessionId
@@ -3796,24 +4657,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                         actorUid: currentUser?.uid || '',
                                         targetUid: '', // Not selected yet
                                         skillId: move.id,
-                                        skillName: move.name,
+                                        skillName: rrCandyDisplayName,
                                         metadata: {
                                           skillType: move.type,
                                           category: move.category,
-                                          cost: move.cost,
+                                          cost: leRr.finalCost,
                                           cooldown: move.cooldown
                                         }
                                       });
                                     }
                                     
                                     if (DEBUG_LIVE_EVENTS) {
-                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (Manifest):', {
+                                      console.log('[InSessionBattle] 🎮 SKILL CLICKED (RR Candy):', {
                                         traceId,
                                         skillId: move.id,
                                         skillName: move.name,
                                         skillType: move.type,
                                         category: move.category,
-                                        cost: move.cost,
+                                        cost: leRr.finalCost,
                                         cooldown: move.cooldown,
                                         actorUid: currentUser?.uid,
                                         sessionId: sessionId
@@ -3823,6 +4684,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     setSelectedMove(move);
                                     setShowMoveMenu(false); // Close modal but keep move selected
                                   }}
+                                  disabled={!canAffordRr}
+                                  title={
+                                    !canAffordRr
+                                      ? `Need ${leRr.finalCost} Participation Points to use this skill (have ${participationMe})`
+                                      : `Base ${leRr.baseCost} · Reduction ${leRr.reductionFromArtifacts + leRr.reductionFromEffects} · Final ${leRr.finalCost} PP`
+                                  }
                                   style={{
                                     background: selectedMove?.id === move.id 
                                       ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'
@@ -3831,14 +4698,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     border: 'none',
                                     borderRadius: '0.5rem',
                                     padding: '0.75rem',
-                                    cursor: 'pointer',
+                                    cursor: canAffordRr ? 'pointer' : 'not-allowed',
                                     textAlign: 'left',
                                     fontSize: '0.875rem',
                                     fontWeight: 'bold',
-                                    transition: 'all 0.2s'
+                                    transition: 'all 0.2s',
+                                    opacity: canAffordRr ? 1 : 0.55
                                   }}
                                   onMouseEnter={(e) => {
-                                    if (selectedMove?.id !== move.id) {
+                                    if (selectedMove?.id !== move.id && canAffordRr) {
                                       e.currentTarget.style.transform = 'scale(1.02)';
                                     }
                                   }}
@@ -3849,7 +4717,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
                                     <div style={{ flex: 1 }}>
                                       <div style={{ fontWeight: 'bold', marginBottom: '0.125rem' }}>
-                                        {move.name}
+                                        {rrCandyDisplayName}
                                       </div>
                                       <div style={{ fontSize: '0.7rem', opacity: 0.9, display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                         <span style={{ 
@@ -3864,7 +4732,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Cost: {move.cost} PP
+                                          PP Cost: {leRr.finalCost} (base {leRr.baseCost}, −{leRr.reductionFromArtifacts + leRr.reductionFromEffects})
                                         </span>
                                       </div>
                                     </div>

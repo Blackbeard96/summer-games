@@ -60,6 +60,13 @@ const TutorialReviewModal: React.FC<TutorialReviewModalProps> = ({
       description: 'Discover and purchase powerful artifacts to enhance your journey',
       icon: '🏪',
       character: 'The Guide'
+    },
+    {
+      id: 'skillLoadoutV1',
+      title: 'New Skill Loadout System',
+      description: 'Equip up to 6 skills from Manifest, Elemental, RR Candy, and Artifact sources.',
+      icon: '⚔️',
+      character: 'The Guide'
     }
   ];
 
@@ -232,7 +239,14 @@ const TutorialReviewModal: React.FC<TutorialReviewModalProps> = ({
                   marginTop: '0.75rem'
                 }}>
                   <button
-                    onClick={() => onTutorialSelect(tutorial.id)}
+                    onClick={() => {
+                      if (tutorial.id === 'skillLoadoutV1') {
+                        window.dispatchEvent(new CustomEvent('openSkillLoadoutTutorial'));
+                        onClose();
+                        return;
+                      }
+                      onTutorialSelect(tutorial.id);
+                    }}
                     style={{
                       backgroundColor: '#4f46e5',
                       color: 'white',

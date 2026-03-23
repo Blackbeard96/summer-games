@@ -19,15 +19,37 @@ import {
   arrayUnion,
 } from 'firebase/firestore';
 import type { UpdateData, DocumentData } from 'firebase/firestore';
-import type { LiveQuizSession, LiveQuizStatus, LiveQuizResponse, LiveQuizRewardConfig, LiveQuizPlacementReward } from '../types/liveQuiz';
+import type {
+  LiveQuizSession,
+  LiveQuizStatus,
+  LiveQuizResponse,
+  LiveQuizRewardConfig,
+  LiveQuizPlacementReward,
+  LiveQuizGameMode,
+  BattleRoyaleHostConfig,
+  TeamBattleRoyaleHostConfig,
+  TeamBattleRoyaleRuntimeState,
+  BattleRoyaleRuntimeState,
+  LiveQuizPerQuestionResultEntry,
+} from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
-import { calculateLiveQuizPoints } from './liveQuizScoring';
-import { trackParticipation } from './inSessionStatsService';
+import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
+import { trackParticipation, trackElimination } from './inSessionStatsService';
+import { computeDamageAfterShield } from './liveEventCombatMath';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
 
 function log(...args: unknown[]) {
   if (DEBUG) console.log('[LiveQuiz]', ...args);
+}
+
+/** Firestore rejects `undefined` anywhere in document data (invalid-argument). */
+function omitUndefinedFields<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
 }
 
 const QUIZ_SESSION_CURRENT = 'current';
@@ -42,6 +64,77 @@ function responsesRef(sessionId: string) {
 
 function responseDocRef(sessionId: string, uid: string) {
   return doc(db, 'inSessionRooms', sessionId, 'quizSession', QUIZ_SESSION_CURRENT, 'responses', uid);
+}
+
+function roomRef(sessionId: string) {
+  return doc(db, 'inSessionRooms', sessionId);
+}
+
+export const DEFAULT_BATTLE_ROYALE_HOST_CONFIG: BattleRoyaleHostConfig = {
+  finalSurvivorsTarget: 1,
+  shuffleAnswers: true,
+  autoRepeatQuestions: true,
+  spectatorsOnElimination: true,
+  allowEliminatedQuizAnswering: false,
+  autoAdvanceDelayMs: 3500,
+};
+
+export const DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG: TeamBattleRoyaleHostConfig = {
+  teamCount: 2,
+  teams: [
+    { id: 'team-1', name: 'Team 1', color: '#dc2626' },
+    { id: 'team-2', name: 'Team 2', color: '#2563eb' },
+  ],
+  autoBalanceTeams: true,
+  supportAlliesEnabled: true,
+  sharedTeamHealth: false,
+  shuffleAnswers: true,
+  autoRepeatQuestions: true,
+  spectatorsOnElimination: true,
+  allowEliminatedQuizAnswering: false,
+  autoAdvanceDelayMs: 3500,
+};
+
+export type StartQuizSessionOptions = {
+  gameMode?: LiveQuizGameMode;
+  battleRoyale?: BattleRoyaleHostConfig;
+  teamBattleRoyale?: TeamBattleRoyaleHostConfig;
+  roomPlayerUids?: string[];
+};
+
+export function isBattleQuizMode(mode?: LiveQuizGameMode): boolean {
+  return mode === 'battle_royale' || mode === 'team_battle_royale';
+}
+
+function shuffleUids<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildTeamAssignments(
+  cfg: TeamBattleRoyaleHostConfig,
+  roomPlayerUids: string[]
+): TeamBattleRoyaleRuntimeState {
+  const n = Math.max(1, cfg.teamCount || 2);
+  const teams: TeamBattleRoyaleHostConfig['teams'] =
+    cfg.teams?.length >= n
+      ? cfg.teams.slice(0, n)
+      : Array.from({ length: n }, (_, i) => ({
+          id: `team-${i + 1}`,
+          name: `Team ${i + 1}`,
+          color: ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#db2777'][i % 6],
+        }));
+  const teamIds = teams.map((t) => t.id);
+  const uids = cfg.autoBalanceTeams ? shuffleUids(roomPlayerUids) : [...roomPlayerUids];
+  const playerTeamId: Record<string, string> = {};
+  uids.forEach((uid, i) => {
+    playerTeamId[uid] = teamIds[i % teamIds.length];
+  });
+  return { teams, playerTeamId };
 }
 
 /** Get current quiz session (null if none or idle). */
@@ -86,7 +179,8 @@ export async function startQuizSession(
   quizId: string,
   numQuestions?: number,
   timeLimitSeconds: number = 20,
-  rewardConfig?: LiveQuizRewardConfig
+  rewardConfig?: LiveQuizRewardConfig,
+  options?: StartQuizSessionOptions
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const quiz = await getQuizSet(quizId);
@@ -100,6 +194,17 @@ export async function startQuizSession(
     const count = numQuestions ? Math.min(numQuestions, questions.length) : questions.length;
     const questionOrder = questions.slice(0, count).map((q) => q.id);
 
+    const gameMode: LiveQuizGameMode = options?.gameMode ?? 'regular';
+    const emptyBr: BattleRoyaleRuntimeState = { streaks: {}, energy: {}, strongUnlocked: {} };
+
+    let teamBattleState: TeamBattleRoyaleRuntimeState | undefined;
+    if (gameMode === 'team_battle_royale' && options?.teamBattleRoyale) {
+      teamBattleState = buildTeamAssignments(
+        options.teamBattleRoyale,
+        options.roomPlayerUids ?? []
+      );
+    }
+
     const session: LiveQuizSession = {
       status: 'lobby',
       quizId,
@@ -107,18 +212,30 @@ export async function startQuizSession(
       questionIndex: -1,
       questionOrder,
       currentQuestionId: null,
+      quizRoundIndex: 0,
       questionStartedAt: null,
       questionEndsAt: null,
       timeLimitSeconds,
       hostUid,
+      gameMode,
+      battleRoyaleConfig: gameMode === 'battle_royale' ? options?.battleRoyale : undefined,
+      teamBattleRoyaleConfig: gameMode === 'team_battle_royale' ? options?.teamBattleRoyale : undefined,
+      teamBattleState,
+      battleRoyaleState: isBattleQuizMode(gameMode) ? emptyBr : undefined,
       leaderboard: {},
       correctCount: {},
       rewardConfig: rewardConfig ?? undefined,
       updatedAt: serverTimestamp(),
     };
 
-    await setDoc(sessionRef(sessionId), session);
-    log('Quiz session created', { sessionId, quizId, questionCount: questionOrder.length, rewardConfig: !!rewardConfig });
+    await setDoc(sessionRef(sessionId), omitUndefinedFields(session as unknown as Record<string, unknown>) as DocumentData);
+    log('Quiz session created', {
+      sessionId,
+      quizId,
+      questionCount: questionOrder.length,
+      rewardConfig: !!rewardConfig,
+      gameMode,
+    });
     return { ok: true };
   } catch (e) {
     log('startQuizSession error', e);
@@ -304,6 +421,7 @@ export async function launchFirstQuestion(sessionId: string, hostUid: string): P
       status: 'question_live',
       questionIndex: 0,
       currentQuestionId: questionId,
+      quizRoundIndex: 1,
       questionStartedAt: now,
       questionEndsAt: endsAt,
       updatedAt: serverTimestamp(),
@@ -318,7 +436,6 @@ export async function advanceQuiz(
   sessionId: string,
   hostUid: string
 ): Promise<{ ok: boolean; error?: string; completed?: boolean }> {
-  // Firestore transactions only allow tx.get(DocumentReference), not Query. Fetch responses outside the transaction.
   const responsesSnap = await getDocs(responsesRef(sessionId));
   const responsesForCurrentQuestion: { uid: string; data: LiveQuizResponse }[] = [];
   responsesSnap.docs.forEach((d) => {
@@ -328,64 +445,164 @@ export async function advanceQuiz(
 
   return runTransaction(db, async (tx) => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
+    const roomSnap = await tx.get(roomRef(sessionId));
     if (!sessionSnap.exists()) return { ok: false, error: 'No quiz session' };
     const session = sessionSnap.data() as LiveQuizSession;
     if (session.hostUid !== hostUid) return { ok: false, error: 'Only host can advance' };
 
+    const mode = session.gameMode ?? 'regular';
+    const battleMode = isBattleQuizMode(mode);
+
     const currentQId = session.currentQuestionId;
+    const activeRound =
+      session.quizRoundIndex ?? (session.status === 'question_live' ? 1 : 0);
+
     const newLeaderboard = { ...session.leaderboard };
     const newCorrectCount = { ...(session.correctCount || {}) };
-    const newPerQuestionResults: { [uid: string]: Array<{ questionId: string; isCorrect: boolean; pointsAwarded: number }> } = { ...(session.perQuestionResults || {}) };
+    const newPerQuestionResults: { [uid: string]: LiveQuizPerQuestionResultEntry[] } = {
+      ...((session.perQuestionResults as { [uid: string]: LiveQuizPerQuestionResultEntry[] } | undefined) ?? {}),
+    };
 
-    if (currentQId) {
-      const MAX_POINTS_PER_QUESTION = 150; // base 100 + speed 50
+    let brState: BattleRoyaleRuntimeState | undefined = session.battleRoyaleState
+      ? {
+          streaks: { ...session.battleRoyaleState.streaks },
+          energy: { ...session.battleRoyaleState.energy },
+          strongUnlocked: { ...session.battleRoyaleState.strongUnlocked },
+        }
+      : undefined;
+
+    const responseMatchesRound = (r: LiveQuizResponse) => {
+      if (r.currentQuestionId !== currentQId) return false;
+      if (r.quizRoundIndex != null) return r.quizRoundIndex === activeRound;
+      return activeRound === 1;
+    };
+
+    if (currentQId && activeRound > 0) {
+      const MAX_REGULAR = 150;
+      const MAX_BR = 25;
+      const correctUids = new Set<string>();
+
       responsesForCurrentQuestion.forEach(({ uid, data: r }) => {
-        if (r.currentQuestionId !== currentQId) return;
-        // Idempotent: do not add points if we already recorded this question for this user (prevents double-count on duplicate advance)
+        if (!responseMatchesRound(r)) return;
         const existing = newPerQuestionResults[uid] || [];
-        if (existing.some((e) => e.questionId === currentQId)) return;
-        const points = typeof r.pointsAwarded === 'number' && Number.isFinite(r.pointsAwarded)
-          ? Math.max(0, Math.min(MAX_POINTS_PER_QUESTION, r.pointsAwarded))
-          : 0;
+        const already = existing.some((e) => {
+          if (e.quizRoundIndex != null) return e.quizRoundIndex === activeRound;
+          return e.questionId === currentQId;
+        });
+        if (already) return;
+
+        const cap = battleMode ? MAX_BR : MAX_REGULAR;
+        const points =
+          typeof r.pointsAwarded === 'number' && Number.isFinite(r.pointsAwarded)
+            ? Math.max(0, Math.min(cap, r.pointsAwarded))
+            : 0;
         newLeaderboard[uid] = (newLeaderboard[uid] || 0) + points;
-        if (r.isCorrect) newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
-        newPerQuestionResults[uid] = [...existing, { questionId: currentQId, isCorrect: r.isCorrect, pointsAwarded: points }];
+        if (r.isCorrect) {
+          newCorrectCount[uid] = (newCorrectCount[uid] || 0) + 1;
+          correctUids.add(uid);
+        }
+        newPerQuestionResults[uid] = [
+          ...existing,
+          {
+            questionId: currentQId,
+            quizRoundIndex: activeRound,
+            isCorrect: r.isCorrect,
+            pointsAwarded: points,
+          },
+        ];
       });
+
+      if (battleMode && brState && roomSnap.exists()) {
+        const players: { userId: string }[] = roomSnap.data()?.players || [];
+        const inSessionUids = new Set(players.map((p) => p.userId));
+        inSessionUids.forEach((uid) => {
+          if (correctUids.has(uid)) return;
+          brState!.streaks[uid] = 0;
+        });
+      }
     }
 
-    const nextIndex = session.questionIndex + 1;
-    if (nextIndex >= session.questionOrder.length) {
-      tx.update(sessionRef(sessionId), {
-        status: 'completed',
-        questionIndex: nextIndex - 1,
-        currentQuestionId: null,
-        questionStartedAt: null,
-        questionEndsAt: null,
-        leaderboard: newLeaderboard,
-        correctCount: newCorrectCount,
-        perQuestionResults: newPerQuestionResults,
-        updatedAt: serverTimestamp(),
-      });
-      log('Quiz completed', { sessionId });
-      return { ok: true, completed: true };
-    }
+    const checkBattleEnd = (): boolean => {
+      if (!battleMode || !roomSnap.exists()) return false;
+      const players = (roomSnap.data()?.players || []) as Array<{ userId: string; eliminated?: boolean }>;
+      const alive = players.filter((p) => !p.eliminated);
+      if (mode === 'battle_royale') {
+        const target = session.battleRoyaleConfig?.finalSurvivorsTarget ?? 1;
+        if (alive.length <= target) return true;
+      }
+      if (mode === 'team_battle_royale' && session.teamBattleState?.playerTeamId) {
+        const map = session.teamBattleState.playerTeamId;
+        const aliveTeams = new Set(alive.map((p) => map[p.userId]).filter(Boolean));
+        if (aliveTeams.size <= 1) return true;
+      }
+      return false;
+    };
 
-    const nextQuestionId = session.questionOrder[nextIndex];
-    const now = Date.now();
-    const endsAt = now + session.timeLimitSeconds * 1000;
-
-    tx.update(sessionRef(sessionId), {
-      status: 'question_live',
-      questionIndex: nextIndex,
-      currentQuestionId: nextQuestionId,
-      questionStartedAt: now,
-      questionEndsAt: endsAt,
+    const baseUpdate: Record<string, unknown> = {
       leaderboard: newLeaderboard,
       correctCount: newCorrectCount,
       perQuestionResults: newPerQuestionResults,
       updatedAt: serverTimestamp(),
+    };
+    if (battleMode && brState) {
+      baseUpdate.battleRoyaleState = brState;
+    }
+
+    if (battleMode && checkBattleEnd()) {
+      tx.update(sessionRef(sessionId), {
+        ...baseUpdate,
+        status: 'completed',
+        currentQuestionId: null,
+        questionStartedAt: null,
+        questionEndsAt: null,
+        battleEndReason: mode === 'team_battle_royale' ? 'team_elimination' : 'survivor_threshold',
+      });
+      log('Battle quiz completed (threshold)', { sessionId, mode });
+      return { ok: true, completed: true };
+    }
+
+    const nextIndex = session.questionIndex + 1;
+    const orderLen = session.questionOrder.length;
+    let nextQuestionIndex: number;
+
+    if (nextIndex >= orderLen) {
+      const repeat =
+        (mode === 'battle_royale' && session.battleRoyaleConfig?.autoRepeatQuestions) ||
+        (mode === 'team_battle_royale' && session.teamBattleRoyaleConfig?.autoRepeatQuestions);
+      if (repeat) {
+        nextQuestionIndex = 0;
+      } else {
+        tx.update(sessionRef(sessionId), {
+          ...baseUpdate,
+          status: 'completed',
+          questionIndex: nextIndex - 1,
+          currentQuestionId: null,
+          questionStartedAt: null,
+          questionEndsAt: null,
+          ...(battleMode ? { battleEndReason: 'manual_complete' as const } : {}),
+        });
+        log('Quiz completed', { sessionId });
+        return { ok: true, completed: true };
+      }
+    } else {
+      nextQuestionIndex = nextIndex;
+    }
+
+    const nextQuestionId = session.questionOrder[nextQuestionIndex];
+    const now = Date.now();
+    const endsAt = now + session.timeLimitSeconds * 1000;
+    const nextRound = activeRound + 1;
+
+    tx.update(sessionRef(sessionId), {
+      ...baseUpdate,
+      status: 'question_live',
+      questionIndex: nextQuestionIndex,
+      currentQuestionId: nextQuestionId,
+      quizRoundIndex: nextRound,
+      questionStartedAt: now,
+      questionEndsAt: endsAt,
     });
-    log('Advanced to question', { sessionId, nextIndex, nextQuestionId });
+    log('Advanced to question', { sessionId, nextQuestionIndex, nextQuestionId, nextRound });
     return { ok: true, completed: false };
   });
 }
@@ -409,28 +626,58 @@ export async function setQuizStatus(
   }
 }
 
-/** Submit answer (player). First answer locks; late answers rejected. */
+type SubmitQuizTxResult = {
+  ok: boolean;
+  error?: string;
+  pointsAwarded?: number;
+  isCorrect?: boolean;
+  gameMode?: LiveQuizGameMode;
+};
+
+/** Submit answer (player). First answer locks; late answers rejected. Pass quizRoundIndex from the live session doc. */
 export async function submitQuizResponse(
   sessionId: string,
   uid: string,
   questionId: string,
   selectedIndices: number[],
-  correctIndices: number[]
+  correctIndices: number[],
+  quizRoundIndexFromClient: number
 ): Promise<{ ok: boolean; error?: string; pointsAwarded?: number; isCorrect?: boolean }> {
-  return runTransaction(db, async (tx) => {
+  return runTransaction(db, async (tx): Promise<SubmitQuizTxResult> => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
+    const roomSnap = await tx.get(roomRef(sessionId));
     if (!sessionSnap.exists()) return { ok: false, error: 'No quiz session' };
     const session = sessionSnap.data() as LiveQuizSession;
-    if (session.currentQuestionId !== questionId)
-      return { ok: false, error: 'Wrong question' };
+    const mode = session.gameMode ?? 'regular';
+    if (session.currentQuestionId !== questionId) return { ok: false, error: 'Wrong question' };
     const now = Date.now();
     const endsAt = session.questionEndsAt ?? 0;
     if (now > endsAt) return { ok: false, error: 'Time expired' };
 
+    const activeRound = session.quizRoundIndex ?? (session.status === 'question_live' ? 1 : 0);
+    if (quizRoundIndexFromClient !== activeRound) {
+      return { ok: false, error: 'Stale question round' };
+    }
+
+    if (isBattleQuizMode(mode) && roomSnap.exists()) {
+      const playersRoom = (roomSnap.data()?.players || []) as Array<{ userId: string; eliminated?: boolean }>;
+      const pl = playersRoom.find((p) => p.userId === uid);
+      if (pl?.eliminated) {
+        const allow =
+          mode === 'battle_royale'
+            ? session.battleRoyaleConfig?.allowEliminatedQuizAnswering
+            : session.teamBattleRoyaleConfig?.allowEliminatedQuizAnswering;
+        if (!allow) return { ok: false, error: 'Eliminated players cannot answer' };
+      }
+    }
+
     const responseSnap = await tx.get(responseDocRef(sessionId, uid));
     if (responseSnap.exists()) {
       const existing = responseSnap.data() as LiveQuizResponse;
-      if (existing.currentQuestionId === questionId) return { ok: false, error: 'Already answered' };
+      if (existing.currentQuestionId === questionId) {
+        const er = existing.quizRoundIndex ?? 1;
+        if (er === activeRound) return { ok: false, error: 'Already answered' };
+      }
     }
 
     const correctSet = new Set(correctIndices);
@@ -440,51 +687,94 @@ export async function submitQuizResponse(
       correctIndices.every((i) => selectedSet.has(i)) &&
       selectedIndices.every((i) => correctSet.has(i));
     const startedAt = session.questionStartedAt ?? now;
-    const pointsAwarded = calculateLiveQuizPoints({
-      isCorrect: allCorrect,
-      submittedAt: now,
-      questionStartedAt: startedAt,
-      questionEndsAt: endsAt,
-    });
+
+    let pointsAwarded: number;
+    let brPatch: { battleRoyaleState: BattleRoyaleRuntimeState } | null = null;
+
+    if (isBattleQuizMode(mode)) {
+      const br: BattleRoyaleRuntimeState = {
+        streaks: { ...(session.battleRoyaleState?.streaks || {}) },
+        energy: { ...(session.battleRoyaleState?.energy || {}) },
+        strongUnlocked: { ...(session.battleRoyaleState?.strongUnlocked || {}) },
+      };
+      const prev = br.streaks[uid] || 0;
+      if (!allCorrect) {
+        br.streaks[uid] = 0;
+        pointsAwarded = 0;
+        brPatch = { battleRoyaleState: br };
+      } else {
+        const { newStreak, ppAwarded, energyDelta, strongUnlockedNow } = computeBattleRoyaleStreakRewards(prev);
+        br.streaks[uid] = newStreak;
+        if (energyDelta) br.energy[uid] = (br.energy[uid] || 0) + energyDelta;
+        if (strongUnlockedNow) br.strongUnlocked[uid] = true;
+        pointsAwarded = ppAwarded;
+        brPatch = { battleRoyaleState: br };
+      }
+    } else {
+      pointsAwarded = calculateLiveQuizPoints({
+        isCorrect: allCorrect,
+        submittedAt: now,
+        questionStartedAt: startedAt,
+        questionEndsAt: endsAt,
+      });
+    }
 
     const response: LiveQuizResponse = {
       currentQuestionId: questionId,
+      quizRoundIndex: activeRound,
       selectedIndices,
       submittedAt: now,
       isCorrect: allCorrect,
       pointsAwarded,
     };
     tx.set(responseDocRef(sessionId, uid), response);
-    log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded });
-    return { ok: true, pointsAwarded, isCorrect: allCorrect };
+    if (brPatch) {
+      tx.update(sessionRef(sessionId), { ...brPatch, updatedAt: serverTimestamp() });
+    }
+    log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded, mode });
+    return { ok: true, pointsAwarded, isCorrect: allCorrect, gameMode: mode };
   }).then(async (result) => {
-    // Correct answers in Live Event quiz count as 1 participation point so players can use skills
-    if (result.ok && result.isCorrect) {
-      await trackParticipation(sessionId, uid, 1);
-      // Update the session room's players array so this player's movesEarned increases (enables skill use)
-      try {
-        const roomRef = doc(db, 'inSessionRooms', sessionId);
-        const roomSnap = await getDoc(roomRef);
-        if (roomSnap.exists()) {
-          const data = roomSnap.data();
-          const players: Array<{ userId: string; participationCount?: number; movesEarned?: number; [k: string]: unknown }> = data?.players ?? [];
-          const idx = players.findIndex((p) => p.userId === uid);
-          if (idx >= 0) {
-            const p = players[idx];
-            const newParticipationCount = (p.participationCount ?? 0) + 1;
-            const newMovesEarned = (p.movesEarned ?? 0) + 1;
-            const updatedPlayers = [...players];
-            updatedPlayers[idx] = { ...p, participationCount: newParticipationCount, movesEarned: newMovesEarned };
-            await updateDoc(roomRef, {
-              players: updatedPlayers,
-              updatedAt: serverTimestamp(),
-            });
-            log('Session player participation +1 for correct quiz answer (moves available for skills)', { sessionId, uid, newMovesEarned });
-          }
+    if (!result.ok || !result.isCorrect) return result;
+    const mode = result.gameMode ?? 'regular';
+    const isBattle = isBattleQuizMode(mode);
+    const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : 1;
+    await trackParticipation(sessionId, uid, ppDelta);
+    try {
+      const rref = roomRef(sessionId);
+      const roomSnap = await getDoc(rref);
+      const qSnap = await getDoc(sessionRef(sessionId));
+      const energy =
+        isBattle && qSnap.exists()
+          ? (qSnap.data() as LiveQuizSession).battleRoyaleState?.energy?.[uid]
+          : undefined;
+      if (roomSnap.exists()) {
+        const data = roomSnap.data();
+        const players: Array<{
+          userId: string;
+          participationCount?: number;
+          movesEarned?: number;
+          brEnergy?: number;
+          [k: string]: unknown;
+        }> = data?.players ?? [];
+        const idx = players.findIndex((p) => p.userId === uid);
+        if (idx >= 0) {
+          const p = players[idx];
+          const updatedPlayers = [...players];
+          updatedPlayers[idx] = {
+            ...p,
+            participationCount: (p.participationCount ?? 0) + ppDelta,
+            movesEarned: (p.movesEarned ?? 0) + ppDelta,
+            ...(typeof energy === 'number' ? { brEnergy: energy } : {}),
+          };
+          await updateDoc(rref, {
+            players: updatedPlayers,
+            updatedAt: serverTimestamp(),
+          });
+          log('Session player PP from quiz', { sessionId, uid, ppDelta, isBattle });
         }
-      } catch (err) {
-        log('Failed to update session player participation for quiz correct', err);
       }
+    } catch (err) {
+      log('Failed to update session player participation for quiz correct', err);
     }
     return result;
   });
@@ -501,7 +791,8 @@ export async function getMyResponse(sessionId: string, uid: string): Promise<Liv
 export function subscribeResponseCount(
   sessionId: string,
   currentQuestionId: string | null,
-  onCount: (count: number) => void
+  onCount: (count: number) => void,
+  quizRoundIndex?: number | null
 ): () => void {
   if (!currentQuestionId) {
     onCount(0);
@@ -511,10 +802,165 @@ export function subscribeResponseCount(
     let count = 0;
     snap.docs.forEach((d) => {
       const r = d.data() as LiveQuizResponse;
-      if (r.currentQuestionId === currentQuestionId) count++;
+      if (r.currentQuestionId !== currentQuestionId) return;
+      if (quizRoundIndex != null && quizRoundIndex > 0) {
+        const rr = r.quizRoundIndex ?? 1;
+        if (rr !== quizRoundIndex) return;
+      }
+      count++;
     });
     onCount(count);
   });
+}
+
+export type BrQuickActionId = 'attack' | 'shield' | 'heal' | 'control' | 'strong';
+
+const BR_PP_COST: Record<BrQuickActionId, number> = {
+  attack: 1,
+  shield: 1,
+  heal: 2,
+  control: 2,
+  strong: 3,
+};
+
+/**
+ * Lightweight BR / Team BR combat using Participation Points (movesEarned) and optional Energy / streak unlock for strong.
+ */
+export async function submitBattleRoyaleQuickAction(
+  sessionId: string,
+  actorUid: string,
+  actorName: string,
+  action: BrQuickActionId,
+  targetUid: string,
+  targetName: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    return await runTransaction(db, async (tx) => {
+      const qRef = sessionRef(sessionId);
+      const rRef = roomRef(sessionId);
+      const qSnap = await tx.get(qRef);
+      const roomSnap = await tx.get(rRef);
+      if (!qSnap.exists() || !roomSnap.exists()) return { ok: false, error: 'Session not found' };
+      const quiz = qSnap.data() as LiveQuizSession;
+      const mode = quiz.gameMode ?? 'regular';
+      if (!isBattleQuizMode(mode)) return { ok: false, error: 'Not a battle quiz mode' };
+
+      const roomData = roomSnap.data();
+      const players = [...((roomData?.players || []) as Record<string, unknown>[])];
+      const battleLog: string[] = [...(roomData?.battleLog || [])];
+
+      const aIdx = players.findIndex((p) => (p as { userId: string }).userId === actorUid);
+      const tIdx = players.findIndex((p) => (p as { userId: string }).userId === targetUid);
+      if (aIdx < 0) return { ok: false, error: 'Actor not in session' };
+      if (tIdx < 0) return { ok: false, error: 'Target not in session' };
+
+      const actor = { ...(players[aIdx] as Record<string, unknown>) } as {
+        userId: string;
+        eliminated?: boolean;
+        movesEarned?: number;
+        hp?: number;
+        maxHp?: number;
+        shield?: number;
+        maxShield?: number;
+        level?: number;
+      };
+      const target = { ...(players[tIdx] as Record<string, unknown>) } as typeof actor;
+
+      if (actor.eliminated) return { ok: false, error: 'You are eliminated' };
+      if (target.eliminated && action !== 'heal') return { ok: false, error: 'Target eliminated' };
+
+      if (action === 'heal' && mode === 'team_battle_royale' && quiz.teamBattleRoyaleConfig?.supportAlliesEnabled) {
+        const map = quiz.teamBattleState?.playerTeamId || {};
+        const same = map[actorUid] && map[actorUid] === map[targetUid];
+        const self = actorUid === targetUid;
+        if (!same && !self) return { ok: false, error: 'Heal only yourself or allies' };
+      }
+
+      const cost = BR_PP_COST[action];
+      if ((actor.movesEarned ?? 0) < cost) return { ok: false, error: 'Not enough Participation Points' };
+
+      const br: BattleRoyaleRuntimeState = {
+        streaks: { ...(quiz.battleRoyaleState?.streaks || {}) },
+        energy: { ...(quiz.battleRoyaleState?.energy || {}) },
+        strongUnlocked: { ...(quiz.battleRoyaleState?.strongUnlocked || {}) },
+      };
+
+      if (action === 'strong') {
+        const e = br.energy[actorUid] || 0;
+        if (e >= 1) {
+          br.energy[actorUid] = e - 1;
+        } else if (br.strongUnlocked[actorUid]) {
+          br.strongUnlocked[actorUid] = false;
+        } else {
+          return { ok: false, error: 'Strong move needs 1 Energy or a 7-streak unlock' };
+        }
+      }
+
+      const initP = (p: typeof actor) => {
+        if (p.maxHp == null) p.maxHp = Math.max(100, (p.level || 1) * 10);
+        if (p.hp == null) p.hp = p.maxHp;
+        if (p.maxShield == null) p.maxShield = 100;
+        if (p.shield == null) p.shield = p.maxShield;
+      };
+      initP(actor);
+      initP(target);
+
+      actor.movesEarned = Math.max(0, (actor.movesEarned ?? 0) - cost);
+
+      let msg = '';
+      if (action === 'attack') {
+        const d = computeDamageAfterShield(target.hp || 0, target.shield || 0, 26);
+        target.hp = d.hp;
+        target.shield = d.shield;
+        msg = `⚔️ ${actorName} struck ${targetName} (BR Attack)`;
+      } else if (action === 'control') {
+        const d = computeDamageAfterShield(target.hp || 0, target.shield || 0, 18);
+        target.hp = d.hp;
+        target.shield = d.shield;
+        msg = `🌀 ${actorName} disrupted ${targetName} (Control)`;
+      } else if (action === 'strong') {
+        const d = computeDamageAfterShield(target.hp || 0, target.shield || 0, 44);
+        target.hp = d.hp;
+        target.shield = d.shield;
+        msg = `💥 ${actorName} hit ${targetName} with a STRONG move!`;
+      } else if (action === 'shield') {
+        if (targetUid !== actorUid) return { ok: false, error: 'Shield targets yourself' };
+        actor.shield = Math.min(actor.maxShield || 100, (actor.shield || 0) + 38);
+        msg = `🛡️ ${actorName} reinforced shields`;
+      } else if (action === 'heal') {
+        target.hp = Math.min(target.maxHp || 100, (target.hp || 0) + 28);
+        msg = `💚 ${actorName} healed ${targetName}`;
+      }
+
+      const targetTotal = (target.hp || 0) + (target.shield || 0);
+      if (targetTotal <= 0 && !target.eliminated) {
+        target.eliminated = true;
+        battleLog.push(`☠️ ${targetName} has been ELIMINATED!`);
+        Promise.resolve().then(() => {
+          trackElimination(sessionId, actorUid, targetUid).catch(() => {});
+        });
+      }
+
+      players[aIdx] = actor as Record<string, unknown>;
+      players[tIdx] = target as Record<string, unknown>;
+      battleLog.push(msg);
+
+      tx.update(rRef, {
+        players,
+        battleLog,
+        updatedAt: serverTimestamp(),
+      });
+      tx.update(qRef, {
+        battleRoyaleState: br,
+        updatedAt: serverTimestamp(),
+      });
+
+      return { ok: true };
+    });
+  } catch (e) {
+    log('submitBattleRoyaleQuickAction error', e);
+    return { ok: false, error: String(e) };
+  }
 }
 
 /** End quiz early (host). */
@@ -524,13 +970,16 @@ export async function endQuizSession(sessionId: string, hostUid: string): Promis
     if (!snap.exists()) return { ok: false, error: 'No quiz session' };
     const session = snap.data() as LiveQuizSession;
     if (session.hostUid !== hostUid) return { ok: false, error: 'Only host can end quiz' };
-    await updateDoc(sessionRef(sessionId), {
+    const mode = session.gameMode ?? 'regular';
+    const patch: UpdateData<DocumentData> = {
       status: 'completed',
       currentQuestionId: null,
       questionStartedAt: null,
       questionEndsAt: null,
       updatedAt: serverTimestamp(),
-    });
+      ...(isBattleQuizMode(mode) ? { battleEndReason: 'host' as const } : {}),
+    };
+    await updateDoc(sessionRef(sessionId), patch);
     log('Quiz ended by host', { sessionId });
     await grantLiveQuizRewards(sessionId);
     return { ok: true };

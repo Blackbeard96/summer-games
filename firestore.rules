@@ -6,6 +6,48 @@ service cloud.firestore {
       return request.auth != null && 
         request.auth.token.email == 'edm21179@gmail.com';
     }
+
+    // App "admin" role stored in userRoles (matches isUserAdmin in roleManagement.ts)
+    function isAppAdminUser() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+        (
+          get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'admin' ||
+          (
+            get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null &&
+            get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['admin'])
+          )
+        );
+    }
+
+    // Staff who can manage any live session (matches inSessionRooms admin checks)
+    function isLiveEventStaff() {
+      return request.auth != null && (
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        request.auth.token.email.matches('.*@mstgames\\.net$') ||
+        request.auth.token.email.matches('.*@compscihigh\\.org$')
+      );
+    }
+
+    // Session host (teacher) — not in classrooms.students; must read quizSession/stats for hosting.
+    function isInSessionRoomHost(sessionId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)) &&
+        (
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid ||
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.teacherId == request.auth.uid
+        );
+    }
+
+    // Student enrolled in the class for this session, session host, or staff
+    function canReadInSessionRoomSession(sessionId) {
+      return isLiveEventStaff() || isInSessionRoomHost(sessionId) || (
+        request.auth != null &&
+        exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)) &&
+        exists(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)).data.students
+      );
+    }
     
     // Users collection - allow users to read/write their own documents
     // SECURITY NOTE: Challenge reset prevention is enforced at application level.
@@ -192,6 +234,14 @@ service cloud.firestore {
          (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
+
+    // Classrooms - enrolled students may read their own classes (needed for assessment goals notifier,
+    // array-contains queries, and for assessment/inSession rules that get() classroom docs).
+    match /classrooms/{classroomId} {
+      allow read: if request.auth != null &&
+        'students' in resource.data &&
+        request.auth.uid in resource.data.students;
+    }
     
     // Badges collection - allow admins to manage badges
     match /badges/{badgeId} {
@@ -296,6 +346,23 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
+
+    // Habit submissions (habits-type assessments) — was missing; fell through to deny-all.
+    match /habitSubmissions/{submissionId} {
+      allow read: if request.auth != null && (
+        isLiveEventStaff() ||
+        resource.data.studentId == request.auth.uid ||
+        (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
+      );
+      allow create, update: if request.auth != null && (
+        isLiveEventStaff() ||
+        (request.resource.data.studentId == request.auth.uid &&
+         exists(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)).data.students)
+      );
+      allow delete: if isLiveEventStaff();
+    }
     
     // PP Ledger collection - students can read their own entries, admins can read all
     match /ppLedger/{entryId} {
@@ -329,6 +396,15 @@ service cloud.firestore {
     
     // Battle Moves collection - allow users to read/write their own moves
     match /battleMoves/{userId} {
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == userId || 
+         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+         request.auth.token.email.matches('.*@mstgames\\.net$') ||
+         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+    
+    // Legacy moves/{userId} doc (same shape as battleMoves; used by older clients + power level recalc)
+    match /moves/{userId} {
       allow read, write: if request.auth != null && 
         (request.auth.uid == userId || 
          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
@@ -529,6 +605,37 @@ service cloud.firestore {
           request.auth.token.email.matches('.*@compscihigh\\.org$')
         );
       }
+
+      // Live quiz / battle royale state: quizSession/current (+ responses)
+      match /quizSession/{quizDocId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow create, update, delete: if request.auth != null && (
+          isLiveEventStaff() ||
+          get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid
+        );
+        match /responses/{responseUid} {
+          allow read: if canReadInSessionRoomSession(sessionId);
+          allow create, update: if request.auth != null && (
+            isLiveEventStaff() ||
+            get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid ||
+            (request.auth.uid == responseUid && canReadInSessionRoomSession(sessionId))
+          );
+          allow delete: if request.auth != null && (
+            isLiveEventStaff() ||
+            get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid
+          );
+        }
+      }
+
+      // Per-player session stats (skills used, PP, eliminations, etc.)
+      match /stats/{playerId} {
+        allow read: if canReadInSessionRoomSession(sessionId);
+        allow create, update: if request.auth != null && (
+          isLiveEventStaff() ||
+          (request.auth.uid == playerId && canReadInSessionRoomSession(sessionId))
+        );
+        allow delete: if isLiveEventStaff();
+      }
     }
     
     // Challenge completions collection - allow users to read/write their own completions
@@ -577,12 +684,14 @@ service cloud.firestore {
     match /squads/{squadId} {
       allow read, write: if request.auth != null;
       
-      // Helper function to check if user is a squad member
-      // Note: This checks if the user's UID exists in the members array
+      // Squad members are stored as objects [{ uid, displayName, ... }].
+      // `request.auth.uid in members` is always false for object elements, so we use denormalized memberUids.
       function isSquadMember() {
-        return request.auth != null && 
+        let squadData = get(/databases/$(database)/documents/squads/$(squadId)).data;
+        return request.auth != null &&
           exists(/databases/$(database)/documents/squads/$(squadId)) &&
-          request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.members;
+          squadData.memberUids is list &&
+          request.auth.uid in squadData.memberUids;
       }
       
       // Stream messages subcollection - only squad members can read/write
@@ -636,10 +745,17 @@ service cloud.firestore {
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
     }
     
-    // Admin Settings collection - allow admins to read/write (for move overrides, etc.)
+    // Admin Settings — admins read/write all.
+    // equippableArtifacts + marketplaceArtifacts: any signed-in user may READ (catalog metadata only;
+    // equippable is needed for battle/skills UI; marketplace catalog for store parity / compensation UI).
+    // Scorekeepers and other staff use Compensate without matching isAdmin() token email.
     match /adminSettings/{settingId} {
-      allow read: if request.auth != null && isAdmin();
-      allow write: if request.auth != null && isAdmin();
+      allow read: if request.auth != null && (
+        isAdmin() ||
+        settingId == 'equippableArtifacts' ||
+        settingId == 'marketplaceArtifacts'
+      );
+      allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
     }
     
     // Island Raid Levels - read for all authenticated (lobby list, battle load), write for admins only
@@ -680,6 +796,41 @@ service cloud.firestore {
         // Allow delete only own reactions
         allow delete: if request.auth != null &&
           reactionUserId == request.auth.uid;
+      }
+    }
+    
+    // Player skill tree & battle loadout (NOT in-session battle players under inSessionRooms)
+    // Path: players/{userId}/skill_state/main — equippedSkillIds, unlocked nodes, etc.
+    match /players/{userId}/skill_state/{stateDocId} {
+      allow read, write: if request.auth != null &&
+        (request.auth.uid == userId || isAdmin());
+    }
+
+    // Training Grounds attempts — users create/read own; staff read all (admin analytics).
+    match /trainingAttempts/{attemptId} {
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isLiveEventStaff()
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isLiveEventStaff();
+    }
+
+    // Training Grounds — published quiz sets + questions (live event quiz launch, Training Grounds page).
+    // Was missing: fell through to deny-all and caused permission errors on getQuizSet / getQuestions.
+    match /trainingQuizSets/{quizSetId} {
+      allow read: if request.auth != null && (
+        resource.data.isPublished == true ||
+        isLiveEventStaff()
+      );
+      allow create, update, delete: if isLiveEventStaff();
+      match /questions/{questionId} {
+        allow read: if request.auth != null && (
+          get(/databases/$(database)/documents/trainingQuizSets/$(quizSetId)).data.isPublished == true ||
+          isLiveEventStaff()
+        );
+        allow create, update, delete: if isLiveEventStaff();
       }
     }
     

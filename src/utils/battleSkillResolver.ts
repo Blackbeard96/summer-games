@@ -16,6 +16,13 @@ import type { Move } from '../types/battle';
 import { getMoveDamage } from './moveOverrides';
 import { calculateDamageRange, rollDamage, calculateShieldBoostRange, calculateHealingRange } from './damageCalculator';
 import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier, getElementalRingLevel } from './artifactUtils';
+import {
+  applyPpEconomyToPPGain,
+  getOutgoingDamageMultiplierFromCostReductionPerk,
+  getOutgoingDamageMultiplierFromDamageBoostPerk,
+  getOutgoingDamageMultiplierFromElementalBoostPerk,
+  getOutgoingDamageMultiplierFromManifestBoostPerk,
+} from './artifactPerkEffects';
 
 export interface ActorState {
   uid: string;
@@ -54,6 +61,8 @@ export interface BattleContext {
   playerLevel: number;
   questionCorrect?: boolean; // For Mindforge mode
   mindforgeMode?: boolean;
+  /** Optional admin equippable catalog (enriches perk ids like Artifacts page). */
+  equippableCatalogRaw?: Record<string, unknown> | null;
   fieldBonus?: {
     type: string;
     healing?: number;
@@ -170,23 +179,43 @@ export async function resolveSkillAction(
     
     // Apply artifact damage multipliers
     let artifactMultiplier = 1.0;
-    
-    // Apply manifest damage boost for manifest moves (Captain's Helmet)
+    const eqArt = actor.equippedArtifacts as Record<string, unknown> | null | undefined;
+    const eqCat = context.equippableCatalogRaw ?? null;
+
+    // Manifest: Captain's Helmet (stats) + Manifest Boost perk
     if (skill.category === 'manifest' && actor.equippedArtifacts) {
       const manifestBoost = getManifestDamageBoost(actor.equippedArtifacts);
       if (manifestBoost > 1.0) {
         result.manifestBoost = manifestBoost;
         artifactMultiplier *= manifestBoost;
       }
+      const manifestPerkMult = getOutgoingDamageMultiplierFromManifestBoostPerk(eqArt, eqCat);
+      if (manifestPerkMult > 1.001) {
+        artifactMultiplier *= manifestPerkMult;
+      }
     }
-    
-    // Apply elemental damage multiplier (Elemental Ring)
+
+    // Elemental: Elemental Ring level + Elemental Boost perk
     if (skill.category === 'elemental' && actor.equippedArtifacts) {
       const ringLevel = getElementalRingLevel(actor.equippedArtifacts);
       const elementalMultiplier = getArtifactDamageMultiplier(ringLevel);
       if (elementalMultiplier > 1.0) {
         artifactMultiplier *= elementalMultiplier;
       }
+      const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(eqArt, eqCat);
+      if (elementalPerkMult > 1.001) {
+        artifactMultiplier *= elementalPerkMult;
+      }
+    }
+
+    const dmgBoostMult = getOutgoingDamageMultiplierFromDamageBoostPerk(eqArt, eqCat);
+    if (dmgBoostMult > 1.001) {
+      artifactMultiplier *= dmgBoostMult;
+    }
+
+    const costRedMult = getOutgoingDamageMultiplierFromCostReductionPerk(eqArt, eqCat);
+    if (costRedMult > 1.001) {
+      artifactMultiplier *= costRedMult;
     }
     
     result.artifactMultiplier = artifactMultiplier;
@@ -223,9 +252,29 @@ export async function resolveSkillAction(
       result.logMessages.push(`🪖 Captain's Helmet boosts ${skill.name} damage by ${Math.round((result.manifestBoost - 1) * 100)}%!`);
     }
     
-    if (result.artifactMultiplier && result.artifactMultiplier > 1.0 && skill.category === 'elemental') {
-      const ringLevel = actor.equippedArtifacts?.elementalRing?.level || 1;
-      result.logMessages.push(`💍 Elemental Ring (Level ${ringLevel}) boosts ${skill.name} damage by ${Math.round((result.artifactMultiplier - 1) * 100)}%!`);
+    if (skill.category === 'elemental' && actor.equippedArtifacts) {
+      const ringLevel = getElementalRingLevel(actor.equippedArtifacts);
+      const ringMult = getArtifactDamageMultiplier(ringLevel);
+      if (ringMult > 1.0) {
+        result.logMessages.push(
+          `💍 Elemental Ring (Level ${ringLevel}) boosts ${skill.name} damage by ${Math.round((ringMult - 1) * 100)}%!`
+        );
+      }
+      const ePerk = getOutgoingDamageMultiplierFromElementalBoostPerk(eqArt, eqCat);
+      if (ePerk > 1.001) {
+        result.logMessages.push(
+          `🔥 Elemental Boost increases ${skill.name} damage by ${Math.round((ePerk - 1) * 100)}%!`
+        );
+      }
+    }
+
+    if (skill.category === 'manifest') {
+      const mPerk = getOutgoingDamageMultiplierFromManifestBoostPerk(eqArt, eqCat);
+      if (mPerk > 1.001) {
+        result.logMessages.push(
+          `✨ Manifest Boost increases ${skill.name} damage by ${Math.round((mPerk - 1) * 100)}%!`
+        );
+      }
     }
     
     if (context.mindforgeMode && !context.questionCorrect) {
@@ -254,9 +303,23 @@ export async function resolveSkillAction(
 
   // Calculate shield boost
   if (skill.shieldBoost && skill.shieldBoost > 0) {
-    const shieldBoostRange = calculateShieldBoostRange(skill.shieldBoost, skill.level, effectiveMasteryLevel);
+    let shieldBoostRange = calculateShieldBoostRange(skill.shieldBoost, skill.level, effectiveMasteryLevel);
+    if (skill.category === 'manifest' && actor.equippedArtifacts) {
+      let shieldMult = getManifestDamageBoost(actor.equippedArtifacts);
+      shieldMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(
+        actor.equippedArtifacts as Record<string, unknown> | null | undefined,
+        context.equippableCatalogRaw ?? null
+      );
+      if (shieldMult > 1.001) {
+        shieldBoostRange = {
+          min: Math.floor(shieldBoostRange.min * shieldMult),
+          max: Math.floor(shieldBoostRange.max * shieldMult),
+          average: Math.floor(shieldBoostRange.average * shieldMult),
+        };
+      }
+    }
     const shieldBoostResult = rollDamage(shieldBoostRange, context.playerLevel, skill.level, effectiveMasteryLevel);
-    
+
     result.shieldBoost = shieldBoostResult.damage; // Reuse damage calculation
     result.wasMaxShieldBoost = shieldBoostResult.isMaxDamage;
     
@@ -276,12 +339,23 @@ export async function resolveSkillAction(
     // PP steal is calculated in the move service, but we can include it here for consistency
     // This is typically a percentage of target's PP
     const stealPercentage = 0.1; // 10% default
-    result.ppStolen = Math.floor((target.powerPoints || 0) * stealPercentage);
-    
-    if (result.ppStolen > 0) {
-      result.targetDelta.powerPoints = -result.ppStolen;
-      result.actorDelta.powerPoints = result.ppStolen;
-      result.logMessages.push(`💰 ${actor.name} stole ${result.ppStolen} PP from ${target.name}!`);
+    const baseStolen = Math.floor((target.powerPoints || 0) * stealPercentage);
+    const gainedWithEconomy = applyPpEconomyToPPGain(
+      baseStolen,
+      actor.equippedArtifacts as Record<string, unknown> | null | undefined,
+      context.equippableCatalogRaw ?? null
+    );
+    result.ppStolen = gainedWithEconomy;
+
+    if (baseStolen > 0) {
+      result.targetDelta.powerPoints = -baseStolen;
+      result.actorDelta.powerPoints = gainedWithEconomy;
+      const bonus = gainedWithEconomy - baseStolen;
+      result.logMessages.push(
+        bonus > 0
+          ? `💰 ${actor.name} stole ${baseStolen} PP from ${target.name} (+${bonus} from PP Economy = ${gainedWithEconomy} received)!`
+          : `💰 ${actor.name} stole ${baseStolen} PP from ${target.name}!`
+      );
     }
   }
 

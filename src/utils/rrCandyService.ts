@@ -28,25 +28,52 @@ import { getRRCandyStatus, getRRCandyStatusAsync } from './rrCandyUtils';
  * @param battleMoves - Optional: existing moves array from BattleContext (to avoid extra fetch)
  * @returns Array of RR Candy Move objects, or empty array if not unlocked
  */
+function inferRRCandyTypeFromMoveIds(rrMoves: Move[]): 'on-off' | 'up-down' | 'config' | null {
+  for (const m of rrMoves) {
+    const id = (m.id || '').toLowerCase();
+    if (id.includes('on-off') || id.includes('on_off')) return 'on-off';
+    if (id.includes('up-down') || id.includes('up_down')) return 'up-down';
+    if (id.includes('config')) return 'config';
+  }
+  return null;
+}
+
 export async function getUserRRCandySkills(
   userId: string,
   battleMoves?: Move[]
 ): Promise<Move[]> {
   try {
-    // Check unlock status
-    const rrCandyStatus = await getRRCandyStatusAsync(userId);
-    
-    if (!rrCandyStatus.unlocked || !rrCandyStatus.candyType) {
-      return [];
-    }
-
     // If battleMoves provided, use them; otherwise fetch from Firestore
     let moves: Move[] = battleMoves || [];
-    
+
     if (moves.length === 0) {
       const movesRef = doc(db, 'battleMoves', userId);
       const movesDoc = await getDoc(movesRef);
       moves = movesDoc.exists() ? (movesDoc.data().moves || []) : [];
+    }
+
+    const rrInPool = moves.filter((m: Move) => m.id?.startsWith('rr-candy-'));
+    const hasAnyRrInMoves = rrInPool.length > 0;
+
+    // Check unlock status (users + students in getRRCandyStatusAsync)
+    let rrCandyStatus = await getRRCandyStatusAsync(userId);
+
+    // If chapter/artifact data failed to load but battleMoves already lists RR Candy ids, still serve skills
+    if ((!rrCandyStatus.unlocked || !rrCandyStatus.candyType) && hasAnyRrInMoves) {
+      const inferred = inferRRCandyTypeFromMoveIds(rrInPool);
+      rrCandyStatus = {
+        unlocked: true,
+        candyType: (rrCandyStatus.candyType || inferred || 'on-off') as 'on-off' | 'up-down' | 'config',
+        challengeData: rrCandyStatus.challengeData,
+      };
+      console.log('getUserRRCandySkills: Using battleMoves RR Candy as unlock signal', {
+        candyType: rrCandyStatus.candyType,
+        count: rrInPool.length,
+      });
+    }
+
+    if (!rrCandyStatus.unlocked || !rrCandyStatus.candyType) {
+      return [];
     }
 
     // Filter for RR Candy moves

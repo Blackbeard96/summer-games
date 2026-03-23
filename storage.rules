@@ -28,9 +28,21 @@ service firebase.storage {
       allow write: if request.auth != null;
     }
     
+    // Artifact images (admin/equippable artifacts) - authenticated users can upload; anyone can read for display
+    match /artifacts/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
     // Mission sequence media (slides, videos, posters) - admins upload; any auth user can read for gameplay
     match /missions/{allPaths=**} {
       allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // CPU opponent images (admin uploads in CPU Opponent Moves Admin) - anyone can read for battle display
+    match /cpu_opponents/{allPaths=**} {
+      allow read: if true;
       allow write: if request.auth != null;
     }
     

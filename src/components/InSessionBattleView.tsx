@@ -48,35 +48,67 @@ const InSessionBattleView: React.FC = () => {
         const classDoc = await getDoc(classRef);
 
         if (classDoc.exists()) {
-          const classData = classDoc.data();
-          const studentIds = classData.students || [];
+          const classData = classDoc.data() as {
+            students?: string[];
+            studentDisplayNames?: Record<string, string>;
+          };
+          const studentIds: string[] = Array.isArray(classData.students) ? classData.students : [];
+          const nameFromClassroom =
+            classData.studentDisplayNames && typeof classData.studentDisplayNames === 'object'
+              ? classData.studentDisplayNames
+              : {};
 
-          // Load student data
-          const studentsData: Student[] = [];
-          for (const studentId of studentIds) {
-            try {
-              const [studentDoc, userDoc] = await Promise.all([
-                getDoc(doc(db, 'students', studentId)),
-                getDoc(doc(db, 'users', studentId))
-              ]);
+          // Build a fallback map from current live-session players (works even when profile reads are denied).
+          const sessionPlayers = Array.isArray(sessionData.players) ? sessionData.players : [];
+          const sessionPlayerMap = new Map<string, any>(
+            sessionPlayers.map((p: any) => [p.userId, p])
+          );
 
-              const studentData = studentDoc.exists() ? studentDoc.data() : {};
-              const userData = userDoc.exists() ? userDoc.data() : {};
+          // Load profile data best-effort, but NEVER drop a class member from the roster if reads fail.
+          const studentsData: Student[] = await Promise.all(
+            studentIds.map(async (studentId, index) => {
+              const sessionPlayer = sessionPlayerMap.get(studentId);
+              const fallbackName =
+                sessionPlayer?.displayName ||
+                nameFromClassroom[studentId] ||
+                `Student ${index + 1}`;
 
-              const level = getLevelFromXP(studentData.xp || 0);
-              studentsData.push({
+              const base: Student = {
                 id: studentId,
-                displayName: userData.displayName || studentData.displayName || 'Unknown',
-                email: userData.email || studentData.email || '',
-                powerPoints: studentData.powerPoints || 0,
-                photoURL: userData.photoURL || studentData.photoURL,
-                level,
-                xp: studentData.xp || 0
-              });
-            } catch (error) {
-              console.error(`Error loading student ${studentId}:`, error);
-            }
-          }
+                displayName: fallbackName,
+                email: '',
+                powerPoints: sessionPlayer?.powerPoints || 0,
+                photoURL: sessionPlayer?.photoURL,
+                level: sessionPlayer?.level || 1,
+                xp: undefined,
+              };
+
+              try {
+                const [studentDoc, userDoc] = await Promise.all([
+                  getDoc(doc(db, 'students', studentId)),
+                  getDoc(doc(db, 'users', studentId))
+                ]);
+
+                const studentData = studentDoc.exists() ? studentDoc.data() : {};
+                const userData = userDoc.exists() ? userDoc.data() : {};
+                const level = getLevelFromXP(studentData.xp || 0);
+
+                return {
+                  ...base,
+                  displayName: userData.displayName || studentData.displayName || base.displayName,
+                  email: userData.email || studentData.email || '',
+                  powerPoints: studentData.powerPoints || base.powerPoints,
+                  photoURL: userData.photoURL || studentData.photoURL || base.photoURL,
+                  level: level || base.level,
+                  xp: studentData.xp || base.xp
+                };
+              } catch (error) {
+                // Expected for non-admin students due profile access rules; keep fallback row visible.
+                console.warn(`Roster fallback used for ${studentId}`, error);
+                return base;
+              }
+            })
+          );
 
           setStudents(studentsData);
         }

@@ -4,7 +4,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getPlayerSkillState } from './skillStateService';
 import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
@@ -37,11 +37,15 @@ export async function equipSkill(userId: string, skillId: string, maxEquipped: n
     const updatedEquipped = [...currentEquipped, skillId];
     
     const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-    await updateDoc(skillStateRef, {
-      equippedSkillIds: updatedEquipped,
-      lastUpdated: serverTimestamp(),
-      version: SKILL_STATE_VERSION
-    });
+    await setDoc(
+      skillStateRef,
+      {
+        equippedSkillIds: updatedEquipped,
+        lastUpdated: serverTimestamp(),
+        version: SKILL_STATE_VERSION,
+      },
+      { merge: true }
+    );
     
     // Recalculate power level after equip
     try {
@@ -77,11 +81,15 @@ export async function unequipSkill(userId: string, skillId: string): Promise<boo
     const updatedEquipped = currentEquipped.filter(id => id !== skillId);
     
     const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-    await updateDoc(skillStateRef, {
-      equippedSkillIds: updatedEquipped,
-      lastUpdated: serverTimestamp(),
-      version: SKILL_STATE_VERSION
-    });
+    await setDoc(
+      skillStateRef,
+      {
+        equippedSkillIds: updatedEquipped,
+        lastUpdated: serverTimestamp(),
+        version: SKILL_STATE_VERSION,
+      },
+      { merge: true }
+    );
     
     // Recalculate power level after unequip
     try {
@@ -105,11 +113,15 @@ export async function unequipSkill(userId: string, skillId: string): Promise<boo
 export async function updateEquippedSkills(userId: string, equippedSkillIds: string[]): Promise<void> {
   try {
     const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-    await updateDoc(skillStateRef, {
-      equippedSkillIds,
-      lastUpdated: serverTimestamp(),
-      version: SKILL_STATE_VERSION
-    });
+    await setDoc(
+      skillStateRef,
+      {
+        equippedSkillIds,
+        lastUpdated: serverTimestamp(),
+        version: SKILL_STATE_VERSION,
+      },
+      { merge: true }
+    );
     
     // Recalculate power level after update
     try {

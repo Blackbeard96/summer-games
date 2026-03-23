@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { db } from '../firebase';
 import { 
@@ -42,6 +42,11 @@ import {
 import { getMoveDamage } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
+import {
+  applyVaultShieldBoostFromEquipped,
+  getElementalAccessElementFromStudent,
+  hasElementalAccessPerkEquipped,
+} from '../utils/artifactPerkEffects';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 import { getRRCandyMoves, hasRRCandyUnlocked } from '../utils/rrCandyMoves';
 import { getRRCandyStatus } from '../utils/rrCandyUtils';
@@ -187,6 +192,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // logger.battle.debug('BattleProvider initialized!');
   const { currentUser } = useAuth();
   const [vault, setVault] = useState<Vault | null>(null);
+  /** Raw equipped + catalog for Shield Boost (vault UI uses boosted values). */
+  const [perkEquippedSnapshot, setPerkEquippedSnapshot] = useState<Record<string, unknown> | null>(null);
+  const [perkCatalogSnapshot, setPerkCatalogSnapshot] = useState<Record<string, unknown> | null>(null);
   const [moves, setMoves] = useState<Move[]>([]);
   const [actionCards, setActionCards] = useState<ActionCard[]>([]);
   const [currentBattle, setCurrentBattle] = useState<BattleState | null>(null);
@@ -231,6 +239,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const studentDoc = await getDoc(studentRef);
         const studentData = studentDoc.exists() ? studentDoc.data() : {};
         const playerPP = studentData.powerPoints || 0;
+
+        let equippableCatalogForPerks: Record<string, unknown> | null = null;
+        setPerkEquippedSnapshot((studentData.equippedArtifacts as Record<string, unknown>) || null);
+        try {
+          const eqPerkDoc = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+          equippableCatalogForPerks = eqPerkDoc.exists()
+            ? (eqPerkDoc.data() as Record<string, unknown>)
+            : null;
+          setPerkCatalogSnapshot(equippableCatalogForPerks);
+        } catch {
+          setPerkCatalogSnapshot(null);
+        }
         
         // Extract manifest ID properly - do NOT default to 'reading' if manifest is missing
         // Only use valid manifest IDs from the manifest object
@@ -545,7 +565,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               // Always use the original template.name as the key to look up overrides
               const overriddenName = getMoveNameSync(template.name);
               
-              // Match existing move by ID first (most reliable), then by category+element+name for elemental
+              // Match existing move by ID first (most reliable), then by category+type+name to avoid losing levels
               const moveId = `move_${index + 1}`;
               let existingMove = movesData.find((m: Move) => m.id === moveId || m.name === template.name);
               if (!existingMove && template.category === 'elemental' && template.elementalAffinity) {
@@ -553,7 +573,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   m.category === 'elemental' && m.elementalAffinity === template.elementalAffinity && m.name === template.name
                 );
               }
-              // Preserve level (elemental 1–4) and masteryLevel so skills are never reset by migration
+              if (!existingMove && template.category === 'manifest' && template.manifestType) {
+                existingMove = movesData.find((m: Move) =>
+                  m.category === 'manifest' && m.manifestType === template.manifestType && (m.name === template.name || m.name === overriddenName)
+                );
+              }
+              // Preserve level and masteryLevel so skills are never reset by migration; never downgrade
               const preservedLevel = existingMove?.level ?? template.level;
               const preservedMasteryLevel = existingMove?.masteryLevel ?? 1;
 
@@ -575,9 +600,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               };
             });
             
-            // Update the database with new moves
-            await updateDoc(movesRef, { moves: newMoves });
-            setMoves(newMoves);
+            // Protection: do not persist if any move would be downgraded (existing had higher level)
+            const wouldDowngrade = newMoves.some((nm, i) => {
+              const existing = movesData.find((m: Move) => m.id === nm.id || (m.category === nm.category && m.manifestType === nm.manifestType && m.name === nm.name));
+              if (!existing) return false;
+              return (existing.level ?? 1) > (nm.level ?? 1) || (existing.masteryLevel ?? 1) > (nm.masteryLevel ?? 1);
+            });
+            if (wouldDowngrade) {
+              console.warn('BattleContext: Migration would downgrade move levels; skipping write and keeping existing moves');
+              setMoves(normalizeManifestMoveCooldowns(movesData as Move[]));
+            } else {
+              await updateDoc(movesRef, { moves: newMoves });
+              setMoves(newMoves);
+            }
           } else {
             // Apply element-specific filtering to existing moves
             console.log('BattleContext: Applying element-specific filtering to existing moves');
@@ -590,10 +625,26 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             // Get user's element from student data
             const studentRef = doc(db, 'students', currentUser.uid);
             const studentDoc = await getDoc(studentRef);
-            const userElement = studentDoc.exists() ? 
-              (studentDoc.data().manifestationType?.toLowerCase() || 'fire') : 'fire';
+            const sd = studentDoc.exists() ? studentDoc.data() : {};
+            const userElement = (
+              (sd as any).artifacts?.chosen_element ||
+              (sd as any).elementalAffinity ||
+              (sd as any).manifestationType ||
+              'fire'
+            )
+              .toString()
+              .toLowerCase();
+            const secondaryRaw = getElementalAccessElementFromStudent(sd as Record<string, unknown>);
+            const secondaryElement =
+              secondaryRaw &&
+              hasElementalAccessPerkEquipped(
+                sd.equippedArtifacts as Record<string, unknown>,
+                equippableCatalogForPerks
+              )
+                ? secondaryRaw
+                : null;
             
-            console.log('BattleContext: User element for move filtering:', userElement);
+            console.log('BattleContext: User element for move filtering:', userElement, 'secondary:', secondaryElement);
             
             // Update moves with correct element and manifest filtering
             // Also apply overridden names from admin panel
@@ -642,11 +693,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               
               if (move.category === 'elemental' && move.level === 1) {
                 // CRITICAL: Preserve the unlocked state from the database PERMANENTLY
-                // Elemental moves are unlocked when the player chooses their element in the Artifacts page
-                // Once unlocked (unlocked === true), they should ALWAYS remain unlocked
-                // If already unlocked, keep it unlocked. Otherwise, unlock if it matches user's element.
-                const shouldRemainUnlocked = move.unlocked === true ? true : 
-                  (move.elementalAffinity === userElement);
+                // Elemental moves unlock for primary element (Artifacts) + optional Elemental Access element
+                const moveEl = (move.elementalAffinity || '').toString().toLowerCase();
+                const matchesPrimary = moveEl === userElement;
+                const matchesSecondary =
+                  !!secondaryElement && moveEl === secondaryElement.toLowerCase();
+                const shouldRemainUnlocked =
+                  move.unlocked === true ? true : matchesPrimary || matchesSecondary;
                 console.log(`BattleContext: Move ${updatedMove.name} (${move.elementalAffinity}) - unlocked state: ${move.unlocked}, preserving: ${shouldRemainUnlocked}`);
                 return { ...updatedMove, unlocked: shouldRemainUnlocked };
               } else if (move.category === 'manifest') {
@@ -934,6 +987,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         setError('Failed to initialize battle data. Please refresh the page or try again later.');
         
+        // Protection: never replace existing battleMoves with level-1 defaults; re-fetch and use if available
+        let fallbackMoves: Move[] = [];
+        try {
+          const movesRef = doc(db, 'battleMoves', currentUser.uid);
+          const existingMovesDoc = await getDoc(movesRef);
+          if (existingMovesDoc.exists()) {
+            const existingMoves = (existingMovesDoc.data().moves || []) as Move[];
+            if (existingMoves.length > 0) {
+              fallbackMoves = normalizeManifestMoveCooldowns(existingMoves);
+              console.log('BattleContext: Error recovery - using existing battleMoves to avoid resetting skill levels');
+            }
+          }
+        } catch (_) {
+          // Ignore
+        }
+        if (fallbackMoves.length === 0) {
+          fallbackMoves = MOVE_TEMPLATES.map((template, index) => ({
+            ...template,
+            id: `move_${index + 1}`,
+            unlocked: template.category === 'system' ||
+                      (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === 'fire') ||
+                      false,
+            currentCooldown: 0,
+            masteryLevel: 1,
+          }));
+        }
+        
         // Set default values to prevent complete failure, but use synced PP
         const maxVaultHealth = Math.floor(1000 * 0.1);
         const defaultVault: Vault = {
@@ -958,15 +1038,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           lastMoveReset: new Date(),
         };
         setVault(defaultVault);
-        setMoves(MOVE_TEMPLATES.map((template, index) => ({
-          ...template,
-          id: `move_${index + 1}`,
-          unlocked: template.category === 'system' || 
-                    (template.category === 'elemental' && template.level === 1 && template.elementalAffinity === 'fire') || 
-                    false, // Manifest moves should NOT be auto-unlocked here - they should be unlocked based on user's actual manifest
-          currentCooldown: 0,
-          masteryLevel: 1,
-        })));
+        setMoves(fallbackMoves);
         setActionCards(ACTION_CARD_TEMPLATES.map((template, index) => ({
           ...template,
           id: `card_${index + 1}`,
@@ -2250,6 +2322,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (studentDoc.exists()) {
         const studentData = studentDoc.data();
         console.log('Student data refreshed - XP:', studentData.xp, 'PP:', studentData.powerPoints);
+        setPerkEquippedSnapshot((studentData.equippedArtifacts as Record<string, unknown>) || null);
+        try {
+          const eqPerkDoc = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+          setPerkCatalogSnapshot(
+            eqPerkDoc.exists() ? (eqPerkDoc.data() as Record<string, unknown>) : null
+          );
+        } catch {
+          /* keep previous catalog snapshot */
+        }
       }
       
     } catch (error) {
@@ -2458,7 +2539,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Unlock level 1 moves for the user's element
         // IMPORTANT: Set unlocked to true explicitly - this will persist
         if (move.category === 'elemental' && 
-            move.elementalAffinity === elementalAffinity && 
+            (move.elementalAffinity || '').toString().toLowerCase() === elementalAffinity.toLowerCase() && 
             move.level === 1) {
           console.log(`BattleContext: Permanently unlocking ${move.name} (${move.elementalAffinity})`);
           return { ...move, unlocked: true };
@@ -5194,8 +5275,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const vaultForUI = useMemo((): Vault | null => {
+    if (!vault) return null;
+    return applyVaultShieldBoostFromEquipped(vault, perkEquippedSnapshot, perkCatalogSnapshot);
+  }, [vault, perkEquippedSnapshot, perkCatalogSnapshot]);
+
   const value: BattleContextType = {
-    vault,
+    vault: vaultForUI,
     updateVault,
     upgradeVaultCapacity,
     upgradeVaultShields,

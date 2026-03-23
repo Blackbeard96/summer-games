@@ -27,19 +27,16 @@ export async function migratePlayerPowerLevel(userId: string): Promise<boolean> 
     
     const studentData = studentDoc.data();
     
-    // Check if powerLevel already exists and is valid
+    // If PL was already stored, still recompute — equipped artifacts/skills may have changed, and older
+    // recalculatePowerLevel logic only looked up artifact IDs in inventory (often missing full PL data).
     if (studentData.powerLevel !== null && studentData.powerLevel !== undefined) {
-      // Power level already exists, but check if we need to recalculate
-      // Only recalculate if powerBreakdown is missing (indicates old format)
-      if (studentData.powerBreakdown) {
-        console.log(`[PowerLevelMigration] Power level already exists for ${userId}: ${studentData.powerLevel}`);
-        return true; // Already migrated
-      } else {
+      if (!studentData.powerBreakdown) {
         console.log(`[PowerLevelMigration] Power level exists but breakdown missing for ${userId}, recalculating...`);
-        // Recalculate to get breakdown
-        await recalculatePowerLevel(userId);
-        return true;
+      } else {
+        console.log(`[PowerLevelMigration] Re-syncing power level for ${userId} (stored ${studentData.powerLevel})`);
       }
+      await recalculatePowerLevel(userId);
+      return true;
     }
     
     // Power level doesn't exist - initialize it

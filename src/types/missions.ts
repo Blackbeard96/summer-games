@@ -3,12 +3,66 @@
  * 
  * Story Missions integrate with Home Hub NPCs and Player Journey tab.
  * Profile Missions add information directly into the Player's Journey on their Power Card.
+ * 
+ * Extended for universal Challenge/Feat system (Ghost of Tsushima-style):
+ * Event-driven missions can trigger from practice battles, skills, Mindforge, etc.
  */
 
 export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE';
 export type DeliveryChannel = 'HUB_NPC' | 'PLAYER_JOURNEY';
 export type MissionStatus = 'available' | 'active' | 'completed' | 'locked';
 export type MissionSource = 'HUB_NPC' | 'PLAYER_JOURNEY';
+
+/** Mission type for challenge/feat system - defines overall category */
+export type MissionType =
+  | 'journey'
+  | 'home'
+  | 'practice'
+  | 'battle'
+  | 'skill'
+  | 'mindforge'
+  | 'feat'
+  | 'daily'
+  | 'weekly'
+  | 'special';
+
+/** Event that increments mission progress */
+export type MissionTriggerType =
+  | 'practice_battle_completed'
+  | 'enemy_defeated'
+  | 'practice_difficulty_cleared'
+  | 'battle_won'
+  | 'skill_used'
+  | 'specific_skill_used'
+  | 'manifest_skill_used'
+  | 'elemental_skill_used'
+  | 'artifact_equipped'
+  | 'home_action_completed'
+  | 'mindforge_action_completed'
+  | 'pp_earned'
+  | 'xp_earned'
+  | 'truth_metal_earned'
+  | 'login'
+  | 'streak'
+  | 'custom_event';
+
+/** How progress is calculated */
+export type MissionProgressType = 'count' | 'boolean' | 'cumulative_value' | 'unique_targets';
+
+/** Source area where mission applies */
+export type MissionSourceArea =
+  | 'home'
+  | 'practice'
+  | 'mindforge'
+  | 'battle_arena'
+  | 'player_journey'
+  | 'global';
+
+/** Difficulty tier for display */
+export type MissionDifficultyTier = 'easy' | 'medium' | 'hard' | 'legendary';
+
+/** Repeat interval for repeatable missions */
+export type MissionRepeatInterval = 'daily' | 'weekly' | 'none';
 
 export interface StoryMetadata {
   chapterId: string;           // e.g. "chapter_1", "chapter_2"
@@ -58,6 +112,8 @@ export interface MissionTemplate {
   rewards?: {
     xp?: number;
     pp?: number;
+    truthMetal?: number;
+    artifactIds?: string[];
     items?: string[];
     moves?: string[];
   };
@@ -70,6 +126,18 @@ export interface MissionTemplate {
   sequenceVersion?: number;           // Version counter for sequence edits
   createdAt?: any;
   updatedAt?: any;
+
+  // --- Challenge/Feat extension (event-driven missions) ---
+  missionType?: MissionType;
+  triggerType?: MissionTriggerType;
+  progressType?: MissionProgressType;
+  targetValue?: number;
+  sourceArea?: MissionSourceArea;
+  difficultyTier?: MissionDifficultyTier;
+  isRepeatable?: boolean;
+  repeatInterval?: MissionRepeatInterval;
+  isHidden?: boolean;
+  metadata?: Record<string, unknown>;  // custom rules, e.g. { skillType: 'manifest', opponentId: 'cpu-master-guardian' }
 }
 
 export interface PlayerMission {
@@ -81,8 +149,10 @@ export interface PlayerMission {
   acceptedAt: any;
   completedAt?: any;
   progress?: {
-    [objectiveId: string]: number;
+    [objectiveId: string]: number;  // objectiveId or 'main' for event-driven progress
   };
+  /** For event-driven missions: auto-accepted when first event matches */
+  autoAccepted?: boolean;
 }
 
 export interface PlayerStoryProgress {

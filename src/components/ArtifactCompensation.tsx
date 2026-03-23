@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { grantArtifactToPlayer, getAvailableArtifacts } from '../utils/artifactCompensation';
+import { grantArtifactToPlayer, getAvailableArtifactsAsync, type ArtifactOption } from '../utils/artifactCompensation';
 import { useAuth } from '../context/AuthContext';
 
 interface Player {
@@ -19,7 +19,21 @@ const ArtifactCompensation: React.FC = () => {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [availableArtifacts] = useState(getAvailableArtifacts());
+  const [availableArtifacts, setAvailableArtifacts] = useState<ArtifactOption[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAvailableArtifactsAsync().then((list) => {
+      if (!cancelled) {
+        setAvailableArtifacts(list);
+        setArtifactsLoading(false);
+      }
+    }).catch(() => {
+      if (!cancelled) setArtifactsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Search for players by email, name, or UID
   useEffect(() => {
@@ -311,6 +325,7 @@ const ArtifactCompensation: React.FC = () => {
         <select
           value={selectedArtifact}
           onChange={(e) => setSelectedArtifact(e.target.value)}
+          disabled={artifactsLoading}
           style={{
             width: '100%',
             padding: '0.75rem',
@@ -321,11 +336,26 @@ const ArtifactCompensation: React.FC = () => {
           }}
         >
           <option value="">-- Select an artifact --</option>
-          {availableArtifacts.map((artifact) => (
-            <option key={artifact.id} value={artifact.id}>
-              {artifact.icon} {artifact.name} ({artifact.rarity})
-            </option>
-          ))}
+          {artifactsLoading ? (
+            <option value="">Loading artifacts...</option>
+          ) : (
+            availableArtifacts.map((artifact) => (
+              <option
+                key={`${artifact.source}-${artifact.id}-${artifact.slot ?? ''}`}
+                value={artifact.id}
+              >
+                {artifact.icon} {artifact.name} ({artifact.rarity}
+                {artifact.slot ? ` · ${artifact.slot}` : ''}) —{' '}
+                {artifact.source === 'marketplace'
+                  ? 'admin store (Firestore)'
+                  : artifact.source === 'equippable'
+                    ? 'equippable'
+                    : artifact.source === 'in_game_store'
+                      ? 'MKT (in-game)'
+                      : 'legacy'}
+              </option>
+            ))
+          )}
         </select>
         
         {selectedArtifact && (
@@ -341,7 +371,8 @@ const ArtifactCompensation: React.FC = () => {
                     {artifact.description}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                    Category: {artifact.category} | Rarity: {artifact.rarity}
+                    {artifact.source === 'equippable' && artifact.slot ? `Slot: ${artifact.slot} · ` : ''}
+                    Rarity: {artifact.rarity}
                   </div>
                 </>
               ) : null;

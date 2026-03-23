@@ -13,6 +13,7 @@ import {
   getAssessmentsByClass,
   getAssessmentGoal
 } from '../utils/assessmentGoalsFirestore';
+import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
 
 const tooltipStyle: CSSProperties = {
   position: 'absolute',
@@ -608,52 +609,64 @@ const NavBar = memo(() => {
 
   // Removed battleSubItems - now using item.children from navConfig
 
-  // Track active live events count
+  // Track active live events count (per-class queries only — global inSessionRooms queries fail student rules)
   useEffect(() => {
     if (!currentUser) {
       setActiveLiveEventsCount(0);
       return;
     }
 
-    // Get user's classrooms
-    let userClassrooms: string[] = [];
-    const getClassrooms = async () => {
-      try {
-        const classroomsSnapshot = await getDocs(collection(db, 'classrooms'));
-        userClassrooms = classroomsSnapshot.docs
-          .filter(doc => {
-            const classData = doc.data();
-            return (classData.students || []).includes(currentUser.uid);
-          })
-          .map(doc => doc.id);
-      } catch (error) {
-        console.error('Error fetching classrooms for live events badge:', error);
-      }
+    let cancelled = false;
+    const unsubscribes: Array<() => void> = [];
+    const countByClass = new Map<string, number>();
+    const LIVE_STATUSES = new Set(['open', 'active', 'live']);
+
+    const recompute = () => {
+      let total = 0;
+      countByClass.forEach((n) => {
+        total += n;
+      });
+      setActiveLiveEventsCount(total);
     };
 
-    getClassrooms().then(() => {
-      if (userClassrooms.length === 0) {
+    (async () => {
+      let classIds: string[] = [];
+      try {
+        classIds = await getClassroomIdsForEnrolledStudent(currentUser.uid);
+      } catch (error) {
+        console.error('Error fetching classrooms for live events badge:', error);
+        setActiveLiveEventsCount(0);
+        return;
+      }
+      if (cancelled) return;
+      if (classIds.length === 0) {
         setActiveLiveEventsCount(0);
         return;
       }
 
-      // Subscribe to active live events in user's classrooms
       const eventsRef = collection(db, 'inSessionRooms');
-      const q = query(eventsRef, where('status', 'in', ['open', 'active', 'live']));
+      for (const classId of classIds) {
+        const unsub = onSnapshot(
+          query(eventsRef, where('classId', '==', classId)),
+          (snapshot) => {
+            const n = snapshot.docs.filter((d) => LIVE_STATUSES.has(String(d.data().status || ''))).length;
+            countByClass.set(classId, n);
+            recompute();
+          },
+          (error) => {
+            console.error('Error listening to live events for badge:', error);
+            countByClass.set(classId, 0);
+            recompute();
+          }
+        );
+        unsubscribes.push(unsub);
+      }
+    })();
 
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const activeCount = snapshot.docs.filter(doc => {
-          const data = doc.data();
-          return userClassrooms.includes(data.classId);
-        }).length;
-        setActiveLiveEventsCount(activeCount);
-      }, (error) => {
-        console.error('Error listening to live events for badge:', error);
-        setActiveLiveEventsCount(0);
-      });
-
-      return () => unsubscribe();
-    });
+    return () => {
+      cancelled = true;
+      unsubscribes.forEach((u) => u());
+    };
   }, [currentUser]);
 
   // Get nav config and filter by role

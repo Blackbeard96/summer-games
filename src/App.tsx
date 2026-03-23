@@ -22,6 +22,8 @@ import MilestoneModal from './components/MilestoneModal';
 import GeneratorEarningsModal from './components/GeneratorEarningsModal';
 import AnnouncementCarousel from './components/AnnouncementCarousel';
 import SquadCheckInReminderModal, { shouldShowSquadCheckInReminder } from './components/SquadCheckInReminderModal';
+import SkillLoadoutTutorialModal from './components/SkillLoadoutTutorialModal';
+import { hasSeenSkillLoadoutTutorial } from './utils/skillLoadoutTutorial';
 import { shouldShowModalToday } from './utils/generatorEarnings';
 import { getActiveAnnouncements, ROLLOUT_ANNOUNCEMENTS } from './utils/announcementConfig';
 import { checkAndCreditDailyGenerator, shouldShowDailyGeneratorModal } from './utils/dailyGeneratorNotification';
@@ -370,6 +372,12 @@ const AppContent = () => {
         if (shouldShowSquadCheckInReminder(currentUser.uid)) {
           queue.push('squadCheckIn');
         }
+
+        // 4. One-time Skill Loadout tutorial (existing players who haven't seen it)
+        const seenSkillLoadout = await hasSeenSkillLoadoutTutorial(currentUser.uid);
+        if (!seenSkillLoadout) {
+          queue.push('skillLoadoutTutorial');
+        }
         
         // Set queue and show first modal
         if (queue.length > 0) {
@@ -388,6 +396,7 @@ const AppContent = () => {
   
   // Handle modal queue progression
   const [showSquadCheckInModal, setShowSquadCheckInModal] = React.useState(false);
+  const [skillLoadoutTutorialSource, setSkillLoadoutTutorialSource] = React.useState<'queue' | 'review' | null>(null);
   React.useEffect(() => {
     if (currentModal === 'dailyGenerator') {
       setShowGeneratorModal(true);
@@ -395,8 +404,17 @@ const AppContent = () => {
       setShowAnnouncementCarousel(true);
     } else if (currentModal === 'squadCheckIn') {
       setShowSquadCheckInModal(true);
+    } else if (currentModal === 'skillLoadoutTutorial') {
+      setSkillLoadoutTutorialSource('queue');
     }
   }, [currentModal]);
+
+  // Open Skill Loadout tutorial from Help / Tutorials (Review)
+  React.useEffect(() => {
+    const handler = () => setSkillLoadoutTutorialSource('review');
+    window.addEventListener('openSkillLoadoutTutorial', handler);
+    return () => window.removeEventListener('openSkillLoadoutTutorial', handler);
+  }, []);
   
   // Handle modal close - move to next in queue
   const handleModalClose = async (modalType: string) => {
@@ -406,6 +424,8 @@ const AppContent = () => {
       setShowAnnouncementCarousel(false);
     } else if (modalType === 'squadCheckIn') {
       setShowSquadCheckInModal(false);
+    } else if (modalType === 'skillLoadoutTutorial') {
+      setSkillLoadoutTutorialSource(null);
     }
     
     // Move to next modal in queue
@@ -749,6 +769,19 @@ const AppContent = () => {
           isOpen={showSquadCheckInModal}
           onClose={() => handleModalClose('squadCheckIn')}
           userId={currentUser.uid}
+        />
+      )}
+
+      {/* One-time Skill Loadout tutorial (queue on sign-in or from Help / Tutorials) */}
+      {currentUser && skillLoadoutTutorialSource && (
+        <SkillLoadoutTutorialModal
+          isOpen={true}
+          markSeenOnClose={skillLoadoutTutorialSource === 'queue'}
+          onClose={() => {
+            const wasQueue = skillLoadoutTutorialSource === 'queue';
+            setSkillLoadoutTutorialSource(null);
+            if (wasQueue) handleModalClose('skillLoadoutTutorial');
+          }}
         />
       )}
       

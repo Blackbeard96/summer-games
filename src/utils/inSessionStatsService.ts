@@ -4,7 +4,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment } from 'firebase/firestore';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
 
@@ -215,6 +215,46 @@ export async function trackElimination(
         });
       }
     });
+
+    // Grant PP to eliminator's account (students, users, vault) so they actually receive +500 (and vault PP)
+    try {
+      const studentRef = doc(db, 'students', eliminatorId);
+      const userRef = doc(db, 'users', eliminatorId);
+      const vaultRef = doc(db, 'vaults', eliminatorId);
+
+      const studentDoc = await getDoc(studentRef);
+      if (studentDoc.exists()) {
+        await updateDoc(studentRef, { powerPoints: increment(ppFromElimination) });
+      }
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await updateDoc(userRef, { powerPoints: increment(ppFromElimination) });
+      }
+      const vaultDoc = await getDoc(vaultRef);
+      if (vaultDoc.exists()) {
+        const v = vaultDoc.data();
+        const cur = v?.currentPP ?? 0;
+        const cap = v?.capacity ?? 1000;
+        await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppFromElimination) });
+      }
+
+      // Update session players so eliminator's in-session PP display reflects the grant
+      const sessionRef = doc(db, 'inSessionRooms', sessionId);
+      const sessionDoc = await getDoc(sessionRef);
+      if (sessionDoc.exists()) {
+        const sessionData = sessionDoc.data();
+        const players = sessionData?.players || [];
+        const eliminatorIndex = players.findIndex((p: any) => p.userId === eliminatorId);
+        if (eliminatorIndex >= 0) {
+          const updatedPlayers = [...players];
+          const currentPP = updatedPlayers[eliminatorIndex].powerPoints ?? 0;
+          updatedPlayers[eliminatorIndex] = { ...updatedPlayers[eliminatorIndex], powerPoints: currentPP + ppFromElimination };
+          await updateDoc(sessionRef, { players: updatedPlayers, updatedAt: serverTimestamp() });
+        }
+      }
+    } catch (grantError) {
+      debugError('inSessionStats', `Error granting PP to eliminator ${eliminatorId}`, grantError);
+    }
 
     debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
     return true;

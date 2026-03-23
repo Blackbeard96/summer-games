@@ -225,7 +225,7 @@ const TutorialManager: React.FC = () => {
       const userRef = doc(db, 'users', currentUser.uid);
       
       const resetData: any = {};
-      ['welcome', 'navigation', 'profile', 'manifest', 'chapter1', 'marketplace'].forEach(tutorialId => {
+      ['welcome', 'navigation', 'profile', 'manifest', 'chapter1', 'marketplace', 'skillLoadoutV1'].forEach(tutorialId => {
         resetData[`tutorials.${tutorialId}.completed`] = false;
         resetData[`tutorials.${tutorialId}.skipped`] = false;
         resetData[`tutorials.${tutorialId}.completedAt`] = null;

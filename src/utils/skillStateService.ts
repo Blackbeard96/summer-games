@@ -38,8 +38,11 @@ export async function getPlayerSkillState(userId: string): Promise<PlayerSkillSt
     
     return initialState;
   } catch (error) {
-    console.error('Error getting player skill state:', error);
-    // Return default state on error
+    console.error(
+      'Error getting player skill state (if permission-denied, deploy rules for players/{uid}/skill_state/*):',
+      error
+    );
+    // Return default state on error (avoids crashing UI; loadout appears empty until rules allow access)
     return {
       unlockedNodeIds: getStarterNodes(),
       equippedSkillIds: [],

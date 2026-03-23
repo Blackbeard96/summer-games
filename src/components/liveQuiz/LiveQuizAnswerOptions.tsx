@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import type { TrainingQuestion } from '../../types/trainingGrounds';
 
 interface LiveQuizAnswerOptionsProps {
@@ -10,9 +10,25 @@ interface LiveQuizAnswerOptionsProps {
   reveal?: boolean;
   /** Player's response for reveal (which indices they selected) */
   submittedIndices?: number[];
+  /** When true, option order is shuffled; canonical indices still used for onSelect / server */
+  shuffle?: boolean;
+  /** Stable key so shuffle order resets per question round */
+  shuffleKey?: string;
 }
 
 const OPTION_LABELS = ['A', 'B', 'C', 'D'];
+
+function seededOrder(length: number, seed: string): number[] {
+  const indices = Array.from({ length }, (_, i) => i);
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  for (let i = indices.length - 1; i > 0; i--) {
+    h = (h * 1664525 + 1013904223) >>> 0;
+    const j = h % (i + 1);
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return indices;
+}
 
 export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
   question,
@@ -21,19 +37,29 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
   disabled,
   reveal,
   submittedIndices,
+  shuffle = false,
+  shuffleKey = '',
 }) => {
   const correctIndices = question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : []);
   const selected = submittedIndices ?? selectedIndices;
   const isMultiple = correctIndices.length > 1;
+
+  const displayOrder = useMemo(() => {
+    const n = question.options.length;
+    if (!shuffle || n <= 1) return Array.from({ length: n }, (_, i) => i);
+    return seededOrder(n, `${shuffleKey}|${question.id}`);
+  }, [shuffle, shuffleKey, question.id, question.options.length]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       <p style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.25rem', fontWeight: 600 }}>
         {isMultiple ? 'Select all that apply' : 'Select one answer'}
       </p>
-      {question.options.map((option, index) => {
+      {displayOrder.map((canonicalIndex, displayPos) => {
+        const option = question.options[canonicalIndex];
+        const index = canonicalIndex;
         const isSelected = selected.includes(index);
-        const isCorrect = correctIndices.includes(index);
+        const isCorrect = correctIndices.includes(canonicalIndex);
         const showCorrect = reveal && isCorrect;
         const showIncorrect = reveal && isSelected && !isCorrect;
 
@@ -103,7 +129,7 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
                 flexShrink: 0,
               }}
             >
-              {OPTION_LABELS[index] ?? index + 1}
+              {OPTION_LABELS[displayPos] ?? displayPos + 1}
             </span>
             <span style={{ flex: 1 }}>{option}</span>
             {reveal && showCorrect && <span style={{ fontSize: '1.25rem' }}>✓</span>}
