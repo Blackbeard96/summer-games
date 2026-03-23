@@ -70,7 +70,9 @@ export interface BattleSession {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   hostId: string; // uid of the host
-  
+  /** Denormalized uids for Firestore security rules (participants is an array of maps). */
+  participantUids?: string[];
+
   // Participants
   participants: BattleParticipant[];
   

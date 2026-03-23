@@ -259,7 +259,8 @@ const TimuIslandStoryModal: React.FC<TimuIslandStoryModalProps> = ({ isOpen, onC
       setShowBattle(true);
     } catch (error) {
       console.error('Error starting Island Raid battle:', error);
-      alert('Error starting battle. Please try again.');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`Error starting battle: ${msg}`);
     }
   };
 

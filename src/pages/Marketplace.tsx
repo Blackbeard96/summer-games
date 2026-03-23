@@ -12,6 +12,7 @@ import {
 } from '../data/marketplaceArtifactsCatalog';
 import { mergeMarketplaceStoreItems } from '../utils/marketplaceStoreMerge';
 import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
+import { getEquippablePerkDisplayRows } from '../utils/marketplaceEquippablePerks';
 
 type Artifact = MarketplaceStoreArtifact;
 
@@ -32,6 +33,10 @@ const Marketplace = () => {
   const [storeItems, setStoreItems] = useState<MarketplaceStoreArtifact[]>(MARKETPLACE_STORE_ARTIFACTS);
   /** Listing id → player already owns the linked equippable (students.artifacts). */
   const [equippableStoreOwned, setEquippableStoreOwned] = useState<Record<string, boolean>>({});
+  /** Merged equippable catalog (for perk labels on equippable marketplace listings). */
+  const [equippableCatalogMerged, setEquippableCatalogMerged] = useState<Record<string, unknown>>(() =>
+    mergeEquippableCatalogLayers(undefined) as Record<string, unknown>
+  );
   const [truthMetal, setTruthMetal] = useState(0);
   const isAdmin = checkIsAdmin ?? false;
 
@@ -85,6 +90,35 @@ const Marketplace = () => {
         console.error('MST MKT: failed to load marketplace catalog from Firestore', e);
         if (!cancelled) {
           setStoreItems(MARKETPLACE_STORE_ARTIFACTS);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
+  /** Load equippable catalog so marketplace cards can show perk names for grant-by-id listings. */
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentUser?.uid) {
+      setEquippableCatalogMerged(mergeEquippableCatalogLayers(undefined) as Record<string, unknown>);
+      return;
+    }
+    (async () => {
+      try {
+        const equippableRef = doc(db, 'adminSettings', 'equippableArtifacts');
+        const snap = await getDoc(equippableRef);
+        const merged = mergeEquippableCatalogLayers(
+          snap.exists() ? (snap.data() as Record<string, unknown>) : undefined
+        );
+        if (!cancelled) {
+          setEquippableCatalogMerged(merged as Record<string, unknown>);
+        }
+      } catch (e) {
+        console.error('MST MKT: failed to load equippable catalog for perk display', e);
+        if (!cancelled) {
+          setEquippableCatalogMerged(mergeEquippableCatalogLayers(undefined) as Record<string, unknown>);
         }
       }
     })();
@@ -1790,6 +1824,10 @@ const Marketplace = () => {
                 const equippableAtLimit = isEquippableListing && equippableOwned;
                 const insufficientTm = tmCost > 0 && truthMetal < tmCost;
                 const insufficientPp = powerPoints < artifact.price;
+                const equippablePerkLines =
+                  isEquippableListing && artifact.equippableArtifactId?.trim()
+                    ? getEquippablePerkDisplayRows(artifact.equippableArtifactId, equippableCatalogMerged)
+                    : [];
                 return (
                   <div key={artifact.id} className="artifact-card" style={{ 
                     background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
@@ -1911,11 +1949,54 @@ const Marketplace = () => {
                       <p style={{ 
                         fontSize: '0.875rem', 
                         color: '#6b7280',
-                        marginBottom: '1rem',
+                        marginBottom: equippablePerkLines.length > 0 ? '0.65rem' : '1rem',
                         lineHeight: '1.4'
                       }}>
                         {artifact.description}
                       </p>
+
+                      {equippablePerkLines.length > 0 && (
+                        <div
+                          style={{
+                            marginBottom: '0.85rem',
+                            padding: '0.5rem 0.65rem',
+                            background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
+                            borderRadius: '0.5rem',
+                            border: '1px solid #c7d2fe',
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              color: '#4338ca',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                              marginBottom: '0.35rem',
+                            }}
+                          >
+                            Perks when equipped
+                          </div>
+                          <ul
+                            style={{
+                              margin: 0,
+                              paddingLeft: '1.1rem',
+                              color: '#374151',
+                              fontSize: '0.8125rem',
+                              lineHeight: 1.45,
+                            }}
+                          >
+                            {equippablePerkLines.map((line, idx) => (
+                              <li key={idx} style={{ marginBottom: idx === equippablePerkLines.length - 1 ? 0 : '0.35rem' }}>
+                                <strong style={{ color: '#1f2937' }}>{line.label}</strong>
+                                {line.description ? (
+                                  <span style={{ color: '#6b7280' }}> — {line.description}</span>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div>

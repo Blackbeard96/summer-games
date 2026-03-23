@@ -635,6 +635,21 @@ const DailyChallengesCompact: React.FC = () => {
             </div>
           );
         })}
+        {displayChallenges.length === 0 && (
+          <div
+            style={{
+              textAlign: 'center',
+              color: 'rgba(255, 255, 255, 0.65)',
+              fontSize: '0.8125rem',
+              padding: '0.75rem 0.35rem',
+              lineHeight: 1.45,
+            }}
+          >
+            {challenges.length === 0
+              ? 'No daily challenge pool is published yet. Admins can add challenges under Admin → Daily Challenges.'
+              : 'Your challenge assignments are still syncing. Try refreshing if this stays empty.'}
+          </div>
+        )}
       </div>
 
       {/* View All Button */}

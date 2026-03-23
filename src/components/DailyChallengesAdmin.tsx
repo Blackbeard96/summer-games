@@ -57,7 +57,8 @@ const DailyChallengesAdmin: React.FC = () => {
       setChallenges(challengesList);
     } catch (error) {
       console.error('Error loading challenges:', error);
-      alert('Failed to load challenges');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`Failed to load challenges: ${msg}`);
     } finally {
       setLoading(false);
     }

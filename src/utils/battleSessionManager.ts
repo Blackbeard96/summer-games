@@ -102,6 +102,7 @@ export async function createBattleSession(
     createdAt: serverTimestamp() as Timestamp,
     updatedAt: serverTimestamp() as Timestamp,
     hostId,
+    participantUids: [hostId],
     participants: [hostParticipant],
     allies: cleanedAllies,
     enemies: cleanedEnemies,
@@ -303,6 +304,7 @@ export async function joinBattleSession(
     // Sanitize all data before writing to Firestore
     const updates: any = {
       participants: arrayUnion(sanitizeFirestoreData(newParticipant)),
+      participantUids: arrayUnion(participant.uid),
       updatedAt: serverTimestamp()
     };
     
