@@ -72,6 +72,34 @@ function memberUidsFromMemberList(members: SquadMember[]): string[] {
     .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
 }
 
+/**
+ * `getDocs(collection('users'))` fails for normal players: rules only allow reading your own `users/{uid}`.
+ * Firestore rejects the whole query if it could return unreadable docs. Load a map safely + own doc fallback.
+ */
+async function loadUsersDataMapForSquads(
+  currentUserUid: string | undefined
+): Promise<Map<string, Record<string, unknown>>> {
+  const map = new Map<string, Record<string, unknown>>();
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    snap.forEach((d) => map.set(d.id, d.data() as Record<string, unknown>));
+  } catch (e) {
+    console.warn(
+      'Squads: cannot list users collection (expected for non-admin). Enrichment uses students + your users doc only.',
+      e
+    );
+  }
+  if (currentUserUid && !map.has(currentUserUid)) {
+    try {
+      const mine = await getDoc(doc(db, 'users', currentUserUid));
+      if (mine.exists()) map.set(currentUserUid, mine.data() as Record<string, unknown>);
+    } catch {
+      /* ignore */
+    }
+  }
+  return map;
+}
+
 const Squads: React.FC = () => {
   const { currentUser } = useAuth();
   const [squads, setSquads] = useState<Squad[]>([]);
@@ -98,21 +126,12 @@ const Squads: React.FC = () => {
         // Fetch all squads
         console.log('Squads: Fetching squads...');
         const squadsSnapshot = await getDocs(collection(db, 'squads'));
-        
-        // First, fetch all users and students data to enrich member info
-        const usersSnapshot = await getDocs(collection(db, 'users'));
         const studentsSnapshot = await getDocs(collection(db, 'students'));
-        
-        // Create maps for quick lookup
-        const userDataMap = new Map();
+        const userDataMap = await loadUsersDataMapForSquads(currentUser.uid);
+
         const studentDataMap = new Map();
-        
-        usersSnapshot.docs.forEach(doc => {
-          userDataMap.set(doc.id, doc.data());
-        });
-        
-        studentsSnapshot.docs.forEach(doc => {
-          studentDataMap.set(doc.id, doc.data());
+        studentsSnapshot.docs.forEach((d) => {
+          studentDataMap.set(d.id, d.data());
         });
         
         const squadsDataPromises = squadsSnapshot.docs.map(async (doc) => {
@@ -219,14 +238,12 @@ const Squads: React.FC = () => {
         setSquads(squadsData);
         setCurrentSquad(userSquad || null);
 
-        // Fetch all available players (not in any squad)
-        console.log('Squads: Fetching users...');
-        // Note: usersSnapshot and studentsSnapshot are already fetched above, reuse them
-        // studentDataMap is already created above
+        // Available players: iterate students (listing `users` fails for non-admins — see loadUsersDataMapForSquads)
+        console.log('Squads: Building available players from students...');
         
-        const allUsers: SquadMember[] = usersSnapshot.docs.map(doc => {
-          const data = doc.data();
-          const studentData = studentDataMap.get(doc.id);
+        const allUsers: SquadMember[] = studentsSnapshot.docs.map(doc => {
+          const studentData = doc.data();
+          const data = (userDataMap.get(doc.id) || {}) as Record<string, any>;
           
           console.log('Squads: User data:', { uid: doc.id, ...data });
           if (studentData) {
@@ -330,7 +347,7 @@ const Squads: React.FC = () => {
           return {
             uid: doc.id,
             displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
-            email: data.email || '',
+            email: (data.email as string) || (studentData as { email?: string })?.email || '',
             photoURL: data.photoURL || studentData?.photoURL || null,
             level: data.level || studentData?.level || 1,
             xp: data.xp || studentData?.xp || 0,
@@ -373,19 +390,12 @@ const Squads: React.FC = () => {
 
     // Set up real-time listener for squads
     const unsubscribe = onSnapshot(collection(db, 'squads'), async (snapshot) => {
-      // Fetch current user/student data for enrichment
-      const usersSnapshot = await getDocs(collection(db, 'users'));
       const studentsSnapshot = await getDocs(collection(db, 'students'));
-      
-      const userDataMap = new Map();
+      const userDataMap = await loadUsersDataMapForSquads(currentUser?.uid);
+
       const studentDataMap = new Map();
-      
-      usersSnapshot.docs.forEach(doc => {
-        userDataMap.set(doc.id, doc.data());
-      });
-      
-      studentsSnapshot.docs.forEach(doc => {
-        studentDataMap.set(doc.id, doc.data());
+      studentsSnapshot.docs.forEach((d) => {
+        studentDataMap.set(d.id, d.data());
       });
       
       const squadsDataPromises = snapshot.docs.map(async (doc) => {
@@ -1025,22 +1035,12 @@ const Squads: React.FC = () => {
             setSquads(squadsData);
             setCurrentSquad(userSquad || null);
 
-            // Fetch all available players (not in any squad)
-            console.log('Squads: Fetching users...');
-            // Try to get users from both collections to find manifest data
-            const usersSnapshot = await getDocs(collection(db, 'users'));
             const studentsSnapshot = await getDocs(collection(db, 'students'));
-            
-            // Create a map of student data by UID
-            const studentDataMap = new Map();
-            studentsSnapshot.docs.forEach(doc => {
-              const data = doc.data();
-              studentDataMap.set(doc.id, data);
-            });
-            
-            const allUsers: SquadMember[] = usersSnapshot.docs.map(doc => {
-              const data = doc.data();
-              const studentData = studentDataMap.get(doc.id);
+            const userDataMap = await loadUsersDataMapForSquads(currentUser.uid);
+
+            const allUsers: SquadMember[] = studentsSnapshot.docs.map((doc) => {
+              const studentData = doc.data();
+              const data = (userDataMap.get(doc.id) || {}) as Record<string, any>;
               
               console.log('Squads: User data:', { uid: doc.id, ...data });
               if (studentData) {
@@ -1146,9 +1146,9 @@ const Squads: React.FC = () => {
               
               return {
                 uid: doc.id,
-                displayName: data.displayName || data.email?.split('@')[0] || 'Unknown',
-                email: data.email || '',
-                photoURL: data.photoURL,
+                displayName: data.displayName || studentData?.displayName || data.email?.split('@')[0] || 'Unknown',
+                email: data.email || studentData?.email || '',
+                photoURL: data.photoURL || studentData?.photoURL || null,
                 level: data.level || studentData?.level || 1,
                 xp: data.xp || studentData?.xp || 0,
                 manifest: capitalizedManifest,
