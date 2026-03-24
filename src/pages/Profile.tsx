@@ -13,6 +13,7 @@ import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { findNextChallenge } from '../utils/journeyProgress';
+import { mergeChaptersProgressMaps } from '../utils/mergeChapterProgress';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import { normalizePlayerData } from '../utils/playerData';
@@ -256,7 +257,9 @@ const Profile = () => {
           usersSnap.exists() && usersSnap.data().chapters && typeof usersSnap.data().chapters === 'object'
             ? usersSnap.data().chapters
             : {};
-        const mergedChapters = { ...studentsChapters, ...usersChapters };
+        const mergedChapters =
+          mergeChaptersProgressMaps(usersChapters, studentsChapters) ??
+          { ...studentsChapters, ...usersChapters };
 
         // Merge students data with users artifacts and merged chapters
         const mergedUserData = {
@@ -305,7 +308,7 @@ const Profile = () => {
         setBadges(userDataFromDB.badges || []);
         
         // Find the next available challenge
-        const nextChallengeData = findNextChallenge(mergedUserData);
+        const nextChallengeData = findNextChallenge(mergedUserData, userDataFromDB);
         setNextChallenge(nextChallengeData);
         
         // Load manifest data

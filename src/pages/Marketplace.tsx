@@ -12,6 +12,7 @@ import {
 } from '../data/marketplaceArtifactsCatalog';
 import { mergeMarketplaceStoreItems } from '../utils/marketplaceStoreMerge';
 import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
+import { isRevivePotionName } from '../utils/liveEventRevive';
 import { getEquippablePerkDisplayRows } from '../utils/marketplaceEquippablePerks';
 
 type Artifact = MarketplaceStoreArtifact;
@@ -628,6 +629,13 @@ const Marketplace = () => {
     // Handle Instant A - show ERROR 1001 and don't consume the item
     if (artifactName === 'Instant A') {
       showError1001();
+      return;
+    }
+
+    if (isRevivePotionName(artifactName)) {
+      alert(
+        '💚 Revive Potion only works during a Live Event.\n\nJoin the event, open your Bag (🎒), then choose an eliminated teammate.'
+      );
       return;
     }
 

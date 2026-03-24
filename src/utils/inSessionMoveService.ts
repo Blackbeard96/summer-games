@@ -345,6 +345,9 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       const targetTotalHealth = (targetCopy.hp || 0) + (targetCopy.shield || 0);
       if (targetTotalHealth <= 0 && !targetCopy.eliminated) {
         targetCopy.eliminated = true;
+        if (actorUid !== targetUid) {
+          targetCopy.eliminatedBy = actorUid;
+        }
         if (DEBUG_IN_SESSION_MOVES) {
           debug('inSessionMove', `☠️ Target ${targetName} eliminated!`);
         }

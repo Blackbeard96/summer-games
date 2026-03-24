@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, doc, addDoc, updateDoc, query, where, getDocs, getDoc, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
+import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
 
 interface Player {
   uid: string;
@@ -158,17 +159,18 @@ const BattleInviteModal: React.FC<BattleInviteModalProps> = ({
         const squadsSnapshot = await getDocs(collection(db, 'squads'));
         let userSquadMembers: Player[] = [];
         
-        squadsSnapshot.docs.forEach(doc => {
-          const squadData = doc.data();
+        squadsSnapshot.docs.forEach((d) => {
+          const squadData = d.data();
           if (squadData.members && Array.isArray(squadData.members)) {
-            const isUserInSquad = squadData.members.some((member: any) => member.uid === currentUser.uid);
+            const isUserInSquad = isUidInSquad(squadData, currentUser.uid);
             if (isUserInSquad) {
               // Get all members of this squad (excluding current user)
               squadData.members.forEach((member: any) => {
-                if (member.uid !== currentUser.uid) {
+                const mid = squadMemberUid(member);
+                if (mid && mid !== currentUser.uid) {
                   // Find the user in allUsers (which already has accurate level calculated from XP)
-                  const userData = allUsers.find(u => u.uid === member.uid);
-                  if (userData && !currentPlayers.includes(member.uid)) {
+                  const userData = allUsers.find((u) => u.uid === mid);
+                  if (userData && !currentPlayers.includes(mid)) {
                     userSquadMembers.push(userData);
                   }
                 }

@@ -1,6 +1,7 @@
 import { getLevelFromXP } from './leveling';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { mergeChaptersProgressMaps } from './mergeChapterProgress';
 
 /**
  * Normalized player data structure matching Profile page display
@@ -217,12 +218,12 @@ export function normalizePlayerData(
   squadAbbreviation?: string | null
 ): NormalizedPlayerData {
   // Merge data sources (students takes precedence for most fields, users for artifacts/chapters)
+  const mergedChapters = mergeChaptersProgressMaps(userData?.chapters, studentData?.chapters);
   const mergedData = {
     ...userData,
     ...studentData,
-    // But preserve artifacts and chapters from users collection
     artifacts: userData?.artifacts || studentData?.artifacts,
-    chapters: userData?.chapters || studentData?.chapters
+    chapters: mergedChapters ?? userData?.chapters ?? studentData?.chapters
   };
   
   // Display Name - matches Profile.tsx logic

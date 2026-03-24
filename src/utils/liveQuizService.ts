@@ -864,7 +864,9 @@ export async function submitBattleRoyaleQuickAction(
         maxShield?: number;
         level?: number;
       };
-      const target = { ...(players[tIdx] as Record<string, unknown>) } as typeof actor;
+      const target = { ...(players[tIdx] as Record<string, unknown>) } as typeof actor & {
+        eliminatedBy?: string;
+      };
 
       if (actor.eliminated) return { ok: false, error: 'You are eliminated' };
       if (target.eliminated && action !== 'heal') return { ok: false, error: 'Target eliminated' };
@@ -935,6 +937,7 @@ export async function submitBattleRoyaleQuickAction(
       const targetTotal = (target.hp || 0) + (target.shield || 0);
       if (targetTotal <= 0 && !target.eliminated) {
         target.eliminated = true;
+        target.eliminatedBy = actorUid;
         battleLog.push(`☠️ ${targetName} has been ELIMINATED!`);
         Promise.resolve().then(() => {
           trackElimination(sessionId, actorUid, targetUid).catch(() => {});

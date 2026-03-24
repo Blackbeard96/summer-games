@@ -32,6 +32,29 @@ export interface RRCandyStatus {
 }
 
 /**
+ * candyChoice / candyChoice fields are not always strings (objects, numbers, legacy shapes).
+ * Never call .toLowerCase() on raw Firestore values.
+ */
+function coerceCandyChoiceToString(raw: unknown): string | null {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    return t.length > 0 ? t : null;
+  }
+  if (typeof raw === 'number' || typeof raw === 'boolean') {
+    return String(raw);
+  }
+  if (typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    for (const k of ['choice', 'candyChoice', 'type', 'value', 'id']) {
+      const v = o[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+  return null;
+}
+
+/**
  * Chapter progress is sometimes under chapters[2], sometimes under another numeric key.
  * Scan all chapter objects for ep2-its-all-a-game (RR Candy unlock challenge).
  */
@@ -115,18 +138,18 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
     isCompleted = true;
   }
   
-  // Get candyType - default to 'on-off' if challenge is completed but candyChoice is missing
-  // This matches Profile page behavior: const candyType = challenge?.candyChoice || 'on-off';
-  let candyType =
+  const candyRaw =
     challenge?.candyChoice ||
     artifacts.candy_choice ||
     artifacts.candyChoice ||
     userData.candyChoice;
-  if (isCompleted && !candyType) {
-    // If challenge is completed but no candyChoice was saved, default to 'on-off'
-    // This handles cases where the completion happened before candyChoice was properly saved
-    console.warn('getRRCandyStatus: Challenge completed but candyChoice missing, defaulting to "on-off"');
-    candyType = 'on-off';
+  let candyTypeStr = coerceCandyChoiceToString(candyRaw);
+  if (isCompleted && !candyTypeStr) {
+    console.warn(
+      'getRRCandyStatus: Challenge completed but candyChoice missing or non-string, defaulting to "on-off"',
+      { candyRaw }
+    );
+    candyTypeStr = 'on-off';
   }
 
   console.log('getRRCandyStatus: Challenge check:', {
@@ -136,14 +159,14 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
     chapterCompleted,
     isCompleted,
     candyChoice: challenge?.candyChoice,
-    candyType,
+    candyTypeStr,
     challengeKeys: Object.keys(challenges),
     chapter2Keys: Object.keys(chapter2)
   });
 
-  if (isCompleted && candyType) {
+  if (isCompleted && candyTypeStr) {
     // Normalize candy type to match expected format
-    const normalizedType = candyType.toLowerCase().replace(/_/g, '-') as 'on-off' | 'up-down' | 'config';
+    const normalizedType = candyTypeStr.toLowerCase().replace(/_/g, '-') as 'on-off' | 'up-down' | 'config';
     console.log('getRRCandyStatus: RR Candy UNLOCKED:', { candyType: normalizedType });
     return {
       unlocked: true,
@@ -154,8 +177,8 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
 
   console.log('getRRCandyStatus: RR Candy NOT unlocked:', {
     isCompleted,
-    hasCandyType: !!candyType,
-    candyType,
+    hasCandyType: !!candyTypeStr,
+    candyTypeStr,
     challengeCompleted,
     chapterCompleted
   });

@@ -13,6 +13,9 @@ export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
 /** PP awarded per participation point in a live event */
 export const LIVE_EVENT_PP_PER_PARTICIPATION_POINT = 50;
 
+/** Eliminated players keep this fraction of quiz + elimination PP (participation PP in stats is not deducted from vault). */
+export const LIVE_EVENT_ELIMINATED_PP_FRACTION = 0.5;
+
 /**
  * Initialize session stats for a player when they join
  */
@@ -264,6 +267,185 @@ export async function trackElimination(
   }
 }
 
+type RoomPlayerEliminationFields = {
+  userId: string;
+  displayName?: string;
+  powerPoints?: number;
+  participationCount?: number;
+  movesEarned?: number;
+  eliminated?: boolean;
+  eliminatedBy?: string;
+};
+
+/**
+ * Merge room.players[].eliminated (authoritative) into stats so the session summary lists eliminations
+ * even when stats subdocs missed trackElimination or never existed.
+ */
+function mergeRoomEliminationsIntoStatsMap(
+  statsMap: { [playerId: string]: SessionStats },
+  roomPlayers: RoomPlayerEliminationFields[],
+  sessionId: string,
+  sessionStartTime: any,
+  sessionEndTime: any,
+  duration: number
+): void {
+  for (const rp of roomPlayers) {
+    if (!rp?.userId || !rp.eliminated) continue;
+    const uid = rp.userId;
+    const eliminatedBy = rp.eliminatedBy || statsMap[uid]?.eliminatedBy;
+    const existing = statsMap[uid];
+    if (existing) {
+      statsMap[uid] = {
+        ...existing,
+        isEliminated: true,
+        ...(eliminatedBy ? { eliminatedBy } : {}),
+        playerName: existing.playerName || rp.displayName || 'Player'
+      };
+    } else {
+      const endingPP = rp.powerPoints ?? 0;
+      statsMap[uid] = {
+        playerId: uid,
+        playerName: rp.displayName || 'Player',
+        startingPP: endingPP,
+        endingPP,
+        netPPGained: 0,
+        ppSpent: 0,
+        ppEarned: 0,
+        participationEarned: rp.participationCount ?? 0,
+        movesEarned: rp.movesEarned ?? 0,
+        eliminations: 0,
+        isEliminated: true,
+        ...(eliminatedBy ? { eliminatedBy } : {}),
+        damageDealt: 0,
+        damageTaken: 0,
+        healingGiven: 0,
+        healingReceived: 0,
+        skillsUsed: [],
+        totalSkillsUsed: 0,
+        sessionId,
+        sessionStartTime,
+        sessionEndTime,
+        sessionDuration: duration
+      };
+    }
+  }
+}
+
+/**
+ * Client-side: enrich embedded sessionSummary with room snapshot (fixes older summaries / reconnects).
+ */
+export function mergeRoomEliminationsIntoSummary(
+  summary: SessionSummary,
+  roomPlayers: RoomPlayerEliminationFields[] | null | undefined
+): SessionSummary {
+  if (!roomPlayers?.length) return summary;
+  const stats = { ...summary.stats };
+  mergeRoomEliminationsIntoStatsMap(stats, roomPlayers, summary.sessionId, summary.startedAt, summary.endedAt, summary.duration);
+  const mergedKeys = Object.keys(stats).length;
+  return {
+    ...summary,
+    stats,
+    totalPlayers: Math.max(summary.totalPlayers, mergedKeys)
+  };
+}
+
+/**
+ * Estimates elimination portion of ppEarned (same heuristic as SessionSummaryModal: total minus participation notional).
+ */
+export function estimateEliminationPpFromStats(stats: SessionStats): number {
+  const partPP = (stats.participationEarned || 0) * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+  return Math.max(0, (stats.ppEarned || 0) - partPP);
+}
+
+async function deductPPFromStudentUserVault(userId: string, amount: number): Promise<void> {
+  if (amount <= 0) return;
+  try {
+    const studentRef = doc(db, 'students', userId);
+    const userRef = doc(db, 'users', userId);
+    const vaultRef = doc(db, 'vaults', userId);
+    const studentDoc = await getDoc(studentRef);
+    if (studentDoc.exists()) {
+      const cur = (studentDoc.data() as { powerPoints?: number }).powerPoints ?? 0;
+      await updateDoc(studentRef, { powerPoints: Math.max(0, cur - amount) });
+    }
+    const userDoc = await getDoc(userRef);
+    if (userDoc.exists()) {
+      const cur = (userDoc.data() as { powerPoints?: number }).powerPoints ?? 0;
+      await updateDoc(userRef, { powerPoints: Math.max(0, cur - amount) });
+    }
+    const vaultDoc = await getDoc(vaultRef);
+    if (vaultDoc.exists()) {
+      const v = vaultDoc.data() as { currentPP?: number };
+      const cur = v?.currentPP ?? 0;
+      await updateDoc(vaultRef, { currentPP: Math.max(0, cur - amount) });
+    }
+    debug('inSessionStats', `Elimination PP penalty: deducted ${amount} PP from accounts for ${userId}`);
+  } catch (e) {
+    debugError('inSessionStats', `deductPPFromStudentUserVault failed for ${userId}`, e);
+  }
+}
+
+/**
+ * Halves quiz + stats PP for eliminated players, deducts vault/student/user for quiz + elimination portions that were actually granted.
+ */
+async function applyEliminatedPlayerPointPenalty(
+  sessionId: string,
+  statsMap: { [playerId: string]: SessionStats },
+  quizPpByPlayer: Record<string, number> | undefined
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = { ...(quizPpByPlayer ?? {}) };
+  const frac = LIVE_EVENT_ELIMINATED_PP_FRACTION;
+
+  for (const [uid, stats] of Object.entries(statsMap)) {
+    if (!stats.isEliminated) continue;
+
+    const quizPP = out[uid] ?? 0;
+    const pe = stats.ppEarned ?? 0;
+    const elimPP = estimateEliminationPpFromStats(stats);
+
+    const newQuiz = Math.floor(quizPP * frac);
+    const newPe = Math.floor(pe * frac);
+    const newElimPP = Math.floor(elimPP * frac);
+    const oldNet = stats.netPPGained ?? 0;
+    const newNet = Math.floor(oldNet * frac);
+    const startingPP = stats.startingPP ?? 0;
+    const newEndingPP = Math.max(0, startingPP + newNet);
+
+    out[uid] = newQuiz;
+
+    const deductQuiz = quizPP - newQuiz;
+    const deductElim = elimPP - newElimPP;
+    const totalDeduct = deductQuiz + deductElim;
+
+    statsMap[uid] = {
+      ...stats,
+      ppEarned: newPe,
+      netPPGained: newNet,
+      endingPP: newEndingPP
+    };
+
+    if (totalDeduct > 0) {
+      await deductPPFromStudentUserVault(uid, totalDeduct);
+    }
+
+    try {
+      const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', uid);
+      const statsDoc = await getDoc(statsRef);
+      if (statsDoc.exists()) {
+        await updateDoc(statsRef, {
+          ppEarned: newPe,
+          netPPGained: newNet,
+          endingPP: newEndingPP
+        });
+      }
+    } catch (e) {
+      debugError('inSessionStats', `Failed to persist penalty stats for ${uid}`, e);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Track participation earned
  */
@@ -368,6 +550,22 @@ export async function finalizeSessionStats(
       }
     }
 
+    mergeRoomEliminationsIntoStatsMap(
+      statsMap,
+      (sessionData.players || []) as RoomPlayerEliminationFields[],
+      sessionId,
+      sessionStartTime,
+      sessionEndTime,
+      duration
+    );
+
+    const rawQuizPpByPlayer = (sessionData.lastQuizPpByPlayer || {}) as Record<string, number>;
+    const adjustedQuizPpByPlayer = await applyEliminatedPlayerPointPenalty(
+      sessionId,
+      statsMap,
+      rawQuizPpByPlayer
+    );
+
     // Sync each player's vault health and shield from session state so Live Event impact persists globally
     const players = sessionData.players || [];
     for (const p of players) {
@@ -458,11 +656,11 @@ export async function finalizeSessionStats(
       startedAt: sessionStartTime,
       endedAt: sessionEndTime,
       duration,
-      totalPlayers: playerIds.length,
+      totalPlayers: Math.max(playerIds.length, Object.keys(statsMap).length),
       stats: statsMap,
       mvpPlayerId,
       ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot }),
-      ...(sessionData.lastQuizPpByPlayer && { quizPpByPlayer: sessionData.lastQuizPpByPlayer })
+      ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer })
     };
 
     // Store summary in session document

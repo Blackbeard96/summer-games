@@ -31,6 +31,8 @@ export interface SessionPlayer {
   participationCount: number;
   movesEarned: number;
   eliminated?: boolean;
+  /** Set when another player eliminated this user (BR / in-session combat). */
+  eliminatedBy?: string;
   hp?: number;
   maxHp?: number;
   shield?: number;
@@ -121,6 +123,7 @@ export async function createSession(
         `  • +${LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP for every player you eliminate (plus their vault PP)`,
         '  • PP for each correct quiz answer (more for faster answers)',
         `  • +${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP for every Participation Point the host gives you`,
+        '  • If you are eliminated, quiz and elimination PP from this event are halved at the end',
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       ] as string[],
       createdAt: serverTimestamp(),

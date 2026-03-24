@@ -5062,6 +5062,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentUser || !vault) return;
 
     try {
+      const { isRevivePotionName } = await import('../utils/liveEventRevive');
+      if (isRevivePotionName(artifactName)) {
+        throw new Error(
+          'Revive Potion is used during Live Events only — open your Bag (🎒) in the arena and pick an eliminated teammate.'
+        );
+      }
+
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
       if (!studentDoc.exists()) {

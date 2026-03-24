@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, doc, updateDoc, onSnapshot, query, where, getDocs, getDoc, Timestamp, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
 
 interface SquadMember {
   uid: string;
@@ -87,9 +88,9 @@ const InvitationManager: React.FC = () => {
     try {
       // Check if user is already in a squad
       const allSquadsSnapshot = await getDocs(collection(db, 'squads'));
-      const userSquad = allSquadsSnapshot.docs.find(doc => {
-        const squadData = doc.data();
-        return squadData.members?.some((member: any) => member.uid === currentUser.uid);
+      const userSquad = allSquadsSnapshot.docs.find((d) => {
+        const squadData = d.data();
+        return isUidInSquad(squadData, currentUser.uid);
       });
 
       if (userSquad) {
@@ -120,7 +121,9 @@ const InvitationManager: React.FC = () => {
       }
 
       // Check if user is already in this squad
-      const alreadyMember = currentMembers.some((member: any) => member.uid === currentUser.uid);
+      const alreadyMember = currentMembers.some(
+        (member: any) => squadMemberUid(member) === currentUser.uid
+      );
       if (alreadyMember) {
         alert('You are already a member of this squad.');
         await updateDoc(doc(db, 'squadInvitations', invitation.id), {
@@ -192,7 +195,9 @@ const InvitationManager: React.FC = () => {
       const finalMembers = finalSquadData.members || [];
       
       // Double-check user isn't already a member
-      const isAlreadyMember = finalMembers.some((member: any) => member.uid === currentUser.uid);
+      const isAlreadyMember = finalMembers.some(
+        (member: any) => squadMemberUid(member) === currentUser.uid
+      );
       if (isAlreadyMember) {
         alert('You are already a member of this squad.');
         return;
@@ -249,7 +254,9 @@ const InvitationManager: React.FC = () => {
       try {
         await updateDoc(squadRef, {
           members: sanitizedMembers,
-          memberUids: sanitizedMembers.map((m: { uid?: string }) => m.uid).filter(Boolean) as string[],
+          memberUids: sanitizedMembers
+            .map((m: any) => squadMemberUid(m))
+            .filter((id): id is string => Boolean(id)),
           updatedAt: serverTimestamp()
         });
         
@@ -272,7 +279,9 @@ const InvitationManager: React.FC = () => {
           if (verificationDoc.exists()) {
             const verifiedData = verificationDoc.data();
             const verifiedMembers = verifiedData.members || [];
-            memberWasAdded = verifiedMembers.some((member: any) => member.uid === currentUser.uid);
+            memberWasAdded = verifiedMembers.some(
+              (member: any) => squadMemberUid(member) === currentUser.uid
+            );
             
             if (memberWasAdded) {
               console.log('InvitationManager: Successfully verified member was added to squad:', {

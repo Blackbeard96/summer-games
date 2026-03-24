@@ -204,5 +204,16 @@ export const MARKETPLACE_STORE_ARTIFACTS: MarketplaceStoreArtifact[] = [
     image: '/images/Instant Regrade Pass.png',
     category: 'special',
     rarity: 'common'
+  },
+  {
+    id: 'revive-potion',
+    name: 'Revive Potion',
+    description:
+      'Revives an eliminated teammate in a Live Event. They return at 50% max HP (shields reset). Use from your Bag during the event.',
+    price: 180,
+    icon: '💚',
+    image: '/images/Revive Potion.png',
+    category: 'special',
+    rarity: 'epic'
   }
 ];

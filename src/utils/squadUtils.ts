@@ -1,5 +1,6 @@
 import { db } from '../firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
+import { isUidInSquad, squadMemberUid } from './squadMemberUtils';
 
 /**
  * Fetches the squad abbreviation for a given user ID
@@ -12,12 +13,8 @@ export async function getUserSquadAbbreviation(userId: string): Promise<string |
     
     for (const squadDoc of squadsSnapshot.docs) {
       const squadData = squadDoc.data();
-      const members = squadData.members || [];
-      
-      // Check if user is a member of this squad
-      const isMember = members.some((member: any) => member.uid === userId);
-      
-      if (isMember && squadData.abbreviation) {
+      if (!isUidInSquad(squadData, userId)) continue;
+      if (squadData.abbreviation) {
         return squadData.abbreviation;
       }
     }
@@ -48,11 +45,18 @@ export async function getUserSquadAbbreviations(userIds: string[]): Promise<Map<
       const squadData = squadDoc.data();
       const members = squadData.members || [];
       const abbreviation = squadData.abbreviation || null;
-      
-      // Check each member
+      const memberUids: string[] = Array.isArray(squadData.memberUids) ? squadData.memberUids : [];
+
+      memberUids.forEach((uid: string) => {
+        if (userIds.includes(uid) && abbreviation) {
+          result.set(uid, abbreviation);
+        }
+      });
+
       members.forEach((member: any) => {
-        if (userIds.includes(member.uid) && abbreviation) {
-          result.set(member.uid, abbreviation);
+        const mid = squadMemberUid(member);
+        if (mid && userIds.includes(mid) && abbreviation) {
+          result.set(mid, abbreviation);
         }
       });
     });

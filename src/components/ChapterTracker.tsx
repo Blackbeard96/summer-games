@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { debug } from '../utils/debug';
 import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { CHAPTERS, Chapter } from '../types/chapters';
-import { getChapterProgress } from '../utils/journeyProgress';
+import { calculateChapterProgress, getChapterProgress } from '../utils/journeyProgress';
+import { mergeUserAndStudentForJourney } from '../utils/mergeChapterProgress';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 
 interface ChapterTrackerProps {
@@ -17,6 +18,14 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   const [studentData, setStudentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  /** Chapters + squad/rival/artifacts: students often hold progress users/{uid} lacks. */
+  const mergedUserProgress = useMemo(
+    () => mergeUserAndStudentForJourney(userProgress, studentData),
+    [userProgress, studentData]
+  );
+
+  const journeyProgress = mergedUserProgress;
 
   // Helper to check for Firestore internal errors
   const isFirestoreInternalError = (error: any): boolean => {
@@ -88,39 +97,40 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     switch (requirement.type) {
       case 'level':
         // Check if user has reached the required level
-        const userLevel = studentData?.level || userProgress?.level || 1;
+        const userLevel = studentData?.level || journeyProgress?.level || 1;
         const requiredLevel = requirement.value || 1;
         debug.log('ChapterTracker', `Level check - user: ${userLevel}, required: ${requiredLevel}`);
         return userLevel >= requiredLevel;
       case 'manifest':
         // Use standardized manifest detection utility
-        const manifestData = { studentData, userProgress };
+        const manifestData = { studentData, userProgress: journeyProgress };
         const hasManifest = detectManifest(manifestData);
         logManifestDetection(manifestData, 'ChapterTracker');
         return hasManifest;
       case 'artifact':
-        return userProgress?.artifact?.identified;
+        return journeyProgress?.artifact?.identified;
       case 'team':
-        return userProgress?.team;
+        return journeyProgress?.team;
       case 'rival':
-        return userProgress?.rival;
+        return journeyProgress?.rival;
       case 'veil':
-        return userProgress?.veil?.isConfronted;
+        return journeyProgress?.veil?.isConfronted;
       case 'reflection':
-        return userProgress?.reflectionEcho;
+        return journeyProgress?.reflectionEcho;
       case 'wisdom':
-        return userProgress?.wisdomPoints && userProgress.wisdomPoints.length > 0;
+        return journeyProgress?.wisdomPoints && journeyProgress.wisdomPoints.length > 0;
       case 'ethics':
-        return userProgress?.ethics && userProgress.ethics.length >= requirement.value;
+        return journeyProgress?.ethics && journeyProgress.ethics.length >= requirement.value;
       case 'leadership':
-        return userProgress?.leadership?.role;
+        return journeyProgress?.leadership?.role;
       case 'profile':
         return studentData?.displayName && studentData?.photoURL;
       case 'previousChapter':
         // Check if previous chapter is completed (Firestore may use string keys)
         const prevChapterId = requirement.value;
         const prevChapterProgress =
-          userProgress?.chapters?.[String(prevChapterId)] ?? userProgress?.chapters?.[prevChapterId];
+          journeyProgress?.chapters?.[String(prevChapterId)] ??
+          journeyProgress?.chapters?.[prevChapterId];
         return prevChapterProgress?.isCompleted || false;
       default:
         debug.warn('ChapterTracker', `Unknown requirement type: ${requirement.type}`);
@@ -129,7 +139,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   };
 
   const getChapterStatus = (chapter: Chapter) => {
-    if (!userProgress) {
+    if (!journeyProgress) {
       // Chapter 1 and 2 are always available, even without userProgress
       if (chapter.id === 1 || chapter.id === 2) return 'available';
       return 'locked';
@@ -137,13 +147,19 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
     
     // Chapter 1 and 2 are always available to all players - no requirements
     if (chapter.id === 1 || chapter.id === 2) {
-      const chapterProgress = getChapterProgress(userProgress, chapter.id);
+      const chapterProgress = getChapterProgress(journeyProgress, chapter.id);
       if (chapterProgress?.isCompleted) return 'completed';
       if (chapterProgress?.isActive) return 'active';
+      if (chapter.id === 2) {
+        const ch2Pct = calculateChapterProgress(chapter, journeyProgress, studentData);
+        if (ch2Pct > 0) return 'active';
+        const ch1Prog = getChapterProgress(journeyProgress, 1);
+        if (ch1Prog?.isCompleted === true) return 'active';
+      }
       return 'available'; // Always available, even if not active yet
     }
     
-    const chapterProgress = getChapterProgress(userProgress, chapter.id);
+    const chapterProgress = getChapterProgress(journeyProgress, chapter.id);
     if (chapterProgress?.isCompleted) return 'completed';
     if (chapterProgress?.isActive) return 'active';
     
@@ -161,22 +177,14 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
   };
 
   const getChapterProgressPercent = (chapter: Chapter) => {
-    if (!userProgress) return 0;
-    
-    const chapterProgress = getChapterProgress(userProgress, chapter.id);
-    if (!chapterProgress) return 0;
-    
-    const completedChallenges = chapter.challenges.filter(challenge => 
-      chapterProgress.challenges?.[challenge.id]?.isCompleted
-    ).length;
-    
-    return (completedChallenges / chapter.challenges.length) * 100;
+    if (!journeyProgress) return 0;
+    return calculateChapterProgress(chapter, journeyProgress, studentData);
   };
 
   const getCompletedChapters = () => {
-    if (!userProgress?.chapters) return 0;
+    if (!journeyProgress?.chapters) return 0;
     
-    return Object.values(userProgress.chapters).filter((chapter: any) => 
+    return Object.values(journeyProgress.chapters).filter((chapter: any) => 
       chapter.isCompleted
     ).length;
   };
@@ -519,7 +527,7 @@ const ChapterTracker: React.FC<ChapterTrackerProps> = ({ onChapterSelect }) => {
                 )}
 
                 {/* Requirements */}
-                {status === 'locked' && !(chapter.id === 2 && userProgress?.chapters?.[1]?.isCompleted) && (
+                {status === 'locked' && !(chapter.id === 2 && journeyProgress?.chapters?.[1]?.isCompleted) && (
                   <div style={{ 
                     marginBottom: '1rem', 
                     padding: '12px', 

@@ -2,7 +2,9 @@ import React from 'react';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import {
   LIVE_EVENT_PP_BASE_PER_ELIMINATION,
-  LIVE_EVENT_PP_PER_PARTICIPATION_POINT
+  LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
+  LIVE_EVENT_ELIMINATED_PP_FRACTION,
+  mergeRoomEliminationsIntoSummary
 } from '../utils/inSessionStatsService';
 
 interface SessionSummaryModalProps {
@@ -10,13 +12,24 @@ interface SessionSummaryModalProps {
   onClose: () => void;
   summary: SessionSummary | null;
   currentPlayerId: string;
+  /** Live room players (e.g. from subscription); enriches embedded summary with eliminations when stats were incomplete. */
+  roomPlayers?: Array<{
+    userId: string;
+    displayName?: string;
+    powerPoints?: number;
+    participationCount?: number;
+    movesEarned?: number;
+    eliminated?: boolean;
+    eliminatedBy?: string;
+  }>;
 }
 
 const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   isOpen,
   onClose,
   summary,
-  currentPlayerId
+  currentPlayerId,
+  roomPlayers
 }) => {
   // Only close via the Close button — ignore Escape and backdrop click
   React.useEffect(() => {
@@ -31,10 +44,15 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isOpen]);
 
-  if (!isOpen || !summary) return null;
+  const displaySummary = React.useMemo(() => {
+    if (!summary) return null;
+    return mergeRoomEliminationsIntoSummary(summary, roomPlayers);
+  }, [summary, roomPlayers]);
 
-  const currentPlayerStats = summary.stats[currentPlayerId];
-  const allStats = Object.values(summary.stats);
+  if (!isOpen || !displaySummary) return null;
+
+  const currentPlayerStats = displaySummary.stats[currentPlayerId];
+  const allStats = Object.values(displaySummary.stats);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -43,7 +61,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   };
 
   // Total PP from quiz (placement) per player
-  const getQuizPP = (playerId: string) => summary.quizPpByPlayer?.[playerId] ?? 0;
+  const getQuizPP = (playerId: string) => displaySummary.quizPpByPlayer?.[playerId] ?? 0;
   // Players who earned any PP (quiz, eliminations, or participation)
   const totalEarned = (s: SessionStats) => getQuizPP(s.playerId) + (s.ppEarned || 0);
   const playersWithPP = allStats
@@ -115,7 +133,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             🎉 Live Event Summary
           </h2>
           <p style={{ fontSize: '1rem', color: '#f0f0f0' }}>
-            {summary.className} • {formatDuration(summary.duration)}
+            {displaySummary.className} • {formatDuration(displaySummary.duration)}
           </p>
         </div>
 
@@ -134,6 +152,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           </h3>
           <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '1rem' }}>
             Quiz: placement PP • Eliminations: +{LIVE_EVENT_PP_BASE_PER_ELIMINATION} PP + eliminated player&apos;s vault per elimination • Participation: +{LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP per participation point
+            {'. '}
+            If you were eliminated, quiz and elimination PP from this event count at{' '}
+            {Math.round(LIVE_EVENT_ELIMINATED_PP_FRACTION * 100)}% (shown below).
           </p>
           {playersWithPP.length === 0 ? (
             <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No PP earned this event.</p>
@@ -141,9 +162,11 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {playersWithPP.map((s) => {
                 const quizPP = getQuizPP(s.playerId);
-                const partPP = (s.participationEarned || 0) * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
-                const elimPP = Math.max(0, (s.ppEarned || 0) - partPP);
-                const total = quizPP + (s.ppEarned || 0);
+                const pe = s.ppEarned || 0;
+                const partPPNotional = (s.participationEarned || 0) * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+                const partPP = Math.min(partPPNotional, pe);
+                const elimPP = Math.max(0, pe - partPP);
+                const total = quizPP + pe;
                 return (
                   <li
                     key={s.playerId}
@@ -165,7 +188,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                       {elimPP > 0 ? `Eliminations: +${elimPP} PP` : ''}
                       {elimPP > 0 && partPP > 0 ? ' • ' : ''}
                       {partPP > 0
-                        ? `Participation: ${s.participationEarned} × ${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} = +${partPP} PP`
+                        ? partPP === partPPNotional && (s.participationEarned || 0) > 0
+                          ? `Participation: ${s.participationEarned} × ${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} = +${partPP} PP`
+                          : `Participation: +${partPP} PP`
                         : ''}
                     </span>
                   </li>
@@ -203,9 +228,13 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                   }}
                 >
                   <span style={{ color: '#ef4444', fontWeight: 'bold' }}>{s.playerName}</span>
-                  {s.eliminatedBy && summary.stats[s.eliminatedBy] && (
+                  {s.eliminatedBy && (
                     <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>
-                      (eliminated by {summary.stats[s.eliminatedBy].playerName})
+                      (eliminated by{' '}
+                      {displaySummary.stats[s.eliminatedBy]?.playerName ||
+                        roomPlayers?.find((p) => p.userId === s.eliminatedBy)?.displayName ||
+                        'Unknown'}
+                      )
                     </span>
                   )}
                 </li>
@@ -237,7 +266,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         </div>
 
         {/* 4. Awards (quiz rewards by placement, if any) */}
-        {summary.quizAwardsSnapshot && summary.quizAwardsSnapshot.placements?.length > 0 && (
+        {displaySummary.quizAwardsSnapshot && displaySummary.quizAwardsSnapshot.placements?.length > 0 && (
           <div
             style={{
               background: 'rgba(255, 255, 255, 0.95)',
@@ -250,21 +279,21 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem' }}>
               🏆 Awards
             </h3>
-            {summary.quizAwardsSnapshot.quizTitle && (
+            {displaySummary.quizAwardsSnapshot?.quizTitle && (
               <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>
-                Quiz: {summary.quizAwardsSnapshot.quizTitle}
+                Quiz: {displaySummary.quizAwardsSnapshot.quizTitle}
               </p>
             )}
             <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>
               Rewards by placement (already applied to players):
             </p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {summary.quizAwardsSnapshot.placements.map((row, idx) => (
+              {displaySummary.quizAwardsSnapshot!.placements.map((row, idx) => (
                 <li
                   key={idx}
                   style={{
                     padding: '0.5rem 0',
-                    borderBottom: idx < summary.quizAwardsSnapshot!.placements.length - 1 ? '1px solid #e5e7eb' : 'none',
+                    borderBottom: idx < displaySummary.quizAwardsSnapshot!.placements.length - 1 ? '1px solid #e5e7eb' : 'none',
                     display: 'flex',
                     flexWrap: 'wrap',
                     alignItems: 'center',
@@ -379,7 +408,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                   Quiz
                 </div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>
-                  +{(summary.quizPpByPlayer?.[currentPlayerId] ?? 0)} PP
+                  +{(displaySummary.quizPpByPlayer?.[currentPlayerId] ?? 0)} PP
                 </div>
                 <div style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.25rem' }}>
                   from placement
@@ -531,7 +560,10 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                 textAlign: 'center',
                 color: '#991b1b'
               }}>
-                Eliminated by {summary.stats[currentPlayerStats.eliminatedBy]?.playerName || 'Unknown'}
+                Eliminated by{' '}
+                {displaySummary.stats[currentPlayerStats.eliminatedBy]?.playerName ||
+                  roomPlayers?.find((p) => p.userId === currentPlayerStats.eliminatedBy)?.displayName ||
+                  'Unknown'}
               </div>
             )}
           </div>
@@ -548,10 +580,10 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             fontWeight: 'bold',
             fontSize: '1rem'
           }}>
-            View All Players ({summary.totalPlayers})
+            View All Players ({displaySummary.totalPlayers})
           </summary>
           <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {Object.values(summary.stats)
+            {Object.values(displaySummary.stats)
               .sort((a, b) => {
                 // Sort by eliminations first, then net PP
                 if (b.eliminations !== a.eliminations) {

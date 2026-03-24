@@ -10,6 +10,7 @@ import ManifestSelection from './ManifestSelection';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import { CHAPTERS } from '../types/chapters';
 import RivalSelectionModal from './RivalSelectionModal';
+import { isUidInSquad } from '../utils/squadMemberUtils';
 
 interface Badge {
   id: string;
@@ -220,7 +221,7 @@ const ChallengeTracker = () => {
       isInSquad = squadsSnapshot.docs.some(doc => {
         const squadData = doc.data();
         console.log('ChallengeTracker: Squad data:', { id: doc.id, name: squadData.name, members: squadData.members?.length || 0 });
-        const isMember = squadData.members && squadData.members.some((member: any) => member.uid === currentUser.uid);
+        const isMember = isUidInSquad(squadData, currentUser.uid);
         if (isMember) {
           console.log('ChallengeTracker: User is member of squad:', squadData.name);
         }

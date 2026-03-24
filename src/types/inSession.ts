@@ -31,6 +31,8 @@ export interface InSessionPlayer {
   participationCount: number; // Participation points earned
   movesEarned: number; // Moves available from participation
   eliminated?: boolean; // Whether player is eliminated
+  /** Set when eliminated by another player (BR / live combat); used in session summary. */
+  eliminatedBy?: string;
   isReady?: boolean; // Optional for backward compatibility
   isTeacher?: boolean; // Optional for backward compatibility
   equippedArtifacts?: any; // Optional for backward compatibility

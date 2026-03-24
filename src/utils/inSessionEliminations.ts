@@ -51,7 +51,8 @@ export async function checkAndHandleElimination(
       if (p.userId === playerId) {
         return {
           ...p,
-          eliminated: true
+          eliminated: true,
+          ...(attackerId && attackerId !== playerId ? { eliminatedBy: attackerId } : {})
         };
       }
       return p;

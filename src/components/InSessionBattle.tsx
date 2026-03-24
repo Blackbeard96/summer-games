@@ -122,6 +122,7 @@ interface SessionPlayer {
   shield?: number;
   maxShield?: number;
   eliminated?: boolean;
+  eliminatedBy?: string;
 }
 
 const InSessionBattle: React.FC<InSessionBattleProps> = ({
@@ -3825,6 +3826,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       <BagModal 
         isOpen={showBagModal} 
         onClose={() => setShowBagModal(false)}
+        liveSessionId={sessionId}
+        sessionPlayers={sessionPlayers}
         onArtifactUsed={() => {
           // Handle artifact used - end turn
           setShowBagModal(false);
@@ -4883,6 +4886,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             onClose={() => setShowSessionSummary(false)}
             summary={sessionSummary}
             currentPlayerId={currentUser.uid}
+            roomPlayers={sessionPlayers}
           />
         )}
     </div>

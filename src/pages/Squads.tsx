@@ -10,6 +10,7 @@ import InvitationManager from '../components/InvitationManager';
 import { MANIFESTS } from '../types/manifest';
 import { normalizePlayerData, fetchAndNormalizePlayerData, NormalizedPlayerData } from '../utils/playerData';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
+import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
 import AlliesManager from '../components/AlliesManager';
 import '../styles/squadStream.css';
 
@@ -67,7 +68,7 @@ const sanitizeForFirestore = (obj: any): any => {
 
 function memberUidsFromMemberList(members: SquadMember[]): string[] {
   return (members || [])
-    .map((m) => m.uid)
+    .map((m) => squadMemberUid(m))
     .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
 }
 
@@ -120,9 +121,17 @@ const Squads: React.FC = () => {
           
           // Enrich member data using normalizePlayerData helper for consistency with Profile
           const enrichedMembersPromises = (data.members || []).map(async (member: SquadMember) => {
-            const userData = userDataMap.get(member.uid);
-            const studentData = studentDataMap.get(member.uid);
-            
+            const memberUid = squadMemberUid(member);
+            if (!memberUid) {
+              console.warn('Squads: squad member missing uid/userId', data, member);
+            }
+            const userData = memberUid ? userDataMap.get(memberUid) : undefined;
+            const studentData = memberUid ? studentDataMap.get(memberUid) : undefined;
+
+            if (!memberUid) {
+              return { ...member };
+            }
+
             // Extract playerManifest from studentData if present
             let playerManifest = undefined;
             if (studentData?.manifest && studentData.manifest.manifestId) {
@@ -136,11 +145,11 @@ const Squads: React.FC = () => {
             }
             
             // Get squad abbreviation for this member
-            const squadAbbrev = await getUserSquadAbbreviation(member.uid);
+            const squadAbbrev = await getUserSquadAbbreviation(memberUid);
             
             // Normalize using the shared helper (matches Profile.tsx logic)
             const normalized = normalizePlayerData(
-              member.uid,
+              memberUid,
               userData,
               studentData,
               undefined, // currentUser not needed here
@@ -164,6 +173,7 @@ const Squads: React.FC = () => {
             // Return normalized data merged with squad-specific fields
             return {
               ...member,
+              uid: memberUid,
               // Use normalized values (these match Profile page exactly)
               photoURL: normalized.avatarUrl,
               displayName: normalized.displayName,
@@ -200,8 +210,8 @@ const Squads: React.FC = () => {
         console.log('Squads: Total squads found:', squadsData.length);
 
         // Find current user's squad
-        const userSquad = squadsData.find((squad: Squad) => 
-          squad.members.some((member: SquadMember) => member.uid === currentUser.uid)
+        const userSquad = squadsData.find((squad: Squad) =>
+          isUidInSquad(squad, currentUser.uid)
         );
 
         console.log('Squads: User squad found:', userSquad ? userSquad.name : 'None');
@@ -337,8 +347,10 @@ const Squads: React.FC = () => {
         console.log('Squads: Total users found:', allUsers.length);
 
         // Filter out players already in squads
-        const squadMemberIds = squadsData.flatMap((squad: Squad) => 
-          squad.members.map((member: SquadMember) => member.uid)
+        const squadMemberIds = squadsData.flatMap((squad: Squad) =>
+          squad.members
+            .map((member: SquadMember) => squadMemberUid(member))
+            .filter((id): id is string => Boolean(id))
         );
         console.log('Squads: Squad member IDs:', squadMemberIds);
         
@@ -381,9 +393,14 @@ const Squads: React.FC = () => {
         
         // Enrich member data using normalizePlayerData helper for consistency with Profile
         const enrichedMembersPromises = (data.members || []).map(async (member: SquadMember) => {
-          const userData = userDataMap.get(member.uid);
-          const studentData = studentDataMap.get(member.uid);
-          
+          const memberUid = squadMemberUid(member);
+          const userData = memberUid ? userDataMap.get(memberUid) : undefined;
+          const studentData = memberUid ? studentDataMap.get(memberUid) : undefined;
+
+          if (!memberUid) {
+            return { ...member };
+          }
+
           // Extract playerManifest from studentData if present
           let playerManifest = undefined;
           if (studentData?.manifest && studentData.manifest.manifestId) {
@@ -397,11 +414,11 @@ const Squads: React.FC = () => {
           }
           
           // Get squad abbreviation for this member
-          const squadAbbrev = await getUserSquadAbbreviation(member.uid);
+          const squadAbbrev = await getUserSquadAbbreviation(memberUid);
           
           // Normalize using the shared helper (matches Profile.tsx logic)
           const normalized = normalizePlayerData(
-            member.uid,
+            memberUid,
             userData,
             studentData,
             undefined, // currentUser not needed here
@@ -424,6 +441,7 @@ const Squads: React.FC = () => {
           // Return normalized data merged with squad-specific fields
           return {
             ...member,
+            uid: memberUid,
             // Use normalized values (these match Profile page exactly)
             photoURL: normalized.avatarUrl,
             displayName: normalized.displayName,
@@ -461,9 +479,7 @@ const Squads: React.FC = () => {
       
       setSquads(squadsData);
       
-      const userSquad = squadsData.find(squad => 
-        squad.members.some(member => member.uid === currentUser.uid)
-      );
+      const userSquad = squadsData.find((squad) => isUidInSquad(squad, currentUser.uid));
       setCurrentSquad(userSquad || null);
       
       // Update squad members with current manifest data if needed
@@ -488,10 +504,8 @@ const Squads: React.FC = () => {
 
     try {
       // Check if user is already in a squad
-      const userSquad = squads.find(squad => 
-        squad.members.some(member => member.uid === currentUser.uid)
-      );
-      
+      const userSquad = squads.find((squad) => isUidInSquad(squad, currentUser.uid));
+
       if (userSquad) {
         alert(`You are already in a squad: ${userSquad.name}. Please leave your current squad before creating a new one.`);
         return;
@@ -583,10 +597,8 @@ const Squads: React.FC = () => {
         ...doc.data()
       } as Squad));
       
-      const updatedUserSquad = squadsData.find(squad => 
-        squad.members.some(member => member.uid === currentUser.uid)
-      );
-      
+      const updatedUserSquad = squadsData.find((squad) => isUidInSquad(squad, currentUser.uid));
+
       setSquads(squadsData);
       setCurrentSquad(updatedUserSquad || null);
       
@@ -618,10 +630,8 @@ const Squads: React.FC = () => {
 
     try {
       // Check if user is already in a squad
-      const userSquad = squads.find(squad => 
-        squad.members.some(member => member.uid === currentUser.uid)
-      );
-      
+      const userSquad = squads.find((squad) => isUidInSquad(squad, currentUser.uid));
+
       if (userSquad) {
         alert(`You are already in a squad: ${userSquad.name}. Please leave your current squad before joining another one.`);
         return;
@@ -646,7 +656,9 @@ const Squads: React.FC = () => {
       }
 
       // Check if user is already in this squad (double-check)
-      const alreadyMember = currentMembers.some((member: any) => member.uid === currentUser.uid);
+      const alreadyMember = currentMembers.some(
+        (member: any) => squadMemberUid(member) === currentUser.uid
+      );
       if (alreadyMember) {
         alert('You are already a member of this squad.');
         return;
@@ -708,7 +720,9 @@ const Squads: React.FC = () => {
       const finalMembers = finalSquadData.members || [];
       
       // Double-check user isn't already a member (race condition check)
-      const isAlreadyMember = finalMembers.some((member: any) => member.uid === currentUser.uid);
+      const isAlreadyMember = finalMembers.some(
+        (member: any) => squadMemberUid(member) === currentUser.uid
+      );
       if (isAlreadyMember) {
         alert('You are already a member of this squad.');
         return;
@@ -765,10 +779,8 @@ const Squads: React.FC = () => {
         ...doc.data()
       } as Squad));
       
-      const updatedUserSquad = squadsData.find(squad => 
-        squad.members.some(member => member.uid === currentUser.uid)
-      );
-      
+      const updatedUserSquad = squadsData.find((squad) => isUidInSquad(squad, currentUser.uid));
+
       setSquads(squadsData);
       setCurrentSquad(updatedUserSquad || null);
       
@@ -799,7 +811,9 @@ const Squads: React.FC = () => {
       const squad = squads.find(s => s.id === squadId);
       if (!squad) return;
 
-      const updatedMembers = squad.members.filter(member => member.uid !== currentUser.uid);
+      const updatedMembers = squad.members.filter(
+        (member) => squadMemberUid(member) !== currentUser.uid
+      );
       
       if (updatedMembers.length === 0) {
         // Delete squad if no members left
@@ -810,11 +824,12 @@ const Squads: React.FC = () => {
         newLeader.isLeader = true;
         newLeader.role = 'Leader';
         newLeader.isAdmin = true;
+        const newLeaderUid = squadMemberUid(newLeader);
         
         await updateDoc(doc(db, 'squads', squadId), {
           members: sanitizeForFirestore(updatedMembers),
           memberUids: memberUidsFromMemberList(updatedMembers),
-          leader: newLeader.uid
+          leader: newLeaderUid ?? newLeader.uid
         });
       }
     } catch (error) {
@@ -830,14 +845,14 @@ const Squads: React.FC = () => {
       if (!squad) return;
 
       // Check if current user is leader or admin
-      const currentMember = squad.members.find(m => m.uid === currentUser.uid);
+      const currentMember = squad.members.find((m) => squadMemberUid(m) === currentUser.uid);
       if (!currentMember || (!currentMember.isLeader && !currentMember.isAdmin)) {
         console.error('Only leaders and admins can promote members');
         return;
       }
 
-      const updatedMembers = squad.members.map(member => 
-        member.uid === memberId 
+      const updatedMembers = squad.members.map((member) =>
+        squadMemberUid(member) === memberId
           ? { ...member, isAdmin: true, role: 'Admin' }
           : member
       );
@@ -859,14 +874,14 @@ const Squads: React.FC = () => {
       if (!squad) return;
 
       // Check if current user is leader
-      const currentMember = squad.members.find(m => m.uid === currentUser.uid);
+      const currentMember = squad.members.find((m) => squadMemberUid(m) === currentUser.uid);
       if (!currentMember || !currentMember.isLeader) {
         console.error('Only leaders can demote admins');
         return;
       }
 
-      const updatedMembers = squad.members.map(member => 
-        member.uid === memberId 
+      const updatedMembers = squad.members.map((member) =>
+        squadMemberUid(member) === memberId
           ? { ...member, isAdmin: false, role: 'Member' }
           : member
       );
@@ -888,8 +903,8 @@ const Squads: React.FC = () => {
       if (!squad) return;
 
       // Check if current user is leader or admin
-      const currentMember = squad.members.find(m => m.uid === currentUser.uid);
-      const targetMember = squad.members.find(m => m.uid === memberId);
+      const currentMember = squad.members.find((m) => squadMemberUid(m) === currentUser.uid);
+      const targetMember = squad.members.find((m) => squadMemberUid(m) === memberId);
       
       if (!currentMember || (!currentMember.isLeader && !currentMember.isAdmin)) {
         console.error('Only leaders and admins can remove members');
@@ -901,7 +916,9 @@ const Squads: React.FC = () => {
         return;
       }
 
-      const updatedMembers = squad.members.filter(member => member.uid !== memberId);
+      const updatedMembers = squad.members.filter(
+        (member) => squadMemberUid(member) !== memberId
+      );
 
       await updateDoc(doc(db, 'squads', squadId), {
         members: sanitizeForFirestore(updatedMembers),
@@ -920,7 +937,7 @@ const Squads: React.FC = () => {
       if (!squad) return;
 
       // Check if current user is the leader (only leaders can update abbreviation)
-      const currentMember = squad.members.find(m => m.uid === currentUser.uid);
+      const currentMember = squad.members.find((m) => squadMemberUid(m) === currentUser.uid);
       if (!currentMember || !currentMember.isLeader) {
         console.error('Only squad leaders can update the abbreviation');
         return;
@@ -1001,9 +1018,7 @@ const Squads: React.FC = () => {
             console.log('Squads: Total squads found:', squadsData.length);
 
             // Find current user's squad
-            const userSquad = squadsData.find(squad => 
-              squad.members.some(member => member.uid === currentUser.uid)
-            );
+            const userSquad = squadsData.find((squad) => isUidInSquad(squad, currentUser.uid));
 
             console.log('Squads: User squad found:', userSquad ? userSquad.name : 'None');
 
@@ -1144,8 +1159,10 @@ const Squads: React.FC = () => {
             console.log('Squads: Total users found:', allUsers.length);
 
             // Filter out players already in squads
-            const squadMemberIds = squadsData.flatMap((squad: Squad) => 
-              squad.members.map((member: SquadMember) => member.uid)
+            const squadMemberIds = squadsData.flatMap((squad: Squad) =>
+              squad.members
+                .map((member: SquadMember) => squadMemberUid(member))
+                .filter((id): id is string => Boolean(id))
             );
             console.log('Squads: Squad member IDs:', squadMemberIds);
             
@@ -1180,9 +1197,14 @@ const Squads: React.FC = () => {
           // Always update if the newly extracted manifest is different from the current member's manifest
           // This ensures the latest priority logic is always reflected.
 
+          const memberUid = squadMemberUid(member);
+          if (!memberUid) {
+            return member;
+          }
+
           // Fetch current user data from both collections
-          const userDoc = await getDoc(doc(db, 'users', member.uid));
-          const studentDoc = await getDoc(doc(db, 'students', member.uid));
+          const userDoc = await getDoc(doc(db, 'users', memberUid));
+          const studentDoc = await getDoc(doc(db, 'students', memberUid));
           
           const userData = userDoc.exists() ? userDoc.data() : {};
           const studentData = studentDoc.exists() ? studentDoc.data() : {};
@@ -1609,8 +1631,8 @@ const Squads: React.FC = () => {
                 <SquadStream
                   squadId={currentSquad.id}
                   currentUserId={currentUser?.uid || ''}
-                  squadMembers={currentSquad.members.map(m => ({
-                    uid: m.uid,
+                  squadMembers={currentSquad.members.map((m) => ({
+                    uid: squadMemberUid(m) ?? m.uid,
                     displayName: m.displayName,
                     photoURL: m.photoURL
                   }))}
@@ -1665,7 +1687,7 @@ const Squads: React.FC = () => {
                 onRemoveMember={removeMember}
                 onUpdateAbbreviation={updateAbbreviation}
                 currentUserId={currentUser?.uid || undefined}
-                isCurrentUserInSquad={squad.members.some(member => member.uid === currentUser?.uid)}
+                isCurrentUserInSquad={isUidInSquad(squad, currentUser?.uid)}
               />
             ))
           ) : (

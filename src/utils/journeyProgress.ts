@@ -5,6 +5,7 @@
  */
 
 import { CHAPTERS, Chapter, ChapterChallenge } from '../types/chapters';
+import { isChapter2ChallengeEffectivelyComplete } from './chapter2ProgressInference';
 
 export interface NextChallenge {
   chapterId: number;
@@ -26,7 +27,8 @@ export function getChapterProgress(userProgress: any, chapterId: number): any {
  */
 export function isSequentialUnlockedInEarlyChapters(
   challenge: ChapterChallenge,
-  userProgress: any
+  userProgress: any,
+  studentData?: any
 ): boolean {
   const chapter = CHAPTERS.find(c => c.challenges.some(ch => ch.id === challenge.id));
   if (!chapter || (chapter.id !== 1 && chapter.id !== 2)) return false;
@@ -36,12 +38,17 @@ export function isSequentialUnlockedInEarlyChapters(
   if (idx === 0) return true;
 
   const cp = getChapterProgress(userProgress, chapter.id);
-  if (!cp?.challenges) return false;
+  if (chapter.id === 1 && !cp?.challenges) return false;
+
+  const cpForCh2 = cp || { challenges: {} };
 
   for (let i = 0; i < idx; i++) {
     const prevId = chapter.challenges[i].id;
-    const p = cp.challenges[prevId];
-    const done = p?.isCompleted === true || p?.status === 'approved';
+    const p = chapter.id === 1 ? cp?.challenges?.[prevId] : cpForCh2.challenges?.[prevId];
+    let done = p?.isCompleted === true || p?.status === 'approved';
+    if (!done && chapter.id === 2) {
+      done = isChapter2ChallengeEffectivelyComplete(prevId, cpForCh2, userProgress, studentData);
+    }
     if (!done) return false;
   }
   return true;
@@ -51,8 +58,12 @@ export function isSequentialUnlockedInEarlyChapters(
  * Check if a challenge's requirements are met (legacy / full requirement set).
  * For Chapters 1–2, sequential completion short-circuits to true so journey matches in-game UI.
  */
-export function isChallengeUnlocked(challenge: ChapterChallenge, userProgress: any): boolean {
-  if (isSequentialUnlockedInEarlyChapters(challenge, userProgress)) {
+export function isChallengeUnlocked(
+  challenge: ChapterChallenge,
+  userProgress: any,
+  studentData?: any
+): boolean {
+  if (isSequentialUnlockedInEarlyChapters(challenge, userProgress, studentData)) {
     return true;
   }
 
@@ -72,10 +83,11 @@ export function isChallengeUnlocked(challenge: ChapterChallenge, userProgress: a
       case 'artifact': {
         const artifactValue = requirement.value;
         if (typeof artifactValue === 'string') {
-          requirementMet =
+          const fromUser =
             userProgress?.artifacts?.[artifactValue] === true ||
-            userProgress?.artifacts?.includes?.(artifactValue) ||
-            false;
+            userProgress?.artifacts?.includes?.(artifactValue);
+          const fromStudent = studentData?.artifacts?.[artifactValue] === true;
+          requirementMet = !!(fromUser || fromStudent);
         }
         break;
       }
@@ -95,6 +107,19 @@ export function isChallengeUnlocked(challenge: ChapterChallenge, userProgress: a
       }
       case 'challenge': {
         const requiredChallengeId = requirement.value;
+        const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+        if (
+          cp2 &&
+          (requiredChallengeId.startsWith('ch2-') || requiredChallengeId.startsWith('ep2-'))
+        ) {
+          requirementMet = isChapter2ChallengeEffectivelyComplete(
+            requiredChallengeId,
+            cp2,
+            userProgress,
+            studentData
+          );
+          break;
+        }
         let challengeFound = false;
         for (const chapterId in userProgress?.chapters || {}) {
           const chapterChallenges = userProgress?.chapters?.[chapterId]?.challenges || {};
@@ -170,13 +195,30 @@ export function getCurrentChapter(userProgress: any): Chapter | null {
   return activeChapter;
 }
 
-export function calculateChapterProgress(chapter: Chapter, userProgress: any): number {
+export function calculateChapterProgress(
+  chapter: Chapter,
+  userProgress: any,
+  studentData?: any
+): number {
   const chapterProgress = getChapterProgress(userProgress, chapter.id);
   if (!chapterProgress) {
     return 0;
   }
 
+  // Chapter-level flag can be true while nested `challenges` was wiped — avoid "Completed" + 0%.
+  if (chapterProgress.isCompleted === true) {
+    return 100;
+  }
+
   const completedChallenges = chapter.challenges.filter(challenge => {
+    if (chapter.id === 2) {
+      return isChapter2ChallengeEffectivelyComplete(
+        challenge.id,
+        chapterProgress,
+        userProgress,
+        studentData
+      );
+    }
     const challengeProgress = chapterProgress?.challenges?.[challenge.id];
     return challengeProgress?.isCompleted || challengeProgress?.status === 'approved';
   }).length;
@@ -185,7 +227,7 @@ export function calculateChapterProgress(chapter: Chapter, userProgress: any): n
   return totalChallenges > 0 ? (completedChallenges / totalChallenges) * 100 : 0;
 }
 
-export function findNextChallenge(userProgress: any): NextChallenge | null {
+export function findNextChallenge(userProgress: any, studentData?: any): NextChallenge | null {
   if (!userProgress?.chapters) {
     const chapter1 = CHAPTERS.find(c => c.id === 1);
     if (chapter1 && chapter1.challenges.length > 0) {
@@ -205,15 +247,23 @@ export function findNextChallenge(userProgress: any): NextChallenge | null {
   }
 
   for (const challenge of currentChapter.challenges) {
-    const challengeProgress = getChapterProgress(userProgress, currentChapter.id)?.challenges?.[
-      challenge.id
-    ];
+    const cp = getChapterProgress(userProgress, currentChapter.id);
+    const cpSafe = cp || { challenges: {} };
+    const challengeProgress = cpSafe.challenges?.[challenge.id];
 
-    if (challengeProgress?.isCompleted || challengeProgress?.status === 'approved') {
+    const inferredDone =
+      currentChapter.id === 2 &&
+      isChapter2ChallengeEffectivelyComplete(challenge.id, cpSafe, userProgress, studentData);
+
+    if (
+      challengeProgress?.isCompleted ||
+      challengeProgress?.status === 'approved' ||
+      inferredDone
+    ) {
       continue;
     }
 
-    if (isChallengeUnlocked(challenge, userProgress)) {
+    if (isChallengeUnlocked(challenge, userProgress, studentData)) {
       return {
         chapterId: currentChapter.id,
         challengeId: challenge.id,

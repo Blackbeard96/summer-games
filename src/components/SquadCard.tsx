@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import PlayerCard from './PlayerCard';
 import PlayerPowerCard from './PlayerPowerCard';
 import { NormalizedPlayerData } from '../utils/playerData';
+import { squadMemberUid } from '../utils/squadMemberUtils';
 
 interface SquadMember {
   uid: string;
@@ -66,7 +67,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   
 
-  const currentMember = squad.members.find(m => m.uid === currentUserId);
+  const currentMember = squad.members.find((m) => squadMemberUid(m) === currentUserId);
   const isLeader = currentMember?.isLeader === true;
   const isAdmin = currentMember?.isAdmin === true || isLeader; // Leaders are also admins
   const canJoin = !isCurrentUserInSquad && squad.members.length < squad.maxMembers;
@@ -76,7 +77,9 @@ const SquadCard: React.FC<SquadCardProps> = ({
     console.log('SquadCard invite check:', {
       currentUserId,
       squadId: squad.id,
-      currentMember: currentMember ? { uid: currentMember.uid, isLeader: currentMember.isLeader, isAdmin: currentMember.isAdmin } : null,
+      currentMember: currentMember
+        ? { uid: squadMemberUid(currentMember) ?? currentMember.uid, isLeader: currentMember.isLeader, isAdmin: currentMember.isAdmin }
+        : null,
       isLeader,
       isAdmin,
       canInvite: (isLeader || isAdmin) && onInvite,
@@ -224,13 +227,14 @@ const SquadCard: React.FC<SquadCardProps> = ({
         justifyContent: 'center'
       }}>
         {squad.members.map((member) => {
+          const memberId = squadMemberUid(member) ?? member.uid;
           // Use normalized data if available (from Squads.tsx enrichment)
           const normalizedData = (member as any)._normalizedData;
           
           // If normalized data exists, use PlayerPowerCard for consistency with Profile
           if (normalizedData) {
             return (
-              <div key={member.uid} style={{
+              <div key={memberId} style={{
                 position: 'relative',
                 display: 'flex',
                 flexDirection: 'column',
@@ -333,7 +337,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
           const manifestInfo = getManifestInfo();
           
           return (
-            <div key={member.uid} style={{
+            <div key={memberId} style={{
               position: 'relative',
               display: 'flex',
               flexDirection: 'column',
@@ -402,7 +406,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
                   description={member.description || `${member.role || 'Member'} of ${squad.name}`}
                   cardBgColor={member.cardBgColor}
                   xp={member.xp}
-                  userId={member.uid}
+                  userId={memberId}
                 />
               </div>
               
@@ -663,8 +667,10 @@ const SquadCard: React.FC<SquadCardProps> = ({
                 gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
                 gap: '0.75rem'
               }}>
-                {squad.members.map((member) => (
-                  <div key={member.uid} style={{
+                {squad.members.map((member) => {
+                  const memberId = squadMemberUid(member) ?? member.uid;
+                  return (
+                  <div key={memberId} style={{
                     backgroundColor: 'white',
                     border: '1px solid #e5e7eb',
                     borderRadius: '0.5rem',
@@ -698,14 +704,14 @@ const SquadCard: React.FC<SquadCardProps> = ({
                         {member.isLeader ? 'Leader' : member.isAdmin ? 'Admin' : 'Member'}
                       </div>
                     </div>
-                    {member.uid !== currentUserId && (
+                    {memberId !== currentUserId && (
                       <div style={{
                         display: 'flex',
                         gap: '0.25rem'
                       }}>
                         {!member.isAdmin && onPromoteToAdmin && (
                           <button
-                            onClick={() => handleMemberAction('promote', member.uid)}
+                            onClick={() => handleMemberAction('promote', memberId)}
                             style={{
                               backgroundColor: '#3b82f6',
                               color: 'white',
@@ -723,7 +729,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
                         )}
                         {member.isAdmin && !member.isLeader && onDemoteFromAdmin && (
                           <button
-                            onClick={() => handleMemberAction('demote', member.uid)}
+                            onClick={() => handleMemberAction('demote', memberId)}
                             style={{
                               backgroundColor: '#f59e0b',
                               color: 'white',
@@ -741,7 +747,7 @@ const SquadCard: React.FC<SquadCardProps> = ({
                         )}
                         {onRemoveMember && (
                           <button
-                            onClick={() => setShowRemoveConfirm({ memberId: member.uid, memberName: member.displayName })}
+                            onClick={() => setShowRemoveConfirm({ memberId, memberName: member.displayName })}
                             style={{
                               backgroundColor: '#dc2626',
                               color: 'white',
@@ -760,7 +766,8 @@ const SquadCard: React.FC<SquadCardProps> = ({
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

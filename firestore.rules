@@ -90,9 +90,12 @@ service cloud.firestore {
       }
     }
     
-    // Students collection - allow users to read/write their own documents
+    // Students collection.
+    // Read is open to authenticated users so Vault Siege can list valid targets.
+    // Write remains restricted to self/admin.
     match /students/{userId} {
-      allow read, write: if request.auth != null && 
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
         (request.auth.uid == userId || isAdmin());
     }
     
@@ -390,13 +393,10 @@ service cloud.firestore {
       allow update, delete: if false;
     }
     
-    // Vaults collection - allow users to read/write their own vault
+    // Vaults collection.
+    // Vault Siege reads and writes target vault docs directly from authenticated clients.
     match /vaults/{userId} {
-      allow read, write: if request.auth != null && 
-        (request.auth.uid == userId || 
-         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
-         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      allow read, write: if request.auth != null;
     }
     
     // Battle Moves collection - allow users to read/write their own moves
@@ -568,13 +568,14 @@ service cloud.firestore {
         request.auth.token.email.matches('.*@compscihigh\\.org$')
       );
       
+      // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
       allow update: if request.auth != null && (
-        // Host can update
         resource.data.hostUid == request.auth.uid ||
-        // Admin/Yondaime can update
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
-        request.auth.token.email.matches('.*@compscihigh\\.org$')
+        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
+        (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
       );
       
       allow delete: if request.auth != null && (

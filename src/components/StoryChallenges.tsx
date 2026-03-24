@@ -5,6 +5,9 @@ import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '../firebase';
 import { CHAPTERS } from '../types/chapters';
+import { calculateChapterProgress } from '../utils/journeyProgress';
+import { isChapter2ChallengeEffectivelyComplete } from '../utils/chapter2ProgressInference';
+import { isMissingOrEmptyChapters, mergeChaptersProgressMaps } from '../utils/mergeChapterProgress';
 import ModelPreview from './ModelPreview';
 import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
@@ -50,11 +53,11 @@ const StoryChallenges = () => {
         const studentData = studentDoc.exists() ? studentDoc.data() : null;
         
         // If no chapters exist, initialize them
-        if (!userData?.chapters) {
+        if (isMissingOrEmptyChapters(userData?.chapters)) {
           console.log('StoryChallenges: Initializing chapters for user...');
           const { initializeChapterProgress } = await import('../utils/chapterInit');
           await initializeChapterProgress(currentUser.uid);
-        } else if (!userData.chapters[1]?.isActive) {
+        } else if (!userData?.chapters?.[1]?.isActive) {
           // If Chapter 1 exists but isn't active, activate it
           console.log('StoryChallenges: Activating Chapter 1 for user...');
           await updateDoc(userRef, {
@@ -64,14 +67,14 @@ const StoryChallenges = () => {
         }
         
         // Also update students collection
-        if (!studentData?.chapters) {
+        if (isMissingOrEmptyChapters(studentData?.chapters)) {
           if (studentDoc.exists()) {
             await updateDoc(studentRef, {
               'chapters.1.isActive': true,
               'chapters.1.unlockDate': new Date()
             });
           }
-        } else if (!studentData.chapters[1]?.isActive) {
+        } else if (!studentData?.chapters?.[1]?.isActive) {
           if (studentDoc.exists()) {
             await updateDoc(studentRef, {
               'chapters.1.isActive': true,
@@ -109,10 +112,12 @@ const StoryChallenges = () => {
     const unsubscribeStudents = onSnapshot(studentRef, (doc) => {
       if (doc.exists()) {
         const studentData = doc.data();
-        // Merge student data with user data, prioritizing student data for manifest
+        // Never let `students.chapters` replace `users.chapters` wholesale (listener order bug).
+        const { chapters: _studentChapters, ...studentRest } = studentData;
         setUserProgress((prev: any) => ({
           ...prev,
-          ...studentData,
+          ...studentRest,
+          chapters: mergeChaptersProgressMaps(prev?.chapters, studentData.chapters),
           manifest: studentData.manifest || prev?.manifest
         }));
         
@@ -120,7 +125,8 @@ const StoryChallenges = () => {
         if (studentData.manifest) {
           checkAndCompletePowerCardChallenge({
             ...userProgress,
-            ...studentData,
+            ...studentRest,
+            chapters: mergeChaptersProgressMaps(userProgress?.chapters, studentData.chapters),
             manifest: studentData.manifest
           });
         }
@@ -1354,6 +1360,14 @@ const ensureChaptersInitialized = async () => {
             });
             requirementMet = challenge8Completed === true;
             console.log(requirementMet ? '✅ Elemental Ring requirement met (Challenge 8 completed)' : '❌ Elemental Ring requirement not met');
+          } else if (requirement.value === 'rr_candy') {
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            requirementMet = isChapter2ChallengeEffectivelyComplete(
+              'ep2-its-all-a-game',
+              cp2,
+              userProgress,
+              undefined
+            );
           } else {
             console.warn(`❌ Unknown artifact requirement: ${requirement.value}`);
             requirementMet = false;
@@ -1382,8 +1396,14 @@ const ensureChaptersInitialized = async () => {
           break;
         case 'team':
           if (requirement.value === 'formed') {
-            const teamChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
-            requirementMet = teamChallenge?.isCompleted;
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            requirementMet =
+              isChapter2ChallengeEffectivelyComplete(
+                'ch2-team-formation',
+                cp2,
+                userProgress,
+                undefined
+              ) || !!(userProgress?.team?.id || userProgress?.squad?.id);
           } else {
             console.warn(`❌ Unknown team requirement: ${requirement.value}`);
             requirementMet = false;
@@ -1391,8 +1411,14 @@ const ensureChaptersInitialized = async () => {
           break;
         case 'rival':
           if (requirement.value === 'chosen') {
-            const rivalChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-rival-selection'];
-            requirementMet = rivalChallenge?.isCompleted;
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            requirementMet =
+              isChapter2ChallengeEffectivelyComplete(
+                'ch2-rival-selection',
+                cp2,
+                userProgress,
+                undefined
+              ) || !!userProgress?.rival;
           } else {
             console.warn(`❌ Unknown rival requirement: ${requirement.value}`);
             requirementMet = false;
@@ -1445,7 +1471,19 @@ const ensureChaptersInitialized = async () => {
           // Check if a specific challenge is completed
           // requirement.value should be the challenge ID (e.g., 'ch2-team-trial')
           const requiredChallengeId = requirement.value;
-          // Find which chapter contains this challenge
+          const cp2Story = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+          if (
+            cp2Story &&
+            (requiredChallengeId.startsWith('ch2-') || requiredChallengeId.startsWith('ep2-'))
+          ) {
+            requirementMet = isChapter2ChallengeEffectivelyComplete(
+              requiredChallengeId,
+              cp2Story,
+              userProgress,
+              undefined
+            );
+            break;
+          }
           let challengeFound = false;
           for (const chapterId in userProgress?.chapters || {}) {
             const chapterChallenges = userProgress?.chapters?.[chapterId]?.challenges || {};
@@ -1484,17 +1522,9 @@ const ensureChaptersInitialized = async () => {
   };
 
   const getChapterProgress = (chapterId: number) => {
-    if (!userProgress?.chapters?.[chapterId]) return 0;
-    
     const chapter = CHAPTERS.find(c => c.id === chapterId);
-    if (!chapter) return 0;
-    
-    const chapterProgress = userProgress.chapters[chapterId];
-    const completedChallenges = chapter.challenges.filter(challenge => 
-      chapterProgress.challenges?.[challenge.id]?.isCompleted
-    ).length;
-    
-    return (completedChallenges / chapter.challenges.length) * 100;
+    if (!chapter || !userProgress) return 0;
+    return calculateChapterProgress(chapter, userProgress, undefined);
   };
 
   const getCompletedChapters = () => {

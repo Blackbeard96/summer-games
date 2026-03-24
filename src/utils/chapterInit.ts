@@ -1,6 +1,37 @@
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { CHAPTERS } from '../types/chapters';
+import {
+  countCompletedChallengesGlobally,
+  isMissingOrEmptyChapters,
+  mergeChaptersProgressMaps
+} from './mergeChapterProgress';
+
+/**
+ * If `students` has more chapter progress than `users` (or users has empty chapters),
+ * persist the merged map to `users` so the canonical document catches up.
+ */
+export async function syncUserChaptersFromMergeIfNeeded(userId: string): Promise<void> {
+  try {
+    const userRef = doc(db, 'users', userId);
+    const studentRef = doc(db, 'students', userId);
+    const [userDoc, studentDoc] = await Promise.all([getDoc(userRef), getDoc(studentRef)]);
+    if (!userDoc.exists()) return;
+
+    const userData = userDoc.data();
+    const studentData = studentDoc.exists() ? studentDoc.data() : null;
+    const merged = mergeChaptersProgressMaps(userData.chapters, studentData?.chapters);
+    if (!merged || isMissingOrEmptyChapters(merged)) return;
+
+    const userScore = countCompletedChallengesGlobally(userData.chapters);
+    const mergedScore = countCompletedChallengesGlobally(merged);
+    if (mergedScore > userScore || isMissingOrEmptyChapters(userData.chapters)) {
+      await updateDoc(userRef, { chapters: merged });
+    }
+  } catch (error) {
+    console.error('syncUserChaptersFromMergeIfNeeded:', error);
+  }
+}
 
 export const initializeChapterProgress = async (userId: string) => {
   try {
@@ -14,8 +45,8 @@ export const initializeChapterProgress = async (userId: string) => {
 
     const userData = userDoc.data();
     
-    // Check if chapters already exist
-    if (userData.chapters) {
+    // `{}` is truthy but is not real progress — allow init/repair
+    if (!isMissingOrEmptyChapters(userData.chapters)) {
       console.log('Chapter progress already exists for user');
       return;
     }
@@ -46,6 +77,7 @@ export const initializeChapterProgress = async (userId: string) => {
     });
 
     console.log('Chapter progress initialized for user:', userId);
+    await syncUserChaptersFromMergeIfNeeded(userId);
   } catch (error) {
     console.error('Error initializing chapter progress:', error);
   }
@@ -64,7 +96,7 @@ export const migrateExistingUserToChapters = async (userId: string) => {
     const userData = userDoc.data();
     
     // If chapters already exist, ensure Chapter 1 is active
-    if (userData.chapters) {
+    if (!isMissingOrEmptyChapters(userData.chapters)) {
       console.log('User has chapter progress, checking Chapter 1 activation...');
       
       // Check if Chapter 1 is active, if not, activate it
@@ -76,6 +108,7 @@ export const migrateExistingUserToChapters = async (userId: string) => {
         });
         console.log('Chapter 1 activated for existing user');
       }
+      await syncUserChaptersFromMergeIfNeeded(userId);
       return;
     }
 
@@ -105,6 +138,7 @@ export const migrateExistingUserToChapters = async (userId: string) => {
     });
 
     console.log(`Migrated user ${userId} to Chapter 1 - starting point`);
+    await syncUserChaptersFromMergeIfNeeded(userId);
   } catch (error) {
     console.error('Error migrating user to chapters:', error);
   }
@@ -127,7 +161,7 @@ export const ensureChapter1Active = async (userId: string) => {
     const studentData = studentDoc.exists() ? studentDoc.data() : null;
     
     // Check if chapters exist
-    if (!userData.chapters) {
+    if (isMissingOrEmptyChapters(userData.chapters)) {
       console.log('No chapters found, initializing...');
       await initializeChapterProgress(userId);
       // Also initialize for students collection if it exists

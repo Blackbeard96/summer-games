@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { doc, updateDoc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit, deleteField, onSnapshot, increment } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
@@ -29,6 +29,9 @@ import StoryMissionsSection from './StoryMissionsSection';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
 import { grantChallengeRewards } from '../utils/challengeRewards';
+import { mergeUserAndStudentForJourney } from '../utils/mergeChapterProgress';
+import { isChapter2ChallengeEffectivelyComplete } from '../utils/chapter2ProgressInference';
+import { isUidInSquad } from '../utils/squadMemberUtils';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -41,8 +44,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   const { vault, moves, actionCards, unlockElementalMoves } = useBattle();
   const { storyProgress, getEpisodeStatus, isEpisodeUnlocked, startEpisode, isLoading: storyLoading, error: storyError } = useStory();
   const navigate = useNavigate();
-  const [userProgress, setUserProgress] = useState<any>(null);
+  const [rawUserProgress, setRawUserProgress] = useState<any>(null);
   const [studentData, setStudentData] = useState<any>(null);
+
+  const userProgress = useMemo(
+    () => mergeUserAndStudentForJourney(rawUserProgress, studentData),
+    [rawUserProgress, studentData]
+  );
   const [loading, setLoading] = useState(true);
   const [completingChallenge, setCompletingChallenge] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'challenges' | 'ethics'>('challenges');
@@ -212,7 +220,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           }
           
           // Always set userProgress (the fix above will trigger another snapshot if needed)
-          setUserProgress(userData);
+          setRawUserProgress(userData);
           setLoading(false);
         }
       } catch (error) {
@@ -480,10 +488,19 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const previousChallengeProgress = chapterProgress.challenges?.[previousChallenge.id];
       
       // Check if previous challenge is completed (multiple ways to verify)
-      previousChallengeCompleted = 
-        previousChallengeProgress?.isCompleted === true || 
-        previousChallengeProgress?.status === 'approved' ||
-        false; // Explicitly default to false if not found
+      if (chapter.id === 2) {
+        previousChallengeCompleted = isChapter2ChallengeEffectivelyComplete(
+          previousChallenge.id,
+          chapterProgress,
+          userProgress,
+          studentData
+        );
+      } else {
+        previousChallengeCompleted =
+          previousChallengeProgress?.isCompleted === true ||
+          previousChallengeProgress?.status === 'approved' ||
+          false;
+      }
       
       // Debug logging (always log for Chapter 2 challenges)
       if (DEBUG_CH1 || chapter.id === 2) {
@@ -610,6 +627,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
               studentArtifacts: studentData?.artifacts
             });
             return challenge8Completed === true || hasElementalRing === true;
+          } else if (req.value === 'rr_candy') {
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            return isChapter2ChallengeEffectivelyComplete(
+              'ep2-its-all-a-game',
+              cp2,
+              userProgress,
+              studentData
+            );
           } else {
             // Fallback to generic artifact check
             return userProgress.artifact?.identified;
@@ -618,19 +643,30 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           // For team requirements, check if Chapter 2-1 (team formation) is completed
           // This allows Chapter 2-2 to unlock after completing 2-1, regardless of actual squad membership
           if (req.value === 'formed') {
-            const teamFormationChallenge = userProgress?.chapters?.[2]?.challenges?.['ch2-team-formation'];
-            const isTeamFormationCompleted = teamFormationChallenge?.isCompleted || teamFormationChallenge?.status === 'approved';
-            if (DEBUG_CH1) {
-              console.log(`[DEBUG_CH1] Checking team requirement (formed):`, {
-                teamFormationChallenge,
-                isTeamFormationCompleted
-              });
-            }
-            return isTeamFormationCompleted;
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            return (
+              isChapter2ChallengeEffectivelyComplete(
+                'ch2-team-formation',
+                cp2,
+                userProgress,
+                studentData
+              ) || !!(userProgress?.team?.id || userProgress?.squad?.id)
+            );
           }
           // For other team requirements, check squad membership
           return !!userProgress?.team?.id || !!userProgress?.squad?.id;
         case 'rival':
+          if (req.value === 'chosen') {
+            const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+            return (
+              isChapter2ChallengeEffectivelyComplete(
+                'ch2-rival-selection',
+                cp2,
+                userProgress,
+                studentData
+              ) || !!userProgress.rival
+            );
+          }
           return userProgress.rival;
         case 'veil':
           return userProgress.veil?.isConfronted;
@@ -674,18 +710,31 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             console.warn(`ChapterDetail: Unknown ability requirement: ${req.value}`);
             return false;
           }
-        case 'challenge':
-          // Check if a specific challenge is completed
-          // req.value should be the challenge ID (e.g., 'ch2-team-trial')
+        case 'challenge': {
           const requiredChallengeId = req.value;
-          const requiredChallenge = userProgress?.chapters?.[chapter.id]?.challenges?.[requiredChallengeId];
-          const isCompleted = requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
+          const cp2 = userProgress?.chapters?.[2] || userProgress?.chapters?.['2'];
+          if (
+            cp2 &&
+            (requiredChallengeId.startsWith('ch2-') || requiredChallengeId.startsWith('ep2-'))
+          ) {
+            return isChapter2ChallengeEffectivelyComplete(
+              requiredChallengeId,
+              cp2,
+              userProgress,
+              studentData
+            );
+          }
+          const requiredChallenge =
+            userProgress?.chapters?.[chapter.id]?.challenges?.[requiredChallengeId];
+          const isCompleted =
+            requiredChallenge?.isCompleted || requiredChallenge?.status === 'approved';
           console.log(`ChapterDetail: Checking challenge requirement ${requiredChallengeId}:`, {
             found: !!requiredChallenge,
             isCompleted,
             status: requiredChallenge?.status
           });
           return isCompleted;
+        }
         default:
           console.warn(`ChapterDetail: Unknown requirement type: ${req.type}`);
           return true;
@@ -751,7 +800,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         const refreshedDoc = await getDoc(userRef);
         if (refreshedDoc.exists()) {
           const refreshedData = refreshedDoc.data();
-          setUserProgress(refreshedData);
+          setRawUserProgress(refreshedData);
           
           console.log(`[AutoComplete] User progress refreshed after challenge completion:`, {
             challengeId: challenge.id,
@@ -846,7 +895,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Refresh user progress to trigger requirement checks for next challenge
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
       
       // Trigger auto-completion check to unlock next challenge
@@ -899,7 +948,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         const userDocRefresh = await getDoc(userRef);
         if (userDocRefresh.exists()) {
           const userDataRefresh = userDocRefresh.data();
-          setUserProgress(userDataRefresh);
+          setRawUserProgress(userDataRefresh);
         }
         
         setChapterActivationInProgress(false);
@@ -925,7 +974,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       isInSquad = squadsSnapshot.docs.some(doc => {
         const squadData = doc.data();
         console.log('ChapterDetail: Squad data:', { id: doc.id, name: squadData.name, members: squadData.members?.length || 0 });
-        const isMember = squadData.members && squadData.members.some((member: any) => member.uid === currentUser.uid);
+        const isMember = isUidInSquad(squadData, currentUser.uid);
         if (isMember) {
           console.log('ChapterDetail: User is member of squad:', squadData.name);
         }
@@ -1077,7 +1126,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         // Refresh user progress to trigger requirement checks for next challenge
         const refreshedUserDoc = await getDoc(userRef);
         if (refreshedUserDoc.exists()) {
-          setUserProgress(refreshedUserDoc.data());
+          setRawUserProgress(refreshedUserDoc.data());
         }
 
         // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
@@ -1182,7 +1231,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             const userDocRefresh = await getDoc(userRef);
             if (userDocRefresh.exists()) {
               const userDataRefresh = userDocRefresh.data();
-              setUserProgress(userDataRefresh);
+              setRawUserProgress(userDataRefresh);
             }
             
             setChapterActivationInProgress(false);
@@ -1214,7 +1263,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           const userRef = doc(db, 'users', currentUser.uid);
           const userDoc = await getDoc(userRef);
           if (userDoc.exists()) {
-            setUserProgress(userDoc.data());
+            setRawUserProgress(userDoc.data());
           }
         } catch (error) {
           console.error('Error refreshing user data:', error);
@@ -1461,7 +1510,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       });
 
       // Update local state to reflect the completion
-      setUserProgress((prev: any) => ({
+      setRawUserProgress((prev: any) => ({
         ...prev,
         chapters: updatedChapters
       }));
@@ -1566,7 +1615,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       });
 
       // Update local state to reflect the completion
-      setUserProgress((prev: any) => ({
+      setRawUserProgress((prev: any) => ({
         ...prev,
         chapters: updatedChapters
       }));
@@ -1632,7 +1681,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const userDocRefresh = await getDoc(userRef);
       if (userDocRefresh.exists()) {
         const userDataRefresh = userDocRefresh.data();
-        setUserProgress(userDataRefresh);
+        setRawUserProgress(userDataRefresh);
       }
 
       // Show reward modal
@@ -1776,7 +1825,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           const userDocRefresh = await getDoc(userRef);
           if (userDocRefresh.exists()) {
             const userDataRefresh = userDocRefresh.data();
-            setUserProgress(userDataRefresh);
+            setRawUserProgress(userDataRefresh);
           }
 
           // Show reward modal
@@ -1921,7 +1970,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const userDocRefresh = await getDoc(userRef);
       if (userDocRefresh.exists()) {
         const userDataRefresh = userDocRefresh.data();
-        setUserProgress(userDataRefresh);
+        setRawUserProgress(userDataRefresh);
       }
 
       // Show reward modal
@@ -1991,7 +2040,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         });
 
         // Update local state
-        setUserProgress((prev: any) => ({
+        setRawUserProgress((prev: any) => ({
           ...prev,
           chapters: updatedChapters
         }));
@@ -2135,7 +2184,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const userDocRefresh = await getDoc(userRef);
       if (userDocRefresh.exists()) {
         const userDataRefresh = userDocRefresh.data();
-        setUserProgress(userDataRefresh);
+        setRawUserProgress(userDataRefresh);
       }
       
     } catch (error) {
@@ -2223,7 +2272,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Refresh user progress
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
       
       alert('✅ Challenge 7 reset! Refresh the page to see it as incomplete.');
@@ -2305,7 +2354,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Refresh user progress - the onSnapshot listener will automatically update the UI
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
       
       // Also refresh student data
@@ -2379,7 +2428,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         // Refresh user progress
         const refreshedUserDoc = await getDoc(userRef);
         if (refreshedUserDoc.exists()) {
-          setUserProgress(refreshedUserDoc.data());
+          setRawUserProgress(refreshedUserDoc.data());
         }
       } else if (isTeamFormationCompleted) {
         console.log('[CH2-1] fixChapter2Challenge1 - No fix needed, Chapter 2-1 is already completed');
@@ -2439,7 +2488,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
       }
       
       if (!autoReset) {
@@ -2501,7 +2550,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
       }
       
       alert('✅ Chapter 2-2 has been reset! The "Find a Home" button should now appear.');
@@ -2555,7 +2604,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       }
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
       const refreshedStudentDoc = await getDoc(studentRef);
       if (refreshedStudentDoc.exists()) {
@@ -2661,7 +2710,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       // Refresh user progress
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
       
       // Also refresh student data
@@ -2721,7 +2770,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
       }
       
       alert('✅ Chapter 2-3 has been reset! The "Squad Up" button should now appear.');
@@ -2816,7 +2865,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         }
 
         // Update local state
-        setUserProgress((prev: any) => ({
+        setRawUserProgress((prev: any) => ({
           ...prev,
           chapters: updatedChapters
         }));
@@ -2962,7 +3011,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           chapterData: refreshedData.chapters?.[chapter.id],
           challengeData: refreshedData.chapters?.[chapter.id]?.challenges?.['ep1-where-it-started']
         });
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
       }
 
       // Also refresh student data
@@ -3153,7 +3202,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         }
         
         // Force update userProgress to ensure UI reflects completion
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
         
         // Double-check that the challenge is marked as completed
         if (!challengeData?.isCompleted && challengeData?.status !== 'approved') {
@@ -3261,7 +3310,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
 
       if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
@@ -3504,14 +3553,14 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
         
         // Force a small delay to ensure Firestore has propagated the changes
         setTimeout(() => {
           // Re-check user progress to ensure next challenge unlocks
           getDoc(userRef).then(doc => {
             if (doc.exists()) {
-              setUserProgress(doc.data());
+              setRawUserProgress(doc.data());
             }
           });
         }, 500);
@@ -3568,7 +3617,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
         const refreshedData = refreshedUserDoc.data();
-        setUserProgress(refreshedData);
+        setRawUserProgress(refreshedData);
       }
 
       alert('✅ Chapter 2-4 has been reset! The challenge should now appear as incomplete.');
@@ -3655,7 +3704,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       const userRef = doc(db, 'users', currentUser.uid);
       const refreshedUserDoc = await getDoc(userRef);
       if (refreshedUserDoc.exists()) {
-        setUserProgress(refreshedUserDoc.data());
+        setRawUserProgress(refreshedUserDoc.data());
       }
 
       if (DEBUG_CH2 && progressionResult.challengeUnlocked) {
@@ -5858,7 +5907,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                   const userDoc = await getDoc(userRef);
                   if (userDoc.exists()) {
                     const refreshedData = userDoc.data();
-                    setUserProgress(refreshedData);
+                    setRawUserProgress(refreshedData);
                     const DEBUG_CH2_1 = process.env.REACT_APP_DEBUG_CH2_1 === 'true';
                     if (DEBUG_CH2_1) {
                       const challengeData = refreshedData.chapters?.[chapter.id]?.challenges?.['ch2-team-formation'];
@@ -5902,7 +5951,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                   const userRef = doc(db, 'users', currentUser.uid);
                   const userDoc = await getDoc(userRef);
                   if (userDoc.exists()) {
-                    setUserProgress(userDoc.data());
+                    setRawUserProgress(userDoc.data());
                   }
                 } catch (error) {
                   console.error('Error refreshing user progress:', error);
@@ -5932,7 +5981,7 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                   const userRef = doc(db, 'users', currentUser.uid);
                   const refreshedUserDoc = await getDoc(userRef);
                   if (refreshedUserDoc.exists()) {
-                    setUserProgress(refreshedUserDoc.data());
+                    setRawUserProgress(refreshedUserDoc.data());
                   }
                 }
               }}
