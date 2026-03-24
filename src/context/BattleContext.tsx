@@ -1210,6 +1210,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               // Update inventory and artifacts in real-time
               setInventory(studentData.inventory || []);
               setArtifacts(studentData.artifacts || []);
+              setPerkEquippedSnapshot((studentData.equippedArtifacts as Record<string, unknown>) || null);
               
               // Update moves when manifest changes
               const movesRef = doc(db, 'battleMoves', currentUser.uid);
@@ -1247,6 +1248,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               // If manifest is missing, just update inventory/artifacts but don't touch moves
               setInventory(studentData.inventory || []);
               setArtifacts(studentData.artifacts || []);
+              setPerkEquippedSnapshot((studentData.equippedArtifacts as Record<string, unknown>) || null);
               console.warn('BattleContext: No valid manifest found in snapshot, skipping move updates');
             }
             
@@ -5286,6 +5288,39 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!vault) return null;
     return applyVaultShieldBoostFromEquipped(vault, perkEquippedSnapshot, perkCatalogSnapshot);
   }, [vault, perkEquippedSnapshot, perkCatalogSnapshot]);
+
+  // Impenetrable perk: at most one overshield per Eastern day when perk is equipped and vault has no overshield
+  useEffect(() => {
+    if (!currentUser?.uid || !vault) return;
+    if (!perkEquippedSnapshot) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { applyImpenetrableDailyOvershieldIfEligible } = await import('../utils/impenetrableOvershield');
+        const { applied } = await applyImpenetrableDailyOvershieldIfEligible(
+          currentUser.uid,
+          vault,
+          perkEquippedSnapshot,
+          perkCatalogSnapshot
+        );
+        if (applied && !cancelled) {
+          console.log('[BattleContext] Impenetrable: granted daily overshield');
+        }
+      } catch (e) {
+        console.error('[BattleContext] Impenetrable daily overshield:', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentUser?.uid,
+    vault?.id,
+    vault?.overshield,
+    vault?.impenetrableLastGrantDateEastern,
+    perkEquippedSnapshot,
+    perkCatalogSnapshot,
+  ]);
 
   const value: BattleContextType = {
     vault: vaultForUI,

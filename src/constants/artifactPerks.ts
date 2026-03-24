@@ -45,6 +45,12 @@ export const ARTIFACT_PERK_OPTIONS: ArtifactPerkOption[] = [
       'Increases vault shield capacity: +100 at level 1, +50 more per artifact level. Applies while equipped.'
   },
   {
+    id: 'impenetrable',
+    label: 'Impenetrable',
+    description:
+      'Grants 1 daily Overshield on your vault while equipped: it must be broken before your vault can be damaged. If destroyed, it returns on the next Eastern calendar day (at most once per day). Also increases shield capacity by +10 at artifact level 1, scaling up to +100 at max level (10). Artifact Synergy can strengthen the shield bonus.'
+  },
+  {
     id: 'healing-boost',
     label: 'Healing Boost',
     description:

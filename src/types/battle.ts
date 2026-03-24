@@ -11,6 +11,8 @@ export interface Vault {
   shieldStrength: number;
   maxShieldStrength: number;
   overshield: number; // Additional shield from Shield artifact that absorbs next attack
+  /** Eastern calendar date (YYYY-MM-DD) when Impenetrable perk last granted daily overshield */
+  impenetrableLastGrantDateEastern?: string;
   generatorLevel: number; // Generator level (starts at 1)
   generatorPendingPP: number; // PP generated but not yet collected
   generatorLastReset: Date; // When generator last reset (8am EST daily)

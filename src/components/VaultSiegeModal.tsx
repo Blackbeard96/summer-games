@@ -3,12 +3,13 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
-import { collection, getDocs, doc, getDoc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { MOVE_DAMAGE_VALUES, ACTION_CARD_DAMAGE_VALUES, BATTLE_CONSTANTS } from '../types/battle';
 import { getMoveDamageSync, getMoveNameSync, getMoveDescriptionSync, loadMoveOverrides } from '../utils/moveOverrides';
 import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 import { trackMoveUsage } from '../utils/manifestTracking';
+import { loadVaultSiegePlayerList } from '../utils/vaultSiegeTargets';
 
 interface VaultSiegeModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ interface Player {
   displayName: string;
   powerPoints: number;
   level: number;
+  email?: string;
   shieldStrength?: number;
   maxShieldStrength?: number;
   overshield?: number;
@@ -44,6 +46,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
   const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
   const [selectedActionCards, setSelectedActionCards] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [playerListError, setPlayerListError] = useState<string | null>(null);
   
   // Debug loading state changes
   useEffect(() => {
@@ -244,6 +247,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
       setSelectedTarget('');
       setSearchQuery('');
       setFilterType('none');
+      setPlayerListError(null);
       // Only clear attackResults when modal FIRST opens (not on every render)
       setAttackResults(null);
       console.log('VaultSiegeModal: Modal opened, resetting state');
@@ -258,9 +262,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
     // Apply search query filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
-      filtered = filtered.filter(player => 
+      filtered = filtered.filter(player =>
         player.displayName.toLowerCase().includes(query) ||
-        player.uid.toLowerCase().includes(query) // This will match email if uid is email
+        player.uid.toLowerCase().includes(query) ||
+        (player.email && player.email.toLowerCase().includes(query))
       );
     }
     
@@ -304,25 +309,20 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
 
     const loadPlayers = async () => {
       setLoading(true);
+      setPlayerListError(null);
       try {
         console.log('VaultSiegeModal: Loading players...');
-        const studentsSnapshot = await getDocs(collection(db, 'students'));
-        const availablePlayers: Player[] = [];
-        
-        console.log('VaultSiegeModal: Found', studentsSnapshot.size, 'students');
-        
-        studentsSnapshot.forEach((doc) => {
-          const data = doc.data();
-          console.log('VaultSiegeModal: Student data:', doc.id, data);
-          if (doc.id !== currentUser.uid) {
-            availablePlayers.push({
-              uid: doc.id,
-              displayName: data.displayName || data.name || 'Unknown Player',
-              powerPoints: data.powerPoints || data.currentPP || 0,
-              level: data.level || 1,
-            });
-          }
-        });
+        const { players: basePlayers, loadError } = await loadVaultSiegePlayerList(currentUser.uid);
+        if (loadError && basePlayers.length === 0) {
+          setPlayerListError(loadError);
+        }
+        const availablePlayers: Player[] = basePlayers.map((p) => ({
+          uid: p.uid,
+          displayName: p.displayName,
+          powerPoints: p.powerPoints,
+          level: p.level,
+          email: p.email,
+        }));
 
         console.log('VaultSiegeModal: Available players before vault loading:', availablePlayers.length);
 
@@ -372,6 +372,7 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
         // filteredPlayers will automatically update via useMemo when players changes
       } catch (error) {
         console.error('Error loading players:', error);
+        setPlayerListError('Failed to load players. Check your connection and try again.');
       } finally {
         setLoading(false);
       }
@@ -1499,10 +1500,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                 {searchQuery ? 'No Players Found' : 'No Players Available'}
               </div>
               <div style={{ fontSize: '0.875rem' }}>
-                {searchQuery 
+                {searchQuery
                   ? `No players match your search for "${searchQuery}". Try a different search term.`
-                  : 'There are no other players in the system to attack.'
-                }
+                  : playerListError
+                    ? playerListError
+                    : 'There are no other players in the system to attack. If your class uses roster-based access, ensure your student profile has a class and that classmates have student documents.'}
               </div>
             </div>
           ) : (

@@ -12,6 +12,7 @@ import {
 
 export const ELEMENTAL_ACCESS_PERK_ID = 'elemental-access';
 export const SHIELD_BOOST_PERK_ID = 'shield-boost';
+export const IMPENETRABLE_PERK_ID = 'impenetrable';
 /** Firestore/catalog id (legacy id name). Perk is displayed as "Cost Reduction". */
 export const COST_REDUCTION_PERK_ID = 'cooldown-reduction';
 /** @deprecated Use COST_REDUCTION_PERK_ID — same string, kept for older imports */
@@ -189,6 +190,37 @@ export function getShieldBoostFlatBonus(
     total += Math.round(base * syn);
   }
   return total;
+}
+
+/** Flat +max shield from Impenetrable perk(s): +10 at level 1 → +100 at level 10, × set synergy. Stacks with Shield Boost. */
+export function getImpenetrableShieldStatFlatBonus(
+  equipped: Record<string, unknown> | null | undefined,
+  rawCatalog: Record<string, unknown> | null | undefined
+): number {
+  const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
+  let total = 0;
+  for (const slot of EQUIP_SLOTS) {
+    const art = eq[slot] as Record<string, unknown> | undefined;
+    if (!art || !perkIdsForArtifact(art, rawCatalog).includes(IMPENETRABLE_PERK_ID)) continue;
+    const level = clampArtifactLevelForPerks((art as { level?: number }).level);
+    const base = perkEffectLinear(level, 10, 100, ARTIFACT_PERK_SCALE_MAX_LEVEL);
+    const name = String((art as { name?: string }).name || '');
+    const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
+    total += Math.round(base * syn);
+  }
+  return total;
+}
+
+export function hasImpenetrablePerkEquipped(
+  equipped: Record<string, unknown> | null | undefined,
+  rawCatalog: Record<string, unknown> | null | undefined
+): boolean {
+  const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
+  for (const slot of EQUIP_SLOTS) {
+    const art = eq[slot] as Record<string, unknown> | undefined;
+    if (perkIdsForArtifact(art, rawCatalog).includes(IMPENETRABLE_PERK_ID)) return true;
+  }
+  return false;
 }
 
 function artifactHasCostReductionPerk(
@@ -518,7 +550,8 @@ export function applyVaultShieldBoostFromEquipped<T extends { maxShieldStrength?
   equipped: Record<string, unknown> | null | undefined,
   rawCatalog: Record<string, unknown> | null | undefined
 ): T {
-  const bonus = getShieldBoostFlatBonus(equipped, rawCatalog);
+  const bonus =
+    getShieldBoostFlatBonus(equipped, rawCatalog) + getImpenetrableShieldStatFlatBonus(equipped, rawCatalog);
   if (bonus <= 0) return vault;
   const baseMax = Math.max(0, Number(vault.maxShieldStrength) || 0);
   const baseCur = Math.max(0, Number(vault.shieldStrength) || 0);
