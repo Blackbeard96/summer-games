@@ -274,8 +274,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
   const [quizResponseCount, setQuizResponseCount] = useState(0);
+  const [showEliminatedQuizOverlay, setShowEliminatedQuizOverlay] = useState(false);
   const [quizCountdown, setQuizCountdown] = useState<number | null>(null);
   const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eliminationOverlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasCurrentPlayerEliminatedRef = useRef(false);
   /** When a quiz is active, players/host can swap between Quiz view and Battle Log view. Persist in sessionStorage so it survives remounts and toggling works reliably. */
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
 
@@ -1624,6 +1627,31 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
   const currentPlayer = sessionPlayers.find(p => p.userId === currentUser?.uid);
 
+  useEffect(() => {
+    const isEliminatedNow = currentPlayer?.eliminated === true;
+    const becameEliminated = isEliminatedNow && !wasCurrentPlayerEliminatedRef.current;
+    wasCurrentPlayerEliminatedRef.current = isEliminatedNow;
+
+    if (!becameEliminated) return;
+
+    setShowEliminatedQuizOverlay(true);
+    if (eliminationOverlayTimeoutRef.current) {
+      clearTimeout(eliminationOverlayTimeoutRef.current);
+    }
+    eliminationOverlayTimeoutRef.current = setTimeout(() => {
+      setShowEliminatedQuizOverlay(false);
+      eliminationOverlayTimeoutRef.current = null;
+    }, 1800);
+  }, [currentPlayer?.eliminated]);
+
+  useEffect(() => {
+    return () => {
+      if (eliminationOverlayTimeoutRef.current) {
+        clearTimeout(eliminationOverlayTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Get all students in the class (not just those in session)
   // Create a combined list with session players and non-session students
   // Always use the latest profile data from userProfiles to ensure consistency
@@ -2424,6 +2452,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         selectedSkillId={selectedMove?.id}
         selectedTargetUid={selectedTarget || undefined}
       />
+      <style>{`
+        @keyframes liveEventEliminatedOverlay {
+          0% { opacity: 0; transform: scale(0.9); }
+          30% { opacity: 1; transform: scale(1.02); }
+          100% { opacity: 0; transform: scale(1); }
+        }
+      `}</style>
       <div style={{ 
         padding: '1rem',
         maxWidth: '1600px',
@@ -3052,7 +3087,39 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           <>
           {quizSession && centerView === 'quiz' && (
             /* Live Quiz Mode panel - full area when Quiz tab is selected */
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', position: 'relative' }}>
+              {showEliminatedQuizOverlay && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 60,
+                    pointerEvents: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '0.75rem',
+                    background: 'rgba(17, 24, 39, 0.3)',
+                    animation: 'liveEventEliminatedOverlay 1.8s ease-out forwards',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '1rem 1.5rem',
+                      borderRadius: '0.75rem',
+                      background: 'linear-gradient(135deg, #7f1d1d 0%, #ef4444 100%)',
+                      color: 'white',
+                      fontWeight: 800,
+                      fontSize: '1.25rem',
+                      letterSpacing: '0.05em',
+                      textTransform: 'uppercase',
+                      boxShadow: '0 12px 30px rgba(127, 29, 29, 0.45)',
+                    }}
+                  >
+                    Eliminated
+                  </div>
+                </div>
+              )}
               {quizSession.status === 'lobby' && (
                 <div style={{ background: '#f0f9ff', padding: '1.5rem', borderRadius: '1rem', textAlign: 'center' }}>
                   <p style={{ fontSize: '1.1rem', fontWeight: 600, color: '#0369a1' }}>Quiz starting soon...</p>

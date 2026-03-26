@@ -41,6 +41,7 @@ const PPChangeApproval: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [processing, setProcessing] = useState<string | null>(null);
   const [ppBoostStatuses, setPpBoostStatuses] = useState<{ [studentId: string]: boolean }>({});
+  const isBulkProcessing = processing === 'all';
 
   // Check if current user is admin
   const isAdmin = currentUser?.email === 'eddymosley@compscihigh.org' || 
@@ -109,14 +110,8 @@ const PPChangeApproval: React.FC = () => {
     loadChangeRequests();
   }, [isAdmin]);
 
-  const handleApprove = async (requestId: string) => {
-    if (!currentUser) return;
-
-    setProcessing(requestId);
-    try {
-      const request = changeRequests.find(r => r.id === requestId);
-      if (!request) return;
-
+  const approveRequest = async (request: PPChangeRequest) => {
+      if (!currentUser) return { appliedCount: 0, requestId: request.id, className: request.className };
       // Store final PP values for notifications
       const finalPPValues: { [studentId: string]: { originalPP: number; finalPP: number; changeAmount: number } } = {};
       
@@ -186,7 +181,7 @@ const PPChangeApproval: React.FC = () => {
       }
 
       // Update the change request status
-      await updateDoc(doc(db, 'ppChangeRequests', requestId), {
+      await updateDoc(doc(db, 'ppChangeRequests', request.id), {
         status: 'approved',
         reviewedBy: currentUser.uid,
         reviewedAt: serverTimestamp()
@@ -233,17 +228,59 @@ const PPChangeApproval: React.FC = () => {
       }
 
       // Remove from local state
-      setChangeRequests(prev => prev.filter(r => r.id !== requestId));
+      setChangeRequests(prev => prev.filter(r => r.id !== request.id));
 
       logger.roster.info('PPChangeApproval: Approved change request:', {
-        requestId,
+        requestId: request.id,
         changesCount: request.changes.length
       });
+      return { appliedCount: request.changes.length, requestId: request.id, className: request.className };
+  };
 
-      alert(`Approved ${request.changes.length} changes for ${request.className}`);
+  const handleApprove = async (requestId: string) => {
+    if (!currentUser) return;
+
+    setProcessing(requestId);
+    try {
+      const request = changeRequests.find(r => r.id === requestId);
+      if (!request) return;
+      const result = await approveRequest(request);
+      alert(`Approved ${result.appliedCount} changes for ${result.className}`);
     } catch (error) {
       logger.roster.error('PPChangeApproval: Error approving changes:', error);
       alert('Error approving changes. Please try again.');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleApproveAll = async () => {
+    if (!currentUser) return;
+    if (changeRequests.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Approve all ${changeRequests.length} pending PP change request${changeRequests.length === 1 ? '' : 's'} across all classes?`
+    );
+    if (!confirmed) return;
+
+    setProcessing('all');
+    try {
+      const requestsToApprove = [...changeRequests];
+      let approvedRequests = 0;
+      let approvedChanges = 0;
+
+      for (const request of requestsToApprove) {
+        const result = await approveRequest(request);
+        approvedRequests += 1;
+        approvedChanges += result.appliedCount;
+      }
+
+      alert(
+        `Approved ${approvedRequests} request${approvedRequests === 1 ? '' : 's'} and ${approvedChanges} student PP change${approvedChanges === 1 ? '' : 's'} across all classes.`
+      );
+    } catch (error) {
+      logger.roster.error('PPChangeApproval: Error approving all changes:', error);
+      alert('Error during Approve All. Some requests may remain pending. Please refresh and retry.');
     } finally {
       setProcessing(null);
     }
@@ -345,6 +382,26 @@ const PPChangeApproval: React.FC = () => {
         }}>
           Review and approve Power Point changes submitted by scorekeepers.
         </p>
+        {changeRequests.length > 0 && (
+          <div style={{ marginTop: '1rem' }}>
+            <button
+              onClick={handleApproveAll}
+              disabled={processing !== null}
+              style={{
+                backgroundColor: processing !== null ? '#9ca3af' : '#059669',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                padding: '0.625rem 1rem',
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                cursor: processing !== null ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {isBulkProcessing ? 'Approving All...' : `Approve All (${changeRequests.length})`}
+            </button>
+          </div>
+        )}
       </div>
 
       {changeRequests.length === 0 ? (
@@ -421,32 +478,32 @@ const PPChangeApproval: React.FC = () => {
                 }}>
                   <button
                     onClick={() => handleReject(request.id)}
-                    disabled={processing === request.id}
+                    disabled={processing !== null}
                     style={{
-                      backgroundColor: processing === request.id ? '#9ca3af' : '#ef4444',
+                      backgroundColor: processing !== null ? '#9ca3af' : '#ef4444',
                       color: 'white',
                       border: 'none',
                       borderRadius: '0.375rem',
                       padding: '0.5rem 1rem',
                       fontSize: '0.875rem',
                       fontWeight: '500',
-                      cursor: processing === request.id ? 'not-allowed' : 'pointer'
+                      cursor: processing !== null ? 'not-allowed' : 'pointer'
                     }}
                   >
                     {processing === request.id ? 'Processing...' : 'Reject'}
                   </button>
                   <button
                     onClick={() => handleApprove(request.id)}
-                    disabled={processing === request.id}
+                    disabled={processing !== null}
                     style={{
-                      backgroundColor: processing === request.id ? '#9ca3af' : '#10b981',
+                      backgroundColor: processing !== null ? '#9ca3af' : '#10b981',
                       color: 'white',
                       border: 'none',
                       borderRadius: '0.375rem',
                       padding: '0.5rem 1rem',
                       fontSize: '0.875rem',
                       fontWeight: '500',
-                      cursor: processing === request.id ? 'not-allowed' : 'pointer'
+                      cursor: processing !== null ? 'not-allowed' : 'pointer'
                     }}
                   >
                     {processing === request.id ? 'Processing...' : 'Approve'}

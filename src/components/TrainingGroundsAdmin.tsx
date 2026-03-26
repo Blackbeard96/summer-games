@@ -28,8 +28,13 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [classrooms, setClassrooms] = useState<Array<{ id: string; name: string }>>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
+  const [showImportForm, setShowImportForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<TrainingQuestion | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [sourceQuizSetId, setSourceQuizSetId] = useState('');
+  const [sourceQuestions, setSourceQuestions] = useState<TrainingQuestion[]>([]);
+  const [selectedSourceQuestionIds, setSelectedSourceQuestionIds] = useState<string[]>([]);
   const [availableArtifacts, setAvailableArtifacts] = useState<Array<{ id: string; name: string; icon: string }>>([]);
   const [showCompletionStats, setShowCompletionStats] = useState(false);
   const [completionStats, setCompletionStats] = useState<Array<{
@@ -520,6 +525,99 @@ const TrainingGroundsAdmin: React.FC = () => {
     await loadQuestions(selectedQuizSet.id);
   };
 
+  const resetImportState = () => {
+    setShowImportForm(false);
+    setSourceQuizSetId('');
+    setSourceQuestions([]);
+    setSelectedSourceQuestionIds([]);
+  };
+
+  const handleSourceQuizChange = async (quizId: string) => {
+    setSourceQuizSetId(quizId);
+    setSelectedSourceQuestionIds([]);
+    if (!quizId) {
+      setSourceQuestions([]);
+      return;
+    }
+    try {
+      const imported = await getQuestions(quizId);
+      setSourceQuestions(imported);
+    } catch (error) {
+      console.error('Error loading source quiz questions:', error);
+      alert('Failed to load questions from source quiz');
+      setSourceQuestions([]);
+    }
+  };
+
+  const toggleSourceQuestion = (questionId: string, checked: boolean) => {
+    setSelectedSourceQuestionIds(prev => {
+      if (checked) return [...prev, questionId];
+      return prev.filter(id => id !== questionId);
+    });
+  };
+
+  const handleImportQuestions = async () => {
+    if (!selectedQuizSet) return;
+    if (!sourceQuizSetId) {
+      alert('Please choose a source quiz set.');
+      return;
+    }
+    if (selectedSourceQuestionIds.length === 0) {
+      alert('Please select at least one question to import.');
+      return;
+    }
+
+    try {
+      setImporting(true);
+      const selectedQuestions = sourceQuestions.filter(q => selectedSourceQuestionIds.includes(q.id));
+      const sortedSelected = [...selectedQuestions].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const baseOrder = questions.length;
+
+      for (let i = 0; i < sortedSelected.length; i++) {
+        const question = sortedSelected[i];
+        const correctIndices = (question as any).correctIndices?.length
+          ? [...(question as any).correctIndices]
+          : (question.correctIndex !== undefined ? [question.correctIndex] : []);
+        const options = [...(question.options || [])];
+        while (options.length < 4) options.push('');
+
+        const importData: Omit<TrainingQuestion, 'id' | 'createdAt' | 'updatedAt'> = {
+          prompt: question.prompt,
+          imageUrl: question.imageUrl ?? null,
+          options,
+          correctIndices,
+          explanation: question.explanation ?? null,
+          difficulty: question.difficulty || 'medium',
+          pointsPP: question.pointsPP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.basePP ?? 10,
+          pointsXP: question.pointsXP ?? DEFAULT_REWARDS[question.difficulty || 'medium']?.baseXP ?? 10,
+          order: baseOrder + i,
+        };
+
+        if (correctIndices.length === 1) {
+          (importData as any).correctIndex = correctIndices[0];
+        }
+        if (question.category?.trim()) {
+          (importData as any).category = question.category.trim();
+        }
+        if (question.artifactRewards?.length) {
+          (importData as any).artifactRewards = [...question.artifactRewards];
+        }
+
+        await addQuestion(selectedQuizSet.id, importData);
+      }
+
+      await loadQuestions(selectedQuizSet.id);
+      await loadQuizSets();
+      alert(`Imported ${sortedSelected.length} question${sortedSelected.length === 1 ? '' : 's'} successfully.`);
+      resetImportState();
+    } catch (error) {
+      console.error('Error importing questions:', error);
+      alert('Failed to import selected questions.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const startEditQuestion = (question: TrainingQuestion) => {
     setEditingQuestion(question);
     // Ensure we have 4 options (pad with empty strings if needed)
@@ -812,6 +910,25 @@ const TrainingGroundsAdmin: React.FC = () => {
                   }}
                 >
                   + Add Question
+                </button>
+                <button
+                  onClick={() => {
+                    setSourceQuizSetId('');
+                    setSourceQuestions([]);
+                    setSelectedSourceQuestionIds([]);
+                    setShowImportForm(true);
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#0ea5e9',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  ⤓ Import Questions
                 </button>
               </div>
             </div>
@@ -1369,6 +1486,147 @@ const TrainingGroundsAdmin: React.FC = () => {
               >
                 {uploading ? 'Saving...' : editingQuestion ? 'Update' : 'Add'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Questions Modal */}
+      {showImportForm && selectedQuizSet && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '1.5rem',
+            maxWidth: '900px',
+            width: '92%',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+          }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+              Import Questions into "{selectedQuizSet.title}"
+            </h3>
+            <p style={{ marginTop: 0, color: '#6b7280', marginBottom: '1rem' }}>
+              Select another quiz set, then choose which questions to copy.
+            </p>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Source Quiz Set</label>
+              <select
+                value={sourceQuizSetId}
+                onChange={(e) => handleSourceQuizChange(e.target.value)}
+                style={{ width: '100%', padding: '0.6rem', border: '1px solid #d1d5db', borderRadius: '0.5rem' }}
+              >
+                <option value="">Select source quiz...</option>
+                {quizSets
+                  .filter(q => q.id !== selectedQuizSet.id)
+                  .map(q => (
+                    <option key={q.id} value={q.id}>
+                      {q.title} ({q.questionCount} questions)
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            {sourceQuizSetId && (
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <strong>Questions ({sourceQuestions.length})</strong>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      onClick={() => setSelectedSourceQuestionIds(sourceQuestions.map(q => q.id))}
+                      style={{ padding: '0.25rem 0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer' }}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      onClick={() => setSelectedSourceQuestionIds([])}
+                      style={{ padding: '0.25rem 0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer' }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '360px', overflowY: 'auto' }}>
+                  {sourceQuestions.map((q, idx) => (
+                    <label
+                      key={q.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.6rem',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '0.5rem',
+                        padding: '0.6rem',
+                        background: selectedSourceQuestionIds.includes(q.id) ? '#eff6ff' : 'white',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedSourceQuestionIds.includes(q.id)}
+                        onChange={(e) => toggleSourceQuestion(q.id, e.target.checked)}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 600 }}>Q{idx + 1}: {q.prompt}</div>
+                        <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>Difficulty: {q.difficulty}</div>
+                      </div>
+                    </label>
+                  ))}
+                  {sourceQuestions.length === 0 && (
+                    <div style={{ color: '#6b7280', textAlign: 'center', padding: '1rem' }}>
+                      No questions found in this quiz.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
+                Selected: {selectedSourceQuestionIds.length}
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button
+                  onClick={resetImportState}
+                  disabled={importing}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: importing ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleImportQuestions}
+                  disabled={importing || selectedSourceQuestionIds.length === 0}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: importing || selectedSourceQuestionIds.length === 0 ? '#9ca3af' : '#0ea5e9',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: importing || selectedSourceQuestionIds.length === 0 ? 'not-allowed' : 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  {importing ? 'Importing...' : `Import ${selectedSourceQuestionIds.length} Question${selectedSourceQuestionIds.length === 1 ? '' : 's'}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>

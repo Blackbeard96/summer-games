@@ -217,10 +217,17 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
       (participant.name || '').toLowerCase().includes('light construct') ||
       (participant.avatar || '').includes('Light_Construct.png') ||
       (participant.avatar || '') === '/images/Light_Construct.png';
-    // Defensive moves (shield boost, healing) only target self - only the current player's card is clickable
-    const isDefensiveMove = !!(selectedMove?.shieldBoost || selectedMove?.healing);
+    const hasSummonEffect =
+      selectedMove != null &&
+      Array.isArray((selectedMove as any).statusEffects) &&
+      (selectedMove as any).statusEffects.some((e: any) => e?.type === 'summon');
+    // Use targetType as source of truth; fallback to legacy shield/heal detection when targetType is missing.
+    const isSelfTargetOnlyMove =
+      selectedMove?.targetType === 'self' ||
+      hasSummonEffect ||
+      (!selectedMove?.targetType && !!(selectedMove?.shieldBoost || selectedMove?.healing));
     const canClick = selectedMove && isPlayerTurn && (
-      isDefensiveMove ? (isAlly && isCurrentPlayer) : (!isAlly || isCurrentPlayer)
+      isSelfTargetOnlyMove ? (isAlly && isCurrentPlayer) : (!isAlly || isCurrentPlayer)
     );
     
     // Always log when a move is selected to help debug
@@ -708,7 +715,10 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 }}>
                   ✅ Selected: <strong>{selectedMove.name}</strong>
                   <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', color: '#fff' }}>
-                    {(selectedMove.shieldBoost || selectedMove.healing) ? (
+                    {(selectedMove.targetType === 'self' ||
+                      (Array.isArray((selectedMove as any).statusEffects) &&
+                        (selectedMove as any).statusEffects.some((e: any) => e?.type === 'summon')) ||
+                      (!selectedMove.targetType && (selectedMove.shieldBoost || selectedMove.healing))) ? (
                       <>🛡️ <strong>This move targets you.</strong> Click your card on the left to confirm, or it will apply automatically.</>
                     ) : (
                       <>🎯 <strong>Click an enemy card on the right to attack!</strong></>
