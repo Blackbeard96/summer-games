@@ -433,7 +433,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   // Update wave state from props
   useEffect(() => {
     if (propCurrentWave !== undefined) {
-      setCurrentWaveIndex(propCurrentWave);
+      // Parent (e.g. Imposition + Firestore) can briefly pass a stale wave behind local progression — never regress.
+      setCurrentWaveIndex(prev => (propCurrentWave < prev ? prev : propCurrentWave));
     }
     if (propMaxWaves !== undefined) {
       setMaxWaves(propMaxWaves);

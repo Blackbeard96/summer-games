@@ -197,14 +197,9 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
   const victoryHandledRef = useRef(false);
   const currentWaveForListenerRef = useRef(currentWave);
   const waveTransitioningForListenerRef = useRef(waveTransitioning);
-
-  useEffect(() => {
-    currentWaveForListenerRef.current = currentWave;
-  }, [currentWave]);
-
-  useEffect(() => {
-    waveTransitioningForListenerRef.current = waveTransitioning;
-  }, [waveTransitioning]);
+  // Keep refs aligned during render so async Firestore snapshots compare to the latest React wave (avoids regressing wave 4 → 3).
+  currentWaveForListenerRef.current = currentWave;
+  waveTransitioningForListenerRef.current = waveTransitioning;
 
   // Initialize battle when modal opens
   useEffect(() => {
@@ -671,6 +666,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
   // Handle wave advancement from BattleEngine (or from our Firestore listener)
   const handleWaveAdvance = useCallback((newWave: number, newEnemies: any[]) => {
     console.log(`[ImpositionTestBattle] Wave advanced to ${newWave}`);
+    currentWaveForListenerRef.current = newWave;
     setCurrentWave(newWave);
     setOpponents(newEnemies);
     
@@ -811,22 +807,31 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
 
       const data = docSnapshot.data();
       const firestoreWave = data.waveNumber || 1;
+      const localWave = currentWaveForListenerRef.current;
+      // Out-of-order / stale snapshots can arrive after BattleEngine + onWaveAdvance already moved forward — never regress wave or merge old-wave enemies.
+      if (firestoreWave < localWave) {
+        return;
+      }
+
       const firestoreEnemies = (data.enemies || []).map((enemy: any) => ({
         ...enemy,
         spawnTime: enemy.spawnTime?.toDate ? enemy.spawnTime.toDate() : (enemy.spawnTime || new Date())
       }));
 
-      // Update local state if wave changed (post wave message only once per wave)
-      if (firestoreWave !== currentWaveForListenerRef.current) {
-        setCurrentWave(firestoreWave);
-        if (lastLoggedWaveRef.current !== firestoreWave) {
-          lastLoggedWaveRef.current = firestoreWave;
-          setBattleLog(prev => [...prev, `🌊 WAVE ${firestoreWave} BEGINS!`]);
+      // Monotonic wave: never set React state to a lower wave than we already have (stale Firestore).
+      setCurrentWave(prev => {
+        if (firestoreWave < prev) return prev;
+        const next = Math.max(prev, firestoreWave);
+        if (next > prev) {
+          if (lastLoggedWaveRef.current !== next) {
+            lastLoggedWaveRef.current = next;
+            setBattleLog(b => [...b, `🌊 WAVE ${next} BEGINS!`]);
+          }
+          lastLocalUpdateRef.current.clear();
+          isUpdatingLocallyRef.current = false;
         }
-        // Clear local update tracking when wave changes
-        lastLocalUpdateRef.current.clear();
-        isUpdatingLocallyRef.current = false;
-      }
+        return next;
+      });
 
       // Format enemies from Firestore
       const formattedEnemies = firestoreEnemies.map((enemy: any) => ({
@@ -977,8 +982,9 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
           return health <= 0;
         });
 
-        if (allDefeated && !waveTransitioning) {
+        if (allDefeated && !waveTransitioningForListenerRef.current) {
           // Wave 4 complete: Show pre-Wave 5 dialogue
+          waveTransitioningForListenerRef.current = true;
           setWaveTransitioning(true);
           setShowBattleEngine(false);
           setBattleLog(prev => [...prev, `🎉 Wave 4 complete!`]);
@@ -1465,6 +1471,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
       {showBattleEngine && battlePhase === 'battle' && (
         <div style={{ width: '100%', height: '100%' }}>
           <BattleEngine
+            key={gameId || 'imposition-battle'}
             onBattleEnd={handleBattleEnd}
             opponents={opponents}
             allies={allies}
