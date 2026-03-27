@@ -107,6 +107,13 @@ export interface SkillUpgrade {
 export interface PlayerSkillState {
   unlockedNodeIds: string[]; // Array of unlocked node IDs from skill tree (legacy)
   learnedNodeIds?: string[]; // Array of learned Universal Law node IDs (new system)
+  universalLawProgress?: {
+    unlockedNodeIds: string[];
+    unlockedByLaw: Record<'divine_oneness' | 'vibration' | 'attraction' | 'rhythm', string[]>;
+    lastUnlockedAt?: Timestamp;
+    totalSpentPP: number;
+    totalSpentTruthMetalShards: number;
+  };
   equippedSkillIds: string[]; // Array of equipped skill IDs (max 6 — see constants/loadout.ts)
   skillUpgrades: Record<string, SkillUpgrade>; // Map of skillId -> upgrade state
   

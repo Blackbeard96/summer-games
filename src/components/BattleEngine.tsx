@@ -37,6 +37,7 @@ import {
   getOutgoingDamageMultiplierFromManifestBoostPerk,
   getStatusDefenseMitigationFraction,
 } from '../utils/artifactPerkEffects';
+import { getPlayerUniversalLawEffects, type UniversalLawBoonEffects } from '../utils/universalLawBoons';
 import {
   getFirstSummonEffectFromMove,
   resolveConstructStatsForSummonEffect,
@@ -193,6 +194,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   /** For Cost Reduction / other perk resolution (merges catalog perks onto equipped). */
   const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
+  const [universalLawEffects, setUniversalLawEffects] = useState<UniversalLawBoonEffects | null>(null);
   const [battleSkills, setBattleSkills] = useState<Move[]>([]); // Canonical battle skills (all unlocked)
   const [userElement, setUserElement] = useState<string | undefined>(undefined); // User's elemental affinity
   const [skillCooldowns, setSkillCooldowns] = useState<Map<string, number>>(new Map()); // Track cooldowns in battle state
@@ -833,7 +835,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const boostedGain = applyPpEconomyToPPGain(
             actualPPStolen,
             equippedArtifacts as Record<string, unknown> | null,
-            equippableCatalogRaw
+            equippableCatalogRaw,
+            universalLawEffects
           );
           await updateVault({
             currentPP: Math.min(vault.capacity || 1000, vault.currentPP + boostedGain)
@@ -894,6 +897,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     refreshVaultData,
     equippedArtifacts,
     equippableCatalogRaw,
+    universalLawEffects,
     isForestStageActive,
   ]);
 
@@ -958,6 +962,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             setEquippableCatalogRaw(null);
           }
           setEquippedArtifacts(equipped);
+          const effects = await getPlayerUniversalLawEffects(currentUser.uid);
+          setUniversalLawEffects(effects);
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -969,8 +975,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   const getBattleSkillCooldownTurns = useCallback(
     (move: Move) =>
-      effectiveSkillCooldownTurns(move.cooldown || 0, equippedArtifacts, equippableCatalogRaw),
-    [equippedArtifacts, equippableCatalogRaw]
+      effectiveSkillCooldownTurns(
+        move.cooldown || 0,
+        equippedArtifacts,
+        equippableCatalogRaw,
+        universalLawEffects,
+        { category: move.category }
+      ),
+    [equippedArtifacts, equippableCatalogRaw, universalLawEffects]
   );
 
   // Load CPU opponent moves from Firestore with real-time listener
@@ -3374,15 +3386,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const eqRec = equippedArtifacts as Record<string, unknown> | null;
           if (playerMove.category === 'manifest' && equippedArtifacts) {
             dmgMult *= getManifestDamageBoost(equippedArtifacts);
-            dmgMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(eqRec, equippableCatalogRaw);
+            dmgMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(eqRec, equippableCatalogRaw, universalLawEffects);
           }
           if (playerMove.category === 'elemental' && equippedArtifacts) {
             const ringLevel = getElementalRingLevel(equippedArtifacts);
             dmgMult *= getArtifactDamageMultiplier(ringLevel);
-            dmgMult *= getOutgoingDamageMultiplierFromElementalBoostPerk(eqRec, equippableCatalogRaw);
+            dmgMult *= getOutgoingDamageMultiplierFromElementalBoostPerk(eqRec, equippableCatalogRaw, universalLawEffects);
           }
-          dmgMult *= getOutgoingDamageMultiplierFromDamageBoostPerk(eqRec, equippableCatalogRaw);
-          dmgMult *= getOutgoingDamageMultiplierFromCostReductionPerk(eqRec, equippableCatalogRaw);
+          dmgMult *= getOutgoingDamageMultiplierFromDamageBoostPerk(eqRec, equippableCatalogRaw, universalLawEffects);
+          dmgMult *= getOutgoingDamageMultiplierFromCostReductionPerk(eqRec, equippableCatalogRaw, universalLawEffects);
           if (dmgMult > 1.001) {
             totalDamage = Math.floor(totalDamage * dmgMult);
           }
@@ -4394,7 +4406,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
         const manifestPerkMult = getOutgoingDamageMultiplierFromManifestBoostPerk(
           equippedArtifacts as Record<string, unknown> | null,
-          equippableCatalogRaw
+          equippableCatalogRaw,
+          universalLawEffects
         );
         if (manifestPerkMult > 1.001) {
           artifactMultiplier *= manifestPerkMult;
@@ -4414,7 +4427,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
         const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(
           equippedArtifacts as Record<string, unknown> | null,
-          equippableCatalogRaw
+          equippableCatalogRaw,
+          universalLawEffects
         );
         if (elementalPerkMult > 1.001) {
           artifactMultiplier *= elementalPerkMult;
@@ -4427,7 +4441,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // Damage Boost perk: all skills, scales with level; matching-set Artifact Synergy buffs this piece
       const dmgBoostMult = getOutgoingDamageMultiplierFromDamageBoostPerk(
         equippedArtifacts as Record<string, unknown> | null,
-        equippableCatalogRaw
+        equippableCatalogRaw,
+        universalLawEffects
       );
       if (dmgBoostMult > 1.001) {
         artifactMultiplier *= dmgBoostMult;
@@ -4438,7 +4453,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
       const costRedDmgMult = getOutgoingDamageMultiplierFromCostReductionPerk(
         equippedArtifacts as Record<string, unknown> | null,
-        equippableCatalogRaw
+        equippableCatalogRaw,
+        universalLawEffects
       );
       if (costRedDmgMult > 1.001) {
         artifactMultiplier *= costRedDmgMult;
@@ -4743,7 +4759,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         let shieldMult = getManifestDamageBoost(equippedArtifacts);
         shieldMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(
           equippedArtifacts as Record<string, unknown> | null,
-          equippableCatalogRaw
+          equippableCatalogRaw,
+          universalLawEffects
         );
         if (shieldMult > 1.001) {
           shieldRange = {
@@ -5499,7 +5516,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const healPP = applyPpEconomyToPPGain(
         playerHealing,
         equippedArtifacts as Record<string, unknown> | null,
-        equippableCatalogRaw
+        equippableCatalogRaw,
+        universalLawEffects
       );
       newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + healPP);
     }
@@ -5708,7 +5726,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const ppAfterEconomy = applyPpEconomyToPPGain(
         totalPPReward,
         equippedArtifacts as Record<string, unknown> | null,
-        equippableCatalogRaw
+        equippableCatalogRaw,
+        universalLawEffects
       );
       const ppEconomyBonus = ppAfterEconomy - totalPPReward;
 
@@ -7304,14 +7323,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 move.category === 'manifest'
                   ? getOutgoingDamageMultiplierFromManifestBoostPerk(
                       equippedArtifacts as Record<string, unknown> | null,
-                      equippableCatalogRaw
+                      equippableCatalogRaw,
+                      universalLawEffects
                     )
                   : 1.0;
               const elementalPerkPreview =
                 move.category === 'elemental'
                   ? getOutgoingDamageMultiplierFromElementalBoostPerk(
                       equippedArtifacts as Record<string, unknown> | null,
-                      equippableCatalogRaw
+                      equippableCatalogRaw,
+                      universalLawEffects
                     )
                   : 1.0;
 

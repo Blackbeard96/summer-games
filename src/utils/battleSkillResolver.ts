@@ -23,6 +23,7 @@ import {
   getOutgoingDamageMultiplierFromElementalBoostPerk,
   getOutgoingDamageMultiplierFromManifestBoostPerk,
 } from './artifactPerkEffects';
+import type { UniversalLawBoonEffects } from './universalLawBoons';
 
 export interface ActorState {
   uid: string;
@@ -63,6 +64,8 @@ export interface BattleContext {
   mindforgeMode?: boolean;
   /** Optional admin equippable catalog (enriches perk ids like Artifacts page). */
   equippableCatalogRaw?: Record<string, unknown> | null;
+  /** Pre-resolved universal law boons for this actor. */
+  universalLawEffects?: UniversalLawBoonEffects | null;
   fieldBonus?: {
     type: string;
     healing?: number;
@@ -189,7 +192,11 @@ export async function resolveSkillAction(
         result.manifestBoost = manifestBoost;
         artifactMultiplier *= manifestBoost;
       }
-      const manifestPerkMult = getOutgoingDamageMultiplierFromManifestBoostPerk(eqArt, eqCat);
+      const manifestPerkMult = getOutgoingDamageMultiplierFromManifestBoostPerk(
+        eqArt,
+        eqCat,
+        context.universalLawEffects
+      );
       if (manifestPerkMult > 1.001) {
         artifactMultiplier *= manifestPerkMult;
       }
@@ -202,18 +209,30 @@ export async function resolveSkillAction(
       if (elementalMultiplier > 1.0) {
         artifactMultiplier *= elementalMultiplier;
       }
-      const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(eqArt, eqCat);
+      const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(
+        eqArt,
+        eqCat,
+        context.universalLawEffects
+      );
       if (elementalPerkMult > 1.001) {
         artifactMultiplier *= elementalPerkMult;
       }
     }
 
-    const dmgBoostMult = getOutgoingDamageMultiplierFromDamageBoostPerk(eqArt, eqCat);
+    const dmgBoostMult = getOutgoingDamageMultiplierFromDamageBoostPerk(
+      eqArt,
+      eqCat,
+      context.universalLawEffects
+    );
     if (dmgBoostMult > 1.001) {
       artifactMultiplier *= dmgBoostMult;
     }
 
-    const costRedMult = getOutgoingDamageMultiplierFromCostReductionPerk(eqArt, eqCat);
+    const costRedMult = getOutgoingDamageMultiplierFromCostReductionPerk(
+      eqArt,
+      eqCat,
+      context.universalLawEffects
+    );
     if (costRedMult > 1.001) {
       artifactMultiplier *= costRedMult;
     }
@@ -260,7 +279,11 @@ export async function resolveSkillAction(
           `💍 Elemental Ring (Level ${ringLevel}) boosts ${skill.name} damage by ${Math.round((ringMult - 1) * 100)}%!`
         );
       }
-      const ePerk = getOutgoingDamageMultiplierFromElementalBoostPerk(eqArt, eqCat);
+      const ePerk = getOutgoingDamageMultiplierFromElementalBoostPerk(
+        eqArt,
+        eqCat,
+        context.universalLawEffects
+      );
       if (ePerk > 1.001) {
         result.logMessages.push(
           `🔥 Elemental Boost increases ${skill.name} damage by ${Math.round((ePerk - 1) * 100)}%!`
@@ -269,7 +292,11 @@ export async function resolveSkillAction(
     }
 
     if (skill.category === 'manifest') {
-      const mPerk = getOutgoingDamageMultiplierFromManifestBoostPerk(eqArt, eqCat);
+      const mPerk = getOutgoingDamageMultiplierFromManifestBoostPerk(
+        eqArt,
+        eqCat,
+        context.universalLawEffects
+      );
       if (mPerk > 1.001) {
         result.logMessages.push(
           `✨ Manifest Boost increases ${skill.name} damage by ${Math.round((mPerk - 1) * 100)}%!`
@@ -308,7 +335,8 @@ export async function resolveSkillAction(
       let shieldMult = getManifestDamageBoost(actor.equippedArtifacts);
       shieldMult *= getOutgoingDamageMultiplierFromManifestBoostPerk(
         actor.equippedArtifacts as Record<string, unknown> | null | undefined,
-        context.equippableCatalogRaw ?? null
+        context.equippableCatalogRaw ?? null,
+        context.universalLawEffects
       );
       if (shieldMult > 1.001) {
         shieldBoostRange = {
@@ -343,7 +371,8 @@ export async function resolveSkillAction(
     const gainedWithEconomy = applyPpEconomyToPPGain(
       baseStolen,
       actor.equippedArtifacts as Record<string, unknown> | null | undefined,
-      context.equippableCatalogRaw ?? null
+      context.equippableCatalogRaw ?? null,
+      context.universalLawEffects
     );
     result.ppStolen = gainedWithEconomy;
 

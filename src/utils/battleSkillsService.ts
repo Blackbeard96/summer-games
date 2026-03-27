@@ -16,10 +16,13 @@ import { Move } from '../types/battle';
 import { getUserRRCandySkills } from './rrCandyService';
 import { getRRCandyStatusAsync } from './rrCandyUtils';
 import { getPlayerSkillState } from './skillStateService';
-import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
 import type { ArtifactSkillDefinition, ArtifactStatusEffect } from '../types/artifact';
 import { getElementalAccessElementFromStudent, hasElementalAccessPerkEquipped } from './artifactPerkEffects';
 import { DEFAULT_EQUIPPABLE_ARTIFACTS_CATALOG } from '../data/defaultEquippableArtifactsCatalog';
+import {
+  getMaxLoadoutSlotsFromEffects,
+  getPlayerUniversalLawEffects,
+} from './universalLawBoons';
 
 // Prevent console log spam; only emit a small number of Magical Paintbrush debug lines.
 let artifactPaintbrushDebugEmitted = false;
@@ -670,6 +673,14 @@ export async function getUserUnlockedSkillsForBattle(
       ...artifactSkillMoves,
     ];
 
+    const lawEffects = await getPlayerUniversalLawEffects(userId);
+    if (lawEffects.unlockedSpecificSkillIds.length > 0) {
+      const bonusSkills = allMoves.filter((m) =>
+        lawEffects.unlockedSpecificSkillIds.includes(m.id)
+      );
+      battleSkills.push(...bonusSkills);
+    }
+
     const uniqueSkills = new Map<string, Move>();
     battleSkills.forEach(skill => {
       if (!uniqueSkills.has(skill.id)) {
@@ -733,10 +744,12 @@ export async function getEquippedSkillsForBattle(
   battleMoves?: Move[]
 ): Promise<Move[]> {
   try {
-    const [skillState, unlocked] = await Promise.all([
+    const [skillState, unlocked, lawEffects] = await Promise.all([
       getPlayerSkillState(userId),
       getUserUnlockedSkillsForBattle(userId, userElement, battleMoves),
+      getPlayerUniversalLawEffects(userId),
     ]);
+    const maxSlots = getMaxLoadoutSlotsFromEffects(lawEffects);
     const equippedIds = skillState.equippedSkillIds || [];
 
     const byId = new Map<string, Move>();
@@ -744,7 +757,7 @@ export async function getEquippedSkillsForBattle(
 
     if (equippedIds.length > 0) {
       const result: Move[] = [];
-      const cappedIds = equippedIds.slice(0, MAX_EQUIPPED_SKILLS);
+      const cappedIds = equippedIds.slice(0, maxSlots);
       for (const id of cappedIds) {
         const move = byId.get(id);
         if (move) result.push(move);
@@ -755,7 +768,7 @@ export async function getEquippedSkillsForBattle(
       return result;
     }
 
-    const fallback = unlocked.slice(0, MAX_EQUIPPED_SKILLS);
+    const fallback = unlocked.slice(0, maxSlots);
     if (fallback.length > 0) {
       const ids = fallback.map(m => m.id);
       const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');

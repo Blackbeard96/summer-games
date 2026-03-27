@@ -7,23 +7,22 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { 
-  UniversalLawId, 
-  UNIVERSAL_LAW_TREES, 
+import {
+  UniversalLawId,
   getAllLawTrees,
   getLawTreeById,
-  getSkillById
+  getBoonNodesByLaw,
+  type UniversalLawBoonNode,
 } from '../../data/universalLawTrees';
-import { 
-  getAllLawTreeAccess, 
-  LawTreeAccess,
-  canLearnNode 
-} from '../../utils/universalLawGating';
-import { 
-  getLearnedNodeIds, 
-  learnUniversalLawNode 
-} from '../../utils/skillStateService';
+import { getAllLawTreeAccess, canLearnNode } from '../../utils/universalLawGating';
 import { HoldToUnlockButton } from './HoldToUnlockButton';
+import {
+  computeNodeEligibility,
+  getPlayerUniversalLawProgress,
+  type PlayerUniversalLawProgress,
+  type UniversalLawCurrencySnapshot,
+  unlockUniversalLawBoonNode,
+} from '../../utils/universalLawBoons';
 
 interface UniversalLawSkillTreePageProps {
   userId: string;
@@ -35,8 +34,24 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
   const { currentUser } = useAuth();
   const [selectedLawId, setSelectedLawId] = useState<UniversalLawId | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [learnedNodeIds, setLearnedNodeIds] = useState<string[]>([]);
+  const [progress, setProgress] = useState<PlayerUniversalLawProgress>({
+    unlockedNodeIds: [],
+    unlockedByLaw: {
+      divine_oneness: [],
+      vibration: [],
+      attraction: [],
+      rhythm: [],
+    },
+    totalSpentPP: 0,
+    totalSpentTruthMetalShards: 0,
+  });
   const [userData, setUserData] = useState<any>(null);
+  const [currency, setCurrency] = useState<UniversalLawCurrencySnapshot>({
+    powerPoints: 0,
+    truthMetalShards: 0,
+  });
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockFeedback, setUnlockFeedback] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Load user data and learned nodes
@@ -44,35 +59,48 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
     if (!userId) return;
 
     const userRef = doc(db, 'users', userId);
+    const studentRef = doc(db, 'students', userId);
     const unsubscribeUser = onSnapshot(userRef, (doc) => {
       if (doc.exists()) {
         setUserData(doc.data());
       }
     });
+    const unsubscribeStudent = onSnapshot(studentRef, (docSnap) => {
+      if (!docSnap.exists()) {
+        setCurrency((prev) => ({ ...prev, powerPoints: 0, truthMetalShards: 0 }));
+        return;
+      }
+      const data = docSnap.data() as Record<string, unknown>;
+      setCurrency({
+        powerPoints: Math.max(0, Math.floor(Number(data.powerPoints) || 0)),
+        truthMetalShards: Math.max(0, Math.floor(Number(data.truthMetal) || 0)),
+      });
+    });
 
-    const loadLearnedNodes = async () => {
+    const loadProgress = async () => {
       try {
-        const learned = await getLearnedNodeIds(userId);
-        setLearnedNodeIds(learned);
+        const nextProgress = await getPlayerUniversalLawProgress(userId);
+        setProgress(nextProgress);
         setLoading(false);
       } catch (error) {
-        console.error('Error loading learned nodes:', error);
+        console.error('Error loading universal law progress:', error);
         setLoading(false);
       }
     };
 
-    loadLearnedNodes();
+    loadProgress();
 
     return () => {
       unsubscribeUser();
+      unsubscribeStudent();
     };
   }, [userId]);
 
   // Get access status for all trees
   const treeAccess = useMemo(() => {
     if (!userData) return {};
-    return getAllLawTreeAccess(userData, learnedNodeIds);
-  }, [userData, learnedNodeIds]);
+    return getAllLawTreeAccess(userData, progress.unlockedNodeIds);
+  }, [userData, progress.unlockedNodeIds]);
 
   // Get selected tree
   const selectedTree = useMemo(() => {
@@ -82,27 +110,32 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
 
   // Get selected node
   const selectedNode = useMemo(() => {
-    if (!selectedTree || !selectedNodeId) return null;
-    return selectedTree.nodes.find(n => n.nodeId === selectedNodeId) || null;
-  }, [selectedTree, selectedNodeId]);
-
-  // Get selected skill
-  const selectedSkill = useMemo(() => {
-    if (!selectedNode) return null;
-    return getSkillById(selectedNode.skillId);
-  }, [selectedNode]);
+    if (!selectedLawId || !selectedNodeId) return null;
+    return getBoonNodesByLaw(selectedLawId).find((n) => n.id === selectedNodeId) || null;
+  }, [selectedLawId, selectedNodeId]);
 
   // Check if selected node is learned
   const isNodeLearned = useMemo(() => {
-    return selectedNodeId ? learnedNodeIds.includes(selectedNodeId) : false;
-  }, [selectedNodeId, learnedNodeIds]);
+    return selectedNodeId ? progress.unlockedNodeIds.includes(selectedNodeId) : false;
+  }, [selectedNodeId, progress.unlockedNodeIds]);
 
   // Check if selected node can be learned
   const canLearn = useMemo(() => {
     if (!selectedNode || !userData || isNodeLearned) return false;
-    const result = canLearnNode(selectedNode.nodeId, userData, learnedNodeIds);
+    const result = canLearnNode(
+      selectedNode.id,
+      userData,
+      progress.unlockedNodeIds,
+      progress,
+      currency
+    );
     return result.canLearn;
-  }, [selectedNode, userData, learnedNodeIds, isNodeLearned]);
+  }, [selectedNode, userData, progress, currency, isNodeLearned]);
+
+  const selectedEligibility = useMemo(() => {
+    if (!selectedNode) return null;
+    return computeNodeEligibility(selectedNode, progress, currency);
+  }, [selectedNode, progress, currency]);
 
   // Auto-select first available tree
   useEffect(() => {
@@ -115,8 +148,9 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
       if (firstAvailable) {
         setSelectedLawId(firstAvailable.id);
         // Auto-select first node in tree
-        if (firstAvailable.nodes.length > 0) {
-          setSelectedNodeId(firstAvailable.nodes[0].nodeId);
+        const nodes = getBoonNodesByLaw(firstAvailable.id);
+        if (nodes.length > 0) {
+          setSelectedNodeId(nodes[0].id);
         }
       } else {
         // Select first tree even if locked (to show locked state)
@@ -127,24 +161,31 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
 
   // Auto-select first node when tree changes
   useEffect(() => {
-    if (selectedTree && selectedTree.nodes.length > 0 && !selectedNodeId) {
-      setSelectedNodeId(selectedTree.nodes[0].nodeId);
+    if (selectedLawId && !selectedNodeId) {
+      const nodes = getBoonNodesByLaw(selectedLawId);
+      if (nodes.length > 0) setSelectedNodeId(nodes[0].id);
     }
-  }, [selectedTree, selectedNodeId]);
+  }, [selectedLawId, selectedNodeId]);
 
   // Handle learn
   const handleLearn = async () => {
-    if (!selectedNode || !canLearn) return;
+    if (!selectedNode || !canLearn || unlockBusy) return;
     
     try {
-      const success = await learnUniversalLawNode(userId, selectedNode.nodeId, learnedNodeIds);
-      if (success) {
-        setLearnedNodeIds([...learnedNodeIds, selectedNode.nodeId]);
+      setUnlockBusy(true);
+      setUnlockFeedback(null);
+      const res = await unlockUniversalLawBoonNode(userId, selectedNode.id);
+      if (res.ok && res.progress) {
+        setProgress(res.progress);
+        setUnlockFeedback(`Unlocked ${selectedNode.title}!`);
       } else {
-        console.error('Failed to learn node');
+        setUnlockFeedback(res.reason || 'Failed to unlock boon node');
       }
     } catch (error) {
-      console.error('Error learning node:', error);
+      console.error('Error unlocking node:', error);
+      setUnlockFeedback('Error unlocking node');
+    } finally {
+      setUnlockBusy(false);
     }
   };
 
@@ -194,6 +235,21 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
         }}>
           Universal Laws
         </h3>
+        <div
+          style={{
+            marginBottom: '0.85rem',
+            fontSize: '0.75rem',
+            color: 'rgba(255,255,255,0.75)',
+            lineHeight: 1.5,
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '0.5rem',
+            padding: '0.6rem',
+          }}
+        >
+          <div>⚡ PP: {currency.powerPoints.toLocaleString()}</div>
+          <div>🔩 Truth Metal: {currency.truthMetalShards.toLocaleString()}</div>
+        </div>
         
         {allTrees.map((tree) => {
           const access = treeAccess[tree.id];
@@ -207,8 +263,9 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
               key={tree.id}
               onClick={() => {
                 setSelectedLawId(tree.id);
-                if (tree.nodes.length > 0) {
-                  setSelectedNodeId(tree.nodes[0].nodeId);
+                const nodes = getBoonNodesByLaw(tree.id);
+                if (nodes.length > 0) {
+                  setSelectedNodeId(nodes[0].id);
                 }
               }}
               disabled={isLocked}
@@ -290,7 +347,7 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
         minHeight: 0
       }}>
         {selectedTree ? (
-          selectedTree.nodes.length > 0 ? (
+          getBoonNodesByLaw(selectedTree.id).length > 0 ? (
             <div style={{
               display: 'flex',
               flexWrap: 'wrap',
@@ -300,24 +357,37 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
               width: '100%',
               height: '100%'
             }}>
-              {selectedTree.nodes.map((node) => {
-                const skill = getSkillById(node.skillId);
-                const isLearned = learnedNodeIds.includes(node.nodeId);
-                const isSelected = selectedNodeId === node.nodeId;
+              {getBoonNodesByLaw(selectedTree.id).map((node) => {
+                const isLearned = progress.unlockedNodeIds.includes(node.id);
+                const isSelected = selectedNodeId === node.id;
                 const access = treeAccess[selectedTree.id];
                 const isLocked = access?.status === 'locked';
+                const eligibility = computeNodeEligibility(node, progress, currency);
+                const isUnlockable = !isLearned && eligibility.canUnlock && !isLocked;
+                const isBlockedByCost =
+                  !isLearned &&
+                  (eligibility.insufficientPP || eligibility.insufficientTruthMetal);
                 
                 return (
                   <button
-                    key={node.nodeId}
-                    onClick={() => setSelectedNodeId(node.nodeId)}
+                    key={node.id}
+                    onClick={() => setSelectedNodeId(node.id)}
                     disabled={isLocked}
+                    title={
+                      isLearned
+                        ? 'Unlocked'
+                        : eligibility.reason || (isUnlockable ? 'Unlockable' : 'Locked')
+                    }
                     style={{
                       width: '80px',
                       height: '80px',
                       transform: 'rotate(45deg)',
                       background: isLearned
                         ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(16, 185, 129, 0.1) 100%)'
+                        : isUnlockable
+                          ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(59, 130, 246, 0.1) 100%)'
+                          : isBlockedByCost
+                            ? 'linear-gradient(135deg, rgba(217, 119, 6, 0.2) 0%, rgba(217, 119, 6, 0.08) 100%)'
                         : isSelected
                           ? 'linear-gradient(135deg, rgba(234, 179, 8, 0.3) 0%, rgba(234, 179, 8, 0.1) 100%)'
                           : isLocked
@@ -327,6 +397,8 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
                         ? '2px solid #eab308'
                         : isLearned
                           ? '2px solid #10b981'
+                          : isUnlockable
+                            ? '2px solid #3b82f6'
                           : isLocked
                             ? '2px solid rgba(107, 114, 128, 0.5)'
                             : '2px solid rgba(255, 255, 255, 0.3)',
@@ -342,12 +414,12 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
                   >
                     <div style={{
                       transform: 'rotate(-45deg)',
-                      fontSize: '2rem',
+                      fontSize: '1.65rem',
                       color: isLocked 
                         ? 'rgba(255, 255, 255, 0.3)' 
                         : '#fff'
                     }}>
-                      {skill?.icon.value || '?'}
+                      {node.icon || '◇'}
                     </div>
                     {isLearned && (
                       <div style={{
@@ -379,9 +451,7 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
               textAlign: 'center',
               fontSize: '0.875rem'
             }}>
-              {selectedTree.id === 'divine_oneness' 
-                ? 'Coming soon'
-                : 'No nodes available'}
+              No nodes available
             </div>
           )
         ) : (
@@ -404,7 +474,7 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
         display: 'flex',
         flexDirection: 'column'
       }}>
-        {selectedSkill && selectedNode ? (
+        {selectedNode ? (
           <div style={{
             padding: '1.5rem',
             height: '100%',
@@ -424,8 +494,8 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
               alignItems: 'center',
               gap: '0.75rem'
             }}>
-              <span style={{ fontSize: '2rem' }}>{selectedSkill.icon.value}</span>
-              <span>{selectedSkill.name}</span>
+              <span>{selectedNode.icon || '◇'}</span>
+              <span>{selectedNode.title}</span>
             </div>
 
             {/* Law Info */}
@@ -456,7 +526,7 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
               </div>
             )}
 
-            {/* In-Game Section */}
+            {/* Node Details */}
             <div style={{ marginBottom: '1.5rem' }}>
               <h3 style={{
                 fontSize: '0.875rem',
@@ -466,44 +536,14 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
                 color: 'rgba(255, 255, 255, 0.6)',
                 marginBottom: '0.75rem'
               }}>
-                In-Game Effect
+                Boon Effect
               </h3>
               <p style={{
                 fontSize: '1rem',
                 lineHeight: '1.6',
                 color: 'rgba(255, 255, 255, 0.9)'
               }}>
-                {selectedSkill.inGame.summary}
-              </p>
-            </div>
-
-            {/* IRL Section */}
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{
-                fontSize: '0.875rem',
-                fontWeight: 'bold',
-                textTransform: 'uppercase',
-                letterSpacing: '0.1em',
-                color: 'rgba(255, 255, 255, 0.6)',
-                marginBottom: '0.75rem'
-              }}>
-                Real-World Application
-              </h3>
-              <p style={{
-                fontSize: '1rem',
-                lineHeight: '1.6',
-                marginBottom: '0.5rem',
-                color: 'rgba(255, 255, 255, 0.9)'
-              }}>
-                {selectedSkill.irl.summary}
-              </p>
-              <p style={{
-                fontSize: '0.875rem',
-                lineHeight: '1.5',
-                color: 'rgba(255, 255, 255, 0.7)',
-                fontStyle: 'italic'
-              }}>
-                {selectedSkill.irl.exampleUse}
+                {selectedNode.description}
               </p>
             </div>
 
@@ -531,10 +571,40 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
                   padding: 0,
                   margin: 0
                 }}>
-                  {selectedTree?.rrCandyRequired && (
+                  <li style={{
+                    fontSize: '0.875rem',
+                    color: selectedEligibility?.insufficientPP ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
+                    marginBottom: '0.25rem',
+                    paddingLeft: '1rem',
+                    position: 'relative'
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      left: 0,
+                      color: 'rgba(255, 255, 255, 0.5)'
+                    }}>•</span>
+                    Cost: ⚡ {selectedNode.costPP.toLocaleString()} PP
+                  </li>
+                  <li style={{
+                    fontSize: '0.875rem',
+                    color: selectedEligibility?.insufficientTruthMetal ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
+                    marginBottom: '0.25rem',
+                    paddingLeft: '1rem',
+                    position: 'relative'
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      left: 0,
+                      color: 'rgba(255, 255, 255, 0.5)'
+                    }}>•</span>
+                    Cost: 🔩 {selectedNode.costTruthMetalShards.toLocaleString()} Truth Metal
+                  </li>
+                  {selectedNode.prerequisites.length > 0 && (
                     <li style={{
                       fontSize: '0.875rem',
-                      color: 'rgba(255, 255, 255, 0.8)',
+                      color: (selectedEligibility?.missingPrerequisites.length || 0) > 0
+                        ? '#fca5a5'
+                        : 'rgba(255, 255, 255, 0.8)',
                       marginBottom: '0.25rem',
                       paddingLeft: '1rem',
                       position: 'relative'
@@ -544,41 +614,7 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
                         left: 0,
                         color: 'rgba(255, 255, 255, 0.5)'
                       }}>•</span>
-                      RR Candy: {selectedTree.rrCandyRequired === 'config' ? 'Config (Kon)' :
-                                 selectedTree.rrCandyRequired === 'on_off' ? 'On/Off (Luz)' :
-                                 selectedTree.rrCandyRequired === 'up_down' ? 'Up/Down (Brinx)' : selectedTree.rrCandyRequired}
-                    </li>
-                  )}
-                  {selectedTree?.availableAfterChapter && (
-                    <li style={{
-                      fontSize: '0.875rem',
-                      color: 'rgba(255, 255, 255, 0.8)',
-                      marginBottom: '0.25rem',
-                      paddingLeft: '1rem',
-                      position: 'relative'
-                    }}>
-                      <span style={{
-                        position: 'absolute',
-                        left: 0,
-                        color: 'rgba(255, 255, 255, 0.5)'
-                      }}>•</span>
-                      Complete Chapter {selectedTree.availableAfterChapter}
-                    </li>
-                  )}
-                  {selectedNode.requiresNodeIds.length > 0 && (
-                    <li style={{
-                      fontSize: '0.875rem',
-                      color: 'rgba(255, 255, 255, 0.8)',
-                      marginBottom: '0.25rem',
-                      paddingLeft: '1rem',
-                      position: 'relative'
-                    }}>
-                      <span style={{
-                        position: 'absolute',
-                        left: 0,
-                        color: 'rgba(255, 255, 255, 0.5)'
-                      }}>•</span>
-                      Learn prerequisite nodes
+                      Prerequisites: {selectedNode.prerequisites.length} node(s)
                     </li>
                   )}
                 </ul>
@@ -604,8 +640,13 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
             ) : (
               <HoldToUnlockButton
                 onUnlock={handleLearn}
-                disabled={!canLearn}
+                disabled={!canLearn || unlockBusy}
               />
+            )}
+            {unlockFeedback && (
+              <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'rgba(255,255,255,0.85)' }}>
+                {unlockFeedback}
+              </div>
             )}
 
             {/* Spacer */}

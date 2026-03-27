@@ -4,10 +4,14 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, serverTimestamp, arrayUnion } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { PlayerSkillState } from '../types/skillSystem';
 import { getStarterNodes } from '../data/skillTreeDefinition';
-import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
+import {
+  ensureUniversalLawProgressInitialized,
+  getPlayerUniversalLawProgress,
+  unlockUniversalLawBoonNode,
+} from './universalLawBoons';
 
 const SKILL_STATE_VERSION = 'v1';
 
@@ -135,13 +139,17 @@ export function getUnlockedSkillIds(
  */
 export async function getLearnedNodeIds(userId: string): Promise<string[]> {
   try {
+    await ensureUniversalLawProgressInitialized(userId);
     const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
     const skillStateDoc = await getDoc(skillStateRef);
     
     if (skillStateDoc.exists()) {
       const data = skillStateDoc.data();
       // Support both learnedNodeIds (new) and unlockedNodeIds (legacy)
-      return data.learnedNodeIds || [];
+      const fromMain = Array.isArray(data.learnedNodeIds) ? data.learnedNodeIds : [];
+      if (fromMain.length > 0) return fromMain;
+      const progress = await getPlayerUniversalLawProgress(userId);
+      return progress.unlockedNodeIds;
     }
     
     return [];
@@ -166,16 +174,8 @@ export async function learnUniversalLawNode(
       return true; // Already learned
     }
     
-    const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-    
-    // Use arrayUnion to add the nodeId atomically
-    await updateDoc(skillStateRef, {
-      learnedNodeIds: arrayUnion(nodeId),
-      lastUpdated: serverTimestamp(),
-      version: SKILL_STATE_VERSION
-    });
-    
-    return true;
+    const result = await unlockUniversalLawBoonNode(userId, nodeId);
+    return result.ok;
   } catch (error) {
     console.error('Error learning Universal Law node:', error);
     return false;

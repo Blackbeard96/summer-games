@@ -9,6 +9,7 @@ import {
   findEquippableDefinitionRow,
   mergeEquippableCatalogLayers,
 } from './battleSkillsService';
+import type { UniversalLawBoonEffects } from './universalLawBoons';
 
 export const ELEMENTAL_ACCESS_PERK_ID = 'elemental-access';
 export const SHIELD_BOOST_PERK_ID = 'shield-boost';
@@ -277,9 +278,12 @@ export function getCostReductionPerkSkillEffectivenessBonusFraction(
 
 export function getOutgoingDamageMultiplierFromCostReductionPerk(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  return 1 + getCostReductionPerkSkillEffectivenessBonusFraction(equipped, rawCatalog);
+  const base = 1 + getCostReductionPerkSkillEffectivenessBonusFraction(equipped, rawCatalog);
+  const bonus = 1 + Math.max(0, Number(lawEffects?.rrCandySkillBonusFraction || 0));
+  return base * bonus;
 }
 
 /**
@@ -307,9 +311,12 @@ export function getDamageBoostBonusFraction(
 /** Outgoing damage multiplier for all skills (1 + capped bonus fraction). */
 export function getOutgoingDamageMultiplierFromDamageBoostPerk(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  return 1 + getDamageBoostBonusFraction(equipped, rawCatalog);
+  const base = 1 + getDamageBoostBonusFraction(equipped, rawCatalog);
+  const bonus = 1 + Math.max(0, Number(lawEffects?.comboDamageBonusFraction || 0));
+  return base * bonus;
 }
 
 /**
@@ -336,9 +343,12 @@ export function getManifestBoostBonusFraction(
 
 export function getOutgoingDamageMultiplierFromManifestBoostPerk(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  return 1 + getManifestBoostBonusFraction(equipped, rawCatalog);
+  const base = 1 + getManifestBoostBonusFraction(equipped, rawCatalog);
+  const bonus = 1 + Math.max(0, Number(lawEffects?.manifestSkillBonusFraction || 0));
+  return base * bonus;
 }
 
 /** Additive bonus fraction for Elemental Boost — elemental-category attacks only. Cap +100% total. */
@@ -362,9 +372,12 @@ export function getElementalBoostBonusFraction(
 
 export function getOutgoingDamageMultiplierFromElementalBoostPerk(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  return 1 + getElementalBoostBonusFraction(equipped, rawCatalog);
+  const base = 1 + getElementalBoostBonusFraction(equipped, rawCatalog);
+  const bonus = 1 + Math.max(0, Number(lawEffects?.elementalSkillBonusFraction || 0));
+  return base * bonus;
 }
 
 /**
@@ -416,7 +429,8 @@ export function getHealingBoostRegenPerTurn(
  */
 export function getPpEconomyBonusFraction(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
   let sum = 0;
@@ -429,18 +443,20 @@ export function getPpEconomyBonusFraction(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     sum += base * syn;
   }
-  return Math.min(0.5, sum);
+  const lawBonus = Math.max(0, Number(lawEffects?.battleRewardPpMultiplierBonusFraction || 0));
+  return Math.min(0.8, sum + lawBonus);
 }
 
 /** Floor of basePP × (1 + PP Economy bonus). Target still loses only the base stolen amount when used for steals. */
 export function applyPpEconomyToPPGain(
   basePP: number,
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const b = Math.max(0, Math.floor(Number(basePP) || 0));
   if (b === 0) return 0;
-  const f = getPpEconomyBonusFraction(equipped, rawCatalog);
+  const f = getPpEconomyBonusFraction(equipped, rawCatalog, lawEffects);
   return Math.floor(b * (1 + f));
 }
 
@@ -526,11 +542,20 @@ export function getSkillsMasteryPerkDisplaySnapshot(
 
 export function effectiveSkillCooldownTurns(
   baseCooldown: number,
-  _equipped?: Record<string, unknown> | null | undefined,
-  _rawCatalog?: Record<string, unknown> | null | undefined
+  equipped?: Record<string, unknown> | null | undefined,
+  rawCatalog?: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null,
+  moveMeta?: { category?: string }
 ): number {
   const b = Math.max(0, Math.floor(Number(baseCooldown) || 0));
-  return b;
+  const globalReduction = Math.max(0, Number(lawEffects?.cooldownReductionGlobalFraction || 0));
+  const artifactReduction =
+    moveMeta?.category === 'system'
+      ? Math.max(0, Number(lawEffects?.artifactSkillCooldownReductionFraction || 0))
+      : 0;
+  const perkReduction = Math.min(0.25, getLiveEventPpCostReductionFromEquipped(equipped, rawCatalog) * 0.01);
+  const totalReduction = Math.min(0.85, globalReduction + artifactReduction + perkReduction);
+  return Math.max(0, Math.floor(b * (1 - totalReduction)));
 }
 
 /** Secondary element granted by Elemental Access (Firestore). */

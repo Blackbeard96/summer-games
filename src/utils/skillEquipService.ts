@@ -8,6 +8,7 @@ import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getPlayerSkillState } from './skillStateService';
 import { recalculatePowerLevel } from '../services/recalculatePowerLevel';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
+import { getMaxLoadoutSlotsFromEffects, getPlayerUniversalLawEffects } from './universalLawBoons';
 
 const SKILL_STATE_VERSION = 'v1';
 
@@ -20,6 +21,7 @@ const SKILL_STATE_VERSION = 'v1';
 export async function equipSkill(userId: string, skillId: string, maxEquipped: number = MAX_EQUIPPED_SKILLS): Promise<boolean> {
   try {
     const skillState = await getPlayerSkillState(userId);
+    const lawEffects = await getPlayerUniversalLawEffects(userId);
     const currentEquipped = skillState.equippedSkillIds || [];
     
     // Check if already equipped
@@ -28,7 +30,8 @@ export async function equipSkill(userId: string, skillId: string, maxEquipped: n
     }
     
     // Cap at MAX_EQUIPPED_SKILLS even if caller passes higher
-    const cap = Math.min(maxEquipped, MAX_EQUIPPED_SKILLS);
+    const lawCap = getMaxLoadoutSlotsFromEffects(lawEffects);
+    const cap = Math.max(maxEquipped, lawCap);
     if (currentEquipped.length >= cap) {
       throw new Error(`Cannot equip more than ${cap} skills. Unequip one first.`);
     }
@@ -112,11 +115,14 @@ export async function unequipSkill(userId: string, skillId: string): Promise<boo
  */
 export async function updateEquippedSkills(userId: string, equippedSkillIds: string[]): Promise<void> {
   try {
+    const lawEffects = await getPlayerUniversalLawEffects(userId);
+    const cap = getMaxLoadoutSlotsFromEffects(lawEffects);
+    const trimmed = equippedSkillIds.slice(0, cap);
     const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
     await setDoc(
       skillStateRef,
       {
-        equippedSkillIds,
+        equippedSkillIds: trimmed,
         lastUpdated: serverTimestamp(),
         version: SKILL_STATE_VERSION,
       },

@@ -29,6 +29,11 @@ import {
   resolveConstructStatsForSummonEffect,
 } from '../utils/summonConstructStats';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
+import {
+  getMaxLoadoutSlotsFromEffects,
+  getPlayerUniversalLawEffects,
+  type UniversalLawBoonEffects,
+} from '../utils/universalLawBoons';
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -87,6 +92,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [artifactMoves, setArtifactMoves] = useState<Move[]>([]);
   /** Same doc as equippable catalog — for Elemental Access perk gating. */
   const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
+  const [universalLawEffects, setUniversalLawEffects] = useState<UniversalLawBoonEffects | null>(null);
+  const [maxLoadoutSlots, setMaxLoadoutSlots] = useState<number>(MAX_EQUIPPED_SKILLS);
 
   // Load user's manifest type from both students and users collections
   useEffect(() => {
@@ -262,8 +269,12 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       try {
         const state = await getPlayerSkillState(currentUser.uid);
         setEquippedSkillIds(state.equippedSkillIds || []);
+        const effects = await getPlayerUniversalLawEffects(currentUser.uid);
+        setUniversalLawEffects(effects);
+        setMaxLoadoutSlots(getMaxLoadoutSlotsFromEffects(effects));
       } catch (e) {
         console.error('MovesDisplay: Error loading equipped skills:', e);
+        setMaxLoadoutSlots(MAX_EQUIPPED_SKILLS);
       }
     };
     loadEquipped();
@@ -1308,7 +1319,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             const effCd = effectiveSkillCooldownTurns(
               baseCd,
               equippedArtifacts as Record<string, unknown>,
-              equippableCatalogRaw
+              equippableCatalogRaw,
+              universalLawEffects,
+              { category: move.category }
             );
             return (
             <div style={{
@@ -2023,8 +2036,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 type="button"
                 onClick={async () => {
                   if (!currentUser || loadoutBusy) return;
-                  if (equippedSkillIds.length >= MAX_EQUIPPED_SKILLS) {
-                    alert(`You can only equip ${MAX_EQUIPPED_SKILLS} skills. Unequip one first.`);
+                  if (equippedSkillIds.length >= maxLoadoutSlots) {
+                    alert(`You can only equip ${maxLoadoutSlots} skills. Unequip one first.`);
                     return;
                   }
                   setLoadoutBusy(true);
@@ -2039,19 +2052,21 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                     setLoadoutBusy(false);
                   }
                 }}
-                disabled={loadoutBusy || equippedSkillIds.length >= MAX_EQUIPPED_SKILLS}
+                disabled={loadoutBusy || equippedSkillIds.length >= maxLoadoutSlots}
                 style={{
                   width: '100%',
                   padding: '0.5rem',
-                  background: equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? '#9ca3af' : '#4f46e5',
+                  background: equippedSkillIds.length >= maxLoadoutSlots ? '#9ca3af' : '#4f46e5',
                   color: 'white',
                   border: 'none',
                   borderRadius: '0.5rem',
                   fontSize: '0.8rem',
-                  cursor: loadoutBusy || equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? 'not-allowed' : 'pointer'
+                  cursor: loadoutBusy || equippedSkillIds.length >= maxLoadoutSlots ? 'not-allowed' : 'pointer'
                 }}
               >
-                {equippedSkillIds.length >= MAX_EQUIPPED_SKILLS ? 'Loadout full (6/6)' : '+ Equip to loadout'}
+                {equippedSkillIds.length >= maxLoadoutSlots
+                  ? `Loadout full (${maxLoadoutSlots}/${maxLoadoutSlots})`
+                  : '+ Equip to loadout'}
               </button>
             )}
           </div>
@@ -2300,7 +2315,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + artifactMoves.length} Skills Unlocked)
       </h3>
 
-      {/* Loadout: X/6 — only equipped skills appear in battle */}
+      {/* Loadout slots (base + boon bonuses) */}
       <div style={{
         marginBottom: '1rem',
         padding: '0.75rem 1rem',
@@ -2314,7 +2329,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         gap: '0.5rem'
       }}>
         <span style={{ fontWeight: '600' }}>
-          Loadout: {equippedSkillIds.length}/{MAX_EQUIPPED_SKILLS} equipped
+          Loadout: {equippedSkillIds.length}/{maxLoadoutSlots} equipped
         </span>
         <span style={{ fontSize: '0.875rem', opacity: 0.95 }}>
           Only equipped skills appear in battle. Equip or unequip below.
@@ -2425,7 +2440,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           gap: '0.5rem',
           alignItems: 'stretch'
         }}>
-          {Array.from({ length: MAX_EQUIPPED_SKILLS }, (_, i) => {
+          {Array.from({ length: maxLoadoutSlots }, (_, i) => {
             const move = equippedMovesForPreview[i];
             if (move) {
               const isManifest = move.category === 'manifest';

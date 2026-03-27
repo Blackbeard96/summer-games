@@ -193,11 +193,24 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
   const isUpdatingLocallyRef = useRef(false);
   const lastLocalUpdateRef = useRef<Map<string, { health: number; shield: number }>>(new Map());
   const lastLoggedWaveRef = useRef<number>(0); // Dedupe: only post "WAVE X BEGINS!" once per wave
+  /** Prevents repeated victory handling: Firestore snapshots fire often; wave-5 defeat would otherwise call handleVictory() every tick and freeze the UI. */
+  const victoryHandledRef = useRef(false);
+  const currentWaveForListenerRef = useRef(currentWave);
+  const waveTransitioningForListenerRef = useRef(waveTransitioning);
+
+  useEffect(() => {
+    currentWaveForListenerRef.current = currentWave;
+  }, [currentWave]);
+
+  useEffect(() => {
+    waveTransitioningForListenerRef.current = waveTransitioning;
+  }, [waveTransitioning]);
 
   // Initialize battle when modal opens
   useEffect(() => {
     if (isOpen && !hasShownIntroRef.current) {
       hasShownIntroRef.current = true;
+      victoryHandledRef.current = false;
       setBattlePhase('intro');
       setCurrentWave(1);
       setShowBattleEngine(false);
@@ -213,6 +226,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
       startBattle();
     } else if (!isOpen) {
       hasShownIntroRef.current = false;
+      victoryHandledRef.current = false;
       setCurrentIntroScene(0);
       setShowIntroImage(false);
       setCurrentIntroImage(null);
@@ -587,8 +601,10 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
     // Victory is handled by the wave completion monitoring useEffect
   }, []);
 
-  // Handle victory
+  // Handle victory (must run once — onSnapshot + local opponent updates can fire many times while wave 5 is cleared)
   const handleVictory = async () => {
+    if (victoryHandledRef.current) return;
+    victoryHandledRef.current = true;
     setBattlePhase('victory');
     setShowBattleEngine(false);
 
@@ -645,6 +661,11 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
     } catch (error) {
       console.error('Error completing challenge:', error);
     }
+  };
+
+  const handleVictoryRef = useRef<() => void>(() => {});
+  handleVictoryRef.current = () => {
+    void handleVictory();
   };
 
   // Handle wave advancement from BattleEngine (or from our Firestore listener)
@@ -796,7 +817,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
       }));
 
       // Update local state if wave changed (post wave message only once per wave)
-      if (firestoreWave !== currentWave) {
+      if (firestoreWave !== currentWaveForListenerRef.current) {
         setCurrentWave(firestoreWave);
         if (lastLoggedWaveRef.current !== firestoreWave) {
           lastLoggedWaveRef.current = firestoreWave;
@@ -892,8 +913,9 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
           return (health <= 0 && shield <= 0) || opp.isDefeated === true;
         });
 
-        if (allDefeated && !waveTransitioning) {
+        if (allDefeated && !waveTransitioningForListenerRef.current) {
           console.log(`🌊 [ImpositionTestBattle] Wave ${firestoreWave} complete! Advancing to wave ${firestoreWave + 1}`);
+          waveTransitioningForListenerRef.current = true;
           setWaveTransitioning(true);
           
           // Update Firestore to next wave
@@ -907,6 +929,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
               enemiesRevision: ((data as any).enemiesRevision || 0) + 1,
               updatedAt: serverTimestamp()
             }).then(() => {
+              waveTransitioningForListenerRef.current = false;
               setWaveTransitioning(false);
               if (lastLoggedWaveRef.current !== nextWave) {
                 lastLoggedWaveRef.current = nextWave;
@@ -914,10 +937,12 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
               }
             }).catch(err => {
               console.error('Error advancing wave:', err);
+              waveTransitioningForListenerRef.current = false;
               setWaveTransitioning(false);
             });
           } else {
             console.warn(`⚠️ [ImpositionTestBattle] No enemies found for wave ${nextWave}`);
+            waveTransitioningForListenerRef.current = false;
             setWaveTransitioning(false);
           }
         }
@@ -973,6 +998,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
           setTimeout(async () => {
             setShowDialogue(false);
             setBattlePhase('battle');
+            waveTransitioningForListenerRef.current = false;
             setWaveTransitioning(false);
             
             // Update Firestore to wave 5
@@ -998,15 +1024,16 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
         });
 
         if (allDefeated) {
-          handleVictory();
+          handleVictoryRef.current();
         }
       }
     });
 
     return () => unsubscribe();
-  }, [gameId, currentUser, currentWave, waveTransitioning, showKonDialogue, opponents]);
+    // Intentionally only gameId + currentUser: other state is read via refs so we do not re-subscribe on every opponent HP tick (that was freezing the UI).
+  }, [gameId, currentUser]);
 
-  // Monitor for Wave 5 completion (final victory)
+  // Monitor for Wave 5 completion (final victory) when BattleEngine updates local opponents without a snapshot tick
   useEffect(() => {
     if (!showBattleEngine || currentWave !== 5 || opponents.length === 0) return;
 
@@ -1016,7 +1043,7 @@ const ImpositionTestBattle: React.FC<ImpositionTestBattleProps> = ({
     });
 
     if (allDefeated) {
-      handleVictory();
+      handleVictoryRef.current();
     }
   }, [opponents, showBattleEngine, currentWave]);
 

@@ -6,6 +6,7 @@
 import { doc, getDoc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import { TrainingAttempt, TrainingAnswer, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
+import { getPlayerUniversalLawEffects } from './universalLawBoons';
 
 export interface RewardResult {
   ppGained: number;
@@ -110,6 +111,12 @@ export async function grantQuizRewards(
   userId: string,
   rewards: RewardResult
 ): Promise<void> {
+  const lawEffects = await getPlayerUniversalLawEffects(userId);
+  const ppMultiplier = 1 + Math.max(0, Number(lawEffects.battleRewardPpMultiplierBonusFraction || 0));
+  const adjustedRewards: RewardResult = {
+    ...rewards,
+    ppGained: Math.max(0, Math.floor(rewards.ppGained * ppMultiplier)),
+  };
   const userRef = doc(db, 'users', userId);
   const studentRef = doc(db, 'students', userId);
   const vaultRef = doc(db, 'vaults', userId);
@@ -122,7 +129,7 @@ export async function grantQuizRewards(
     // Update users collection
     if (userDoc.exists()) {
       transaction.update(userRef, {
-        powerPoints: increment(rewards.ppGained),
+        powerPoints: increment(adjustedRewards.ppGained),
         xp: increment(rewards.xpGained),
       });
     }
@@ -130,7 +137,7 @@ export async function grantQuizRewards(
     // Update students collection
     if (studentDoc.exists()) {
       transaction.update(studentRef, {
-        powerPoints: increment(rewards.ppGained),
+        powerPoints: increment(adjustedRewards.ppGained),
         xp: increment(rewards.xpGained),
       });
     }
@@ -140,7 +147,7 @@ export async function grantQuizRewards(
       const vaultData = vaultDoc.data();
       const vaultCapacity = vaultData.capacity || 1000;
       const currentVaultPP = vaultData.currentPP || 0;
-      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + rewards.ppGained);
+      const newVaultPP = Math.min(vaultCapacity, currentVaultPP + adjustedRewards.ppGained);
       
       transaction.update(vaultRef, {
         currentPP: newVaultPP,
