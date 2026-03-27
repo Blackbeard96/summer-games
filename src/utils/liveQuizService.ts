@@ -938,7 +938,11 @@ export async function submitBattleRoyaleQuickAction(
       if (targetTotal <= 0 && !target.eliminated) {
         target.eliminated = true;
         target.eliminatedBy = actorUid;
-        battleLog.push(`☠️ ${targetName} has been ELIMINATED!`);
+        battleLog.push(
+          actorUid !== targetUid
+            ? `☠️ ${targetName} eliminated by ${actorName}!`
+            : `☠️ ${targetName} has been ELIMINATED!`
+        );
         Promise.resolve().then(() => {
           trackElimination(sessionId, actorUid, targetUid).catch(() => {});
         });

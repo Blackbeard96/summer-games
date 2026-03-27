@@ -39,6 +39,7 @@ const InSessionNotification: React.FC = () => {
   const [isJoining, setIsJoining] = useState(false);
   const [isInSession, setIsInSession] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
+  const [dismissedSessionIds, setDismissedSessionIds] = useState<Set<string>>(new Set());
   const previousSessionIdRef = useRef<string | null>(null); // Track previous session ID to prevent unnecessary updates
   const previousMembershipRef = useRef<boolean | null>(null); // Track previous membership state to prevent flickering
 
@@ -249,6 +250,13 @@ const InSessionNotification: React.FC = () => {
             const shouldUpdate = sessionIdChanged || (membershipChanged && isMembershipStable);
 
             if (shouldUpdate) {
+              const isDismissed = dismissedSessionIds.has(latestSession.id);
+              if (isDismissed) {
+                setActiveSession(null);
+                previousSessionIdRef.current = latestSession.id;
+                previousMembershipRef.current = userInSession;
+                return;
+              }
               if (!userInSession) {
                 // User hasn't joined the session - show notification to join
                 debug.log('InSessionNotification', '✅ Showing join notification - user not in session', {
@@ -368,7 +376,7 @@ const InSessionNotification: React.FC = () => {
         clearInterval(pollInterval);
       }
     };
-  }, [currentUser, location]); // Use location object instead of location.pathname to ensure re-evaluation on route changes
+  }, [currentUser, location, dismissedSessionIds]); // Use location object instead of location.pathname to ensure re-evaluation on route changes
 
   const handleJoinSession = async () => {
     if (!currentUser || !activeSession || isJoining) return;
@@ -388,11 +396,16 @@ const InSessionNotification: React.FC = () => {
         throw new Error('Invalid player name. Please update your profile.');
       }
 
+      const plRaw = studentData.powerLevel;
+      const powerLevel =
+        typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
+
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
+        powerLevel,
         powerPoints: studentData.powerPoints || 0,
         participationCount: 0,
         movesEarned: 0
@@ -443,8 +456,13 @@ const InSessionNotification: React.FC = () => {
   };
 
   const handleDismiss = () => {
-    // Don't allow dismissing - notification stays active as long as session is active
-    // This ensures students always see when their class is in session
+    if (!activeSession?.id) return;
+    setDismissedSessionIds(prev => {
+      const next = new Set(prev);
+      next.add(activeSession.id);
+      return next;
+    });
+    setActiveSession(null);
   };
 
   const handleEndSession = async () => {
@@ -510,7 +528,31 @@ const InSessionNotification: React.FC = () => {
         color: 'white'
       }}>
         <div style={{ marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+            <button
+              onClick={handleDismiss}
+              aria-label="Close live event notification"
+              style={{
+                marginLeft: 'auto',
+                background: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.35)',
+                borderRadius: '999px',
+                width: '28px',
+                height: '28px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontWeight: 700,
+                flexShrink: 0
+              }}
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.5rem' }}>
             <div style={{ fontSize: '2rem' }}>📚</div>
             <div>
               <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>

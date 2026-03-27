@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, addDoc, collection, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, addDoc, collection, runTransaction } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { activatePPBoost, getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
@@ -16,6 +16,23 @@ import { isRevivePotionName } from '../utils/liveEventRevive';
 import { getEquippablePerkDisplayRows } from '../utils/marketplaceEquippablePerks';
 
 type Artifact = MarketplaceStoreArtifact;
+
+/** Firestore rejects `undefined` in nested maps; strip recursively before writes. */
+function deepOmitUndefined<T>(value: T): T {
+  if (value === undefined) return value as T;
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) {
+    return value.map((v) => deepOmitUndefined(v)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v !== undefined) {
+      out[k] = deepOmitUndefined(v);
+    }
+  }
+  return out as T;
+}
 
 const Marketplace = () => {
   const { currentUser, isAdmin: checkIsAdmin } = useAuth();
@@ -146,7 +163,8 @@ const Marketplace = () => {
           const studentsData = studentsSnap.data();
           setPowerPoints(studentsData.powerPoints || 0);
           setTruthMetal(Math.max(0, Math.floor(Number(studentsData.truthMetal) || 0)));
-          setInventory(studentsData.inventory || []);
+          const rawInv = studentsData.inventory;
+          setInventory(Array.isArray(rawInv) ? rawInv : []);
         }
         
         // Also fetch user artifacts to check for consistency
@@ -1110,15 +1128,15 @@ const Marketplace = () => {
           return;
         }
 
-        const purchasedEquippable = {
+        const purchasedEquippable = deepOmitUndefined({
           id: equippableGrantId,
           name: item.name || (typeof art.name === 'string' ? art.name : equippableGrantId),
           description: item.description,
           price: item.price,
-          truthMetalPrice: tmCost || undefined,
+          ...(tmCost > 0 ? { truthMetalPrice: tmCost } : {}),
           icon: item.icon,
           image: item.image || (typeof art.image === 'string' ? art.image : ''),
-          category: 'equippable',
+          category: 'equippable' as const,
           rarity: item.rarity,
           purchasedAt: new Date(),
           used: false,
@@ -1130,7 +1148,7 @@ const Marketplace = () => {
           artifactSkill: art.artifactSkill,
           level: typeof art.level === 'number' ? art.level : 1,
           stats: art.stats ?? {},
-        };
+        });
 
         const updatedEquippableArtifacts = {
           ...currentArtifacts,
@@ -1138,29 +1156,31 @@ const Marketplace = () => {
           [`${equippableGrantId}_purchase`]: purchasedEquippable,
         };
 
-        await updateDoc(userRef, {
-          powerPoints: powerPoints - item.price,
-          ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
-          artifacts: updatedEquippableArtifacts,
-        });
+        await setDoc(
+          userRef,
+          deepOmitUndefined({
+            powerPoints: powerPoints - item.price,
+            ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
+            artifacts: updatedEquippableArtifacts,
+          }),
+          { merge: true }
+        );
 
         const usersRef = doc(db, 'users', currentUser.uid);
         const usersSnap = await getDoc(usersRef);
-        if (usersSnap.exists()) {
-          const usersData = usersSnap.data();
-          const usersArtifacts = usersData.artifacts || {};
-          let updatedUsersArtifacts;
-          if (Array.isArray(usersArtifacts)) {
-            updatedUsersArtifacts = [...usersArtifacts, purchasedEquippable];
-          } else {
-            updatedUsersArtifacts = {
-              ...usersArtifacts,
-              [equippableGrantId]: true,
-              [`${equippableGrantId}_purchase`]: purchasedEquippable,
-            };
-          }
-          await updateDoc(usersRef, { artifacts: updatedUsersArtifacts });
+        const usersData = usersSnap.exists() ? usersSnap.data() : {};
+        const usersArtifacts = usersData.artifacts || {};
+        let updatedUsersArtifacts;
+        if (Array.isArray(usersArtifacts)) {
+          updatedUsersArtifacts = [...usersArtifacts, purchasedEquippable];
+        } else {
+          updatedUsersArtifacts = {
+            ...usersArtifacts,
+            [equippableGrantId]: true,
+            [`${equippableGrantId}_purchase`]: purchasedEquippable,
+          };
         }
+        await setDoc(usersRef, deepOmitUndefined({ artifacts: updatedUsersArtifacts }), { merge: true });
 
         await createAdminNotification({
           type: 'artifact_purchase',
@@ -1189,25 +1209,23 @@ const Marketplace = () => {
       // Check if this is a UXP artifact
       const isUXPArtifact = item.name.includes('UXP') || item.id.startsWith('uxp-credit');
 
-      // Create detailed artifact purchase record
-      const purchasedArtifact = {
+      // Create detailed artifact purchase record (no undefined fields — Firestore rejects them)
+      const purchasedArtifact = deepOmitUndefined({
         id: item.id,
         name: item.name,
         description: item.description,
         price: item.price,
-        truthMetalPrice: tmCost || undefined,
+        ...(tmCost > 0 ? { truthMetalPrice: tmCost } : {}),
         icon: item.icon,
         image: item.image,
         category: item.category,
         rarity: item.rarity,
         purchasedAt: new Date(),
         used: false,
-        // UXP artifacts require admin approval before being active
-        ...(isUXPArtifact && {
-          pendingApproval: true,
-          approvalStatus: 'pending',
-        }),
-      };
+        ...(isUXPArtifact
+          ? { pendingApproval: true, approvalStatus: 'pending' as const }
+          : {}),
+      });
 
       // Handle artifacts - can be either array or object
       let updatedArtifacts;
@@ -1224,43 +1242,45 @@ const Marketplace = () => {
         };
       }
 
+      const invList = Array.isArray(inventory) ? inventory : [];
+
       // Update user's power points (and Truth Metal if required) and add artifact to inventory
-      await updateDoc(userRef, {
-        powerPoints: powerPoints - item.price,
-        ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
-        inventory: [...inventory, item.name],
-        artifacts: updatedArtifacts,
-      });
+      await setDoc(
+        userRef,
+        deepOmitUndefined({
+          powerPoints: powerPoints - item.price,
+          ...(tmCost > 0 ? { truthMetal: nextTruth } : {}),
+          inventory: [...invList, item.name],
+          artifacts: updatedArtifacts,
+        }),
+        { merge: true }
+      );
 
       // Also update the users collection to keep both in sync
       const usersRef = doc(db, 'users', currentUser.uid);
       const usersSnap = await getDoc(usersRef);
-      if (usersSnap.exists()) {
-        const usersData = usersSnap.data();
-        const usersArtifacts = usersData.artifacts || {};
-        let updatedUsersArtifacts;
+      const usersData = usersSnap.exists() ? usersSnap.data() : {};
+      const usersArtifacts = usersData.artifacts || {};
+      let updatedUsersArtifacts;
 
-        if (Array.isArray(usersArtifacts)) {
-          updatedUsersArtifacts = [...usersArtifacts, purchasedArtifact];
-        } else {
-          updatedUsersArtifacts = {
-            ...usersArtifacts,
-            [item.id]: true,
-            [`${item.id}_purchase`]: purchasedArtifact,
-          };
-        }
-
-        // For UXP artifacts, show message about pending approval
-        if (isUXPArtifact) {
-          alert(
-            'Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.'
-          );
-        }
-
-        await updateDoc(usersRef, {
-          artifacts: updatedUsersArtifacts,
-        });
+      if (Array.isArray(usersArtifacts)) {
+        updatedUsersArtifacts = [...usersArtifacts, purchasedArtifact];
+      } else {
+        updatedUsersArtifacts = {
+          ...usersArtifacts,
+          [item.id]: true,
+          [`${item.id}_purchase`]: purchasedArtifact,
+        };
       }
+
+      // For UXP artifacts, show message about pending approval
+      if (isUXPArtifact) {
+        alert(
+          'Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.'
+        );
+      }
+
+      await setDoc(usersRef, deepOmitUndefined({ artifacts: updatedUsersArtifacts }), { merge: true });
 
       // Create admin notification
       await createAdminNotification({
@@ -1286,9 +1306,15 @@ const Marketplace = () => {
       await updateAllArtifactCounts();
 
       alert(`Successfully purchased ${item.name}!`);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error purchasing item:', error);
-      alert('Failed to purchase item. Please try again.');
+      const detail =
+        error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: string }).message)
+          : String(error);
+      alert(
+        `Failed to purchase item.${detail ? ` ${detail}` : ''} If this persists, refresh the page and try again.`
+      );
     }
   };
 

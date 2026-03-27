@@ -27,6 +27,8 @@ export interface SessionPlayer {
   displayName: string;
   photoURL?: string;
   level: number;
+  /** Total Power Level (PL) from profile / artifacts — optional for older session rows */
+  powerLevel?: number | null;
   powerPoints: number;
   participationCount: number;
   movesEarned: number;

@@ -58,9 +58,17 @@ export async function checkAndHandleElimination(
       return p;
     });
     
+    const attacker =
+      attackerId && attackerId !== playerId
+        ? players.find((p) => p.userId === attackerId)
+        : undefined;
+    const byClause =
+      attackerId && attackerId !== playerId
+        ? ` by ${attacker?.displayName || 'Unknown'}`
+        : '';
     const updatedLog = [
       ...(sessionData.battleLog || []),
-      `☠️ ${player?.displayName || 'Player'} has been ELIMINATED!`
+      `☠️ ${player?.displayName || 'Player'} has been ELIMINATED${byClause}!`
     ];
     
     await updateDoc(sessionRef, {

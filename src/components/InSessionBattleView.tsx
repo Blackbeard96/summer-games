@@ -14,6 +14,7 @@ interface Student {
   photoURL?: string;
   level?: number;
   xp?: number;
+  powerLevel?: number | null;
 }
 
 const InSessionBattleView: React.FC = () => {
@@ -93,6 +94,10 @@ const InSessionBattleView: React.FC = () => {
                 const userData = userDoc.exists() ? userDoc.data() : {};
                 const level = getLevelFromXP(studentData.xp || 0);
 
+                const plRaw = studentData.powerLevel;
+                const powerLevel =
+                  typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
+
                 return {
                   ...base,
                   displayName: userData.displayName || studentData.displayName || base.displayName,
@@ -100,7 +105,8 @@ const InSessionBattleView: React.FC = () => {
                   powerPoints: studentData.powerPoints || base.powerPoints,
                   photoURL: userData.photoURL || studentData.photoURL || base.photoURL,
                   level: level || base.level,
-                  xp: studentData.xp || base.xp
+                  xp: studentData.xp || base.xp,
+                  powerLevel
                 };
               } catch (error) {
                 // Expected for non-admin students due profile access rules; keep fallback row visible.

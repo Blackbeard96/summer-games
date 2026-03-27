@@ -15,6 +15,7 @@ import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/
 import { getMoveDamageSync } from '../utils/moveOverrides';
 import { getEquippedSkillsForBattle } from '../utils/battleSkillsService';
 import { getRRCandyDisplayName } from '../utils/rrCandyMoves';
+import { getUserRRCandySkills } from '../utils/rrCandyService';
 // New service imports
 import { 
   subscribeToSession, 
@@ -35,7 +36,8 @@ import {
 } from '../utils/inSessionPresenceService';
 import { 
   getAvailableSkillsForSession,
-  createSessionLoadout
+  createSessionLoadout,
+  type SessionLoadout
 } from '../utils/inSessionSkillsService';
 import { 
   submitAction,
@@ -87,6 +89,8 @@ import type { TrainingQuestion } from '../types/trainingGrounds';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
 import type { Move as BattleMove } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
+import { ARTIFACT_PERK_OPTIONS } from '../constants/artifactPerks';
+import { getPlayerSkillState } from '../utils/skillStateService';
 
 interface Student {
   id: string;
@@ -96,6 +100,8 @@ interface Student {
   photoURL?: string;
   level?: number;
   xp?: number;
+  /** Power Level (PL) — from students doc when roster loads */
+  powerLevel?: number | null;
 }
 
 interface InSessionBattleProps {
@@ -123,6 +129,31 @@ interface SessionPlayer {
   maxShield?: number;
   eliminated?: boolean;
   eliminatedBy?: string;
+}
+
+type PlayerInspectTab = 'loadout' | 'artifacts';
+type InspectArtifactEntry = {
+  slot: string;
+  name: string;
+  image?: string | null;
+  level?: number | null;
+  rarity?: string | null;
+  perks: Array<{ id: string; label: string; description: string }>;
+};
+
+type PlayerInspectData = {
+  userId: string;
+  displayName: string;
+  photoURL?: string;
+  powerLevel?: number | null;
+  loadout: SessionLoadout | null;
+  artifacts: InspectArtifactEntry[];
+  skillLevelsById: Record<string, number>;
+};
+
+/** Coerce Firestore / session values to an integer PL, or null if missing/invalid */
+function finitePowerLevel(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : null;
 }
 
 const InSessionBattle: React.FC<InSessionBattleProps> = ({
@@ -180,6 +211,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [userLevel, setUserLevel] = useState(1);
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   const [userProfiles, setUserProfiles] = useState<Map<string, { displayName: string; photoURL?: string }>>(new Map());
+  /** Keep latest profile/roster data without re-subscribing the session doc (rapid teardown causes Firestore ca9 errors). */
+  const userProfilesRef = useRef(userProfiles);
+  const studentsRef = useRef(students);
+  userProfilesRef.current = userProfiles;
+  studentsRef.current = students;
   const isUpdatingViewersRef = useRef(false); // Prevent concurrent updates
   
   // Session summary modal state (ref ensures host sees summary when they end session - avoids stale closure)
@@ -275,6 +311,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
   const [quizResponseCount, setQuizResponseCount] = useState(0);
   const [showEliminatedQuizOverlay, setShowEliminatedQuizOverlay] = useState(false);
+  const [showPlayerInspectModal, setShowPlayerInspectModal] = useState(false);
+  const [playerInspectTab, setPlayerInspectTab] = useState<PlayerInspectTab>('loadout');
+  const [selectedInspectPlayerId, setSelectedInspectPlayerId] = useState<string | null>(null);
+  const [playerInspectLoading, setPlayerInspectLoading] = useState(false);
+  const [playerInspectError, setPlayerInspectError] = useState<string | null>(null);
+  const [playerInspectData, setPlayerInspectData] = useState<PlayerInspectData | null>(null);
   const [quizCountdown, setQuizCountdown] = useState<number | null>(null);
   const quizCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const eliminationOverlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -474,11 +516,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         // PP from vault so it matches Vault Management
         const powerPoints = vaultData.currentPP ?? studentData.powerPoints ?? 0;
 
+        const plRaw = studentData.powerLevel;
+        const powerLevel =
+          typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
+
         const newPlayer: ServiceSessionPlayer = {
           userId: currentUser.uid,
           displayName: userData.displayName || studentData.displayName || currentUser.displayName || 'Unknown',
           photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
           level: playerLevel,
+          powerLevel,
           powerPoints,
           participationCount: 0,
           movesEarned: 0,
@@ -551,17 +598,26 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         })));
       }
       
-      // Update player names from userProfiles (source of truth)
+      // Update player names from userProfiles; merge Power Level from roster when session row omits it
       const updatedPlayers = players.map((player) => {
-        const latestProfile = userProfiles.get(player.userId);
+        let next: SessionPlayer = { ...player };
+        const latestProfile = userProfilesRef.current.get(player.userId);
         if (latestProfile && latestProfile.displayName !== player.displayName) {
-          return {
-            ...player,
+          next = {
+            ...next,
             displayName: latestProfile.displayName,
             photoURL: latestProfile.photoURL || player.photoURL
           };
         }
-        return player;
+        const rosterPl = studentsRef.current.find((s) => s.id === player.userId)?.powerLevel;
+        if (
+          (next.powerLevel === undefined || next.powerLevel === null) &&
+          rosterPl !== undefined &&
+          rosterPl !== null
+        ) {
+          next = { ...next, powerLevel: rosterPl };
+        }
+        return next;
       });
       
       // ALWAYS log player state changes (critical for debugging) - enhanced
@@ -660,7 +716,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     return () => {
       unsubscribe();
     };
-  }, [sessionId, currentUser, userProfiles, showLiveEventSummaryIfEnded]);
+    // Intentionally omit userProfiles & students: including them re-subscribes on every profile snapshot and triggers Firestore INTERNAL ASSERTION (ca9).
+  }, [sessionId, currentUser, showLiveEventSummaryIfEnded]);
 
   // Append entry to Live Event battle log
   const appendBattleLog = useCallback(async (entry: string) => {
@@ -1627,6 +1684,259 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
   const currentPlayer = sessionPlayers.find(p => p.userId === currentUser?.uid);
 
+  /** Battle / Team BR: eliminated players and eliminator names for the center column */
+  const battleRoyaleEliminations = useMemo(() => {
+    if (!quizSession || !isBattleQuizMode(quizSession.gameMode)) return [];
+    const nameFor = (uid: string) =>
+      userProfiles.get(uid)?.displayName ||
+      sessionPlayers.find((p) => p.userId === uid)?.displayName ||
+      students.find((s) => s.id === uid)?.displayName ||
+      'Unknown';
+    return sessionPlayers
+      .filter((p) => p.eliminated)
+      .map((p) => ({
+        victimId: p.userId,
+        victimName: p.displayName || 'Player',
+        eliminatorId: p.eliminatedBy,
+        eliminatorName: p.eliminatedBy ? nameFor(p.eliminatedBy) : null,
+      }))
+      .sort((a, b) => a.victimName.localeCompare(b.victimName, undefined, { sensitivity: 'base' }));
+  }, [quizSession, sessionPlayers, userProfiles, students]);
+
+  const normalizeEquippedArtifacts = (raw: any): InspectArtifactEntry[] => {
+    if (!raw) return [];
+    const entries: InspectArtifactEntry[] = [];
+    const perkById = new Map(ARTIFACT_PERK_OPTIONS.map((p) => [p.id, p]));
+    const perkByLabel = new Map(ARTIFACT_PERK_OPTIONS.map((p) => [p.label.toLowerCase(), p]));
+    const readArtifactLevel = (value: any): number | null => {
+      const candidates = [value?.level, value?.artifactLevel, value?.upgradeLevel, value?.currentLevel];
+      for (const c of candidates) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) return Math.floor(n);
+      }
+      return null;
+    };
+    const pushArtifact = (slot: string, value: any) => {
+      if (!value) return;
+      const name =
+        value.name ||
+        value.label ||
+        value.artifactName ||
+        value.id ||
+        value.artifactId ||
+        'Unknown Artifact';
+      const rawPerks = Array.isArray(value.perks)
+        ? value.perks
+        : (typeof value.perk === 'string' ? [value.perk] : []);
+      const perks = rawPerks
+        .filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
+        .map((p: string) => {
+          const byId = perkById.get(p);
+          if (byId) return byId;
+          const byLabel = perkByLabel.get(p.toLowerCase());
+          if (byLabel) return byLabel;
+          return { id: p, label: p, description: '' };
+        })
+        .map((p: { id: string; label: string; description?: string }) => ({ id: p.id, label: p.label, description: p.description || '' }));
+      entries.push({
+        slot,
+        name: String(name),
+        image: typeof value.image === 'string' ? value.image : null,
+        level: readArtifactLevel(value),
+        rarity: value.rarity ?? null,
+        perks
+      });
+    };
+
+    if (Array.isArray(raw)) {
+      raw.forEach((artifact, idx) => pushArtifact(`slot-${idx + 1}`, artifact));
+      return entries;
+    }
+
+    if (typeof raw === 'object') {
+      Object.entries(raw).forEach(([slot, artifact]) => pushArtifact(slot, artifact));
+    }
+
+    return entries;
+  };
+
+  const applySkillUpgradeLevelsToLoadout = (
+    loadout: SessionLoadout,
+    skillLevelsById: Record<string, number>
+  ): SessionLoadout => {
+    const apply = (moves: any[] = []) =>
+      moves.map((m: any) => {
+        const upgraded = Number(skillLevelsById[m?.id]);
+        const artifactGranted = Number(m?.artifactGrant?.artifactLevel);
+        const fromMove = Number(m?.level);
+        const resolved = Number.isFinite(upgraded) && upgraded > 0
+          ? upgraded
+          : Number.isFinite(artifactGranted) && artifactGranted > 0
+            ? artifactGranted
+            : Number.isFinite(fromMove) && fromMove > 0
+              ? fromMove
+              : 1;
+        return { ...m, level: Math.floor(resolved) };
+      });
+
+    return {
+      ...loadout,
+      manifest: apply(loadout.manifest || []),
+      elemental: apply(loadout.elemental || []),
+      rrCandy: apply(loadout.rrCandy || []),
+      artifact: apply(loadout.artifact || []),
+    };
+  };
+
+  const isRRCandyMoveLike = (move: any): boolean => {
+    const id = String(move?.id || '').toLowerCase();
+    const name = String(move?.name || '').toLowerCase();
+    return (
+      id.includes('rr-candy') ||
+      name === 'shield off' ||
+      name === 'shield on' ||
+      name === 'vault hack' ||
+      name === 'shield restoration'
+    );
+  };
+
+  const normalizeLoadoutBuckets = (loadout: SessionLoadout): SessionLoadout => {
+    const all = [
+      ...(loadout.manifest || []),
+      ...(loadout.elemental || []),
+      ...(loadout.rrCandy || []),
+      ...(loadout.artifact || []),
+    ];
+    const dedup = new Map<string, any>();
+    all.forEach((m: any, idx: number) => dedup.set(String(m?.id || `${m?.name || 'move'}-${idx}`), m));
+    const merged = Array.from(dedup.values());
+    return {
+      ...loadout,
+      manifest: merged.filter((m: any) => m?.category === 'manifest'),
+      elemental: merged.filter((m: any) => m?.category === 'elemental'),
+      rrCandy: merged.filter((m: any) => isRRCandyMoveLike(m)),
+      artifact: merged.filter((m: any) => m?.category === 'system' && !isRRCandyMoveLike(m)),
+    };
+  };
+
+  const openPlayerInspectModal = async (playerId: string) => {
+    const selectedStudent = allClassStudents.find((s) => s.id === playerId);
+    const selectedSessionPlayer = sessionPlayers.find((p) => p.userId === playerId);
+    const selectedProfile = userProfiles.get(playerId);
+    const displayName =
+      selectedProfile?.displayName ||
+      selectedSessionPlayer?.displayName ||
+      selectedStudent?.displayName ||
+      'Player';
+    const photoURL = selectedProfile?.photoURL || selectedSessionPlayer?.photoURL || selectedStudent?.photoURL;
+
+    setSelectedInspectPlayerId(playerId);
+    setPlayerInspectTab('loadout');
+    setShowPlayerInspectModal(true);
+    setPlayerInspectLoading(true);
+    setPlayerInspectError(null);
+    setPlayerInspectData({
+      userId: playerId,
+      displayName,
+      photoURL,
+      powerLevel:
+        finitePowerLevel(selectedSessionPlayer?.powerLevel) ??
+        finitePowerLevel(selectedStudent?.powerLevel),
+      loadout: null,
+      artifacts: [],
+      skillLevelsById: {}
+    });
+
+    try {
+      const studentRef = doc(db, 'students', playerId);
+      const playerRef = doc(db, 'inSessionRooms', sessionId, 'players', playerId);
+      const battleMovesRef = doc(db, 'battleMoves', playerId);
+      const [studentSnap, playerSnap, skillState, battleMovesSnap] = await Promise.all([
+        getDoc(studentRef),
+        getDoc(playerRef),
+        getPlayerSkillState(playerId),
+        getDoc(battleMovesRef)
+      ]);
+
+      const studentData = studentSnap.exists() ? studentSnap.data() : {};
+      const playerData = playerSnap.exists() ? playerSnap.data() : {};
+      const battleMoves = battleMovesSnap.exists() ? ((battleMovesSnap.data().moves || []) as any[]) : [];
+      const skillLevelsById = Object.entries(skillState?.skillUpgrades || {}).reduce((acc, [skillId, data]: [string, any]) => {
+        const lvl = Number(data?.level);
+        if (Number.isFinite(lvl) && lvl > 0) acc[skillId] = Math.floor(lvl);
+        return acc;
+      }, {} as Record<string, number>);
+      battleMoves.forEach((m: any) => {
+        const id = String(m?.id || '');
+        if (!id) return;
+        const fromLevel = Number(m?.level);
+        const fromMastery = Number(m?.masteryLevel);
+        const best = Math.max(
+          Number.isFinite(fromLevel) ? fromLevel : 0,
+          Number.isFinite(fromMastery) ? fromMastery : 0,
+          Number(skillLevelsById[id] || 0)
+        );
+        if (best > 0) skillLevelsById[id] = Math.floor(best);
+      });
+      let activeLoadout = (playerData.activeLoadout || null) as SessionLoadout | null;
+      if (!activeLoadout) {
+        // Fallback so players can still be inspected even when no session snapshot exists.
+        const userElement = studentData.elementalAffinity || studentData.manifestationType || undefined;
+        const equippedSkills = await getEquippedSkillsForBattle(playerId, userElement);
+        activeLoadout = {
+          manifest: equippedSkills.filter((s) => s.category === 'manifest'),
+          elemental: equippedSkills.filter((s) => s.category === 'elemental'),
+          rrCandy: equippedSkills.filter((s) => isRRCandyMoveLike(s)),
+          artifact: equippedSkills.filter((s) => s.category === 'system' && !isRRCandyMoveLike(s)),
+          snapshotAt: null
+        };
+      }
+      if (activeLoadout) {
+        activeLoadout = normalizeLoadoutBuckets(
+          applySkillUpgradeLevelsToLoadout(activeLoadout, skillLevelsById)
+        );
+        // Always prefer canonical RR Candy payload so the inspector shows ON/OFF accurately.
+        const rrCandyFromService = await getUserRRCandySkills(playerId, battleMoves as any[]);
+        if (rrCandyFromService.length > 0) {
+          const rrWithLevels = rrCandyFromService.map((m: any) => ({
+            ...m,
+            level: Math.max(
+              1,
+              Number(skillLevelsById[m?.id]) ||
+                Number(m?.masteryLevel) ||
+                Number(m?.level) ||
+                1
+            )
+          }));
+          activeLoadout = normalizeLoadoutBuckets({
+            ...activeLoadout,
+            rrCandy: rrWithLevels,
+            artifact: [...(activeLoadout.artifact || [])]
+          });
+        }
+      }
+      const artifacts = normalizeEquippedArtifacts(studentData.equippedArtifacts);
+
+      setPlayerInspectData({
+        userId: playerId,
+        displayName,
+        photoURL,
+        powerLevel:
+          finitePowerLevel((studentData as Record<string, unknown>)?.powerLevel) ??
+          finitePowerLevel(selectedSessionPlayer?.powerLevel) ??
+          finitePowerLevel(selectedStudent?.powerLevel),
+        loadout: activeLoadout,
+        artifacts,
+        skillLevelsById
+      });
+    } catch (error) {
+      console.error('Failed to load player inspect data:', error);
+      setPlayerInspectError('Could not load this player\'s loadout/artifacts right now.');
+    } finally {
+      setPlayerInspectLoading(false);
+    }
+  };
+
   useEffect(() => {
     const isEliminatedNow = currentPlayer?.eliminated === true;
     const becameEliminated = isEliminatedNow && !wasCurrentPlayerEliminatedRef.current;
@@ -1839,6 +2149,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const isPresent = isActiveInSession && (isPresentInPresenceService || isPresentInActiveViewers);
     // Eliminated: from session flag or inferred when in session with 0 health and 0 shield
     const isEliminated = player?.eliminated === true || (isActiveInSession && vaultData.vaultHealth === 0 && vaultData.shieldStrength === 0);
+
+    const effectivePowerLevel =
+      finitePowerLevel(player?.powerLevel) ?? finitePowerLevel(student.powerLevel);
 
     return (
       <div
@@ -2083,18 +2396,41 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </div>
             <div style={{ fontSize: '0.75rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span>Level {player?.level || student.level || 1}</span>
-              {(player?.powerLevel !== null && player?.powerLevel !== undefined) && (
-                <span style={{ 
+              {effectivePowerLevel != null && (
+                <span
+                  title={`Power Level = ${effectivePowerLevel}`}
+                  style={{ 
                   color: '#8b5cf6', 
                   fontWeight: '600',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '2px'
-                }}>
-                  ⚡ PL {player.powerLevel}
+                }}
+                >
+                  ⚡ PL {effectivePowerLevel}
                 </span>
               )}
             </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openPlayerInspectModal(student.id);
+              }}
+              style={{
+                marginTop: '0.25rem',
+                fontSize: '0.68rem',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '0.375rem',
+                border: '1px solid #cbd5e1',
+                background: '#f8fafc',
+                color: '#1e3a8a',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              View Build
+            </button>
           </div>
         </div>
         
@@ -3084,6 +3420,51 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </button>
             </div>
           )}
+          {quizSession && isBattleQuizMode(quizSession.gameMode) && (
+            <div
+              style={{
+                flexShrink: 0,
+                background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
+                borderRadius: '0.75rem',
+                padding: '0.75rem 1rem',
+                border: '1px solid #4b5563',
+                maxHeight: '180px',
+                overflowY: 'auto',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  color: '#fca5a5',
+                  marginBottom: '0.5rem',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                ☠️ ELIMINATIONS
+              </div>
+              {battleRoyaleEliminations.length === 0 ? (
+                <div style={{ color: '#9ca3af', fontSize: '0.8rem', fontStyle: 'italic' }}>No eliminations yet.</div>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: '1.1rem', color: '#e5e7eb', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                  {battleRoyaleEliminations.map((row) => (
+                    <li key={row.victimId} style={{ marginBottom: '0.25rem' }}>
+                      <span style={{ fontWeight: 600 }}>{row.victimName}</span>
+                      {row.eliminatorName ? (
+                        <>
+                          {' '}
+                          <span style={{ color: '#9ca3af' }}>— eliminated by</span>{' '}
+                          <span style={{ color: '#fde68a', fontWeight: 600 }}>{row.eliminatorName}</span>
+                        </>
+                      ) : (
+                        <span style={{ color: '#9ca3af' }}> — eliminated</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <>
           {quizSession && centerView === 'quiz' && (
             /* Live Quiz Mode panel - full area when Quiz tab is selected */
@@ -3904,6 +4285,210 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         isOpen={showVaultModal} 
         onClose={() => setShowVaultModal(false)}
       />
+      {showPlayerInspectModal && (
+        <div
+          onClick={() => setShowPlayerInspectModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            zIndex: 10001,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '720px',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: '#ffffff',
+              borderRadius: '0.75rem',
+              border: '1px solid #e5e7eb',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.35)',
+              padding: '1rem'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                {playerInspectData?.photoURL ? (
+                  <img
+                    src={playerInspectData.photoURL}
+                    alt={playerInspectData.displayName}
+                    style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                    {(playerInspectData?.displayName || 'P').charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize: '1rem', fontWeight: 700, color: '#111827' }}>{playerInspectData?.displayName || 'Player'}</div>
+                  <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>Live Event Build Viewer</div>
+                  {playerInspectData?.powerLevel != null && (
+                    <div
+                      title={`Power Level = ${playerInspectData.powerLevel}`}
+                      style={{ fontSize: '0.78rem', color: '#8b5cf6', fontWeight: 600, marginTop: '0.15rem' }}
+                    >
+                      ⚡ PL {playerInspectData.powerLevel}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPlayerInspectModal(false)}
+                style={{ border: 'none', background: 'transparent', fontSize: '1rem', cursor: 'pointer', color: '#6b7280', fontWeight: 700 }}
+              >
+                Close
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                onClick={() => setPlayerInspectTab('loadout')}
+                style={{
+                  padding: '0.45rem 0.75rem',
+                  borderRadius: '0.45rem',
+                  border: '1px solid #cbd5e1',
+                  background: playerInspectTab === 'loadout' ? '#e0e7ff' : '#f8fafc',
+                  color: playerInspectTab === 'loadout' ? '#312e81' : '#334155',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Loadout
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlayerInspectTab('artifacts')}
+                style={{
+                  padding: '0.45rem 0.75rem',
+                  borderRadius: '0.45rem',
+                  border: '1px solid #cbd5e1',
+                  background: playerInspectTab === 'artifacts' ? '#dcfce7' : '#f8fafc',
+                  color: playerInspectTab === 'artifacts' ? '#14532d' : '#334155',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Artifacts
+              </button>
+            </div>
+
+            {playerInspectLoading && <div style={{ color: '#475569', fontSize: '0.9rem' }}>Loading player build...</div>}
+            {!playerInspectLoading && playerInspectError && (
+              <div style={{ color: '#b91c1c', fontSize: '0.9rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '0.5rem', padding: '0.6rem' }}>
+                {playerInspectError}
+              </div>
+            )}
+
+            {!playerInspectLoading && !playerInspectError && playerInspectTab === 'loadout' && (
+              <div style={{ display: 'grid', gap: '0.6rem' }}>
+                {(() => {
+                  const grouped = playerInspectData?.loadout
+                    ? [
+                        { title: 'Manifest', skills: playerInspectData.loadout.manifest || [] },
+                        { title: 'Elemental', skills: playerInspectData.loadout.elemental || [] },
+                        { title: 'RR Candy', skills: playerInspectData.loadout.rrCandy || [] },
+                        { title: 'Artifact Skills', skills: playerInspectData.loadout.artifact || [] }
+                      ]
+                    : [];
+                  if (!playerInspectData?.loadout) {
+                    return <div style={{ fontSize: '0.88rem', color: '#6b7280' }}>No session loadout snapshot found for this player yet.</div>;
+                  }
+                  return grouped.map((group) => (
+                    <div key={group.title} style={{ border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '0.6rem' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1f2937', marginBottom: '0.35rem' }}>{group.title}</div>
+                      {group.skills.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>None equipped</div>
+                      ) : (
+                        <div style={{ display: 'grid', gap: '0.35rem' }}>
+                          {group.skills.map((skill: any) => (
+                            <div key={skill.id || `${group.title}-${skill.name}`} style={{ fontSize: '0.8rem', color: '#334155', display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+                              <span>{group.title === 'RR Candy' ? getRRCandyDisplayName(skill as any) : (skill.name || skill.id || 'Unknown Move')}</span>
+                              <span style={{ color: '#64748b' }}>
+                                Lv.{Math.max(
+                                  1,
+                                  Number(playerInspectData?.skillLevelsById?.[skill.id]) ||
+                                    Number(skill?.artifactGrant?.artifactLevel) ||
+                                    Number(skill?.masteryLevel) ||
+                                    Number(skill?.level) ||
+                                    1
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
+
+            {!playerInspectLoading && !playerInspectError && playerInspectTab === 'artifacts' && (
+              <div style={{ display: 'grid', gap: '0.45rem' }}>
+                {!playerInspectData || playerInspectData.artifacts.length === 0 ? (
+                  <div style={{ fontSize: '0.88rem', color: '#6b7280' }}>No equipped artifacts found.</div>
+                ) : (
+                  playerInspectData.artifacts.map((artifact) => (
+                    <div key={`${artifact.slot}-${artifact.name}`} style={{ border: '1px solid #dcfce7', borderRadius: '0.5rem', padding: '0.55rem', background: '#f0fdf4' }}>
+                      <div style={{ display: 'flex', gap: '0.65rem' }}>
+                        {artifact.image ? (
+                          <img
+                            src={artifact.image}
+                            alt={artifact.name}
+                            style={{
+                              width: '56px',
+                              height: '56px',
+                              borderRadius: '0.5rem',
+                              objectFit: 'cover',
+                              border: '1px solid #bbf7d0',
+                              background: 'white',
+                              flexShrink: 0
+                            }}
+                          />
+                        ) : (
+                          <div style={{ width: '56px', height: '56px', borderRadius: '0.5rem', border: '1px dashed #86efac', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#166534', fontSize: '1.1rem', background: 'white' }}>
+                            🧩
+                          </div>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.78rem', color: '#166534', textTransform: 'uppercase', fontWeight: 700 }}>{artifact.slot}</div>
+                          <div style={{ fontSize: '0.92rem', color: '#14532d', fontWeight: 700 }}>{artifact.name}</div>
+                          <div style={{ fontSize: '0.78rem', color: '#15803d' }}>
+                            Level: {artifact.level ?? '-'} {artifact.rarity ? `• ${artifact.rarity}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '0.45rem', display: 'grid', gap: '0.35rem' }}>
+                        {artifact.perks.length === 0 ? (
+                          <div style={{ fontSize: '0.76rem', color: '#64748b' }}>Perks: None listed</div>
+                        ) : (
+                          artifact.perks.map((perk) => (
+                            <div key={`${artifact.slot}-${perk.id}`} style={{ background: 'white', border: '1px solid #dcfce7', borderRadius: '0.45rem', padding: '0.4rem' }}>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#166534' }}>{perk.label}</div>
+                              {perk.description && (
+                                <div style={{ fontSize: '0.74rem', color: '#334155', marginTop: '0.2rem' }}>{perk.description}</div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Target Selection Banner - Show when move is selected */}
       {selectedMove && !showMoveMenu && (
