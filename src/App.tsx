@@ -177,6 +177,9 @@ const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds
 const MissionRunner = withRouteSplitting(() => import('./pages/MissionRunner'));
 const QuizPlayer = withRouteSplitting(() => import('./pages/QuizPlayer'));
 const QuizResults = withRouteSplitting(() => import('./pages/QuizResults'));
+const BattlePassSeasonPage = withRouteSplitting(() => import('./pages/BattlePassSeasonPage'));
+const EnergyMasteryPage = withRouteSplitting(() => import('./pages/EnergyMasteryPage'));
+const ManifestSkillEvolutionPage = withRouteSplitting(() => import('./pages/ManifestSkillEvolutionPage'));
 
 // Loading component for lazy-loaded routes
 const PageLoader = () => (
@@ -533,6 +536,21 @@ const AppContent = () => {
             <Route path="/profile" element={
               <ProtectedRoute user={true}>
                 <Profile />
+              </ProtectedRoute>
+            } />
+            <Route path="/battle-pass" element={
+              <ProtectedRoute user={true}>
+                <BattlePassSeasonPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/energy-mastery" element={
+              <ProtectedRoute user={true}>
+                <EnergyMasteryPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/manifest-evolution" element={
+              <ProtectedRoute user={true}>
+                <ManifestSkillEvolutionPage />
               </ProtectedRoute>
             } />
             <Route path="/skill-tree" element={

@@ -112,6 +112,26 @@ service cloud.firestore {
     match /students/{userId}/dailyChallenges/{progressDocId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // Badge reward queue — RewardNotifier / BadgeRewardNotifier; BadgeManager creates docs for students.
+    match /students/{userId}/badgeNotifications/{notificationId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && (
+        isAdmin() ||
+        isLiveEventStaff() ||
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        request.auth.token.email.matches('.*@mstgames\\.net$') ||
+        request.auth.token.email.matches('.*@compscihigh\\.org$')
+      );
+      allow update, delete: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isLiveEventStaff() ||
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        request.auth.token.email.matches('.*@mstgames\\.net$') ||
+        request.auth.token.email.matches('.*@compscihigh\\.org$')
+      );
+    }
     
     // Profiles collection - allow users to read/write their own profile
     match /profiles/{userId} {
@@ -317,18 +337,37 @@ service cloud.firestore {
         // Student can read their own goal (goalId format: ${assessmentId}_${studentId})
         request.auth.uid == resource.data.studentId
       );
-      // Students can create/update their own goal if assessment is not locked
-      allow create, update: if request.auth != null && (
-        // Admin access
+      // Create: admins/staff OR enrolled student when assessment is not locked
+      allow create: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        // Student can create/update if: goal doc id matches pattern, student is in class, assessment not locked
         (request.auth.uid == request.resource.data.studentId &&
          exists(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)) &&
          get(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)).data.isLocked == false &&
          exists(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)).data.students)
+      );
+      // Update: admins OR student (unlocked goals) OR student evidence-only when locked (Live Event → Assessment Goals)
+      allow update: if request.auth != null && (
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+        request.auth.token.email.matches('.*@mstgames\\.net$') ||
+        request.auth.token.email.matches('.*@compscihigh\\.org$') ||
+        (request.auth.uid == request.resource.data.studentId &&
+         exists(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)) &&
+         get(/databases/$(database)/documents/assessments/$(request.resource.data.assessmentId)).data.isLocked == false &&
+         exists(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)).data.students) ||
+        (request.auth.uid == resource.data.studentId &&
+         request.resource.data.studentId == resource.data.studentId &&
+         request.resource.data.assessmentId == resource.data.assessmentId &&
+         request.resource.data.classId == resource.data.classId &&
+         request.resource.data.id == resource.data.id &&
+         exists(/databases/$(database)/documents/assessments/$(resource.data.assessmentId)) &&
+         get(/databases/$(database)/documents/assessments/$(resource.data.assessmentId)).data.isLocked == true &&
+         exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['evidence', 'updatedAt']))
       );
       // Only admins can delete
       allow delete: if request.auth != null && 
@@ -424,6 +463,15 @@ service cloud.firestore {
          request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
+    }
+
+    // Legacy Season 0 battle pass (claim tracking + premium flag). Doc ids: "{uid}_season0", "{uid}_season1", etc.
+    match /battlePass/{docId} {
+      allow read, write: if request.auth != null && (
+        (docId.size() >= request.auth.uid.size() + 7 &&
+          docId.substring(0, request.auth.uid.size() + 7) == request.auth.uid + '_season') ||
+        isAdmin()
+      );
     }
     
     // Battle Lobbies collection - allow authenticated users to read/write
@@ -680,10 +728,45 @@ service cloud.firestore {
     match /chapterClassroomAssignments/{assignmentId} {
       allow read, write: if request.auth != null;
     }
+
+    // Island Raid / chapter battle invites — BattleInvitationManager, BattleInviteModal (was missing → deny-all).
+    match /battleInvitations/{invitationId} {
+      allow read: if request.auth != null && (
+        resource.data.toUserId == request.auth.uid ||
+        resource.data.fromUserId == request.auth.uid ||
+        isLiveEventStaff() ||
+        isAdmin()
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.fromUserId == request.auth.uid &&
+        request.resource.data.keys().hasAll(['gameId', 'fromUserId', 'toUserId', 'status']);
+      allow update, delete: if request.auth != null && (
+        resource.data.toUserId == request.auth.uid ||
+        resource.data.fromUserId == request.auth.uid ||
+        isLiveEventStaff() ||
+        isAdmin()
+      );
+    }
     
     // Squad invitations collection - allow authenticated users to read/write
     match /squadInvitations/{invitationId} {
       allow read, write: if request.auth != null;
+    }
+
+    // Per-session quiz leaderboard ranks (uid -> rank) for school Leaderboard; no full session payload.
+    match /liveEventPlacementRollups/{sessionId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && (
+        isLiveEventStaff() ||
+        (
+          exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)) &&
+          (
+            get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.hostUid == request.auth.uid ||
+            get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.teacherId == request.auth.uid
+          )
+        )
+      );
+      allow delete: if isLiveEventStaff() || isAdmin();
     }
     
     // Squads collection - allow authenticated users to read/write
@@ -776,6 +859,12 @@ service cloud.firestore {
       allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
     }
     
+    // Season 1 battle pass definitions — all signed-in users may read (Home / BP UI); admins manage.
+    match /seasons/{seasonId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
+    }
+
     // Island Raid Levels - read for all authenticated (lobby list, battle load), write for admins only
     match /islandRaidLevels/{levelId} {
       allow read: if request.auth != null;
@@ -815,6 +904,18 @@ service cloud.firestore {
         allow delete: if request.auth != null &&
           reactionUserId == request.auth.uid;
       }
+    }
+
+    // Home / global banner strip — Banner.tsx listens on bannerMessages (was missing → deny-all).
+    match /bannerMessages/{messageId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
+        request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
+        request.auth.token.email.matches('.*@mstgames\\.net$') ||
+        request.auth.token.email.matches('.*@compscihigh\\.org$')
+      );
     }
     
     // Player skill tree & battle loadout (NOT in-session battle players under inSessionRooms)

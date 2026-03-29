@@ -4,6 +4,10 @@
  * without duplicating business logic.
  */
 
+import type { ConsumableEffect, LiveEventMktListing, MarketplaceItemType } from '../types/consumableEffects';
+
+export type { ConsumableEffect, LiveEventMktListing, MarketplaceItemType };
+
 export interface MarketplaceStoreArtifact {
   id: string;
   name: string;
@@ -23,6 +27,12 @@ export interface MarketplaceStoreArtifact {
    * (adminSettings/equippableArtifacts). Does not add a consumable to inventory.
    */
   equippableArtifactId?: string;
+  /** Store semantics — drives admin validation and consumable resolution. */
+  itemType?: MarketplaceItemType;
+  /** When itemType is consumable (or effect present), used by battle vault + Live Event MST MKT. */
+  consumableEffect?: ConsumableEffect;
+  /** If set, this listing can appear in Live Event MST MKT for Participation PP. */
+  liveEventMkt?: LiveEventMktListing;
 }
 
 export const MARKETPLACE_STORE_ARTIFACTS: MarketplaceStoreArtifact[] = [
@@ -54,7 +64,23 @@ export const MARKETPLACE_STORE_ARTIFACTS: MarketplaceStoreArtifact[] = [
     icon: '🧪',
     image: '/images/Health Potion - 25.png',
     category: 'protection',
-    rarity: 'common'
+    rarity: 'common',
+    itemType: 'consumable',
+    consumableEffect: { effectType: 'restore_health', amount: 25, targetScope: 'self' },
+    liveEventMkt: { enabled: true, pricePp: 600 },
+  },
+  {
+    id: 'shield-restoration-cell',
+    name: 'Shield Restoration Cell',
+    description: 'Restores shield energy on your vault (additive, up to your max shield).',
+    price: 120,
+    icon: '🔋',
+    image: '/images/Shield Item.jpeg',
+    category: 'protection',
+    rarity: 'common',
+    itemType: 'consumable',
+    consumableEffect: { effectType: 'restore_shields', amount: 30, targetScope: 'self' },
+    liveEventMkt: { enabled: true, pricePp: 550 },
   },
   {
     id: 'lunch-mosley',
@@ -209,11 +235,14 @@ export const MARKETPLACE_STORE_ARTIFACTS: MarketplaceStoreArtifact[] = [
     id: 'revive-potion',
     name: 'Revive Potion',
     description:
-      'Revives an eliminated teammate in a Live Event. They return at 50% max HP (shields reset). Use from your Bag during the event.',
+      'When you are eliminated in a Live Event, brings you back at 50% max HP (shields reset). You can buy from MST MKT before elimination to hold it. Use from your Bag to revive a teammate.',
     price: 180,
     icon: '💚',
     image: '/images/Revive Potion.png',
     category: 'special',
-    rarity: 'epic'
+    rarity: 'epic',
+    itemType: 'consumable',
+    consumableEffect: { effectType: 'revive_eliminated_self', amount: 50, targetScope: 'self' },
+    liveEventMkt: { enabled: true, pricePp: 1500 },
   }
 ];

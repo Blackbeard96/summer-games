@@ -632,9 +632,33 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     }
   };
 
+  /** Overlay mastery / upgraded stats from battleMoves — artifact skills are not stored only in catalog-derived state. */
+  const artifactMovesForDisplay = useMemo(() => {
+    return artifactMoves.map((am) => {
+      const saved = moves.find((m) => m.id === am.id);
+      if (!saved) return am;
+      return {
+        ...am,
+        masteryLevel: typeof saved.masteryLevel === 'number' ? saved.masteryLevel : am.masteryLevel,
+        damage: saved.damage ?? am.damage,
+        shieldBoost: saved.shieldBoost ?? am.shieldBoost,
+        healing: saved.healing ?? am.healing,
+        ppSteal: saved.ppSteal ?? am.ppSteal,
+        debuffStrength: saved.debuffStrength ?? am.debuffStrength,
+        buffStrength: saved.buffStrength ?? am.buffStrength,
+        statusEffects: saved.statusEffects ?? am.statusEffects,
+        description:
+          typeof saved.description === 'string' && saved.description.trim()
+            ? saved.description
+            : am.description,
+        currentCooldown: saved.currentCooldown ?? am.currentCooldown,
+      };
+    });
+  }, [artifactMoves, moves]);
+
   // Resolve equipped skill IDs to move objects for loadout preview (includes artifact-granted skills)
   const equippedMovesForPreview = useMemo(() => {
-    const pool = [...manifestMoves, ...elementalMoves, ...rrCandyMoves, ...artifactMoves];
+    const pool = [...manifestMoves, ...elementalMoves, ...rrCandyMoves, ...artifactMovesForDisplay];
     const byId = new Map(pool.map(m => [m.id, m]));
     return equippedSkillIds
       .map(id => byId.get(id))
@@ -646,7 +670,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         }
         return m;
       });
-  }, [equippedSkillIds, manifestMoves, elementalMoves, rrCandyMoves, artifactMoves]);
+  }, [equippedSkillIds, manifestMoves, elementalMoves, rrCandyMoves, artifactMovesForDisplay]);
 
   /** Matches battle engine: damage boost on all attacks, status defense summary, synergy lines */
   const combatPerkUi = useMemo(
@@ -667,7 +691,14 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     // For manifest moves, always allow upgrading (they're shown regardless of unlock status)
     // For RR Candy moves, allow if globally unlocked
     // For other moves, require unlocked status
-    const effectiveUnlocked = isManifestMove ? true : (isRRCandyMove && rrCandyStatus.unlocked ? true : move.unlocked);
+    const isArtifactGrantedSkill = Boolean(move.artifactGrant && move.category === 'system');
+    const effectiveUnlocked = isManifestMove
+      ? true
+      : isArtifactGrantedSkill
+        ? true
+        : isRRCandyMove && rrCandyStatus.unlocked
+          ? true
+          : move.unlocked;
     
     // Get effective mastery level (includes Blaze Ring bonus for elemental moves)
     const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
@@ -2312,7 +2343,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         color: '#1f2937',
         textAlign: 'center'
       }}>
-        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + artifactMoves.length} Skills Unlocked)
+        ⚔️ Your Battle Arsenal ({manifestMoves.length + elementalMoves.length + rrCandyMoves.length + artifactMovesForDisplay.length} Skills Unlocked)
       </h3>
 
       {/* Loadout slots (base + boon bonuses) */}
@@ -2661,17 +2692,17 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             color: 'white',
             margin: 0
           }}>
-            Artifact Skills ({artifactMoves.length} Available)
+            Artifact Skills ({artifactMovesForDisplay.length} Available)
           </h4>
         </div>
-        {artifactMoves.length > 0 ? (
+        {artifactMovesForDisplay.length > 0 ? (
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, 380px)',
             gap: '2rem',
             justifyContent: 'center'
           }}>
-            {artifactMoves.map(renderMoveCard)}
+            {artifactMovesForDisplay.map(renderMoveCard)}
           </div>
         ) : (
           <p style={{
@@ -2734,7 +2765,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       )}
 
       {/* No Skills Message */}
-      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && artifactMoves.length === 0 && (
+      {manifestMoves.length === 0 && elementalMoves.length === 0 && rrCandyMoves.length === 0 && artifactMovesForDisplay.length === 0 && (
         <div style={{ 
           textAlign: 'center', 
           padding: '3rem',

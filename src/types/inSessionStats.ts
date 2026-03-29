@@ -3,6 +3,8 @@
  * Tracks player performance during a session
  */
 
+import type { LiveEventPowerGain } from './playerPowerStats';
+
 export interface SessionStats {
   // Player identification
   playerId: string;
@@ -18,7 +20,11 @@ export interface SessionStats {
   // Participation tracking
   participationEarned: number; // Total participation points earned
   movesEarned: number; // Moves earned from participation
-  
+  /** Season 1: consecutive successful participation awards (for battle-log streak). */
+  consecutiveParticipationAwards?: number;
+  /** Season 1: last displayed streak count (optional, for dedupe). */
+  lastLoggedStreakCount?: number;
+
   // Combat stats
   eliminations: number; // Number of players eliminated by this player
   eliminatedBy?: string; // ID of player who eliminated this player (if eliminated)
@@ -78,6 +84,15 @@ export interface SessionSummary {
   quizAwardsSnapshot?: QuizAwardsSnapshot;
   /** PP earned from quiz placement per player (uid -> PP), when a quiz was completed. */
   quizPpByPlayer?: Record<string, number>;
+  /** Power stat XP granted at session end (per player); shown in summary. */
+  liveEventPowerGains?: Record<string, LiveEventPowerGain>;
+  /** When true, live-event Power XP was already applied to profiles (idempotent finalize). */
+  liveEventPowerApplied?: boolean;
+  /**
+   * Final quiz leaderboard rank (1 = highest score) per player uid, only when the session had
+   * a scored live quiz (max leaderboard score > 0). Used for school-wide placement stats.
+   */
+  liveEventQuizRankByPlayer?: Record<string, number>;
 }
 
 

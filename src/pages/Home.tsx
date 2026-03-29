@@ -44,6 +44,7 @@ const Home: React.FC = () => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
   const navigate = useNavigate();
+  // Season 1: Flow State hub — battle pass + energy (see docs/SEASON1_IMPLEMENTATION.md)
   const [userLevel, setUserLevel] = useState(1);
   const [showBattlePass, setShowBattlePass] = useState(false);
   const [showSeason0Intro, setShowSeason0Intro] = useState(false);
@@ -155,6 +156,63 @@ const Home: React.FC = () => {
         }}>
           {/* NPC Hotspots - positioned absolutely over background */}
           <NpcHotspots onNpcClick={setSelectedNPC} />
+        </div>
+
+        {/* Season 1 — prominent Flow / Battle Pass (MST Season 1 expansion) */}
+        <div
+          style={{
+            position: 'fixed',
+            top: '5.5rem',
+            right: '1rem',
+            zIndex: 12,
+            width: 'min(320px, 92vw)',
+            background: 'linear-gradient(160deg, rgba(15,23,42,0.92) 0%, rgba(49,46,129,0.9) 100%)',
+            border: '1px solid rgba(129,140,248,0.45)',
+            borderRadius: '0.75rem',
+            padding: '0.85rem 1rem',
+            color: '#e0e7ff',
+            boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
+          }}
+        >
+          <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.85 }}>Season 1 — Flow State</div>
+          <div style={{ fontWeight: 800, fontSize: '1rem', marginTop: 4 }}>Become a conduit.</div>
+          <p style={{ fontSize: '0.72rem', lineHeight: 1.4, margin: '0.4rem 0 0.65rem', opacity: 0.9 }}>
+            Redirect energy with intention, purpose, and focus — the way Kon teaches. Survive the Unveiled.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/battle-pass')}
+            style={{
+              width: '100%',
+              marginBottom: 8,
+              padding: '0.55rem 0.75rem',
+              borderRadius: 8,
+              border: 'none',
+              fontWeight: 800,
+              cursor: 'pointer',
+              background: 'linear-gradient(90deg,#6366f1,#a855f7)',
+              color: '#fff',
+            }}
+          >
+            Battle Pass
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/energy-mastery')}
+            style={{
+              width: '100%',
+              padding: '0.45rem 0.75rem',
+              borderRadius: 8,
+              border: '1px solid rgba(165,180,252,0.5)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: 'rgba(255,255,255,0.06)',
+              color: '#e0e7ff',
+              fontSize: '0.8rem',
+            }}
+          >
+            Energy Mastery
+          </button>
         </div>
 
         {/* Fixed Header - Top Center */}

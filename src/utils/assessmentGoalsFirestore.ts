@@ -767,6 +767,18 @@ export async function applyAssessmentResults(assessmentId: string): Promise<{
       try {
         await batch.commit();
         console.log(`✅ Successfully committed batch for student ${result.studentId}`);
+
+        if (
+          (result.outcome === 'hit' || result.outcome === 'exceed') &&
+          assessmentData?.type !== 'story-goal'
+        ) {
+          try {
+            const { awardPowerXpForGoalAchievement } = await import('./liveEventPowerStatsService');
+            await awardPowerXpForGoalAchievement(result.studentId, 'assessment_applied', 'default');
+          } catch (powerErr) {
+            console.warn('Spiritual Power XP (assessment applied) failed:', powerErr);
+          }
+        }
         
         // Verify artifacts were saved by reading back the student document
         if (artifactsGranted.length > 0) {
@@ -851,6 +863,12 @@ export async function applyAssessmentResults(assessmentId: string): Promise<{
           } as Assessment;
 
           await updateHeroJourneyProgress(result.studentId, fullAssessment);
+          try {
+            const { awardPowerXpForGoalAchievement } = await import('./liveEventPowerStatsService');
+            await awardPowerXpForGoalAchievement(result.studentId, 'story_goal', 'default');
+          } catch (powerErr) {
+            console.warn('Spiritual Power XP (story goal) failed:', powerErr);
+          }
           console.log(`✅ Updated Hero's Journey progress for student ${result.studentId}`);
         } catch (journeyError: any) {
           console.error(`⚠️ Failed to update Hero's Journey progress for student ${result.studentId}:`, journeyError);
@@ -1082,8 +1100,15 @@ export async function finalizeHabitSubmission(
   const submissionId = generateHabitSubmissionId(assessmentId, studentId);
   const submissionRef = doc(db, 'habitSubmissions', submissionId);
   const assessmentRef = doc(db, 'assessments', assessmentId);
-  
-  return runTransaction(db, async (transaction) => {
+
+  type FinalizeTxResult = {
+    completed: boolean;
+    rewardApplied: boolean;
+    consequenceApplied: boolean;
+    duration?: HabitDuration;
+  };
+
+  const out: FinalizeTxResult = await runTransaction(db, async (transaction) => {
     const [submissionDoc, assessmentDoc] = await Promise.all([
       transaction.get(submissionRef),
       transaction.get(assessmentRef)
@@ -1104,7 +1129,8 @@ export async function finalizeHabitSubmission(
       return {
         completed: submission.status === 'completed',
         rewardApplied: submission.rewardApplied || false,
-        consequenceApplied: submission.consequenceApplied || false
+        consequenceApplied: submission.consequenceApplied || false,
+        duration: submission.duration,
       };
     }
     
@@ -1142,9 +1168,36 @@ export async function finalizeHabitSubmission(
     return {
       completed,
       rewardApplied,
-      consequenceApplied
+      consequenceApplied,
+      duration: submission.duration,
     };
   });
+
+  if (out.completed && out.rewardApplied) {
+    try {
+      const { awardPowerXpForGoalAchievement } = await import('./liveEventPowerStatsService');
+      const d = out.duration;
+      const tier =
+        d === '1_week'
+          ? 'week'
+          : d === '3_days'
+            ? 'three_day'
+            : d === '1_day'
+              ? 'day'
+              : d === '1_class'
+                ? 'class'
+                : 'default';
+      await awardPowerXpForGoalAchievement(studentId, 'habit_completed', tier);
+    } catch (e) {
+      console.warn('Spiritual Power XP (habit finalize) failed:', e);
+    }
+  }
+
+  return {
+    completed: out.completed,
+    rewardApplied: out.rewardApplied,
+    consequenceApplied: out.consequenceApplied,
+  };
 }
 
 /**
@@ -1247,5 +1300,118 @@ export async function applyHabitPP(
     
     return { success: true };
   });
+}
+
+// =============================================================================
+// Live Event — Reflection → Assessment Goals evidence (Habits + goal docs)
+// =============================================================================
+
+/** Merge a new reflection block into existing evidence (timestamped for admin review). */
+export function mergeReflectionIntoEvidence(
+  existing: string | null | undefined,
+  newEntry: string,
+  sessionLabel: string
+): string {
+  const trimmed = newEntry.trim();
+  if (!trimmed) return (existing || '').trim();
+  const stamp = `\n\n--- Live Event (${sessionLabel}) — ${new Date().toLocaleString()} ---\n`;
+  const block = `${stamp}${trimmed}`;
+  const base = (existing || '').trim();
+  if (!base) return trimmed;
+  return `${base}${block}`;
+}
+
+async function appendEvidenceToAssessmentGoalDoc(
+  assessmentId: string,
+  studentId: string,
+  mergedEvidence: string
+): Promise<void> {
+  const goalId = generateGoalId(assessmentId, studentId);
+  const goalRef = doc(db, 'assessmentGoals', goalId);
+  const snap = await getDoc(goalRef);
+  if (!snap.exists()) {
+    throw new Error('NO_GOAL');
+  }
+  await updateDoc(goalRef, {
+    evidence: mergedEvidence,
+    updatedAt: Timestamp.now(),
+  });
+}
+
+/**
+ * Student submits Live Event reflection text into the same Evidence field admins see
+ * on Assessment Goals Dashboard (habits → habitSubmissions; other goals → assessmentGoals).
+ */
+export async function submitLiveEventReflectionToAssessment(params: {
+  assessmentId: string;
+  studentId: string;
+  classId: string;
+  sessionId: string;
+  reflectionText: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { assessmentId, studentId, classId, sessionId, reflectionText } = params;
+  const text = reflectionText.trim();
+  if (!text) return { ok: false, error: 'Reflection cannot be empty.' };
+  if (text.length > 4000) return { ok: false, error: 'Reflection is too long (max 4000 characters).' };
+
+  const assessment = await getAssessment(assessmentId);
+  if (!assessment) return { ok: false, error: 'Assessment not found.' };
+  if (assessment.classId !== classId) {
+    return { ok: false, error: 'This assessment does not belong to this class.' };
+  }
+
+  const sessionLabel = sessionId.length > 10 ? `${sessionId.slice(0, 8)}…` : sessionId;
+
+  try {
+    if (assessment.type === 'habits') {
+      const sub = await getHabitSubmission(assessmentId, studentId);
+      if (!sub) {
+        return {
+          ok: false,
+          error: 'No habit goal found for this assessment. Set your goal under Assessment Goals first.',
+        };
+      }
+      const merged = mergeReflectionIntoEvidence(sub.evidence ?? null, text, sessionLabel);
+      await updateHabitSubmission(assessmentId, studentId, { evidence: merged });
+      try {
+        const { awardPowerXpForReflectionSubmission } = await import('./liveEventPowerStatsService');
+        const goalLinked = /\bgoal\b/i.test(text) || merged.includes('goal');
+        await awardPowerXpForReflectionSubmission(studentId, text.length, {
+          goalLinked,
+          qualityBonus: text.length >= 200,
+        });
+      } catch (e) {
+        console.warn('Emotional Power XP (reflection) failed:', e);
+      }
+      return { ok: true };
+    }
+
+    const goal = await getAssessmentGoal(assessmentId, studentId);
+    if (!goal) {
+      return {
+        ok: false,
+        error: 'No goal found for this assessment. Set your goal under Assessment Goals first.',
+      };
+    }
+    const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, text, sessionLabel);
+    await appendEvidenceToAssessmentGoalDoc(assessmentId, studentId, merged);
+    try {
+      const { awardPowerXpForReflectionSubmission } = await import('./liveEventPowerStatsService');
+      const goalLinked = /\bgoal\b/i.test(text) || merged.includes('goal');
+      await awardPowerXpForReflectionSubmission(studentId, text.length, {
+        goalLinked,
+        qualityBonus: text.length >= 200,
+      });
+    } catch (e) {
+      console.warn('Emotional Power XP (reflection) failed:', e);
+    }
+    return { ok: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === 'NO_GOAL') {
+      return { ok: false, error: 'No goal document found. Set your goal under Assessment Goals first.' };
+    }
+    return { ok: false, error: msg || 'Failed to save reflection.' };
+  }
 }
 

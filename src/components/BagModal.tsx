@@ -6,6 +6,8 @@ import {
   consumeOneArtifactFromInventory,
   refundOneArtifactToInventory
 } from '../utils/artifactInventoryConsume';
+import { fetchMergedMarketplaceCatalog } from '../utils/marketplaceStoreMerge';
+import { isBattleVaultConsumable } from '../utils/marketplaceConsumableUtils';
 
 interface BagModalProps {
   isOpen: boolean;
@@ -16,15 +18,13 @@ interface BagModalProps {
   sessionPlayers?: Array<{ userId: string; displayName: string; eliminated?: boolean }>;
 }
 
-// Items that can be used during battle (non–live-event-specific)
-const BATTLE_USABLE_ITEMS = ['Health Potion (25)', 'Double PP Boost'];
+const STATIC_BATTLE_ITEMS = new Set(['Double PP Boost']);
 
-// Mapping of artifact names to their images
-const artifactImages: Record<string, string> = {
+const artifactImagesFallback: Record<string, string> = {
   'Health Potion (25)': '/images/Health Potion - 25.png',
   'Double PP Boost': '/images/Double PP.png',
   'Revive Potion': '/images/Revive Potion.png',
-  'Revivie Potion': '/images/Revive Potion.png'
+  'Revivie Potion': '/images/Revive Potion.png',
 };
 
 const BagModal: React.FC<BagModalProps> = ({
@@ -37,6 +37,35 @@ const BagModal: React.FC<BagModalProps> = ({
   const { currentUser } = useAuth();
   const { inventory, activateArtifact, loading, refreshInventory } = useBattle();
   const [reviveTargetUid, setReviveTargetUid] = useState<string>('');
+  const [vaultBattleItemNames, setVaultBattleItemNames] = useState<Set<string>>(
+    () => new Set(['Health Potion (25)', 'Double PP Boost'])
+  );
+  const [itemImageByName, setItemImageByName] = useState<Record<string, string>>({ ...artifactImagesFallback });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchMergedMarketplaceCatalog()
+      .then((list) => {
+        const names = new Set<string>(STATIC_BATTLE_ITEMS);
+        const images: Record<string, string> = { ...artifactImagesFallback };
+        list.forEach((i) => {
+          if (isBattleVaultConsumable(i)) {
+            names.add(i.name);
+            if (i.image) images[i.name] = i.image;
+          }
+        });
+        setVaultBattleItemNames(names);
+        setItemImageByName(images);
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  const selfRow = useMemo(() => {
+    if (!currentUser || !liveSessionId) return undefined;
+    return sessionPlayers.find((p) => p.userId === currentUser.uid);
+  }, [sessionPlayers, currentUser, liveSessionId]);
+
+  const selfEliminated = selfRow?.eliminated === true;
 
   const eliminatedOthers = useMemo(() => {
     if (!currentUser || !liveSessionId) return [];
@@ -47,18 +76,20 @@ const BagModal: React.FC<BagModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    if (eliminatedOthers.length === 1) {
+    if (selfEliminated) {
+      setReviveTargetUid('');
+    } else if (eliminatedOthers.length === 1) {
       setReviveTargetUid(eliminatedOthers[0].userId);
     } else {
       setReviveTargetUid('');
     }
-  }, [isOpen, eliminatedOthers]);
+  }, [isOpen, eliminatedOthers, selfEliminated]);
 
   if (!isOpen) return null;
 
   const artifactCounts: Record<string, number> = {};
   inventory.forEach((item) => {
-    const isBattle = BATTLE_USABLE_ITEMS.includes(item);
+    const isBattle = vaultBattleItemNames.has(item);
     const isRevive = !!liveSessionId && isRevivePotionName(item);
     if (isBattle || isRevive) {
       artifactCounts[item] = (artifactCounts[item] || 0) + 1;
@@ -70,29 +101,40 @@ const BagModal: React.FC<BagModalProps> = ({
       alert('Revive Potion can only be used during a Live Event.');
       return;
     }
-    if (eliminatedOthers.length === 0) {
-      alert('There are no eliminated teammates to revive.');
-      return;
+
+    let targetUid: string;
+    let targetName: string;
+
+    if (selfEliminated) {
+      targetUid = currentUser.uid;
+      targetName = currentUser.displayName || selfRow?.displayName || 'Player';
+      if (!window.confirm(`Use Revive Potion on yourself? You will return at 50% max HP.`)) {
+        return;
+      }
+    } else {
+      if (eliminatedOthers.length === 0) {
+        alert('There are no eliminated teammates to revive.');
+        return;
+      }
+      const pick =
+        eliminatedOthers.length === 1 ? eliminatedOthers[0].userId : reviveTargetUid;
+      if (!pick) {
+        alert('Choose a teammate to revive.');
+        return;
+      }
+      const target = eliminatedOthers.find((p) => p.userId === pick);
+      if (!target) {
+        alert('Invalid target.');
+        return;
+      }
+      targetUid = target.userId;
+      targetName = target.displayName || 'Player';
+      if (!window.confirm(`Use Revive Potion on ${targetName}? They will return at 50% max HP.`)) {
+        return;
+      }
     }
-    const targetUid =
-      eliminatedOthers.length === 1 ? eliminatedOthers[0].userId : reviveTargetUid;
-    if (!targetUid) {
-      alert('Choose a teammate to revive.');
-      return;
-    }
-    const target = eliminatedOthers.find((p) => p.userId === targetUid);
-    if (!target) {
-      alert('Invalid target.');
-      return;
-    }
+
     const actorName = currentUser.displayName || 'Player';
-    if (
-      !window.confirm(
-        `Use Revive Potion on ${target.displayName}? They will return at 50% max HP.`
-      )
-    ) {
-      return;
-    }
 
     const consumed = await consumeOneArtifactFromInventory(currentUser.uid, exactArtifactName);
     if (!consumed) {
@@ -104,8 +146,8 @@ const BagModal: React.FC<BagModalProps> = ({
       liveSessionId,
       currentUser.uid,
       actorName,
-      target.userId,
-      target.displayName || 'Player'
+      targetUid,
+      targetName
     );
 
     if (!result.ok) {
@@ -188,7 +230,7 @@ const BagModal: React.FC<BagModalProps> = ({
             <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎒</div>
             <div style={{ marginBottom: '0.5rem' }}>No usable items in your bag for this mode.</div>
             <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-              In battle: Health Potions and Double PP Boost.
+              In battle: vault consumables (admin-configured) and Double PP Boost.
               {liveSessionId ? ' In Live Events: Revive Potion also appears here.' : ''}
               <br />
               Other items are available from your Profile.
@@ -197,9 +239,10 @@ const BagModal: React.FC<BagModalProps> = ({
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {Object.entries(artifactCounts).map(([artifactName, count]) => {
-              const imageUrl = artifactImages[artifactName];
+              const imageUrl = itemImageByName[artifactName];
               const isRevive = isRevivePotionName(artifactName);
-              const showRevivePick = isRevive && eliminatedOthers.length > 1;
+              const showRevivePick = isRevive && !selfEliminated && eliminatedOthers.length > 1;
+              const reviveBlocked = isRevive && !selfEliminated && eliminatedOthers.length === 0;
 
               return (
                 <div
@@ -273,14 +316,22 @@ const BagModal: React.FC<BagModalProps> = ({
                         <div style={{ color: '#9ca3af', fontSize: '0.9rem' }}>Quantity: {count}</div>
                         {isRevive && (
                           <div style={{ color: '#86efac', fontSize: '0.8rem', marginTop: '0.35rem' }}>
-                            Live Event: pick an eliminated teammate (not yourself). They return at 50% max HP.
+                            {selfEliminated
+                              ? 'Live Event: revive yourself at 50% max HP.'
+                              : reviveBlocked
+                                ? 'No eliminated teammates — hold your potion until someone is eliminated.'
+                                : 'Live Event: choose an eliminated teammate (or yourself if you are eliminated). They return at 50% max HP.'}
                           </div>
                         )}
                       </div>
                     </div>
                     <button
                       onClick={() => handleUseArtifact(artifactName)}
-                      disabled={loading || (isRevive && eliminatedOthers.length > 1 && !reviveTargetUid)}
+                      disabled={
+                        loading ||
+                        (isRevive && reviveBlocked) ||
+                        (isRevive && !selfEliminated && eliminatedOthers.length > 1 && !reviveTargetUid)
+                      }
                       style={{
                         backgroundColor: '#4f46e5',
                         color: 'white',

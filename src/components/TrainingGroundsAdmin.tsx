@@ -19,6 +19,50 @@ import {
 import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
 
+const MIN_TRAINING_ANSWER_CHOICES = 2;
+const MAX_TRAINING_ANSWER_CHOICES = 6;
+
+/**
+ * Drop empty option rows and remap correct-answer indices onto the stored array.
+ * Form indices refer to the full option list (including blanks); Firestore stores only non-empty strings.
+ */
+function compactOptionsAndCorrectIndices(
+  options: string[],
+  correctIndicesInput: number[],
+  correctIndexSingle?: number
+): { validOptions: string[]; correctIndices: number[] } | { error: string } {
+  const rawIndices =
+    correctIndicesInput.length > 0
+      ? [...correctIndicesInput]
+      : correctIndexSingle !== undefined
+        ? [correctIndexSingle]
+        : [];
+  const validOptions: string[] = [];
+  const oldToNew = new Map<number, number>();
+  options.forEach((o, i) => {
+    const t = o.trim();
+    if (t) {
+      oldToNew.set(i, validOptions.length);
+      validOptions.push(t);
+    }
+  });
+  if (validOptions.length < MIN_TRAINING_ANSWER_CHOICES) {
+    return {
+      error: `Please provide at least ${MIN_TRAINING_ANSWER_CHOICES} non-empty answer choices.`,
+    };
+  }
+  const remapped = rawIndices
+    .map((i) => oldToNew.get(i))
+    .filter((x): x is number => x !== undefined);
+  const correctIndices = Array.from(new Set(remapped)).sort((a, b) => a - b);
+  if (correctIndices.length === 0) {
+    return {
+      error: 'Select at least one correct answer among your filled-in choices.',
+    };
+  }
+  return { validOptions, correctIndices };
+}
+
 const TrainingGroundsAdmin: React.FC = () => {
   const { currentUser } = useAuth();
   const [quizSets, setQuizSets] = useState<TrainingQuizSet[]>([]);
@@ -57,7 +101,7 @@ const TrainingGroundsAdmin: React.FC = () => {
 
   const [questionForm, setQuestionForm] = useState({
     prompt: '',
-    options: ['', '', '', ''], // A, B, C, D - always 4 options
+    options: ['', '', '', ''], // default four rows; save requires ≥2 non-empty
     correctIndex: 0, // DEPRECATED: Use correctIndices instead (0=A, 1=B, 2=C, 3=D)
     correctIndices: [] as number[], // Array of correct answer indices (supports multiple)
     explanation: '',
@@ -268,35 +312,28 @@ const TrainingGroundsAdmin: React.FC = () => {
       return;
     }
     
-    // Validate all 4 options are filled
-    const validOptions = questionForm.options.filter(o => o.trim());
-    if (validOptions.length < 4) {
-      alert('Please fill in all 4 answer options (A, B, C, D)');
+    const compact = compactOptionsAndCorrectIndices(
+      questionForm.options,
+      questionForm.correctIndices,
+      questionForm.correctIndex
+    );
+    if ('error' in compact) {
+      alert(compact.error);
       return;
     }
+    const { validOptions, correctIndices } = compact;
 
     try {
       setUploading(true);
-      const validOptions = questionForm.options.filter(o => o.trim());
-      
+
       // Create question first (without image)
       const rewardConfig = DEFAULT_REWARDS[questionForm.difficulty];
-      
-      // Build question data - omit undefined fields (Firestore doesn't allow undefined)
-      const correctIndices = questionForm.correctIndices.length > 0 
-        ? questionForm.correctIndices 
-        : (questionForm.correctIndex !== undefined ? [questionForm.correctIndex] : []);
-      
-      if (correctIndices.length === 0) {
-        alert('Please select at least one correct answer');
-        return;
-      }
-      
+
       const questionData: any = {
         prompt: questionForm.prompt,
         imageUrl: questionForm.imageUrl || null,
         options: validOptions,
-        correctIndices: correctIndices,
+        correctIndices,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
         pointsPP: questionForm.pointsPP || rewardConfig.basePP,
@@ -359,23 +396,22 @@ const TrainingGroundsAdmin: React.FC = () => {
 
     try {
       setUploading(true);
-      
-      const validOptions = questionForm.options.filter(o => o.trim());
-      
-      // Build update data - omit undefined fields (Firestore doesn't allow undefined)
-      const correctIndices = questionForm.correctIndices.length > 0 
-        ? questionForm.correctIndices 
-        : (questionForm.correctIndex !== undefined ? [questionForm.correctIndex] : []);
-      
-      if (correctIndices.length === 0) {
-        alert('Please select at least one correct answer');
+
+      const compact = compactOptionsAndCorrectIndices(
+        questionForm.options,
+        questionForm.correctIndices,
+        questionForm.correctIndex
+      );
+      if ('error' in compact) {
+        alert(compact.error);
         return;
       }
-      
+      const { validOptions, correctIndices } = compact;
+
       const updateData: any = {
         prompt: questionForm.prompt,
         options: validOptions,
-        correctIndices: correctIndices,
+        correctIndices,
         explanation: questionForm.explanation || null,
         difficulty: questionForm.difficulty,
         pointsPP: questionForm.pointsPP || DEFAULT_REWARDS[questionForm.difficulty]?.basePP || 10,
@@ -475,11 +511,16 @@ const TrainingGroundsAdmin: React.FC = () => {
 
     try {
       setUploading(true);
-      const correctIndices = (question as any).correctIndices?.length
-        ? (question as any).correctIndices
+      const rawOpts = [...(question.options || [])].map((o) => String(o ?? ''));
+      const prevCorrect = (question as any).correctIndices?.length
+        ? ([...(question as any).correctIndices] as number[])
         : (question.correctIndex !== undefined ? [question.correctIndex] : []);
-      const options = [...(question.options || [])];
-      while (options.length < 4) options.push('');
+      const dupCompact = compactOptionsAndCorrectIndices(rawOpts, prevCorrect);
+      if ('error' in dupCompact) {
+        alert(`Cannot duplicate: ${dupCompact.error}`);
+        return;
+      }
+      const { validOptions: options, correctIndices } = dupCompact;
 
       const duplicateData: Omit<TrainingQuestion, 'id' | 'createdAt' | 'updatedAt'> = {
         prompt: question.prompt,
@@ -575,11 +616,16 @@ const TrainingGroundsAdmin: React.FC = () => {
 
       for (let i = 0; i < sortedSelected.length; i++) {
         const question = sortedSelected[i];
-        const correctIndices = (question as any).correctIndices?.length
-          ? [...(question as any).correctIndices]
+        const rawOpts = [...(question.options || [])].map((o) => String(o ?? ''));
+        const prevCorrect = (question as any).correctIndices?.length
+          ? ([...(question as any).correctIndices] as number[])
           : (question.correctIndex !== undefined ? [question.correctIndex] : []);
-        const options = [...(question.options || [])];
-        while (options.length < 4) options.push('');
+        const impCompact = compactOptionsAndCorrectIndices(rawOpts, prevCorrect);
+        if ('error' in impCompact) {
+          alert(`Skipping a question (${question.prompt?.slice(0, 40) || question.id}…): ${impCompact.error}`);
+          continue;
+        }
+        const { validOptions: options, correctIndices } = impCompact;
 
         const importData: Omit<TrainingQuestion, 'id' | 'createdAt' | 'updatedAt'> = {
           prompt: question.prompt,
@@ -620,17 +666,14 @@ const TrainingGroundsAdmin: React.FC = () => {
 
   const startEditQuestion = (question: TrainingQuestion) => {
     setEditingQuestion(question);
-    // Ensure we have 4 options (pad with empty strings if needed)
-    const options = [...question.options];
-    while (options.length < 4) {
-      options.push('');
-    }
+    const stored = [...(question.options || [])].map((o) => String(o ?? ''));
+    const options = stored.length > 0 ? stored : ['', ''];
     const correctIndices = (question as any).correctIndices || 
       (question.correctIndex !== undefined ? [question.correctIndex] : []);
     
     setQuestionForm({
       prompt: question.prompt,
-      options: options.slice(0, 4), // Always 4 options
+      options,
       correctIndex: correctIndices.length === 1 ? correctIndices[0] : 0, // For backwards compatibility
       correctIndices: correctIndices,
       explanation: question.explanation || '',
@@ -646,20 +689,32 @@ const TrainingGroundsAdmin: React.FC = () => {
   };
 
   const addOption = () => {
-    if (questionForm.options.length < 6) {
+    if (questionForm.options.length < MAX_TRAINING_ANSWER_CHOICES) {
       setQuestionForm({ ...questionForm, options: [...questionForm.options, ''] });
     }
   };
 
   const removeOption = (index: number) => {
-    if (questionForm.options.length > 2) {
-      const newOptions = questionForm.options.filter((_, i) => i !== index);
-      setQuestionForm({
-        ...questionForm,
-        options: newOptions,
-        correctIndex: questionForm.correctIndex >= newOptions.length ? newOptions.length - 1 : questionForm.correctIndex,
-      });
+    if (questionForm.options.length <= MIN_TRAINING_ANSWER_CHOICES) return;
+    const newOptions = questionForm.options.filter((_, i) => i !== index);
+    const newCorrectIndices = questionForm.correctIndices
+      .filter((i) => i !== index)
+      .map((i) => (i > index ? i - 1 : i));
+    let newCorrectIndex = questionForm.correctIndex;
+    if (newCorrectIndex === index) {
+      newCorrectIndex = newCorrectIndices.length === 1 ? newCorrectIndices[0] : 0;
+    } else if (newCorrectIndex > index) {
+      newCorrectIndex -= 1;
     }
+    if (newCorrectIndex >= newOptions.length) {
+      newCorrectIndex = Math.max(0, newOptions.length - 1);
+    }
+    setQuestionForm({
+      ...questionForm,
+      options: newOptions,
+      correctIndices: newCorrectIndices,
+      correctIndex: newCorrectIndex,
+    });
   };
 
   if (loading) {
@@ -1212,7 +1267,9 @@ const TrainingGroundsAdmin: React.FC = () => {
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Answer Options * (A, B, C, D)</label>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Answer options * (at least {MIN_TRAINING_ANSWER_CHOICES} filled; up to {MAX_TRAINING_ANSWER_CHOICES})
+              </label>
               {questionForm.options.map((option, index) => (
                 <div key={index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
                   <span style={{ 
@@ -1240,7 +1297,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                     }}
                     placeholder={`Option ${String.fromCharCode(65 + index)}`}
                   />
-                  {questionForm.options.length > 2 && (
+                  {questionForm.options.length > MIN_TRAINING_ANSWER_CHOICES && (
                     <button
                       type="button"
                       onClick={() => removeOption(index)}
@@ -1259,7 +1316,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                   )}
                 </div>
               ))}
-              {questionForm.options.length < 6 && (
+              {questionForm.options.length < MAX_TRAINING_ANSWER_CHOICES && (
                 <button
                   type="button"
                   onClick={addOption}

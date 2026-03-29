@@ -16,7 +16,10 @@ interface LiveQuizAnswerOptionsProps {
   shuffleKey?: string;
 }
 
-const OPTION_LABELS = ['A', 'B', 'C', 'D'];
+function answerChoiceLetter(displayIndex: number): string {
+  if (displayIndex >= 0 && displayIndex < 26) return String.fromCharCode(65 + displayIndex);
+  return String(displayIndex + 1);
+}
 
 function seededOrder(length: number, seed: string): number[] {
   const indices = Array.from({ length }, (_, i) => i);
@@ -129,7 +132,7 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
                 flexShrink: 0,
               }}
             >
-              {OPTION_LABELS[displayPos] ?? displayPos + 1}
+              {answerChoiceLetter(displayPos)}
             </span>
             <span style={{ flex: 1 }}>{option}</span>
             {reveal && showCorrect && <span style={{ fontSize: '1.25rem' }}>✓</span>}

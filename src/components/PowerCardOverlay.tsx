@@ -171,6 +171,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                     maxTier={maxTier}
                     totalXP={battlePassXP}
                     onViewRewards={() => setShowBattlePassModal(true)}
+                    onOpenSeason1Hub={() => navigate('/battle-pass')}
                   />
                 </div>
               )}
@@ -355,6 +356,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                   maxTier={maxTier}
                   totalXP={battlePassXP}
                   onViewRewards={() => setShowBattlePassModal(true)}
+                  onOpenSeason1Hub={() => navigate('/battle-pass')}
                 />
               </div>
             )}

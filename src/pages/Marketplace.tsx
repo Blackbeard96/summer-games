@@ -13,6 +13,8 @@ import {
 import { mergeMarketplaceStoreItems } from '../utils/marketplaceStoreMerge';
 import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
 import { isRevivePotionName } from '../utils/liveEventRevive';
+import { applyConsumableEffectToVault } from '../utils/consumableEffectResolver';
+import { resolveVaultBattleConsumable } from '../utils/vaultConsumablePlan';
 import { getEquippablePerkDisplayRows } from '../utils/marketplaceEquippablePerks';
 
 type Artifact = MarketplaceStoreArtifact;
@@ -714,35 +716,46 @@ const Marketplace = () => {
         return;
       }
       
-      // Handle Health Potion (25) - check if it can be used before consuming
-      if (artifactName === 'Health Potion (25)') {
+      const vaultConsumable = await resolveVaultBattleConsumable(artifactName);
+      if (vaultConsumable.ok) {
         if (!vault) {
           alert('❌ Vault not found. Please try again.');
           return;
         }
-        
         const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
-        const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
-        
-        // Check if vault health is already at max
-        if (currentVaultHealth >= maxVaultHealth) {
-          alert(`🧪 Your vault health is already at maximum (${maxVaultHealth}/${maxVaultHealth})!`);
+        const currentVaultHealth =
+          vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
+        const maxShieldStrength = vault.maxShieldStrength ?? 100;
+        const shieldStrength = vault.shieldStrength ?? 0;
+
+        const applied = applyConsumableEffectToVault(
+          {
+            vaultHealth: currentVaultHealth,
+            maxVaultHealth,
+            shieldStrength,
+            maxShieldStrength,
+          },
+          vaultConsumable.effect,
+          artifactName
+        );
+
+        if (applied.noop || !applied.success) {
+          alert(applied.message);
           return;
         }
-        
-        // Calculate how much health can be restored
-        const healthToRestore = Math.min(25, maxVaultHealth - currentVaultHealth);
-        const newVaultHealth = currentVaultHealth + healthToRestore;
-        
-        // Restore health
-        await updateVault({ vaultHealth: newVaultHealth });
-        
-        // Update both collections atomically using a transaction
+
+        const vaultPatch: { vaultHealth?: number; shieldStrength?: number } = {};
+        if (applied.vaultHealth !== undefined) vaultPatch.vaultHealth = applied.vaultHealth;
+        if (applied.shieldStrength !== undefined) vaultPatch.shieldStrength = applied.shieldStrength;
+        if (Object.keys(vaultPatch).length > 0) {
+          await updateVault(vaultPatch);
+        }
+
         const usersRef = doc(db, 'users', currentUser.uid);
         await runTransaction(db, async (transaction) => {
           const freshUserSnap = await transaction.get(userRef);
           const freshUsersSnap = await transaction.get(usersRef);
-          
+
           if (freshUserSnap.exists()) {
             const freshUserData = freshUserSnap.data();
             const freshInventory = freshUserData.inventory || [];
@@ -753,22 +766,30 @@ const Marketplace = () => {
             }
             transaction.update(userRef, { inventory: freshUpdatedInventory });
           }
-          
+
           if (freshUsersSnap.exists()) {
             const freshUsersData = freshUsersSnap.data();
             const freshArtifactsRaw = freshUsersData.artifacts || [];
-            let freshArtifacts: any[] = Array.isArray(freshArtifactsRaw)
+            const freshArtifacts: any[] = Array.isArray(freshArtifactsRaw)
               ? freshArtifactsRaw
-              : (typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null
-                  ? Object.values(freshArtifactsRaw).filter((val: any) => typeof val === 'object' && val !== null && (val.name || val.id))
-                  : []);
+              : typeof freshArtifactsRaw === 'object' && freshArtifactsRaw !== null
+                ? Object.values(freshArtifactsRaw).filter(
+                    (val: any) => typeof val === 'object' && val !== null && (val.name || val.id)
+                  )
+                : [];
             let foundOne = false;
             const freshUpdatedArtifacts = freshArtifacts.map((artifact: any) => {
               if (foundOne) return artifact;
               if (typeof artifact === 'string') {
                 if (artifact === artifactName) {
                   foundOne = true;
-                  return { id: artifactName.toLowerCase().replace(/\s+/g, '-'), name: artifactName, used: true, usedAt: new Date(), isLegacy: true };
+                  return {
+                    id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+                    name: artifactName,
+                    used: true,
+                    usedAt: new Date(),
+                    isLegacy: true,
+                  };
                 }
                 return artifact;
               }
@@ -782,17 +803,19 @@ const Marketplace = () => {
             transaction.update(usersRef, { artifacts: freshUpdatedArtifacts });
           }
         });
-        
+
         const refreshedSnap = await getDoc(userRef);
         if (refreshedSnap.exists()) {
           const refreshedData = refreshedSnap.data();
           setInventory(refreshedData.inventory || []);
         }
         await updateAllArtifactCounts();
-        updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch(err => 
-          console.error('Error updating daily challenge progress for health potion:', err)
-        );
-        alert(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
+        if (vaultConsumable.effect.effectType === 'restore_health') {
+          updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch((err) =>
+            console.error('Error updating daily challenge progress for health potion:', err)
+          );
+        }
+        alert(`🧪 ${applied.message}`);
         return;
       }
       

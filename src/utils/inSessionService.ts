@@ -54,6 +54,8 @@ export interface InSessionRoom {
   endedAt?: any;
   players: SessionPlayer[];
   battleLog: string[];
+  /** Host opens MST MKT so players can spend session PP on heal / shield / revive items. */
+  mstMktOpen?: boolean;
 }
 
 /**

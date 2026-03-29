@@ -21,6 +21,8 @@ import {
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { applyConsumableEffectToVault } from '../utils/consumableEffectResolver';
+import { resolveVaultBattleConsumable } from '../utils/vaultConsumablePlan';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { getLevelFromXP } from '../utils/leveling';
@@ -50,6 +52,7 @@ import {
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 import { getRRCandyMoves, hasRRCandyUnlocked } from '../utils/rrCandyMoves';
 import { getRRCandyStatus } from '../utils/rrCandyUtils';
+import { getArtifactSkillMovesForStudentData } from '../utils/battleSkillsService';
 import { 
   calculateDaysAway, 
   calculateEarnings, 
@@ -2809,18 +2812,69 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const upgradeMove = async (moveId: string) => {
-    console.log('🔄 upgradeMove called:', { moveId, hasCurrentUser: !!currentUser, hasVault: !!vault, movesCount: moves.length });
-    
     if (!currentUser || !vault) {
       console.error('❌ upgradeMove: Missing currentUser or vault', { currentUser: !!currentUser, vault: !!vault });
       setError('Cannot upgrade: User or vault not loaded');
       return;
     }
-    
+
+    const movesRef = doc(db, 'battleMoves', currentUser.uid);
+
     try {
-      const move = moves.find(m => m.id === moveId);
-      console.log('🔍 upgradeMove: Found move:', { moveId, move: move ? { name: move.name, masteryLevel: move.masteryLevel } : null });
-      
+      // Fresh read: artifact-granted skills (Legendary equips) live in UI from catalog but were never synced into battleMoves.
+      const movesDocFresh = await getDoc(movesRef);
+      let baseMoves: Move[] = movesDocFresh.exists()
+        ? [...(((movesDocFresh.data().moves || []) as Move[]) || [])]
+        : [];
+      let move = baseMoves.find((m) => m.id === moveId);
+
+      if (!move) {
+        try {
+          const studentSnap = await getDoc(doc(db, 'students', currentUser.uid));
+          let catalog: Record<string, unknown> | null = null;
+          try {
+            const catSnap = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+            if (catSnap.exists()) catalog = catSnap.data() as Record<string, unknown>;
+          } catch {
+            catalog = null;
+          }
+          if (studentSnap.exists()) {
+            const fromEquipment = await getArtifactSkillMovesForStudentData(studentSnap.data(), catalog);
+            const artMove = fromEquipment.find((m) => m.id === moveId);
+            if (artMove) {
+              move = {
+                ...artMove,
+                masteryLevel: typeof artMove.masteryLevel === 'number' ? artMove.masteryLevel : 1,
+                unlocked: true,
+              };
+              baseMoves = [...baseMoves, move];
+              if (movesDocFresh.exists()) {
+                await updateDoc(movesRef, { moves: baseMoves, lastUpdated: serverTimestamp() });
+              } else {
+                await setDoc(movesRef, {
+                  moves: baseMoves,
+                  lastUpdated: serverTimestamp(),
+                  createdAt: serverTimestamp(),
+                });
+              }
+              setMoves(baseMoves);
+            }
+          }
+        } catch (e) {
+          console.warn('upgradeMove: artifact skill bootstrap failed', e);
+        }
+      }
+
+      console.log('🔄 upgradeMove called:', {
+        moveId,
+        movesCount: baseMoves.length,
+        found: !!move,
+      });
+      console.log('🔍 upgradeMove: Found move:', {
+        moveId,
+        move: move ? { name: move.name, masteryLevel: move.masteryLevel } : null,
+      });
+
       if (!move) {
         console.error('❌ upgradeMove: Move not found', moveId);
         setError('Move not found');
@@ -2947,7 +3001,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Apply boost multiplier to all numeric properties (damage, shieldBoost, healing, ppSteal, etc.)
       // IMPORTANT: Use the CURRENT values (which may already be upgraded) as the base for the new multiplier
       // This allows upgrades to compound correctly
-      const updatedMoves = moves.map(m => {
+      const updatedMoves = baseMoves.map(m => {
         if (m.id === moveId) {
           const updatedMove: any = { 
             ...m, 
@@ -3031,9 +3085,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
 
       // Update moves in database FIRST, then update local state
-      const movesRef = doc(db, 'battleMoves', currentUser.uid);
-      
-      // Check if document exists, if not create it
       const movesDoc = await getDoc(movesRef);
       if (movesDoc.exists()) {
         await updateDoc(movesRef, { 
@@ -3105,7 +3156,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Collect all boosted properties for the alert message
       const boostedProperties: string[] = [];
       if (updatedMoves.find(m => m.id === moveId)?.damage) {
-        const oldDamage = moves.find(m => m.id === moveId)?.damage || 0;
+        const oldDamage = move.damage || 0;
         const newDamage = updatedMoves.find(m => m.id === moveId)?.damage || 0;
         if (oldDamage > 0) {
           boostedProperties.push(`Damage: ${oldDamage} → ${newDamage}`);
@@ -5085,44 +5136,51 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         throw new Error(`You don't have ${artifactName} in your inventory`);
       }
 
-      // Handle specific artifacts - check if they can be used before consuming
-      if (artifactName === 'Health Potion (25)') {
-        // Restore 25 HP to vault health
+      const vaultConsumable = await resolveVaultBattleConsumable(artifactName);
+      if (vaultConsumable.ok) {
         const maxVaultHealth = vault.maxVaultHealth || Math.floor(vault.capacity * 0.1);
-        const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
-        
-        // Check if vault health is already at max
-        if (currentVaultHealth >= maxVaultHealth) {
-          setSuccess(`🧪 Your vault health is already at maximum (${maxVaultHealth}/${maxVaultHealth})!`);
-          // Don't consume the potion if it can't be used
+        const currentVaultHealth =
+          vault.vaultHealth !== undefined ? vault.vaultHealth : Math.min(vault.currentPP, maxVaultHealth);
+        const maxShieldStrength = vault.maxShieldStrength ?? 100;
+        const shieldStrength = vault.shieldStrength ?? 0;
+
+        const applied = applyConsumableEffectToVault(
+          {
+            vaultHealth: currentVaultHealth,
+            maxVaultHealth,
+            shieldStrength,
+            maxShieldStrength,
+          },
+          vaultConsumable.effect,
+          artifactName
+        );
+
+        if (applied.noop || !applied.success) {
+          setSuccess(applied.message);
           return;
         }
-        
-        // Calculate how much health can be restored
-        const healthToRestore = Math.min(25, maxVaultHealth - currentVaultHealth);
-        const newVaultHealth = currentVaultHealth + healthToRestore;
-        
-        // Remove artifact from inventory (only if it can be used)
+
+        const vaultRef = doc(db, 'vaults', currentUser.uid);
+        const vaultUpdates: Record<string, number> = {};
+        if (applied.vaultHealth !== undefined) vaultUpdates.vaultHealth = applied.vaultHealth;
+        if (applied.shieldStrength !== undefined) vaultUpdates.shieldStrength = applied.shieldStrength;
+        if (Object.keys(vaultUpdates).length > 0) {
+          await updateDoc(vaultRef, vaultUpdates);
+          setVault({
+            ...vault,
+            ...(applied.vaultHealth !== undefined ? { vaultHealth: applied.vaultHealth } : {}),
+            ...(applied.shieldStrength !== undefined ? { shieldStrength: applied.shieldStrength } : {}),
+          });
+        }
+
         const updatedInventory = [...currentInventory];
         const artifactIndex = updatedInventory.indexOf(artifactName);
         if (artifactIndex > -1) {
           updatedInventory.splice(artifactIndex, 1);
         }
-        
-        // Update vault health
-        const vaultRef = doc(db, 'vaults', currentUser.uid);
-        await updateDoc(vaultRef, {
-          vaultHealth: newVaultHealth
-        });
-        setVault({ ...vault, vaultHealth: newVaultHealth });
-        
-        // Update inventory
-        await updateDoc(studentRef, {
-          inventory: updatedInventory
-        });
+        await updateDoc(studentRef, { inventory: updatedInventory });
         setInventory(updatedInventory);
-        
-        // Update artifacts array in users collection
+
         const usersRef = doc(db, 'users', currentUser.uid);
         const usersSnap = await getDoc(usersRef);
         if (usersSnap.exists()) {
@@ -5131,49 +5189,41 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           let foundOne = false;
           const updatedArtifacts = currentArtifacts.map((artifact: any) => {
             if (foundOne) return artifact;
-            
             if (typeof artifact === 'string') {
               if (artifact === artifactName) {
                 foundOne = true;
-                return { 
+                return {
                   id: artifactName.toLowerCase().replace(/\s+/g, '-'),
                   name: artifactName,
                   used: true,
                   usedAt: new Date(),
-                  isLegacy: true
+                  isLegacy: true,
                 };
               }
               return artifact;
-            } else {
-              const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-              if (artifact.name === artifactName && isNotUsed) {
-                foundOne = true;
-                return { ...artifact, used: true, usedAt: new Date() };
-              }
-              return artifact;
             }
+            const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
+            if (artifact.name === artifactName && isNotUsed) {
+              foundOne = true;
+              return { ...artifact, used: true, usedAt: new Date() };
+            }
+            return artifact;
           });
-          
-          await updateDoc(usersRef, {
-            artifacts: updatedArtifacts
-          });
+          await updateDoc(usersRef, { artifacts: updatedArtifacts });
         }
-        
-        setSuccess(`🧪 Health Potion used! Restored ${healthToRestore} HP to your vault health.\n\nVault Health: ${newVaultHealth}/${maxVaultHealth}`);
-        
-        // Track daily challenge: Use Health Potion
-        if (currentUser) {
-          updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch(err => 
+
+        setSuccess(`🧪 ${applied.message}`);
+
+        if (vaultConsumable.effect.effectType === 'restore_health' && currentUser) {
+          updateChallengeProgressByType(currentUser.uid, 'use_health_potion', 1).catch((err) =>
             console.error('Error updating daily challenge progress for health potion:', err)
           );
         }
-        
-        // Call callback to signal that Health Potion was used (ends turn in battle)
+
         if (onArtifactUsed) {
           onArtifactUsed();
         }
-        
-        return; // Exit early since we've handled everything
+        return;
       }
 
       // Remove artifact from inventory for other artifacts

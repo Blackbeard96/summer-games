@@ -6,7 +6,7 @@ export interface TrainingQuestion {
   id: string;
   prompt: string;
   imageUrl?: string | null;
-  options: string[]; // Array of answer option texts (always 4 options: A, B, C, D)
+  options: string[]; // Non-empty answer texts in display order (typically 2–6 choices)
   correctIndex?: number; // DEPRECATED: Use correctIndices instead (0-based: 0=A, 1=B, 2=C, 3=D)
   correctIndices: number[]; // Array of indices of correct answers (supports multiple correct answers)
   explanation?: string | null;

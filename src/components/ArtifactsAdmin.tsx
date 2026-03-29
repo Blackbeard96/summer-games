@@ -7,6 +7,13 @@ import { getPowerLevelBonusForRarity, normalizeArtifactRarity, type ArtifactRari
 import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
 import { buildMarketplaceAdminMap } from '../utils/marketplaceStoreMerge';
 import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
+import type { ConsumableEffect, LiveEventMktListing, MarketplaceItemType } from '../types/consumableEffects';
+import {
+  validateConsumableItemRow,
+  parseConsumableEffect,
+  previewConsumableEffectSentence,
+  consumableEffectLabel,
+} from '../types/consumableEffects';
 
 /** Firestore rejects `undefined` in document data */
 function stripUndefinedDeep<T>(value: T): T {
@@ -43,6 +50,10 @@ interface MarketplaceArtifact {
   disabled?: boolean;
   /** Grants this equippable catalog id on purchase (MST MKT). */
   equippableArtifactId?: string;
+  itemType?: MarketplaceItemType;
+  consumableEffect?: ConsumableEffect;
+  /** Live Event in-session shop (Participation PP). */
+  liveEventMkt?: LiveEventMktListing;
 }
 
 const ARTIFACT_ELEMENTAL_TYPES = ['fire', 'water', 'air', 'earth', 'lightning', 'light', 'shadow', 'metal'] as const;
@@ -250,6 +261,34 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }
 
     const eqPick = (newArtifact as MarketplaceArtifact).equippableArtifactId?.trim() || undefined;
+    let itemType = ((newArtifact as MarketplaceArtifact).itemType ||
+      (eqPick ? 'equippable_grant' : 'other')) as MarketplaceItemType;
+
+    let consumableEffect: ConsumableEffect | undefined;
+    if (itemType === 'consumable') {
+      const p = parseConsumableEffect((newArtifact as MarketplaceArtifact).consumableEffect || {});
+      if (!p.ok) {
+        alert(`Consumable: ${p.error}`);
+        return;
+      }
+      consumableEffect = p.value;
+    }
+
+    const leRaw = (newArtifact as MarketplaceArtifact).liveEventMkt;
+    let liveEventMkt: LiveEventMktListing | undefined;
+    if (leRaw && (leRaw.enabled === true || (leRaw.pricePp ?? 0) > 0)) {
+      liveEventMkt = {
+        enabled: leRaw.enabled === true,
+        pricePp: Math.max(0, Math.floor(Number(leRaw.pricePp) || 0)),
+      };
+    }
+
+    const rowValid = validateConsumableItemRow({ itemType, consumableEffect, equippableArtifactId: eqPick });
+    if (!rowValid.ok) {
+      alert(rowValid.error);
+      return;
+    }
+
     const artifact: MarketplaceArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
@@ -268,6 +307,9 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       discount: (newArtifact as MarketplaceArtifact).discount,
       disabled: (newArtifact as MarketplaceArtifact).disabled === true,
       equippableArtifactId: eqPick,
+      itemType,
+      consumableEffect: itemType === 'consumable' ? consumableEffect : undefined,
+      liveEventMkt,
     };
 
     setMarketplaceArtifacts(prev => ({
@@ -341,6 +383,34 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     }
 
     const eqPick = (newArtifact as MarketplaceArtifact).equippableArtifactId?.trim() || undefined;
+    let itemType = ((newArtifact as MarketplaceArtifact).itemType ||
+      (eqPick ? 'equippable_grant' : 'other')) as MarketplaceItemType;
+
+    let consumableEffect: ConsumableEffect | undefined;
+    if (itemType === 'consumable') {
+      const p = parseConsumableEffect((newArtifact as MarketplaceArtifact).consumableEffect || {});
+      if (!p.ok) {
+        alert(`Consumable: ${p.error}`);
+        return;
+      }
+      consumableEffect = p.value;
+    }
+
+    const leRaw = (newArtifact as MarketplaceArtifact).liveEventMkt;
+    let liveEventMkt: LiveEventMktListing | undefined;
+    if (leRaw && (leRaw.enabled === true || (leRaw.pricePp ?? 0) > 0)) {
+      liveEventMkt = {
+        enabled: leRaw.enabled === true,
+        pricePp: Math.max(0, Math.floor(Number(leRaw.pricePp) || 0)),
+      };
+    }
+
+    const rowValid = validateConsumableItemRow({ itemType, consumableEffect, equippableArtifactId: eqPick });
+    if (!rowValid.ok) {
+      alert(rowValid.error);
+      return;
+    }
+
     const artifact: MarketplaceArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
@@ -359,6 +429,9 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
       discount: (newArtifact as MarketplaceArtifact).discount,
       disabled: (newArtifact as MarketplaceArtifact).disabled === true,
       equippableArtifactId: eqPick,
+      itemType,
+      consumableEffect: itemType === 'consumable' ? consumableEffect : undefined,
+      liveEventMkt,
     };
 
     setMarketplaceArtifacts(prev => ({
@@ -830,6 +903,254 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.35rem' }}>
                     Must match an id from the Equippable Artifacts tab. Store listing id can differ (e.g. promo sku).
                   </div>
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Item type
+                  </label>
+                  <select
+                    value={(newArtifact as MarketplaceArtifact).itemType || 'other'}
+                    onChange={(e) => {
+                      const v = e.target.value as MarketplaceItemType;
+                      setNewArtifact((prev) => {
+                        const p = prev as MarketplaceArtifact;
+                        if (v === 'consumable') {
+                          return {
+                            ...p,
+                            itemType: v,
+                            consumableEffect: p.consumableEffect || {
+                              effectType: 'restore_health',
+                              amount: 25,
+                              targetScope: 'self',
+                            },
+                          };
+                        }
+                        return { ...p, itemType: v, consumableEffect: undefined };
+                      });
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#1f2937',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="other">Other / non-consumable</option>
+                    <option value="consumable">Consumable (heal / shields / revive — uses effect below)</option>
+                    <option value="equippable_grant">Equippable grant (purchase grants gear)</option>
+                    <option value="currency">Currency</option>
+                    <option value="unlock">Unlock</option>
+                  </select>
+                </div>
+                {(newArtifact as MarketplaceArtifact).itemType === 'consumable' && (
+                  <div
+                    style={{
+                      gridColumn: '1 / -1',
+                      padding: '0.85rem',
+                      borderRadius: '0.5rem',
+                      background: 'rgba(59, 130, 246, 0.12)',
+                      border: '1px solid rgba(59, 130, 246, 0.35)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: '#93c5fd', marginBottom: '0.65rem' }}>Consumable effect</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem' }}>Effect type</label>
+                        <select
+                          value={(newArtifact as MarketplaceArtifact).consumableEffect?.effectType || 'restore_health'}
+                          onChange={(e) =>
+                            setNewArtifact((prev) => {
+                              const p = prev as MarketplaceArtifact;
+                              const ce = p.consumableEffect || {
+                                effectType: 'restore_health' as const,
+                                amount: 25,
+                                targetScope: 'self' as const,
+                              };
+                              return {
+                                ...p,
+                                consumableEffect: {
+                                  ...ce,
+                                  effectType: e.target.value as ConsumableEffect['effectType'],
+                                  amount:
+                                    e.target.value === 'revive_eliminated_self'
+                                      ? ce.amount && ce.amount <= 100
+                                        ? ce.amount
+                                        : 50
+                                      : ce.amount,
+                                },
+                              };
+                            })
+                          }
+                          style={{
+                            width: '100%',
+                            padding: '0.45rem',
+                            borderRadius: '0.25rem',
+                            border: '1px solid #4b5563',
+                            background: '#111827',
+                            color: 'white',
+                          }}
+                        >
+                          <option value="restore_health">{consumableEffectLabel('restore_health')}</option>
+                          <option value="restore_shields">{consumableEffectLabel('restore_shields')}</option>
+                          <option value="revive_eliminated_self">{consumableEffectLabel('revive_eliminated_self')}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem' }}>
+                          {(newArtifact as MarketplaceArtifact).consumableEffect?.effectType === 'revive_eliminated_self'
+                            ? 'Revive HP % (1–100)'
+                            : 'Effect amount (positive number)'}
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={
+                            (newArtifact as MarketplaceArtifact).consumableEffect?.effectType ===
+                            'revive_eliminated_self'
+                              ? 100
+                              : undefined
+                          }
+                          value={(newArtifact as MarketplaceArtifact).consumableEffect?.amount ?? ''}
+                          onChange={(e) =>
+                            setNewArtifact((prev) => {
+                              const p = prev as MarketplaceArtifact;
+                              const ce = p.consumableEffect || {
+                                effectType: 'restore_health' as const,
+                                amount: 25,
+                                targetScope: 'self' as const,
+                              };
+                              return {
+                                ...p,
+                                consumableEffect: {
+                                  ...ce,
+                                  amount: Math.max(0, parseInt(e.target.value, 10) || 0),
+                                },
+                              };
+                            })
+                          }
+                          style={{
+                            width: '100%',
+                            padding: '0.45rem',
+                            borderRadius: '0.25rem',
+                            border: '1px solid #4b5563',
+                            background: '#111827',
+                            color: 'white',
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ marginTop: '0.65rem' }}>
+                      <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem' }}>Target scope</label>
+                      <select
+                        value={(newArtifact as MarketplaceArtifact).consumableEffect?.targetScope || 'self'}
+                        onChange={(e) =>
+                          setNewArtifact((prev) => {
+                            const p = prev as MarketplaceArtifact;
+                            const ce = p.consumableEffect || {
+                              effectType: 'restore_health' as const,
+                              amount: 25,
+                              targetScope: 'self' as const,
+                            };
+                            return {
+                              ...p,
+                              consumableEffect: {
+                                ...ce,
+                                targetScope: e.target.value as ConsumableEffect['targetScope'],
+                              },
+                            };
+                          })
+                        }
+                        style={{
+                          width: '100%',
+                          maxWidth: '280px',
+                          padding: '0.45rem',
+                          borderRadius: '0.25rem',
+                          border: '1px solid #4b5563',
+                          background: '#111827',
+                          color: 'white',
+                        }}
+                      >
+                        <option value="self">Self</option>
+                        <option value="ally">Ally (reserved)</option>
+                        <option value="team">Team (reserved)</option>
+                      </select>
+                      <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: '0.35rem' }}>
+                        Ally/team scopes are stored for future use; vault & battle bag use self only today.
+                      </div>
+                    </div>
+                    {(() => {
+                      const ce = (newArtifact as MarketplaceArtifact).consumableEffect;
+                      const p = ce ? parseConsumableEffect(ce) : null;
+                      if (p && p.ok) {
+                        return (
+                          <div style={{ marginTop: '0.65rem', fontSize: '0.8rem', color: '#a5b4fc' }}>
+                            Preview: {previewConsumableEffectSentence(p.value)}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
+                <div
+                  style={{
+                    gridColumn: '1 / -1',
+                    padding: '0.85rem',
+                    borderRadius: '0.5rem',
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: '#fcd34d', marginBottom: '0.5rem' }}>Live Event MST MKT</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={(newArtifact as MarketplaceArtifact).liveEventMkt?.enabled === true}
+                      onChange={(e) =>
+                        setNewArtifact((prev) => {
+                          const p = prev as MarketplaceArtifact;
+                          const cur = p.liveEventMkt || { enabled: false, pricePp: 0 };
+                          return {
+                            ...p,
+                            liveEventMkt: { ...cur, enabled: e.target.checked },
+                          };
+                        })
+                      }
+                    />
+                    <span style={{ fontSize: '0.875rem' }}>Offer in Live Event shop (host opens MST MKT)</span>
+                  </label>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem' }}>
+                    Price (Participation PP)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={(newArtifact as MarketplaceArtifact).liveEventMkt?.pricePp ?? ''}
+                    onChange={(e) =>
+                      setNewArtifact((prev) => {
+                        const p = prev as MarketplaceArtifact;
+                        const cur = p.liveEventMkt || { enabled: false, pricePp: 0 };
+                        return {
+                          ...p,
+                          liveEventMkt: {
+                            enabled: cur.enabled,
+                            pricePp: Math.max(0, parseInt(e.target.value, 10) || 0),
+                          },
+                        };
+                      })
+                    }
+                    style={{
+                      width: '100%',
+                      maxWidth: '200px',
+                      padding: '0.45rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #4b5563',
+                      background: '#111827',
+                      color: 'white',
+                    }}
+                  />
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Category</label>

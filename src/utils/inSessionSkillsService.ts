@@ -7,6 +7,8 @@ import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from './liveEventSkillCost';
+import { defaultEnergies } from './season1PlayerHydration';
+import { resolveSeason1SkillCost } from './season1SkillCost';
 import { getEquippedSkillsForBattle } from './battleSkillsService';
 import { debug, debugError } from './inSessionDebug';
 
@@ -137,8 +139,13 @@ export async function validateSkillUsage(
   userId: string,
   skillId: string,
   participationPointsAvailable: number,
-  equippedArtifacts?: Record<string, unknown> | null
-): Promise<{ valid: boolean; reason?: string }> {
+  equippedArtifacts?: Record<string, unknown> | null,
+  season1?: {
+    energies?: import('../types/season1').EnergiesMap;
+    awakenedFlow?: boolean;
+    reductionFromEffects?: number;
+  }
+): Promise<{ valid: boolean; reason?: string; spendSummary?: string }> {
   try {
     const skills = await getAvailableSkillsForSession(sessionId, userId);
     const skill = skills.find(s => s.id === skillId);
@@ -150,12 +157,32 @@ export async function validateSkillUsage(
     if (!skill.unlocked) {
       return { valid: false, reason: 'Skill is locked' };
     }
+
+    if (skill.season1Cost) {
+      const res = resolveSeason1SkillCost(
+        skill,
+        participationPointsAvailable,
+        season1?.energies ?? defaultEnergies(),
+        equippedArtifacts ?? null,
+        {
+          reductionFromEffects: season1?.reductionFromEffects ?? 0,
+          awakenedFlow: season1?.awakenedFlow ?? false,
+        }
+      );
+      if (!res.canUse) {
+        return { valid: false, reason: res.reason };
+      }
+      if (skill.currentCooldown && skill.currentCooldown > 0) {
+        return { valid: false, reason: `Skill is on cooldown (${skill.currentCooldown} turns remaining)` };
+      }
+      return { valid: true, spendSummary: res.spendSummary };
+    }
     
     const breakdown = computeLiveEventParticipationSkillCost(
       skill,
       equippedArtifacts ?? null,
       null,
-      0
+      season1?.reductionFromEffects ?? 0
     );
     if (participationPointsAvailable < breakdown.finalCost) {
       return {

@@ -34,8 +34,10 @@ import type {
 } from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
-import { trackParticipation, trackElimination } from './inSessionStatsService';
+import { trackParticipation, trackElimination, breakParticipationStreak } from './inSessionStatsService';
+import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
+import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
 
@@ -76,7 +78,7 @@ export const DEFAULT_BATTLE_ROYALE_HOST_CONFIG: BattleRoyaleHostConfig = {
   autoRepeatQuestions: true,
   spectatorsOnElimination: true,
   allowEliminatedQuizAnswering: false,
-  autoAdvanceDelayMs: 3500,
+  autoAdvanceDelayMs: 5000,
 };
 
 export const DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG: TeamBattleRoyaleHostConfig = {
@@ -92,7 +94,7 @@ export const DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG: TeamBattleRoyaleHostConfig 
   autoRepeatQuestions: true,
   spectatorsOnElimination: true,
   allowEliminatedQuizAnswering: false,
-  autoAdvanceDelayMs: 3500,
+  autoAdvanceDelayMs: 5000,
 };
 
 export type StartQuizSessionOptions = {
@@ -362,7 +364,6 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       const userUpdates: UpdateData<DocumentData> = {};
       const ppAmount = reward.pp ?? 0;
       const xpAmount = reward.xp ?? 0;
-      const artifactName = reward.artifactName || reward.artifactId;
       if (ppAmount > 0) {
         studentUpdates.powerPoints = increment(ppAmount);
         userUpdates.powerPoints = increment(ppAmount);
@@ -373,8 +374,33 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         userUpdates.xp = increment(xpAmount);
         didGrant = true;
       }
-      if (artifactName) {
-        studentUpdates.inventory = arrayUnion(artifactName);
+      if (reward.artifactId || reward.artifactName) {
+        const rawId = reward.artifactId || reward.artifactName!;
+        try {
+          const details = await getArtifactDetails(rawId);
+          if (details.isEquippable) {
+            const grantRes = await grantArtifactToPlayer(
+              uid,
+              details.id,
+              session.hostUid,
+              'Live Event quiz placement'
+            );
+            if (!grantRes.success) {
+              log('grantLiveQuiz equippable grant failed', { uid, id: details.id, err: grantRes.error });
+            }
+          } else {
+            const label = details.name || reward.artifactName || reward.artifactId || '';
+            if (label) {
+              studentUpdates.inventory = arrayUnion(label);
+            }
+          }
+        } catch (artErr) {
+          log('grantLiveQuiz artifact resolve failed', artErr);
+          const fallback = reward.artifactName || reward.artifactId;
+          if (fallback) {
+            studentUpdates.inventory = arrayUnion(fallback);
+          }
+        }
         didGrant = true;
       }
       if (Object.keys(studentUpdates).length > 0) {
@@ -478,7 +504,7 @@ export async function advanceQuiz(
     };
 
     if (currentQId && activeRound > 0) {
-      const MAX_REGULAR = 150;
+      const MAX_REGULAR = 100;
       const MAX_BR = 25;
       const correctUids = new Set<string>();
 
@@ -734,11 +760,37 @@ export async function submitQuizResponse(
     log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded, mode });
     return { ok: true, pointsAwarded, isCorrect: allCorrect, gameMode: mode };
   }).then(async (result) => {
-    if (!result.ok || !result.isCorrect) return result;
+    if (!result.ok) return result;
+    if (!result.isCorrect) {
+      try {
+        const rref = roomRef(sessionId);
+        const roomSnap = await getDoc(rref);
+        let displayName: string | undefined;
+        if (roomSnap.exists()) {
+          const players = (roomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>;
+          displayName = players.find((p) => p.userId === uid)?.displayName;
+        }
+        await breakParticipationStreak(sessionId, uid, displayName);
+      } catch (e) {
+        log('breakParticipationStreak failed', e);
+      }
+      return result;
+    }
     const mode = result.gameMode ?? 'regular';
     const isBattle = isBattleQuizMode(mode);
     const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : 1;
-    await trackParticipation(sessionId, uid, ppDelta);
+    let displayName: string | undefined;
+    try {
+      const rref = roomRef(sessionId);
+      const roomSnap = await getDoc(rref);
+      if (roomSnap.exists()) {
+        const players = (roomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>;
+        displayName = players.find((p) => p.userId === uid)?.displayName;
+      }
+    } catch {
+      /* ignore */
+    }
+    await trackParticipation(sessionId, uid, ppDelta, { playerDisplayName: displayName });
     try {
       const rref = roomRef(sessionId);
       const roomSnap = await getDoc(rref);
@@ -775,6 +827,21 @@ export async function submitQuizResponse(
       }
     } catch (err) {
       log('Failed to update session player participation for quiz correct', err);
+    }
+    try {
+      const qSnap = await getDoc(sessionRef(sessionId));
+      const sess = qSnap.exists() ? qSnap.data() : null;
+      const end = sess?.questionEndsAt ?? Date.now();
+      const start = sess?.questionStartedAt ?? Date.now();
+      const span = Math.max(1, end - start);
+      const speedRatio = 1 - Math.min(1, Math.max(0, (Date.now() - start) / span));
+      await awardPowerXpForLiveQuizCorrectAnswer(sessionId, uid, {
+        gameMode: mode,
+        pointsAwarded: result.pointsAwarded ?? 0,
+        speedRatio,
+      });
+    } catch (e) {
+      log('Power XP drip (quiz) skipped', e);
     }
     return result;
   });

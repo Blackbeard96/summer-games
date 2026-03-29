@@ -1,0 +1,46 @@
+/**
+ * Live Event participation streak (Season 1).
+ * Streak *starts* at 3 consecutive participation awards; then increments.
+ */
+
+export interface ParticipationStreakState {
+  /** Consecutive participation awards (each successful earn increments). */
+  consecutiveAwards: number;
+}
+
+export function initialParticipationStreakState(): ParticipationStreakState {
+  return { consecutiveAwards: 0 };
+}
+
+export interface StreakUpdateResult {
+  next: ParticipationStreakState;
+  battleLogLine: string | null;
+}
+
+/**
+ * @param playerName display name for battle log
+ * @param amount participation amount from this award (>0)
+ */
+export function applyParticipationStreakAward(
+  prev: ParticipationStreakState,
+  playerName: string,
+  amount: number
+): StreakUpdateResult {
+  if (amount <= 0) {
+    return { next: prev, battleLogLine: null };
+  }
+  const consecutiveAwards = prev.consecutiveAwards + 1;
+  const next = { consecutiveAwards };
+  let battleLogLine: string | null = null;
+  if (consecutiveAwards === 3) {
+    battleLogLine = `🔥 ${playerName} started a streak! (3 in a row)`;
+  } else if (consecutiveAwards > 3) {
+    battleLogLine = `🔥 ${playerName} is on a ${consecutiveAwards}-point streak!`;
+  }
+  return { next, battleLogLine };
+}
+
+export function breakParticipationStreakMessage(playerName: string, hadStreak: boolean): string | null {
+  if (!hadStreak) return null;
+  return `⚡ ${playerName}'s streak was broken.`;
+}

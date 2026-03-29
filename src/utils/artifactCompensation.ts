@@ -87,7 +87,8 @@ export interface ArtifactGrantResult {
 /**
  * Resolve artifact definition: static lookup first, then equippable, then marketplace from Firestore.
  */
-async function getArtifactDetails(artifactId: string): Promise<{
+/** Exported for live quiz placement rewards and other grant flows. */
+export async function getArtifactDetails(artifactId: string): Promise<{
   id: string;
   name: string;
   description: string;

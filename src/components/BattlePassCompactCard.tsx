@@ -5,13 +5,16 @@ interface BattlePassCompactCardProps {
   maxTier: number;
   totalXP: number;
   onViewRewards: () => void;
+  /** Season 1: open full-screen battle pass / Flow hub */
+  onOpenSeason1Hub?: () => void;
 }
 
 const BattlePassCompactCard: React.FC<BattlePassCompactCardProps> = ({
   currentTier,
   maxTier,
   totalXP,
-  onViewRewards
+  onViewRewards,
+  onOpenSeason1Hub,
 }) => {
   // Calculate progress for current tier
   const currentTierXP = currentTier > 0 ? (currentTier - 1) * 1000 : 0;
@@ -128,6 +131,26 @@ const BattlePassCompactCard: React.FC<BattlePassCompactCardProps> = ({
         >
           View Rewards →
         </button>
+        {onOpenSeason1Hub && (
+          <button
+            type="button"
+            onClick={onOpenSeason1Hub}
+            style={{
+              width: '100%',
+              marginTop: '0.5rem',
+              padding: '0.65rem',
+              background: 'linear-gradient(90deg, rgba(99,102,241,0.35), rgba(168,85,247,0.35))',
+              border: '1px solid rgba(165,180,252,0.55)',
+              borderRadius: '0.5rem',
+              color: 'white',
+              fontSize: '0.8rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+            }}
+          >
+            Season 1 — Full Battle Pass →
+          </button>
+        )}
       </div>
 
       {/* Featured Reward Card (Optional) */}

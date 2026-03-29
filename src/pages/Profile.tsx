@@ -12,6 +12,8 @@ import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
+import type { PowerStatBranch } from '../types/playerPowerStats';
+import { POWER_STAT_EVENT_DESCRIPTION } from '../types/playerPowerStats';
 import { findNextChallenge } from '../utils/journeyProgress';
 import { mergeChaptersProgressMaps } from '../utils/mergeChapterProgress';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
@@ -23,6 +25,8 @@ import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
 import { UniversalLawSkillTreePage } from '../components/skillTree/UniversalLawSkillTreePage';
 import { getRRCandyStatus } from '../utils/rrCandyUtils';
+import { normalizePlayerPowerStats } from '../utils/liveEventPowerStatsService';
+import PowerStatProgressBar from '../components/PowerStatProgressBar';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -150,6 +154,7 @@ const Profile = () => {
   const [showEditRivalModal, setShowEditRivalModal] = useState(false);
   const [rivals, setRivals] = useState<{ chosen?: any; inbound?: any }>({});
   const [showPowerBreakdown, setShowPowerBreakdown] = useState(false);
+  const [profilePowerStatHover, setProfilePowerStatHover] = useState<PowerStatBranch | null>(null);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -496,6 +501,11 @@ const Profile = () => {
       candyType: rr.candyType || 'on-off',
     };
   }, [userData, skillTreeUnlockedFromBattleMoves]);
+
+  const profilePowerStats = useMemo(
+    () => normalizePlayerPowerStats(userData?.stats),
+    [userData?.stats]
+  );
 
   // Note: RR Candy moves are now managed entirely in Skill Mastery (Battle Arena)
   // No longer needed to ensure RR Candy moves in Profile
@@ -1136,6 +1146,7 @@ const Profile = () => {
               candyType={rrProfileSkill.candyType}
               onSkillTreeToggle={setIsSkillTreeShowing}
               initialSkillTreeMode={(skillTreeModeParam === 'irl' ? 'irl' : 'in-game') as 'in-game' | 'irl'}
+              powerStats={profilePowerStats}
             />
           </div>
         </div>
@@ -1327,6 +1338,75 @@ const Profile = () => {
               </div>
             </div>
           )}
+          <div
+            style={{
+              marginBottom: '1rem',
+              padding: '1rem 1.25rem',
+              background: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)',
+              borderRadius: '0.75rem',
+              border: '1px solid #a78bfa',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            }}
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <strong style={{ color: '#4c1d95' }}>Season 1 — Flow &amp; Energy</strong>
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#5b21b6', maxWidth: '36rem' }}>
+                  Track the four energies and evolve your manifest skill tiers (PP unlocks). Same progression data powers live events and battle pass.
+                </p>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => navigate('/energy-mastery')}
+                  style={{
+                    background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Energy Mastery
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/manifest-evolution')}
+                  style={{
+                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Manifest evolution
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/battle-pass')}
+                  style={{
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Battle Pass
+                </button>
+              </div>
+            </div>
+          </div>
           <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
               👤 Profile Settings
@@ -1675,6 +1755,78 @@ const Profile = () => {
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Challenges Completed</div>
+              </div>
+            </div>
+
+            <div style={{
+              marginTop: '1.5rem',
+              padding: '1.25rem',
+              background: '#f8fafc',
+              borderRadius: '0.75rem',
+              border: '1px solid #e2e8f0',
+            }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#1e293b', margin: '0 0 0.75rem 0' }}>
+                ⚡ Power stats
+              </h3>
+              <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0 0 1rem 0', lineHeight: 1.45 }}>
+                Hover a stat to see which live events and goals level it up.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: '0.75rem' }}>
+                {(['physical', 'mental', 'emotional', 'spiritual'] as const).map((key) => {
+                  const st = normalizePlayerPowerStats(userData?.stats)[key];
+                  const label =
+                    key === 'physical' ? 'Physical' : key === 'mental' ? 'Mental' : key === 'emotional' ? 'Emotional' : 'Spiritual';
+                  const hovered = profilePowerStatHover === key;
+                  return (
+                    <div
+                      key={key}
+                      role="group"
+                      aria-label={label}
+                      onMouseEnter={() => setProfilePowerStatHover(key)}
+                      onMouseLeave={() => setProfilePowerStatHover(null)}
+                      style={{
+                        background: hovered ? '#f8fafc' : '#fff',
+                        padding: '0.85rem',
+                        borderRadius: '0.5rem',
+                        border: `1px solid ${hovered ? '#cbd5e1' : '#e2e8f0'}`,
+                        cursor: 'help',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        minHeight: 168,
+                        transition: 'background 0.15s ease, border-color 0.15s ease',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {label}
+                      </div>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#4f46e5', marginTop: '0.15rem' }}>Lv {st.level}</div>
+                      <PowerStatProgressBar branch={key} st={st} height={12} style={{ marginTop: '0.5rem' }} />
+                      <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.35rem' }}>
+                        {st.xp} / {st.xpToNextLevel} XP to next
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '0.35rem' }}>Lifetime XP: {st.totalEarned}</div>
+                      {st.bonusesUnlocked.length > 0 && (
+                        <div style={{ fontSize: '0.65rem', color: '#059669', marginTop: '0.35rem' }}>
+                          Bonuses: {st.bonusesUnlocked.length} unlocked
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          paddingTop: '0.5rem',
+                          minHeight: 40,
+                          fontSize: '0.7rem',
+                          lineHeight: 1.45,
+                          color: '#334155',
+                          opacity: hovered ? 1 : 0,
+                          transition: 'opacity 0.15s ease',
+                        }}
+                      >
+                        {POWER_STAT_EVENT_DESCRIPTION[key]}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

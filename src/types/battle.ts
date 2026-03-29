@@ -1,5 +1,7 @@
 // Battle System Types for Nine Knowings MST
 
+import type { Season1SkillCost } from './season1';
+
 export interface Vault {
   id: string;
   ownerId: string;
@@ -67,6 +69,8 @@ export interface Move {
     artifactLevel: number;
     artifactName?: string;
   };
+  /** Season 1: optional participation + energy payment rules (Live Events / Flow). */
+  season1Cost?: Season1SkillCost;
 }
 
 export interface ActionCard {

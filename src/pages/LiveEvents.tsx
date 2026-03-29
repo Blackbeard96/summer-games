@@ -12,6 +12,10 @@ interface LiveEvent {
   className: string;
   status: 'open' | 'active' | 'closed' | 'live' | 'ended';
   hostUid: string;
+  /** Season 1 live mode — absent on legacy rooms (treat as quiz). */
+  liveEventMode?: string;
+  goalLinkingEnabled?: boolean;
+  energyTypeAwarded?: string;
   players: Array<{
     userId: string;
     displayName: string;
@@ -151,6 +155,9 @@ const LiveEvents: React.FC = () => {
                 className: data.className || `Class ${data.classId}`,
                 status: data.status,
                 hostUid: data.hostUid || data.teacherId,
+                liveEventMode: data.liveEventMode,
+                goalLinkingEnabled: data.goalLinkingEnabled,
+                energyTypeAwarded: data.energyTypeAwarded,
                 players: data.players || [],
                 createdAt: data.createdAt,
                 startedAt: data.startedAt,
@@ -294,6 +301,14 @@ const LiveEvents: React.FC = () => {
     }
   };
 
+  const formatSeason1Mode = (event: LiveEvent): string => {
+    if (!event.liveEventMode) return 'Classic session';
+    const m = event.liveEventMode.replace(/_/g, ' ');
+    const en = event.energyTypeAwarded ? ` · ${event.energyTypeAwarded} energy` : '';
+    const g = event.goalLinkingEnabled === false ? '' : ' · goals on';
+    return `Mode: ${m}${en}${g}`;
+  };
+
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
@@ -376,6 +391,7 @@ const LiveEvents: React.FC = () => {
               <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
                 {userActiveEvent.players.length} player{userActiveEvent.players.length !== 1 ? 's' : ''} joined
               </div>
+              <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(userActiveEvent)}</div>
             </div>
             <button
               onClick={() => navigate(`/live-events/${userActiveEvent.id}`)}
@@ -438,6 +454,7 @@ const LiveEvents: React.FC = () => {
                     <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
                       {event.players.length} player{event.players.length !== 1 ? 's' : ''} joined
                     </div>
+                    <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(event)}</div>
                   </div>
                   <button
                     onClick={() => isJoined ? navigate(`/live-events/${event.id}`) : handleJoinEvent(event)}

@@ -21,7 +21,10 @@ export interface BattleRoyaleHostConfig {
   spectatorsOnElimination: boolean;
   /** If true, eliminated players may still answer for PP-only (no combat if spectator mode) */
   allowEliminatedQuizAnswering: boolean;
-  /** Host advances automatically after reveal (ms delay after timer ends); 0 = manual only */
+  /**
+   * After the question timer ends, wait this many ms then advance to the next question (no host click).
+   * 0 = host must click Next. Battle Royale defaults to a short gap (e.g. 5s).
+   */
   autoAdvanceDelayMs: number;
 }
 
@@ -43,6 +46,7 @@ export interface TeamBattleRoyaleHostConfig {
   autoRepeatQuestions: boolean;
   spectatorsOnElimination: boolean;
   allowEliminatedQuizAnswering: boolean;
+  /** Same as BattleRoyaleHostConfig: pause after each question’s timer before the next question. */
   autoAdvanceDelayMs: number;
 }
 

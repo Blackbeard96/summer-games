@@ -3,7 +3,14 @@
  * Firestore values override catalog fields per item id; items only in Firestore are appended.
  */
 
-import type { MarketplaceStoreArtifact } from '../data/marketplaceArtifactsCatalog';
+import {
+  MARKETPLACE_STORE_ARTIFACTS,
+  type MarketplaceStoreArtifact,
+} from '../data/marketplaceArtifactsCatalog';
+import type { LiveEventMktListing, MarketplaceItemType } from '../types/consumableEffects';
+import { parseConsumableEffect } from '../types/consumableEffects';
+import { db } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 const DOC_META = new Set(['lastUpdated', 'updatedBy']);
 
@@ -46,7 +53,47 @@ export function normalizeMarketplaceItem(
         ? Math.max(0, Math.min(100, Math.floor(Number(partial.discount) || 0)))
         : undefined,
     disabled: partial.disabled === true,
+    itemType: normalizeItemType(partial),
+    consumableEffect: normalizeConsumableEffectField(partial.consumableEffect),
+    liveEventMkt: normalizeLiveEventMkt(partial.liveEventMkt),
   };
+}
+
+function normalizeItemType(partial: Record<string, unknown>): MarketplaceItemType | undefined {
+  const it = partial.itemType;
+  if (it === 'consumable' || it === 'equippable_grant' || it === 'currency' || it === 'unlock' || it === 'other') {
+    return it;
+  }
+  const eq = partial.equippableArtifactId;
+  if (typeof eq === 'string' && eq.trim() && !partial.consumableEffect) {
+    return 'equippable_grant';
+  }
+  if (partial.consumableEffect && typeof partial.consumableEffect === 'object') {
+    const p = parseConsumableEffect(partial.consumableEffect);
+    if (p.ok) return 'consumable';
+  }
+  return undefined;
+}
+
+function normalizeConsumableEffectField(raw: unknown): MarketplaceStoreArtifact['consumableEffect'] {
+  if (raw == null || typeof raw !== 'object') return undefined;
+  const p = parseConsumableEffect(raw);
+  return p.ok ? p.value : undefined;
+}
+
+function normalizeLiveEventMkt(raw: unknown): LiveEventMktListing | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const enabled = o.enabled === true;
+  const pricePp = Math.max(0, Math.floor(Number(o.pricePp) || 0));
+  if (!enabled && pricePp <= 0) return undefined;
+  return { enabled, pricePp };
+}
+
+/** Merged catalog for clients (Marketplace, battle bag, Live Event MKT). */
+export async function fetchMergedMarketplaceCatalog(): Promise<MarketplaceStoreArtifact[]> {
+  const snap = await getDoc(doc(db, 'adminSettings', 'marketplaceArtifacts'));
+  return mergeMarketplaceStoreItems(MARKETPLACE_STORE_ARTIFACTS, snap.exists() ? snap.data() : {});
 }
 
 /** Strip Firestore doc metadata → raw slot map */

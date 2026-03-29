@@ -4,9 +4,16 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment, arrayUnion } from 'firebase/firestore';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
+import { applyParticipationStreakAward, breakParticipationStreakMessage } from './participationStreak';
+import type { LiveEventPowerGain } from '../types/playerPowerStats';
+import {
+  awardLiveEventPowerGain,
+  awardPowerXpForElimination,
+  computeSessionEndPowerXp,
+} from './liveEventPowerStatsService';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -260,6 +267,7 @@ export async function trackElimination(
     }
 
     debug('inSessionStats', `Tracked elimination: ${eliminatorId} eliminated ${eliminatedId} (+${ppFromElimination} PP = 500 + ${eliminatedVaultPP} vault)`);
+    void awardPowerXpForElimination(eliminatorId, sessionId);
     return true;
   } catch (error) {
     debugError('inSessionStats', `Error tracking elimination`, error);
@@ -452,35 +460,118 @@ async function applyEliminatedPlayerPointPenalty(
 export async function trackParticipation(
   sessionId: string,
   playerId: string,
-  participationAmount: number
+  participationAmount: number,
+  options?: { playerDisplayName?: string }
 ): Promise<boolean> {
   try {
     const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
-    
+    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+
+    let streakLogLine: string | null = null;
+    let nextConsecutive = 0;
+
     await runTransaction(db, async (transaction) => {
       const statsDoc = await transaction.get(statsRef);
-      
+      const sessionDoc = await transaction.get(sessionRef);
+
       if (!statsDoc.exists()) {
         return;
       }
-      
+
       const stats = statsDoc.data() as SessionStats;
       const newParticipation = (stats.participationEarned || 0) + participationAmount;
       const newMovesEarned = Math.floor(newParticipation / 1); // 1 participation = 1 move
       const ppFromParticipation = participationAmount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
       const newPPEarned = (stats.ppEarned || 0) + ppFromParticipation;
-      
+
+      const prevConsecutive = stats.consecutiveParticipationAwards ?? 0;
+      const name = options?.playerDisplayName || stats.playerName || 'Player';
+      const streakState = { consecutiveAwards: prevConsecutive };
+      const { next, battleLogLine } = applyParticipationStreakAward(streakState, name, participationAmount);
+      nextConsecutive = next.consecutiveAwards;
+      streakLogLine = battleLogLine;
+
       transaction.update(statsRef, {
         participationEarned: newParticipation,
         movesEarned: newMovesEarned,
-        ppEarned: newPPEarned
+        ppEarned: newPPEarned,
+        consecutiveParticipationAwards: nextConsecutive,
+        lastLoggedStreakCount: nextConsecutive,
       });
+
+      // Session row PP is what MST MKT and finalizeSessionStats use; mirror participation awards here
+      // so players can spend earned PP during the Live Event (same rate as stats.ppEarned).
+      if (sessionDoc.exists()) {
+        const sessionPatch: {
+          players?: unknown[];
+          battleLog?: ReturnType<typeof arrayUnion>;
+          updatedAt: ReturnType<typeof serverTimestamp>;
+        } = { updatedAt: serverTimestamp() };
+        const players = [...((sessionDoc.data()?.players || []) as Array<Record<string, unknown>>)];
+        const pIdx = players.findIndex((p) => p && (p as { userId?: string }).userId === playerId);
+        if (pIdx >= 0) {
+          const row = { ...players[pIdx] } as { powerPoints?: number; userId?: string };
+          row.powerPoints = Math.max(0, (Number(row.powerPoints) || 0) + ppFromParticipation);
+          players[pIdx] = row;
+          sessionPatch.players = players;
+        }
+        if (streakLogLine) {
+          sessionPatch.battleLog = arrayUnion(streakLogLine);
+        }
+        if (sessionPatch.players || sessionPatch.battleLog) {
+          transaction.update(sessionRef, sessionPatch);
+        }
+      } else if (streakLogLine) {
+        transaction.update(sessionRef, {
+          battleLog: arrayUnion(streakLogLine),
+          updatedAt: serverTimestamp(),
+        });
+      }
     });
-    
+
     return true;
   } catch (error) {
     debugError('inSessionStats', `Error tracking participation`, error);
     return false;
+  }
+}
+
+/** Call when a player fails a streak-eligible action (e.g. wrong quiz answer). */
+export async function breakParticipationStreak(
+  sessionId: string,
+  playerId: string,
+  playerDisplayName?: string
+): Promise<void> {
+  try {
+    const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+
+    await runTransaction(db, async (transaction) => {
+      const statsDoc = await transaction.get(statsRef);
+      if (!statsDoc.exists()) return;
+      const stats = statsDoc.data() as SessionStats;
+      const prev = stats.consecutiveParticipationAwards ?? 0;
+      const hadStreak = prev >= 3;
+      const name = playerDisplayName || stats.playerName || 'Player';
+      const msg = breakParticipationStreakMessage(name, hadStreak);
+
+      transaction.update(statsRef, {
+        consecutiveParticipationAwards: 0,
+        lastLoggedStreakCount: 0,
+      });
+
+      if (msg) {
+        const sessionDoc = await transaction.get(sessionRef);
+        if (sessionDoc.exists()) {
+          transaction.update(sessionRef, {
+            battleLog: arrayUnion(msg),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    });
+  } catch (error) {
+    debugError('inSessionStats', `Error breaking participation streak`, error);
   }
 }
 
@@ -501,6 +592,10 @@ export async function finalizeSessionStats(
     }
     
     const sessionData = sessionDoc.data();
+    const existingSummary = sessionData.sessionSummary as SessionSummary | undefined;
+    if (sessionData.status === 'ended' && existingSummary) {
+      return existingSummary;
+    }
     const sessionStartTime = sessionData.startedAt || sessionData.createdAt;
     const sessionEndTime = serverTimestamp();
     
@@ -565,6 +660,57 @@ export async function finalizeSessionStats(
       statsMap,
       rawQuizPpByPlayer
     );
+
+    const quizSessionRef = doc(db, 'inSessionRooms', sessionId, 'quizSession', 'current');
+    const quizSessionSnap = await getDoc(quizSessionRef);
+    let correctByPlayer: Record<string, number> = {};
+    let leaderboard: Record<string, number> = {};
+    let quizGameMode: string | undefined;
+    if (quizSessionSnap.exists()) {
+      const qd = quizSessionSnap.data() as {
+        correctCount?: Record<string, number>;
+        leaderboard?: Record<string, number>;
+        gameMode?: string;
+      };
+      correctByPlayer = { ...(qd.correctCount || {}) };
+      leaderboard = { ...(qd.leaderboard || {}) };
+      quizGameMode = qd.gameMode;
+    }
+
+    const roomPlayersList = (sessionData.players || []) as Array<{ userId: string }>;
+    const sortedByQuizScore = [...roomPlayersList].sort(
+      (a, b) => (leaderboard[b.userId] ?? 0) - (leaderboard[a.userId] ?? 0)
+    );
+    const rankByPlayer: Record<string, number> = {};
+    sortedByQuizScore.forEach((p, idx) => {
+      rankByPlayer[p.userId] = idx + 1;
+    });
+    const totalRanked = Math.max(1, sortedByQuizScore.length);
+
+    const liveEventPowerGains: Record<string, LiveEventPowerGain> = {};
+    for (const playerId of Object.keys(statsMap)) {
+      const { branch, amount } = computeSessionEndPowerXp({
+        liveEventMode: sessionData.liveEventMode as string | undefined,
+        stats: statsMap[playerId],
+        correctAnswers: correctByPlayer[playerId] ?? 0,
+        leaderboardScore: leaderboard[playerId] ?? 0,
+        rankByScore: rankByPlayer[playerId] ?? totalRanked,
+        totalRanked,
+        quizPlacementPp: adjustedQuizPpByPlayer[playerId] ?? 0,
+        quizGameMode,
+      });
+      if (amount <= 0) continue;
+      const gain: LiveEventPowerGain =
+        branch === 'physical'
+          ? { physical: amount }
+          : branch === 'mental'
+            ? { mental: amount }
+            : branch === 'emotional'
+              ? { emotional: amount }
+              : { spiritual: amount };
+      await awardLiveEventPowerGain(playerId, gain);
+      liveEventPowerGains[playerId] = gain;
+    }
 
     // Sync each player's vault health and shield from session state so Live Event impact persists globally
     const players = sessionData.players || [];
@@ -647,6 +793,24 @@ export async function finalizeSessionStats(
     
     // Determine overall MVP (prioritize eliminations, then PP)
     const mvpPlayerId = mvpEliminationsPlayer || mvpPPPlayer;
+
+    /** Ranks for school leaderboard: only when quiz leaderboard had at least one positive score. */
+    let liveEventQuizRankByPlayer: Record<string, number> | undefined;
+    if (Object.keys(leaderboard).length > 0) {
+      const scores = sortedByQuizScore.map((p) => leaderboard[p.userId] ?? 0);
+      const maxScore = scores.length > 0 ? Math.max(0, ...scores) : 0;
+      if (maxScore > 0) {
+        const byPlayer: Record<string, number> = {};
+        sortedByQuizScore.forEach((p, idx) => {
+          if (statsMap[p.userId]) {
+            byPlayer[p.userId] = idx + 1;
+          }
+        });
+        if (Object.keys(byPlayer).length > 0) {
+          liveEventQuizRankByPlayer = byPlayer;
+        }
+      }
+    }
     
     // Create session summary (include quiz awards if stored when a quiz completed)
     const summary: SessionSummary = {
@@ -659,8 +823,11 @@ export async function finalizeSessionStats(
       totalPlayers: Math.max(playerIds.length, Object.keys(statsMap).length),
       stats: statsMap,
       mvpPlayerId,
+      liveEventPowerApplied: true,
+      ...(Object.keys(liveEventPowerGains).length > 0 && { liveEventPowerGains }),
       ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot }),
-      ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer })
+      ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer }),
+      ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer })
     };
 
     // Store summary in session document
@@ -669,6 +836,23 @@ export async function finalizeSessionStats(
       status: 'ended',
       endedAt: sessionEndTime
     });
+
+    if (liveEventQuizRankByPlayer && Object.keys(liveEventQuizRankByPlayer).length > 0) {
+      try {
+        await setDoc(
+          doc(db, 'liveEventPlacementRollups', sessionId),
+          {
+            sessionId,
+            classId: sessionData.classId ?? '',
+            rankByPlayer: liveEventQuizRankByPlayer,
+            endedAt: sessionEndTime,
+          },
+          { merge: true }
+        );
+      } catch (rollupErr) {
+        debugError('inSessionStats', 'Failed to write liveEventPlacementRollups', rollupErr);
+      }
+    }
     
     debug('inSessionStats', `Finalized session stats for ${sessionId}`, {
       totalPlayers: playerIds.length,

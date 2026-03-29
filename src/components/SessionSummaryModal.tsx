@@ -369,6 +369,37 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
               </div>
             )}
 
+            {(() => {
+              const g = displaySummary.liveEventPowerGains?.[currentPlayerId];
+              if (!g) return null;
+              const lines: string[] = [];
+              if (g.physical) lines.push(`+${g.physical} Physical Power`);
+              if (g.mental) lines.push(`+${g.mental} Mental Power`);
+              if (g.emotional) lines.push(`+${g.emotional} Emotional Power`);
+              if (g.spiritual) lines.push(`+${g.spiritual} Spiritual Power`);
+              if (lines.length === 0) return null;
+              return (
+                <div
+                  style={{
+                    marginBottom: '1rem',
+                    padding: '1rem',
+                    background: '#f0fdf4',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #86efac',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: '0.5rem', color: '#166534' }}>
+                    Power stat XP (this Live Event)
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#14532d', lineHeight: 1.6 }}>
+                    {lines.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
+
             {/* Stats Grid */}
             <div style={{ 
               display: 'grid', 

@@ -2,6 +2,13 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import BadgeDetailModal from './BadgeDetailModal';
+import {
+  POWER_STAT_EVENT_DESCRIPTION,
+  type PlayerPowerStatsMap,
+  type PowerStatBranch,
+} from '../types/playerPowerStats';
+import { createDefaultPlayerPowerStats } from '../utils/liveEventPowerStatsService';
+import PowerStatProgressBar from './PowerStatProgressBar';
 
 interface PlayerCardProps {
   name: string;
@@ -32,6 +39,8 @@ interface PlayerCardProps {
   candyType?: 'on-off' | 'up-down' | 'config'; // RR Candy type the player has
   onSkillTreeToggle?: (isShowing: boolean) => void; // Callback when skill tree visibility changes
   initialSkillTreeMode?: 'in-game' | 'irl'; // Initial mode for skill tree
+  /** Live Event Power stats (Physical / Mental / Emotional / Spiritual); defaults if omitted */
+  powerStats?: PlayerPowerStatsMap | null;
 }
 
 const styleIcons: Record<string, string> = {
@@ -97,11 +106,14 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   candyType = 'on-off', // Default to on-off for now
   onSkillTreeToggle,
   initialSkillTreeMode = 'in-game',
+  powerStats: powerStatsProp = null,
 }) => {
   const navigate = useNavigate();
   const [flipped, setFlipped] = useState(false);
   const [showBadges, setShowBadges] = useState(false);
   const [showSkillTree, setShowSkillTree] = useState(false);
+  const [showPowerStats, setShowPowerStats] = useState(false);
+  const [powerStatHover, setPowerStatHover] = useState<PowerStatBranch | null>(null);
   const [skillTreeMode, setSkillTreeMode] = useState<'in-game' | 'irl'>(initialSkillTreeMode);
   const [selectedJourneyStage, setSelectedJourneyStage] = useState<string | null>(null);
   const [selectedBadge, setSelectedBadge] = useState<{ id: string; name: string; imageUrl?: string; description?: string; earnedAt?: any } | null>(null);
@@ -150,6 +162,11 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     return null;
   }, [xp]);
 
+  const powerStats = useMemo(
+    () => powerStatsProp ?? createDefaultPlayerPowerStats(),
+    [powerStatsProp]
+  );
+
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
     const manifestColors: { [key: string]: string } = {
@@ -190,15 +207,19 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
       setShowSkillTree(false);
       setSkillTreeMode('in-game'); // Reset to in-game mode when closing
       setFlipped(false);
+    } else if (showPowerStats) {
+      setShowPowerStats(false);
+      setFlipped(false);
     } else {
       setFlipped(f => !f);
     }
-  }, [showBadges, showSkillTree]);
+  }, [showBadges, showSkillTree, showPowerStats]);
 
   const handleBadgeClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setShowBadges(true);
     setShowSkillTree(false);
+    setShowPowerStats(false);
     setFlipped(true);
   }, []);
 
@@ -206,7 +227,17 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     e.stopPropagation();
     setShowSkillTree(true);
     setShowBadges(false);
+    setShowPowerStats(false);
     setSkillTreeMode('in-game'); // Reset to in-game mode when opening
+    setFlipped(true);
+  }, []);
+
+  const handlePowerStatsClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowPowerStats(true);
+    setShowBadges(false);
+    setShowSkillTree(false);
+    setSelectedJourneyStage(null);
     setFlipped(true);
   }, []);
 
@@ -214,6 +245,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
     e.stopPropagation();
     setSelectedJourneyStage(stage);
     setShowBadges(false);
+    setShowPowerStats(false);
     setFlipped(true);
   }, []);
 
@@ -555,6 +587,43 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               >
                 <span>🏆</span>
                 Badges ({badges.length})
+              </button>
+            </div>
+
+            {/* Power stats (Live Events) */}
+            <div style={{ margin: '12px 0', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={handlePowerStatsClick}
+                style={{
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 12,
+                  padding: '12px 20px',
+                  fontWeight: 'bold',
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: '0 4px 12px rgba(245, 158, 11, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  width: '100%',
+                  margin: '0 auto',
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.45)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.35)';
+                }}
+              >
+                <span>📊</span>
+                Stats
               </button>
             </div>
 
@@ -1233,6 +1302,141 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 
                 <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
                   Click to return to front
+                </div>
+              </>
+            ) : showPowerStats ? (
+              <>
+                <div
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 'bold',
+                    color: '#1f2937',
+                    marginBottom: 12,
+                    textAlign: 'center',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>📊</span>
+                    Power stats
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPowerStats(false);
+                      setFlipped(false);
+                    }}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.2)',
+                      border: 'none',
+                      borderRadius: '50%',
+                      width: '36px',
+                      height: '36px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '20px',
+                      color: '#1f2937',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                    }}
+                  >
+                    ←
+                  </button>
+                </div>
+                <div
+                  style={{
+                    background: '#fff',
+                    borderRadius: 12,
+                    padding: 12,
+                    boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+                    width: '100%',
+                    maxHeight: 380,
+                    overflow: 'visible',
+                    marginBottom: 16,
+                    flex: '1 1 auto',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: 10,
+                    }}
+                  >
+                    {(
+                      [
+                        { key: 'physical' as const, label: 'Physical', icon: '💪' },
+                        { key: 'mental' as const, label: 'Mental', icon: '🧠' },
+                        { key: 'emotional' as const, label: 'Emotional', icon: '💜' },
+                        { key: 'spiritual' as const, label: 'Spiritual', icon: '✨' },
+                      ] as const
+                    ).map(({ key, label, icon }) => {
+                      const st = powerStats[key];
+                      const hovered = powerStatHover === key;
+                      return (
+                        <div
+                          key={key}
+                          role="group"
+                          aria-label={label}
+                          onMouseEnter={() => setPowerStatHover(key)}
+                          onMouseLeave={() => setPowerStatHover(null)}
+                          style={{
+                            background: hovered ? '#f1f5f9' : '#f8fafc',
+                            borderRadius: 10,
+                            padding: '10px 8px',
+                            border: `1px solid ${hovered ? '#94a3b8' : '#e2e8f0'}`,
+                            textAlign: 'center',
+                            cursor: 'help',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            minHeight: 140,
+                            transition: 'background 0.15s ease, border-color 0.15s ease',
+                          }}
+                        >
+                          <div style={{ fontSize: 18, marginBottom: 4 }}>{icon}</div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{label}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: '#d97706', marginTop: 4 }}>
+                            Lv {st.level}
+                          </div>
+                          <PowerStatProgressBar branch={key} st={st} height={9} style={{ marginTop: 8 }} />
+                          <div style={{ fontSize: 10, color: '#64748b', marginTop: 6 }}>
+                            {st.xp} / {st.xpToNextLevel} XP
+                          </div>
+                          <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 4 }}>Total {st.totalEarned}</div>
+                          <div
+                            style={{
+                              marginTop: 'auto',
+                              paddingTop: 6,
+                              minHeight: 40,
+                              fontSize: 9,
+                              lineHeight: 1.35,
+                              color: '#334155',
+                              textAlign: 'center',
+                              opacity: hovered ? 1 : 0,
+                              transition: 'opacity 0.15s ease',
+                            }}
+                          >
+                            {POWER_STAT_EVENT_DESCRIPTION[key]}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
+                  Click card or ← to return
                 </div>
               </>
             ) : (

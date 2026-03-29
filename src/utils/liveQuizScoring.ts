@@ -1,14 +1,21 @@
 /**
- * Live Event Quiz scoring (Kahoot-style).
- * Correct answer required for points; faster answers get more points.
+ * Live Event Quiz scoring (regular mode).
+ * Correct: up to 100 points if answered within the first 5 seconds, then linear decay to 10 by question end.
  */
 
-export const LIVE_QUIZ_BASE_POINTS = 100;
-export const LIVE_QUIZ_SPEED_BONUS_MAX = 50;
+/** Full points for correct answers in this many ms after the question starts */
+export const LIVE_QUIZ_FAST_ANSWER_MS = 5000;
+export const LIVE_QUIZ_MAX_POINTS_PER_QUESTION = 100;
+export const LIVE_QUIZ_MIN_POINTS_PER_QUESTION = 10;
+
+/** @deprecated Use LIVE_QUIZ_MAX_POINTS_PER_QUESTION */
+export const LIVE_QUIZ_BASE_POINTS = LIVE_QUIZ_MAX_POINTS_PER_QUESTION;
+/** @deprecated Speed curve replaced by 5s full score + decay to min */
+export const LIVE_QUIZ_SPEED_BONUS_MAX = 0;
 
 export interface CalculateLiveQuizPointsParams {
   isCorrect: boolean;
-  submittedAt: number;   // ms
+  submittedAt: number; // ms
   questionStartedAt: number;
   questionEndsAt: number;
 }
@@ -20,14 +27,11 @@ const toMs = (v: number | { toMillis?: () => number } | undefined): number => {
   return 0;
 };
 
-/** Max points per question (base + speed bonus). Cap to prevent timestamp bugs from producing huge values. */
-export const LIVE_QUIZ_MAX_POINTS_PER_QUESTION = LIVE_QUIZ_BASE_POINTS + LIVE_QUIZ_SPEED_BONUS_MAX;
-
 /**
- * Calculate points for a single live quiz answer.
+ * Calculate points for a single live quiz answer (regular Kahoot-style mode).
  * - Incorrect: 0
- * - Correct: base (100) + speed bonus (up to 50) based on remaining time
- * - Result is capped at LIVE_QUIZ_MAX_POINTS_PER_QUESTION to avoid runaway scores from bad timestamps
+ * - Correct within first 5s: 100
+ * - Correct after 5s: linear drop from 100 toward 10 by question end (minimum 10)
  */
 export function calculateLiveQuizPoints(params: CalculateLiveQuizPointsParams): number {
   const { isCorrect, submittedAt, questionStartedAt, questionEndsAt } = params;
@@ -38,14 +42,25 @@ export function calculateLiveQuizPoints(params: CalculateLiveQuizPointsParams): 
   const submittedMs = toMs(submittedAt);
 
   const totalMs = endMs - startMs;
-  if (totalMs <= 0) return LIVE_QUIZ_BASE_POINTS;
+  if (totalMs <= 0) return LIVE_QUIZ_MAX_POINTS_PER_QUESTION;
 
-  const remainingMs = Math.max(0, endMs - submittedMs);
-  const remainingRatio = Math.min(1, Math.max(0, remainingMs / totalMs)); // clamp 0..1
+  const clampedSubmit = Math.min(Math.max(submittedMs, startMs), endMs);
+  const elapsed = clampedSubmit - startMs;
 
-  const speedBonus = Math.floor(LIVE_QUIZ_SPEED_BONUS_MAX * remainingRatio);
-  const points = LIVE_QUIZ_BASE_POINTS + speedBonus;
-  return Math.min(LIVE_QUIZ_MAX_POINTS_PER_QUESTION, Math.max(0, points));
+  if (elapsed <= LIVE_QUIZ_FAST_ANSWER_MS) {
+    return LIVE_QUIZ_MAX_POINTS_PER_QUESTION;
+  }
+
+  const decayWindow = totalMs - LIVE_QUIZ_FAST_ANSWER_MS;
+  if (decayWindow <= 0) {
+    return LIVE_QUIZ_MIN_POINTS_PER_QUESTION;
+  }
+
+  const pastFast = elapsed - LIVE_QUIZ_FAST_ANSWER_MS;
+  const ratio = Math.min(1, Math.max(0, pastFast / decayWindow));
+  const span = LIVE_QUIZ_MAX_POINTS_PER_QUESTION - LIVE_QUIZ_MIN_POINTS_PER_QUESTION;
+  const points = LIVE_QUIZ_MAX_POINTS_PER_QUESTION - span * ratio;
+  return Math.floor(Math.max(LIVE_QUIZ_MIN_POINTS_PER_QUESTION, Math.min(LIVE_QUIZ_MAX_POINTS_PER_QUESTION, points)));
 }
 
 /** Battle royale / team BR: 1 PP per correct + streak milestones (wrong / skip resets streak elsewhere). */

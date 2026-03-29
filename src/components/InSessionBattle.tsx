@@ -13,7 +13,7 @@ import { isUserScorekeeper, isUserAdmin, canEndLiveEventSession } from '../utils
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
 import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { getMoveDamageSync } from '../utils/moveOverrides';
-import { getEquippedSkillsForBattle } from '../utils/battleSkillsService';
+import { getEquippedSkillsForBattle, mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
 import { getRRCandyDisplayName } from '../utils/rrCandyMoves';
 import { getUserRRCandySkills } from '../utils/rrCandyService';
 // New service imports
@@ -71,6 +71,7 @@ import {
   getMyResponse,
   subscribeResponseCount,
   submitBattleRoyaleQuickAction,
+  getQuizSession,
   DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
   DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG,
   isBattleQuizMode,
@@ -81,16 +82,36 @@ import type {
   LiveQuizSession as LiveQuizSessionType,
   LiveQuizRewardConfig,
   LiveQuizPlacementKey,
-  LiveQuizGameMode,
   BattleRoyaleHostConfig,
   TeamBattleRoyaleHostConfig,
 } from '../types/liveQuiz';
 import type { TrainingQuestion } from '../types/trainingGrounds';
+import type { LiveEventModeType } from '../types/season1';
+import type { Assessment } from '../types/assessmentGoals';
+import { getEnergyTypeForMode } from '../utils/season1Energy';
+import { getAssessmentsByClass } from '../utils/assessmentGoalsFirestore';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
+import LiveEventReflectionPanel from './LiveEventReflectionPanel';
+import LiveEventSprintPanel from './LiveEventSprintPanel';
+import LiveEventMstMktModal from './LiveEventMstMktModal';
+import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
+import { parseClassFlowSprint } from '../utils/liveEventSprintService';
+import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 import { ARTIFACT_PERK_OPTIONS } from '../constants/artifactPerks';
 import { getPlayerSkillState } from '../utils/skillStateService';
+
+/** Pause after each question’s timer ends before the next question (Battle / Team BR). */
+const BR_INTER_QUESTION_GAP_MS_OPTIONS: { label: string; value: number }[] = [
+  { label: 'Manual — host clicks Next', value: 0 },
+  { label: '3 seconds', value: 3000 },
+  { label: '5 seconds', value: 5000 },
+  { label: '10 seconds', value: 10000 },
+  { label: '15 seconds', value: 15000 },
+  { label: '20 seconds', value: 20000 },
+  { label: '30 seconds', value: 30000 },
+];
 
 interface Student {
   id: string;
@@ -200,7 +221,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
   const [permissionsChecked, setPermissionsChecked] = useState<boolean>(false);
   const [isSessionHost, setIsSessionHost] = useState<boolean>(false);
-  
+  const [mstMktOpen, setMstMktOpen] = useState(false);
+  const [roomSessionStatus, setRoomSessionStatus] = useState<string | undefined>(undefined);
+  const [showMstMktModal, setShowMstMktModal] = useState(false);
+  const [mstMktToggleLoading, setMstMktToggleLoading] = useState(false);
+
   // Log initial state
   console.log('[InSessionBattle] Component initialized with permissions:', {
     isAdminUser,
@@ -295,7 +320,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [selectedQuizId, setSelectedQuizId] = useState<string>('');
   const [quizNumQuestions, setQuizNumQuestions] = useState<number>(0);
   const [quizTimeLimit, setQuizTimeLimit] = useState<number>(20);
-  const [liveEventGameMode, setLiveEventGameMode] = useState<LiveQuizGameMode>('regular');
+  /** Season 1 live activity: four host-facing modes (team BR is a sub-option under Battle Royale). */
+  const [liveEventLaunchMode, setLiveEventLaunchMode] = useState<LiveEventModeType>('class_flow');
+  const [battleRoyaleTeamFormat, setBattleRoyaleTeamFormat] = useState(false);
+  /** Room doc Season 1 / reflection linking (from subscribeToSession). */
+  const [roomReflectionMeta, setRoomReflectionMeta] = useState<{
+    liveEventMode?: string;
+    reflectionAssessmentId?: string;
+    reflectionPrompt?: string;
+  }>({});
+  const [roomClassFlowSprint, setRoomClassFlowSprint] = useState<ClassFlowSprintState | null>(null);
+  const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
+  const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
+  const [reflectionModalAssessments, setReflectionModalAssessments] = useState<Assessment[]>([]);
   const [brHostConfig, setBrHostConfig] = useState<BattleRoyaleHostConfig>(() => ({
     ...DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
   }));
@@ -305,7 +342,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [brSurvivorPreset, setBrSurvivorPreset] = useState<'1' | '3' | '5' | '10' | 'custom'>('1');
   const [brCustomSurvivorTarget, setBrCustomSurvivorTarget] = useState(2);
   const [brQuickTargetUid, setBrQuickTargetUid] = useState<string | null>(null);
-  const brAutoAdvanceRoundRef = useRef<number | null>(null);
+  /** Dedupe auto-advance per question round (`quizRoundIndex:questionId`). */
+  const brAutoAdvanceDedupeRef = useRef<string | null>(null);
+  /** Host-only: seconds until auto-advance after the answer timer ends (Battle Royale modes). */
+  const [brInterQuestionSecondsLeft, setBrInterQuestionSecondsLeft] = useState<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
@@ -323,6 +363,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const wasCurrentPlayerEliminatedRef = useRef(false);
   /** When a quiz is active, players/host can swap between Quiz view and Battle Log view. Persist in sessionStorage so it survives remounts and toggling works reliably. */
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
+
+  useEffect(() => {
+    if (!quizModalOpen || liveEventLaunchMode !== 'reflection' || !classId) return;
+    let cancelled = false;
+    getAssessmentsByClass(classId)
+      .then((list) => {
+        if (cancelled) return;
+        setReflectionModalAssessments(
+          list.filter((a) => a.gradingStatus === 'open' || a.gradingStatus === 'draft')
+        );
+      })
+      .catch((e) => console.error('Reflection modal: failed to load assessments', e));
+    return () => {
+      cancelled = true;
+    };
+  }, [quizModalOpen, liveEventLaunchMode, classId]);
 
   // Use canonical equipped battle skills for Live Event UI so RR Candy/artifact skills match BattleEngine.
   useEffect(() => {
@@ -417,6 +473,34 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     { id: 'skip-the-line', name: 'Skip the Line' },
     { id: 'double-pp', name: 'Double PP Boost' },
   ];
+
+  const [quizEquippableRewardOptions, setQuizEquippableRewardOptions] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!quizModalOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+        const raw = snap.exists() ? (snap.data() as Record<string, unknown>) : {};
+        const merged = mergeEquippableCatalogLayers(raw);
+        const opts = Object.entries(merged)
+          .filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+          .map(([key, v]) => {
+            const art = v as { id?: string; name?: string };
+            const id = typeof art.id === 'string' && art.id.trim() ? art.id.trim() : key;
+            return { id, name: typeof art.name === 'string' && art.name.trim() ? art.name.trim() : id };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (!cancelled) setQuizEquippableRewardOptions(opts);
+      } catch {
+        if (!cancelled) setQuizEquippableRewardOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [quizModalOpen]);
 
   // Track player presence using presence service
   useEffect(() => {
@@ -571,8 +655,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         }
       if (!session) {
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
+        setRoomClassFlowSprint(null);
         return;
       }
+
+      const rawRoom = session as unknown as Record<string, unknown>;
+      setRoomReflectionMeta({
+        liveEventMode: typeof rawRoom.liveEventMode === 'string' ? rawRoom.liveEventMode : undefined,
+        reflectionAssessmentId:
+          typeof rawRoom.reflectionAssessmentId === 'string' ? rawRoom.reflectionAssessmentId : undefined,
+        reflectionPrompt: typeof rawRoom.reflectionPrompt === 'string' ? rawRoom.reflectionPrompt : undefined,
+      });
+      setRoomSessionStatus(typeof session.status === 'string' ? session.status : undefined);
+      setMstMktOpen(rawRoom.mstMktOpen === true);
+      setRoomClassFlowSprint(parseClassFlowSprint(rawRoom.classFlowSprint));
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -733,6 +829,59 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
   }, [sessionId]);
 
+  /** Grants placement rewards, battle log, and room snapshot when a live quiz completes (manual Next or auto-advance). */
+  const runHostQuizCompletedFollowUp = useCallback(async () => {
+    await grantLiveQuizRewards(sessionId);
+    await appendBattleLog('📋 Quiz completed! Rewards have been applied.');
+    const latest = await getQuizSession(sessionId);
+    if (!latest) return;
+    const config = latest.rewardConfig;
+    if (!config?.placements) return;
+    const placementsConfig = config.placements as LiveQuizRewardConfig['placements'];
+    const placements = (
+      [
+        { key: 'first' as const, label: '1st' },
+        { key: 'second' as const, label: '2nd' },
+        { key: 'third' as const, label: '3rd' },
+        { key: 'top5' as const, label: 'Top 5' },
+        { key: 'top10' as const, label: 'Top 10' },
+      ] as const
+    )
+      .map(({ key, label }) => {
+        const p = placementsConfig[key];
+        if (!p || (p.pp <= 0 && p.xp <= 0 && !p.artifactId && !p.artifactName)) return null;
+        return {
+          place: label,
+          pp: p.pp ?? 0,
+          xp: p.xp ?? 0,
+          artifactName: (p.artifactName ?? p.artifactId ?? null) as string | null,
+        };
+      })
+      .filter(Boolean) as { place: string; pp: number; xp: number; artifactName: string | null }[];
+    if (placements.length === 0) return;
+    const roomSnap = await getDoc(doc(db, 'inSessionRooms', sessionId));
+    const players = (roomSnap.data()?.players || []) as Array<{ userId: string }>;
+    const entriesWithScores = players.map((p) => ({
+      uid: p.userId,
+      score: latest.leaderboard?.[p.userId] ?? 0,
+    }));
+    const sortedByScore = [...entriesWithScores].sort((a, b) => b.score - a.score);
+    const quizPpByPlayer: Record<string, number> = {};
+    sortedByScore.forEach((entry, idx) => {
+      const rank = idx + 1;
+      const reward = getPlacementRewardForRank(placementsConfig, rank);
+      quizPpByPlayer[entry.uid] = reward?.pp ?? 0;
+    });
+    await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+      lastQuizAwardsSnapshot: {
+        quizTitle: latest.quizTitle ?? null,
+        placements,
+      },
+      lastQuizPpByPlayer: quizPpByPlayer,
+      updatedAt: serverTimestamp(),
+    });
+  }, [sessionId, appendBattleLog]);
+
   // Subscribe to Live Quiz session (only switch to Quiz view when a quiz first appears, not on every update)
   const hadQuizSessionRef = useRef(false);
   useEffect(() => {
@@ -847,7 +996,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     );
   }, [sessionId, isSessionHost, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
 
-  // Battle modes: host auto-advances after timer + delay
+  // Battle modes: host client auto-advances after question timer + configured gap (no Next click).
   useEffect(() => {
     if (!isSessionHost || !currentUser || !quizSession || !isBattleQuizMode(quizSession.gameMode)) return;
     const delay =
@@ -859,13 +1008,28 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const ends = quizSession.questionEndsAt ?? 0;
     if (!ends || Date.now() <= ends) return;
     const round = quizSession.quizRoundIndex ?? 1;
-    if (brAutoAdvanceRoundRef.current === round) return;
+    const dedupeKey = `${round}:${quizSession.currentQuestionId}`;
+    if (brAutoAdvanceDedupeRef.current === dedupeKey) return;
+    const prevIdx = quizSession.questionIndex ?? 0;
+    const total = quizSession.questionOrder?.length ?? 0;
     const timer = window.setTimeout(async () => {
-      brAutoAdvanceRoundRef.current = round;
+      if (brAutoAdvanceDedupeRef.current === dedupeKey) return;
+      brAutoAdvanceDedupeRef.current = dedupeKey;
       try {
-        await advanceQuiz(sessionId, currentUser.uid);
+        const res = await advanceQuiz(sessionId, currentUser.uid);
+        if (res.ok) {
+          if (res.completed) {
+            await runHostQuizCompletedFollowUp();
+          } else {
+            await appendBattleLog(`📋 Next question (${prevIdx + 2}/${total})`);
+          }
+        } else {
+          brAutoAdvanceDedupeRef.current = null;
+        }
+        if (res.error) console.warn('auto advance quiz:', res.error);
       } catch (e) {
         console.error('auto advance quiz', e);
+        brAutoAdvanceDedupeRef.current = null;
       }
     }, delay);
     return () => clearTimeout(timer);
@@ -878,6 +1042,54 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     quizSession?.currentQuestionId,
     quizSession?.questionEndsAt,
     quizSession?.quizRoundIndex,
+    quizSession?.questionIndex,
+    quizSession?.questionOrder?.length,
+    quizSession?.battleRoyaleConfig?.autoAdvanceDelayMs,
+    quizSession?.teamBattleRoyaleConfig?.autoAdvanceDelayMs,
+    runHostQuizCompletedFollowUp,
+    appendBattleLog,
+  ]);
+
+  // Host UI: countdown between end of answer timer and auto-advance
+  useEffect(() => {
+    if (!isSessionHost || !quizSession || !isBattleQuizMode(quizSession.gameMode)) {
+      setBrInterQuestionSecondsLeft(null);
+      return;
+    }
+    const delay =
+      quizSession.gameMode === 'battle_royale'
+        ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
+        : quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs;
+    if (delay == null || delay <= 0) {
+      setBrInterQuestionSecondsLeft(null);
+      return;
+    }
+    if (quizSession.status !== 'question_live') {
+      setBrInterQuestionSecondsLeft(null);
+      return;
+    }
+    const ends = quizSession.questionEndsAt ?? 0;
+    if (!ends) {
+      setBrInterQuestionSecondsLeft(null);
+      return;
+    }
+    const tick = () => {
+      const now = Date.now();
+      if (now <= ends) {
+        setBrInterQuestionSecondsLeft(null);
+        return;
+      }
+      const target = ends + delay;
+      setBrInterQuestionSecondsLeft(Math.max(0, Math.ceil((target - now) / 1000)));
+    };
+    tick();
+    const id = window.setInterval(tick, 400);
+    return () => clearInterval(id);
+  }, [
+    isSessionHost,
+    quizSession?.gameMode,
+    quizSession?.status,
+    quizSession?.questionEndsAt,
     quizSession?.battleRoyaleConfig?.autoAdvanceDelayMs,
     quizSession?.teamBattleRoyaleConfig?.autoAdvanceDelayMs,
   ]);
@@ -1391,72 +1603,73 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     try {
       const sessionRef = doc(db, 'inSessionRooms', sessionId);
       const sessionDoc = await getDoc(sessionRef);
-      
+
       if (!sessionDoc.exists()) return;
 
       const data = sessionDoc.data();
       const players: SessionPlayer[] = data.players || [];
-
-      // Check if player is already in session (works for both in-session and not-in-session players)
       const existingPlayer = players.find(p => p.userId === userId);
-      
+      const playerName =
+        existingPlayer?.displayName ||
+        students.find(s => s.id === userId)?.displayName ||
+        'Player';
+
+      // Track participation first (+ session powerPoints for MST MKT) so our follow-up merge does not overwrite PP.
+      await trackParticipation(sessionId, userId, 1, { playerDisplayName: playerName });
+
+      const freshSnap = await getDoc(sessionRef);
+      if (!freshSnap.exists()) return;
+      const freshData = freshSnap.data();
+      const freshPlayers: SessionPlayer[] = freshData.players || [];
+
       let updatedPlayers: SessionPlayer[];
-      
+
       if (existingPlayer) {
-        // Player is in session - update their participation
-        updatedPlayers = players.map(p => {
+        updatedPlayers = freshPlayers.map(p => {
           if (p.userId === userId) {
             const newParticipationCount = (p.participationCount || 0) + 1;
-            const newMovesEarned = Math.floor(newParticipationCount / 1); // 1 participation = 1 move
+            const newMovesEarned = Math.floor(newParticipationCount / 1);
             return {
               ...p,
               participationCount: newParticipationCount,
-              movesEarned: newMovesEarned
+              movesEarned: newMovesEarned,
             };
           }
           return p;
         });
       } else {
-        // Player is not in session - add them first, then add participation
         const student = students.find(s => s.id === userId);
-        if (!student) return; // Student not found
-        
-        // Get latest profile data from users collection (source of truth)
+        if (!student) return;
+
         const userDoc = await getDoc(doc(db, 'users', userId));
         const userData = userDoc.exists() ? userDoc.data() : {};
         const latestProfile = userProfiles.get(userId);
-        
-        // Use latest profile data if available, otherwise fall back to student data
+
         const displayName = latestProfile?.displayName || userData.displayName || student.displayName;
         const photoURL = latestProfile?.photoURL || userData.photoURL || student.photoURL;
-        
+
+        const basePp = student.powerPoints || 0;
         const newPlayer: SessionPlayer = {
           userId: student.id,
-          displayName: displayName,
-          photoURL: photoURL,
+          displayName,
+          photoURL,
           level: student.level || getLevelFromXP(student.xp || 0) || 1,
-          powerPoints: student.powerPoints || 0,
-          participationCount: 1, // Start with 1 participation
-          movesEarned: 1 // 1 participation = 1 move
+          powerPoints: basePp + LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
+          participationCount: 1,
+          movesEarned: 1,
         };
-        
-        updatedPlayers = [...players, newPlayer];
+
+        updatedPlayers = [...freshPlayers, newPlayer];
       }
 
-      // Update battle log
       const updatedPlayer = updatedPlayers.find(p => p.userId === userId);
-      const playerName = updatedPlayer?.displayName || students.find(s => s.id === userId)?.displayName || 'Player';
-      
-      // Track participation in stats
-      await trackParticipation(sessionId, userId, 1);
-      
-      const newLogEntry = `✨ ${playerName} participated! (+1 participation, ${updatedPlayer?.movesEarned || 0} moves earned)`;
-      const updatedLog = [...(data.battleLog || []), newLogEntry];
+      const newLogEntry = `✨ ${updatedPlayer?.displayName || playerName} participated! (+1 participation, ${updatedPlayer?.movesEarned || 0} moves earned)`;
+      const updatedLog = [...(freshData.battleLog || []), newLogEntry];
 
       await updateDoc(sessionRef, {
         players: updatedPlayers,
         battleLog: updatedLog,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
       });
     } catch (error) {
       console.error('Error adding participation:', error);
@@ -1493,7 +1706,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         if (p.userId === userId) {
           return {
             ...p,
-            movesEarned: (p.movesEarned || 0) + 1
+            movesEarned: (p.movesEarned || 0) + 1,
+            powerPoints: (p.powerPoints ?? 0) + LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
           };
         }
         return p;
@@ -1501,7 +1715,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
       // Update battle log
       const player = players.find(p => p.userId === userId);
-      const newLogEntry = `✨ ${player?.displayName || 'Player'} earned +1 Par. Pt. (${updatedPlayers.find(p => p.userId === userId)?.movesEarned || 0} moves available)`;
+      const newLogEntry = `✨ ${player?.displayName || 'Player'} earned +1 Par. Pt. (+${LIVE_EVENT_PP_PER_PARTICIPATION_POINT} PP for MST MKT, ${updatedPlayers.find(p => p.userId === userId)?.movesEarned || 0} moves available)`;
       const updatedLog = [...(data.battleLog || []), newLogEntry];
 
       await updateDoc(sessionRef, {
@@ -2821,6 +3035,43 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
         {/* Leave Live Event: all players. End Session: only designated session-ender. Quiz Mode: host only. Disabled while summary is open. */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {permissionsChecked &&
+            (isSessionHost || isAdminUser) &&
+            !showSessionSummary &&
+            (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
+              <button
+                type="button"
+                disabled={mstMktToggleLoading}
+                onClick={async () => {
+                  const next = !mstMktOpen;
+                  setMstMktToggleLoading(true);
+                  try {
+                    const res = await setLiveEventMstMktOpen(sessionId, next);
+                    if (!res.ok) {
+                      alert(res.error || 'Could not update MST MKT');
+                      return;
+                    }
+                    await appendBattleLog(next ? '🛒 MST MKT is now OPEN — spend PP on heals & gear!' : '🛒 MST MKT closed by host.');
+                  } finally {
+                    setMstMktToggleLoading(false);
+                  }
+                }}
+                style={{
+                  background: mstMktOpen ? 'rgba(16, 185, 129, 0.95)' : 'rgba(245, 158, 11, 0.95)',
+                  color: 'white',
+                  border: '2px solid white',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem 1.25rem',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  cursor: mstMktToggleLoading ? 'wait' : 'pointer',
+                  opacity: mstMktToggleLoading ? 0.75 : 1,
+                }}
+                title={mstMktOpen ? 'Close the in-event shop' : 'Let players spend Participation PP on survival items'}
+              >
+                {mstMktToggleLoading ? '…' : mstMktOpen ? '🛒 Close MST MKT' : '🛒 Open MST MKT'}
+              </button>
+            )}
           {isSessionHost && !quizSession && (
             <button
               onClick={() => {
@@ -2925,6 +3176,58 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
       </div>
 
+      {!showSessionSummary &&
+        mstMktOpen &&
+        (roomSessionStatus === 'live' || roomSessionStatus === 'active') &&
+        currentUser && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              borderRadius: '0.65rem',
+              background: 'linear-gradient(90deg, #422006 0%, #713f12 50%, #1c1917 100%)',
+              border: '1px solid rgba(251, 191, 36, 0.5)',
+              color: '#fef3c7',
+            }}
+          >
+            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+              🛒 <strong>MST MKT</strong> is open — spend Participation PP on consumables configured in Artifacts Admin.
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowMstMktModal(true)}
+              style={{
+                padding: '0.5rem 1.1rem',
+                borderRadius: '0.5rem',
+                border: 'none',
+                background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+                color: '#1c1917',
+                fontWeight: 800,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              Open shop
+            </button>
+          </div>
+        )}
+
+      {!quizSession && (isSessionHost || roomClassFlowSprint) && currentUser && (
+        <LiveEventSprintPanel
+          sessionId={sessionId}
+          sprint={roomClassFlowSprint}
+          sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
+          isSessionHost={isSessionHost}
+          currentUserId={currentUser.uid}
+          userEmail={currentUser.email}
+          userDisplayName={currentUser.displayName}
+        />
+      )}
+
       {/* Quiz setup modal (host only) */}
       {quizModalOpen && (
         <div
@@ -2952,27 +3255,34 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Live Event — Quiz &amp; Battle</h3>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Live Event</h3>
             <p style={{ marginBottom: '1rem', color: '#64748b', fontSize: '0.9rem' }}>
-              Choose a Training Grounds quiz. Battle modes: 1 PP per correct + streak bonuses; spend PP on quick actions; questions can repeat until the match ends.
+              Pick a mode for this session. <strong>Class Flow</strong> is for timed sprints and participation (use the Sprint panel in the room).
+              <strong> Quiz</strong> and <strong>Battle Royale</strong> use a Training Grounds question bank.
+              <strong> Reflection</strong> and <strong>Goal setting</strong> activate the room for prompts and goals (no quiz launch).
             </p>
             <div style={{ marginBottom: '1rem' }}>
               <span style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Mode</span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                 {([
-                  { id: 'regular' as LiveQuizGameMode, label: 'Regular Quiz' },
-                  { id: 'battle_royale' as LiveQuizGameMode, label: 'Battle Royale' },
-                  { id: 'team_battle_royale' as LiveQuizGameMode, label: 'Team Battle Royale' },
+                  { id: 'class_flow' as const, label: 'Class Flow' },
+                  { id: 'battle_royale' as const, label: 'Battle Royale' },
+                  { id: 'quiz' as const, label: 'Quiz' },
+                  { id: 'reflection' as const, label: 'Reflection' },
+                  { id: 'goal_setting' as const, label: 'Goal setting' },
                 ]).map(({ id, label }) => (
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setLiveEventGameMode(id)}
+                    onClick={() => {
+                      setLiveEventLaunchMode(id);
+                      if (id !== 'battle_royale') setBattleRoyaleTeamFormat(false);
+                    }}
                     style={{
                       padding: '0.5rem 0.75rem',
                       borderRadius: '0.5rem',
-                      border: liveEventGameMode === id ? '2px solid #4f46e5' : '1px solid #cbd5e1',
-                      background: liveEventGameMode === id ? '#eef2ff' : '#fff',
+                      border: liveEventLaunchMode === id ? '2px solid #4f46e5' : '1px solid #cbd5e1',
+                      background: liveEventLaunchMode === id ? '#eef2ff' : '#fff',
                       fontWeight: 600,
                       cursor: 'pointer',
                       fontSize: '0.85rem',
@@ -2984,7 +3294,27 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </div>
             </div>
 
-            {liveEventGameMode === 'battle_royale' && (
+            {liveEventLaunchMode === 'battle_royale' && (
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={battleRoyaleTeamFormat}
+                  onChange={(e) => setBattleRoyaleTeamFormat(e.target.checked)}
+                />
+                Team format (squads — same rules as former &quot;Team Battle Royale&quot;)
+              </label>
+            )}
+
+            {liveEventLaunchMode === 'battle_royale' && !battleRoyaleTeamFormat && (
               <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
                 <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Battle Royale host settings</div>
                 <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>End when survivors ≤</label>
@@ -3025,21 +3355,38 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     {lab}
                   </label>
                 ))}
-                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>Auto-advance after timer (ms, 0 = host manual only)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={120000}
+                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>
+                  Time between questions (after each answer timer ends)
+                </label>
+                <p style={{ margin: '0 0 0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
+                  Next question starts automatically on your device — keep this tab open, or use Manual to click Next yourself.
+                </p>
+                <select
                   value={brHostConfig.autoAdvanceDelayMs}
                   onChange={(e) =>
-                    setBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: Math.max(0, parseInt(e.target.value, 10) || 0) }))
+                    setBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: parseInt(e.target.value, 10) || 0 }))
                   }
                   style={{ width: '100%', padding: '0.35rem', borderRadius: '0.35rem' }}
-                />
+                >
+                  {(BR_INTER_QUESTION_GAP_MS_OPTIONS.some((o) => o.value === brHostConfig.autoAdvanceDelayMs)
+                    ? BR_INTER_QUESTION_GAP_MS_OPTIONS
+                    : [
+                        ...BR_INTER_QUESTION_GAP_MS_OPTIONS,
+                        {
+                          label: `Other (${Math.round(brHostConfig.autoAdvanceDelayMs / 1000)}s)`,
+                          value: brHostConfig.autoAdvanceDelayMs,
+                        },
+                      ].sort((a, b) => a.value - b.value)
+                  ).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
 
-            {liveEventGameMode === 'team_battle_royale' && (
+            {liveEventLaunchMode === 'battle_royale' && battleRoyaleTeamFormat && (
               <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f0fdf4', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
                 <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Team Battle Royale host settings</div>
                 <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>Number of teams</label>
@@ -3114,19 +3461,111 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     {lab}
                   </label>
                 ))}
-                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>Auto-advance after timer (ms)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={120000}
+                <label style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>
+                  Time between questions (after each answer timer ends)
+                </label>
+                <p style={{ margin: '0 0 0.35rem', fontSize: '0.8rem', color: '#166534' }}>
+                  Questions advance automatically after the gap — keep the host tab open, or choose Manual to click Next.
+                </p>
+                <select
                   value={teamBrHostConfig.autoAdvanceDelayMs}
                   onChange={(e) =>
-                    setTeamBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: Math.max(0, parseInt(e.target.value, 10) || 0) }))
+                    setTeamBrHostConfig((c) => ({ ...c, autoAdvanceDelayMs: parseInt(e.target.value, 10) || 0 }))
                   }
                   style={{ width: '100%', padding: '0.35rem', borderRadius: '0.35rem' }}
-                />
+                >
+                  {(BR_INTER_QUESTION_GAP_MS_OPTIONS.some((o) => o.value === teamBrHostConfig.autoAdvanceDelayMs)
+                    ? BR_INTER_QUESTION_GAP_MS_OPTIONS
+                    : [
+                        ...BR_INTER_QUESTION_GAP_MS_OPTIONS,
+                        {
+                          label: `Other (${Math.round(teamBrHostConfig.autoAdvanceDelayMs / 1000)}s)`,
+                          value: teamBrHostConfig.autoAdvanceDelayMs,
+                        },
+                      ].sort((a, b) => a.value - b.value)
+                  ).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
+
+            {liveEventLaunchMode === 'reflection' && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem',
+                  background: '#f0fdf4',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  color: '#166534',
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Reflection</strong> — student writing is saved to the linked assessment&apos;s{' '}
+                <strong>Evidence</strong> column (Assessment Goals → Dashboard) for you to verify.
+                <div style={{ marginTop: '0.75rem' }}>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>Link assessment *</label>
+                  <select
+                    value={reflectionPickAssessmentId}
+                    onChange={(e) => setReflectionPickAssessmentId(e.target.value)}
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8, marginBottom: 10 }}
+                  >
+                    <option value="">Select assessment…</option>
+                    {reflectionModalAssessments.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title} ({a.type})
+                      </option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>Class prompt (optional)</label>
+                  <textarea
+                    value={reflectionPickPrompt}
+                    onChange={(e) => setReflectionPickPrompt(e.target.value)}
+                    rows={2}
+                    placeholder="Shown to students above the evidence box"
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8, resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+            )}
+            {liveEventLaunchMode === 'goal_setting' && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem',
+                  background: '#f0fdf4',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  color: '#166534',
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Goal setting</strong> — spiritual-energy focus. Students set or update timeframe goals in Assessment
+                Goals; Season 1 linking remains on for this session.
+              </div>
+            )}
+            {liveEventLaunchMode === 'class_flow' && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem',
+                  background: '#ecfdf5',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  color: '#065f46',
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Class Flow</strong> — kinetic energy. After you activate, use the <strong>Class Flow Sprint</strong> panel
+                below the header to run timed goals, check off finishers, and grant participation power plus optional vault PP/XP.
+              </div>
+            )}
+
+            {(liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && (
+              <>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Quiz</label>
             <select
               value={selectedQuizId}
@@ -3164,7 +3603,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem', marginTop: '0.5rem' }}>
               <h4 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600 }}>Rewards</h4>
-              <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.75rem' }}>Set PP, XP, and artifact for each placement (1st, 2nd, 3rd, Top 5, Top 10). Leave 0 or empty for no reward.</p>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.75rem' }}>
+                Set PP, XP, and artifact for each placement (1st, 2nd, 3rd, Top 5, Top 10). Leave 0 or empty for no reward.
+                <strong> Equippable artifacts</strong> (from Artifacts Admin) grant like marketplace equips; MST items still go to
+                inventory by name.
+              </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
                 {(['first', 'second', 'third', 'top5', 'top10'] as LiveQuizPlacementKey[]).map((key) => {
                   const label = key === 'first' ? '1st' : key === 'second' ? '2nd' : key === 'third' ? '3rd' : key === 'top5' ? 'Top 5 (4th–5th)' : 'Top 10 (6th–10th)';
@@ -3209,7 +3652,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         <select
                           value={p.artifactId ?? ''}
                           onChange={(e) => {
-                            const opt = QUIZ_REWARD_ARTIFACTS.find((a) => a.id === e.target.value);
+                            const v = e.target.value;
+                            const mst = QUIZ_REWARD_ARTIFACTS.find((a) => a.id === v);
+                            const eq = quizEquippableRewardOptions.find((a) => a.id === v);
+                            const opt = mst || eq;
                             setQuizRewardConfig((c) => ({
                               ...c,
                               placements: {
@@ -3222,12 +3668,25 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               },
                             }));
                           }}
-                          style={{ padding: '0.35rem', borderRadius: '0.35rem', minWidth: '140px' }}
+                          style={{ padding: '0.35rem', borderRadius: '0.35rem', minWidth: '160px' }}
                         >
                           <option value="">None</option>
-                          {QUIZ_REWARD_ARTIFACTS.map((a) => (
-                            <option key={a.id} value={a.id}>{a.name}</option>
-                          ))}
+                          <optgroup label="MST store items">
+                            {QUIZ_REWARD_ARTIFACTS.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {quizEquippableRewardOptions.length > 0 ? (
+                            <optgroup label="Equippable artifacts">
+                              {quizEquippableRewardOptions.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ) : null}
                         </select>
                       </label>
                     </div>
@@ -3235,6 +3694,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 })}
               </div>
             </div>
+              </>
+            )}
 
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button
@@ -3244,9 +3705,62 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 Cancel
               </button>
               <button
-                disabled={quizStartLoading || !selectedQuizId}
+                disabled={
+                  quizStartLoading ||
+                  ((liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && !selectedQuizId) ||
+                  (liveEventLaunchMode === 'reflection' && !reflectionPickAssessmentId.trim())
+                }
                 onClick={async () => {
-                  if (!currentUser || !selectedQuizId) return;
+                  if (!currentUser) return;
+                  if (
+                    liveEventLaunchMode === 'reflection' ||
+                    liveEventLaunchMode === 'goal_setting' ||
+                    liveEventLaunchMode === 'class_flow'
+                  ) {
+                    setQuizStartLoading(true);
+                    try {
+                      const mode = liveEventLaunchMode;
+                      if (mode === 'reflection' && !reflectionPickAssessmentId.trim()) {
+                        alert('Choose an assessment — reflections will write to Evidence on that dashboard.');
+                        setQuizStartLoading(false);
+                        return;
+                      }
+                      const energyTypeAwarded = getEnergyTypeForMode(mode);
+                      await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+                        liveEventMode: mode,
+                        goalLinkingEnabled: true,
+                        energyTypeAwarded,
+                        ...(mode === 'reflection'
+                          ? {
+                              reflectionAssessmentId: reflectionPickAssessmentId.trim(),
+                              reflectionPrompt: reflectionPickPrompt.trim() || null,
+                            }
+                          : {}),
+                        updatedAt: serverTimestamp(),
+                      });
+                      const label =
+                        mode === 'reflection' ? 'Reflection' : mode === 'goal_setting' ? 'Goal setting' : 'Class Flow';
+                      await appendBattleLog(
+                        mode === 'class_flow'
+                          ? '🏃 Class Flow mode active — use the Sprint panel for timed goals and participation rewards.'
+                          : `🌊 ${label} mode active — responses can link to player goals.`
+                      );
+                      if (mode === 'reflection') {
+                        const linked = reflectionModalAssessments.find((a) => a.id === reflectionPickAssessmentId.trim());
+                        await appendBattleLog(
+                          `🪞 Reflection evidence → Assessment: ${linked?.title ?? reflectionPickAssessmentId.trim()}`
+                        );
+                      }
+                      setQuizModalOpen(false);
+                    } catch (e) {
+                      console.error(e);
+                      alert('Failed to update session mode. Check permissions and try again.');
+                    } finally {
+                      setQuizStartLoading(false);
+                    }
+                    return;
+                  }
+                  if (!selectedQuizId) return;
                   setQuizStartLoading(true);
                   const hasRewards = Object.values(quizRewardConfig.placements).some(
                     (p) => (p.pp > 0 || p.xp > 0 || !!(p.artifactId || p.artifactName))
@@ -3256,18 +3770,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     brSurvivorPreset === 'custom'
                       ? Math.max(1, brCustomSurvivorTarget)
                       : parseInt(brSurvivorPreset, 10);
+                  const useTeamBr = liveEventLaunchMode === 'battle_royale' && battleRoyaleTeamFormat;
                   const startOptions =
-                    liveEventGameMode === 'regular'
+                    liveEventLaunchMode === 'quiz'
                       ? undefined
-                      : liveEventGameMode === 'battle_royale'
+                      : useTeamBr
                         ? {
-                            gameMode: 'battle_royale' as const,
-                            battleRoyale: { ...brHostConfig, finalSurvivorsTarget: finalSurvivors },
+                            gameMode: 'team_battle_royale' as const,
+                            teamBattleRoyale: { ...teamBrHostConfig },
                             roomPlayerUids: sessionPlayers.map((p) => p.userId),
                           }
                         : {
-                            gameMode: 'team_battle_royale' as const,
-                            teamBattleRoyale: { ...teamBrHostConfig },
+                            gameMode: 'battle_royale' as const,
+                            battleRoyale: { ...brHostConfig, finalSurvivorsTarget: finalSurvivors },
                             roomPlayerUids: sessionPlayers.map((p) => p.userId),
                           };
                   const res = await startQuizSession(
@@ -3285,20 +3800,33 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     return;
                   }
                   const launch = await launchFirstQuestion(sessionId, currentUser.uid);
-                  setQuizStartLoading(false);
                   if (!launch.ok) {
                     alert(launch.error || 'Failed to launch first question');
+                    setQuizStartLoading(false);
                     return;
                   }
+                  try {
+                    const roomMode: LiveEventModeType =
+                      liveEventLaunchMode === 'quiz' ? 'quiz' : 'battle_royale';
+                    await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+                      liveEventMode: roomMode,
+                      goalLinkingEnabled: true,
+                      energyTypeAwarded: getEnergyTypeForMode(roomMode),
+                      updatedAt: serverTimestamp(),
+                    });
+                  } catch (e) {
+                    console.warn('Live Event room metadata update failed (quiz still started):', e);
+                  }
                   const modeLabel =
-                    liveEventGameMode === 'regular'
-                      ? 'Regular Quiz'
-                      : liveEventGameMode === 'battle_royale'
-                        ? 'Battle Royale'
-                        : 'Team Battle Royale';
+                    liveEventLaunchMode === 'quiz'
+                      ? 'Quiz'
+                      : useTeamBr
+                        ? 'Team Battle Royale'
+                        : 'Battle Royale';
                   await appendBattleLog(
                     `📋 ${modeLabel} started: ${quizList.find((q) => q.id === selectedQuizId)?.title ?? 'Quiz'} (${quizNumQuestions} in bank, ${quizTimeLimit}s each)`
                   );
+                  setQuizStartLoading(false);
                   setQuizModalOpen(false);
                 }}
                 style={{
@@ -3311,7 +3839,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   cursor: quizStartLoading ? 'not-allowed' : 'pointer',
                 }}
               >
-                {quizStartLoading ? 'Starting...' : 'Start'}
+                {quizStartLoading
+                  ? 'Starting...'
+                  : liveEventLaunchMode === 'reflection' || liveEventLaunchMode === 'goal_setting'
+                    ? 'Activate mode'
+                    : 'Start'}
               </button>
             </div>
           </div>
@@ -3359,6 +3891,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           minWidth: 0,
           position: 'relative'
         }}>
+          {currentUser && (
+            <LiveEventReflectionPanel
+              sessionId={sessionId}
+              classId={classId}
+              reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
+              reflectionPrompt={roomReflectionMeta.reflectionPrompt}
+              liveEventMode={roomReflectionMeta.liveEventMode}
+              isSessionHost={isSessionHost}
+              currentUserId={currentUser.uid}
+              displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+              onAppendBattleLog={appendBattleLog}
+            />
+          )}
           {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky, high z-index so always clickable */}
           {quizSession && (
             <div
@@ -3418,6 +3963,28 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               >
                 📜 Battle Log
               </button>
+              {mstMktOpen &&
+                !showSessionSummary &&
+                (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
+                  <button
+                    type="button"
+                    onClick={() => setShowMstMktModal(true)}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      fontWeight: 700,
+                      borderRadius: '0.5rem',
+                      border: '2px solid #ca8a04',
+                      background: 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
+                      color: '#1c1917',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                      pointerEvents: 'auto',
+                    }}
+                    title="MST MKT — spend Participation PP"
+                  >
+                    🛒 MKT
+                  </button>
+                )}
             </div>
           )}
           {quizSession && isBattleQuizMode(quizSession.gameMode) && (
@@ -3729,62 +4296,54 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     {isSessionHost && (
                       <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.9rem', color: '#64748b' }}>Answers: {quizResponseCount} / {sessionPlayers.length}</span>
+                        {(() => {
+                          const gapMs =
+                            quizSession.gameMode === 'battle_royale'
+                              ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
+                              : quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs;
+                          if (
+                            !isBattle ||
+                            gapMs == null ||
+                            gapMs <= 0 ||
+                            brInterQuestionSecondsLeft == null ||
+                            brInterQuestionSecondsLeft <= 0
+                          ) {
+                            return null;
+                          }
+                          return (
+                            <span style={{ fontSize: '0.9rem', color: '#059669', fontWeight: 700 }}>
+                              Next question auto in {brInterQuestionSecondsLeft}s
+                            </span>
+                          );
+                        })()}
                         <button
                           onClick={async () => {
                             if (!currentUser) return;
+                            const prevIdx = quizSession.questionIndex ?? 0;
+                            const total = quizSession.questionOrder?.length ?? 0;
                             const res = await advanceQuiz(sessionId, currentUser.uid);
                             if (res.ok && res.completed) {
-                              await grantLiveQuizRewards(sessionId);
-                              await appendBattleLog('📋 Quiz completed! Rewards have been applied.');
-                              // Save quiz awards snapshot so Live Event end summary can show them
-                              const config = quizSession.rewardConfig;
-                              if (config?.placements) {
-                                const placements = [
-                                  { key: 'first' as const, label: '1st' },
-                                  { key: 'second' as const, label: '2nd' },
-                                  { key: 'third' as const, label: '3rd' },
-                                  { key: 'top5' as const, label: 'Top 5' },
-                                  { key: 'top10' as const, label: 'Top 10' },
-                                ]
-                                  .map(({ key, label }) => {
-                                    const p = config.placements[key];
-                                    if (!p || (p.pp <= 0 && p.xp <= 0 && !p.artifactId && !p.artifactName)) return null;
-                                    return { place: label, pp: p.pp ?? 0, xp: p.xp ?? 0, artifactName: (p.artifactName ?? p.artifactId ?? null) as string | null };
-                                  })
-                                  .filter(Boolean) as { place: string; pp: number; xp: number; artifactName: string | null }[];
-                                if (placements.length > 0) {
-                                  const placementsConfig = (config.placements ?? {}) as LiveQuizRewardConfig['placements'];
-                                  const entriesWithScores = sessionPlayers.map((p) => ({
-                                    uid: p.userId,
-                                    score: quizSession.leaderboard?.[p.userId] ?? 0,
-                                  }));
-                                  const sortedByScore = [...entriesWithScores].sort((a, b) => b.score - a.score);
-                                  const quizPpByPlayer: Record<string, number> = {};
-                                  sortedByScore.forEach((entry, idx) => {
-                                    const rank = idx + 1;
-                                    const reward = getPlacementRewardForRank(placementsConfig, rank);
-                                    quizPpByPlayer[entry.uid] = reward?.pp ?? 0;
-                                  });
-                                  const sessionRef = doc(db, 'inSessionRooms', sessionId);
-                                  await updateDoc(sessionRef, {
-                                    lastQuizAwardsSnapshot: {
-                                      quizTitle: quizSession.quizTitle ?? null,
-                                      placements,
-                                    },
-                                    lastQuizPpByPlayer: quizPpByPlayer,
-                                    updatedAt: serverTimestamp(),
-                                  });
-                                }
-                              }
+                              await runHostQuizCompletedFollowUp();
                             } else if (res.ok) {
-                              await appendBattleLog(`📋 Next question (${(quizSession.questionIndex ?? 0) + 2}/${quizSession.questionOrder?.length ?? 0})`);
+                              await appendBattleLog(`📋 Next question (${prevIdx + 2}/${total})`);
                             }
                             if (res.error) alert(res.error);
                           }}
                           style={{ padding: '0.5rem 1rem', background: '#4f46e5', color: 'white', border: 'none', borderRadius: '0.5rem', fontWeight: 600, cursor: 'pointer' }}
                           title={atBankEnd && !brRepeat ? 'Complete the quiz and show final standings' : 'Show the next question'}
                         >
-                          {nextBtnLabel}
+                          {(() => {
+                            const gap =
+                              quizSession.gameMode === 'battle_royale'
+                                ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
+                                : quizSession.gameMode === 'team_battle_royale'
+                                  ? quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs
+                                  : 0;
+                            if (isBattle && gap != null && gap > 0) {
+                              return `${nextBtnLabel} (or wait for auto)`;
+                            }
+                            return nextBtnLabel;
+                          })()}
                         </button>
                         <button
                           onClick={async () => {
@@ -4158,6 +4717,63 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               🎒 BAG {(!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button
+              type="button"
+              onClick={() => setShowMstMktModal(true)}
+              disabled={
+                !currentUser ||
+                showSessionSummary ||
+                !mstMktOpen ||
+                (roomSessionStatus !== 'live' && roomSessionStatus !== 'active')
+              }
+              style={{
+                width: '100%',
+                background:
+                  currentUser &&
+                  !showSessionSummary &&
+                  mstMktOpen &&
+                  (roomSessionStatus === 'live' || roomSessionStatus === 'active')
+                    ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)'
+                    : '#9ca3af',
+                color: 'white',
+                border: '3px solid #8B4513',
+                borderRadius: '0.5rem',
+                padding: '1rem',
+                fontSize: '1.125rem',
+                fontWeight: 'bold',
+                cursor:
+                  currentUser &&
+                  !showSessionSummary &&
+                  mstMktOpen &&
+                  (roomSessionStatus === 'live' || roomSessionStatus === 'active')
+                    ? 'pointer'
+                    : 'not-allowed',
+                transition: 'all 0.2s',
+                boxShadow:
+                  currentUser &&
+                  !showSessionSummary &&
+                  mstMktOpen &&
+                  (roomSessionStatus === 'live' || roomSessionStatus === 'active')
+                    ? '0 4px 12px rgba(234, 179, 8, 0.35)'
+                    : 'none',
+                opacity:
+                  currentUser &&
+                  !showSessionSummary &&
+                  mstMktOpen &&
+                  (roomSessionStatus === 'live' || roomSessionStatus === 'active')
+                    ? 1
+                    : 0.55,
+              }}
+              title={
+                !mstMktOpen
+                  ? 'Host must open MST MKT'
+                  : showSessionSummary
+                    ? 'Session ended'
+                    : 'Spend Participation PP on survival items'
+              }
+            >
+              🛒 MST MKT
+            </button>
+            <button
               onClick={() => {
                 setShowVaultModal(true);
               }}
@@ -4281,6 +4897,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           setShowBagModal(false);
         }}
       />
+      {currentUser && (
+        <LiveEventMstMktModal
+          isOpen={showMstMktModal}
+          onClose={() => setShowMstMktModal(false)}
+          sessionId={sessionId}
+          currentPlayer={currentPlayer ? ({ ...currentPlayer } as ServiceSessionPlayer) : null}
+          currentUserId={currentUser.uid}
+          displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+          sessionPlayers={sessionPlayers as ServiceSessionPlayer[]}
+        />
+      )}
       <VaultModal 
         isOpen={showVaultModal} 
         onClose={() => setShowVaultModal(false)}

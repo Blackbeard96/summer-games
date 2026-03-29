@@ -37,6 +37,7 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
   const [currentTier, setCurrentTier] = useState(0);
   const [totalXP, setTotalXP] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [purchasingPremium, setPurchasingPremium] = useState(false);
   const [showRewardModal, setShowRewardModal] = useState(false);
   const [claimedReward, setClaimedReward] = useState<{ reward: any; tier: number; isPremium: boolean } | null>(null);
@@ -66,6 +67,7 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       if (!currentUser || !isOpen) return;
 
       setLoading(true);
+      setLoadError(null);
       try {
         // Get player's actual XP from students collection
         const studentRef = doc(db, 'students', currentUser.uid);
@@ -181,14 +183,24 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
   };
 
   const claimReward = async (tier: number, isPremium: boolean) => {
-    if (!currentUser || !battlePassProgress) return;
+    if (!currentUser) return;
+    if (!battlePassProgress) {
+      alert(
+        'Battle pass data is not loaded yet (or access was denied). Refresh the page. If this continues, ask an admin to confirm Firestore rules allow battlePass for your account.'
+      );
+      return;
+    }
 
     const tierKey = `tier${tier}_${isPremium ? 'premium' : 'free'}`;
-    if (battlePassProgress.claimedTiers?.includes(tierKey)) {
+    const claimedList = Array.isArray(battlePassProgress.claimedTiers)
+      ? battlePassProgress.claimedTiers
+      : [];
+    if (claimedList.includes(tierKey)) {
       alert('Reward already claimed!');
       return;
     }
 
+    // Unlock when player XP reaches this tier's threshold (currentTier = highest tier number earned).
     if (tier > currentTier) {
       alert('You must reach this tier first!');
       return;
@@ -208,7 +220,7 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       if (!reward) return;
 
       // Update claimed tiers
-      const updatedClaimedTiers = [...(battlePassProgress.claimedTiers || []), tierKey];
+      const updatedClaimedTiers = [...claimedList, tierKey];
       await updateDoc(battlePassRef, {
         claimedTiers: updatedClaimedTiers
       });
@@ -281,11 +293,21 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
       const updatePromises: Promise<any>[] = [];
       
       if (Object.keys(userUpdates).length > 0) {
-        updatePromises.push(updateDoc(userRef, userUpdates));
+        const uSnap = await getDoc(userRef);
+        if (uSnap.exists()) {
+          updatePromises.push(updateDoc(userRef, userUpdates));
+        } else {
+          updatePromises.push(setDoc(userRef, userUpdates, { merge: true }));
+        }
       }
-      
+
       if (Object.keys(studentUpdates).length > 0) {
-        updatePromises.push(updateDoc(studentRef, studentUpdates));
+        const sSnap = await getDoc(studentRef);
+        if (sSnap.exists()) {
+          updatePromises.push(updateDoc(studentRef, studentUpdates));
+        } else {
+          updatePromises.push(setDoc(studentRef, studentUpdates, { merge: true }));
+        }
       }
       
       if (updatePromises.length > 0) {
@@ -597,6 +619,22 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
         </div>
 
         {/* Tiers Grid - Improved Layout */}
+        {loadError && (
+          <div
+            style={{
+              padding: '1rem 1.25rem',
+              marginBottom: '1rem',
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(248, 113, 113, 0.5)',
+              borderRadius: '0.75rem',
+              color: '#fecaca',
+              fontSize: '0.9rem',
+            }}
+          >
+            <strong>Could not load battle pass.</strong> Claims and purchases need access to your{' '}
+            <code style={{ color: '#fda4af' }}>battlePass</code> document in Firestore. {loadError}
+          </div>
+        )}
         {loading ? (
           <div style={{ textAlign: 'center', padding: '4rem', color: '#94a3b8', flex: 1 }}>
             Loading Battle Pass...
@@ -618,9 +656,12 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
           className="battle-pass-scroll"
           >
             {season0Tiers.map((tier, index) => {
+              const claimedArr = Array.isArray(battlePassProgress?.claimedTiers)
+                ? battlePassProgress.claimedTiers
+                : [];
               const isUnlocked = tier.tier <= currentTier;
-              const freeClaimed = battlePassProgress?.claimedTiers?.includes(`tier${tier.tier}_free`);
-              const premiumClaimed = battlePassProgress?.claimedTiers?.includes(`tier${tier.tier}_premium`);
+              const freeClaimed = claimedArr.includes(`tier${tier.tier}_free`);
+              const premiumClaimed = claimedArr.includes(`tier${tier.tier}_premium`);
               const isCurrentTier = tier.tier === currentTier;
               const isNextTier = tier.tier === currentTier + 1;
 
