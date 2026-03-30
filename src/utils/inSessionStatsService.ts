@@ -8,6 +8,7 @@ import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increm
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
 import { applyParticipationStreakAward, breakParticipationStreakMessage } from './participationStreak';
+import { evaluateFlowStateAfterSuccess, mergeFlowClearIntoRow } from './liveEventFlowState';
 import type { LiveEventPowerGain } from '../types/playerPowerStats';
 import {
   awardLiveEventPowerGain,
@@ -455,7 +456,9 @@ async function applyEliminatedPlayerPointPenalty(
 }
 
 /**
- * Track participation earned
+ * Track participation earned (single hub for Live Event “success streak” / Flow State).
+ * Correct quiz answers, class-flow sprint rewards, and host-awarded participation all call this.
+ * Updates stats + session `players[]` with `successStreak`, `flowStateActive`, `flowStateNonce` (see liveEventFlowState).
  */
 export async function trackParticipation(
   sessionId: string,
@@ -510,9 +513,12 @@ export async function trackParticipation(
         const players = [...((sessionDoc.data()?.players || []) as Array<Record<string, unknown>>)];
         const pIdx = players.findIndex((p) => p && (p as { userId?: string }).userId === playerId);
         if (pIdx >= 0) {
-          const row = { ...players[pIdx] } as { powerPoints?: number; userId?: string };
+          const row = { ...players[pIdx] } as Record<string, unknown>;
+          const flowEval = evaluateFlowStateAfterSuccess(row, prevConsecutive, nextConsecutive);
+          const { flowEntered, ...flowForStore } = flowEval;
+          void flowEntered;
           row.powerPoints = Math.max(0, (Number(row.powerPoints) || 0) + ppFromParticipation);
-          players[pIdx] = row;
+          players[pIdx] = { ...row, ...flowForStore } as (typeof players)[number];
           sessionPatch.players = players;
         }
         if (streakLogLine) {
@@ -560,14 +566,26 @@ export async function breakParticipationStreak(
         lastLoggedStreakCount: 0,
       });
 
+      const sessionDoc = await transaction.get(sessionRef);
+      if (!sessionDoc.exists()) return;
+
+      const players = [...((sessionDoc.data()?.players || []) as Array<Record<string, unknown>>)];
+      const pIdx = players.findIndex((p) => p && (p as { userId?: string }).userId === playerId);
+      const patch: Record<string, unknown> = {
+        updatedAt: serverTimestamp(),
+      };
       if (msg) {
-        const sessionDoc = await transaction.get(sessionRef);
-        if (sessionDoc.exists()) {
-          transaction.update(sessionRef, {
-            battleLog: arrayUnion(msg),
-            updatedAt: serverTimestamp(),
-          });
-        }
+        patch.battleLog = arrayUnion(msg);
+      }
+      if (pIdx >= 0) {
+        const row = { ...players[pIdx] } as Record<string, unknown>;
+        const flowClear = mergeFlowClearIntoRow(row);
+        players[pIdx] = { ...row, ...flowClear } as (typeof players)[number];
+        patch.players = players;
+      }
+      if (patch.battleLog !== undefined || patch.players !== undefined) {
+        // Firestore UpdateData is strict; session row shape is dynamic (players[]).
+        transaction.update(sessionRef, patch as Record<string, unknown> as never);
       }
     });
   } catch (error) {

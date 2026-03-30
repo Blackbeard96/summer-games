@@ -343,7 +343,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             inferGeneratorLevel,
             getCapacity,
             getMaxShields,
-            getGeneratorPPPerDay
+            getGeneratorPPPerDay,
+            minCapacityLevelForAtLeast,
+            minShieldLevelForAtLeast,
           } = await import('../utils/vaultEconomy');
           
           let capacityLevel = existingVaultData.capacityLevel;
@@ -378,10 +380,20 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const calculatedCapacity = getCapacity(capacityLevel);
           const calculatedMaxShields = getMaxShields(shieldLevel);
           const calculatedGenPP = getGeneratorPPPerDay(generatorLevel);
+
+          // Never downgrade capacity/shields during migration (infer can undershoot custom or legacy values)
+          const storedCapacity = Number(existingVaultData.capacity) || 0;
+          const storedMaxShield = Number(existingVaultData.maxShieldStrength) || 0;
+          const mergedCapacity = Math.max(calculatedCapacity, storedCapacity);
+          const mergedMaxShields = Math.max(calculatedMaxShields, storedMaxShield);
+          const resolvedCapacityLevel = minCapacityLevelForAtLeast(mergedCapacity);
+          const resolvedShieldLevel = minShieldLevelForAtLeast(mergedMaxShields);
+          const resolvedCapacity = getCapacity(resolvedCapacityLevel);
+          const resolvedMaxShields = getMaxShields(resolvedShieldLevel);
           
           // Migrate existing vault to include new move tracking fields and generator
           // Max vault health is always 10% of max PP (capacity is the max PP)
-          const maxPPForHealth = calculatedCapacity;
+          const maxPPForHealth = resolvedCapacity;
           const maxVaultHealth = existingVaultData.maxVaultHealth || calculateMaxVaultHealth(maxPPForHealth);
           // Current vault health: if 0/undefined and player has enough PP, set to max health
           // Otherwise, cap at current PP if PP < max health
@@ -398,8 +410,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           
           const existingVault: Vault = {
             ...existingVaultData,
-            capacity: calculatedCapacity, // Update to calculated value
-            maxShieldStrength: calculatedMaxShields, // Update to calculated value
+            capacity: resolvedCapacity,
+            maxShieldStrength: resolvedMaxShields,
             currentPP: finalPP, // Use synced PP value
             vaultHealth: vaultHealth,
             maxVaultHealth: maxVaultHealth,
@@ -412,25 +424,27 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             generatorLastReset: existingVaultData.generatorLastReset || existingVaultData.lastMoveReset || new Date(),
             generatorUpgrades: existingVaultData.generatorUpgrades || 0,
             // Store levels for new economy system
-            capacityLevel: capacityLevel,
-            shieldLevel: shieldLevel,
+            capacityLevel: resolvedCapacityLevel,
+            shieldLevel: resolvedShieldLevel,
           } as Vault & { capacityLevel: number; shieldLevel: number };
           
           // Update Firestore with inferred levels and recalculated values if needed
           const needsMigration = 
             !existingVaultData.capacityLevel || 
             !existingVaultData.shieldLevel ||
-            existingVaultData.capacity !== calculatedCapacity ||
-            existingVaultData.maxShieldStrength !== calculatedMaxShields;
+            existingVaultData.capacity !== resolvedCapacity ||
+            existingVaultData.maxShieldStrength !== resolvedMaxShields ||
+            existingVaultData.capacityLevel !== resolvedCapacityLevel ||
+            existingVaultData.shieldLevel !== resolvedShieldLevel;
           
           if (needsMigration) {
             console.log('[Vault Migration] Updating vault with inferred levels and recalculated values');
             await updateDoc(vaultRef, {
-              capacityLevel: capacityLevel,
-              shieldLevel: shieldLevel,
-              capacity: calculatedCapacity,
-              maxShieldStrength: calculatedMaxShields,
-              maxVaultHealth: Math.floor(calculatedCapacity * 0.1)
+              capacityLevel: resolvedCapacityLevel,
+              shieldLevel: resolvedShieldLevel,
+              capacity: resolvedCapacity,
+              maxShieldStrength: resolvedMaxShields,
+              maxVaultHealth: calculateMaxVaultHealth(resolvedCapacity)
             });
           }
           

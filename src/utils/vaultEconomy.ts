@@ -139,6 +139,18 @@ export function inferCapacityLevel(storedCapacity: number): number {
 }
 
 /**
+ * Smallest capacity level L such that getCapacity(L) >= storedCapacity.
+ * Used after migration merges so levels stay consistent with preserved capacity.
+ */
+export function minCapacityLevelForAtLeast(storedCapacity: number): number {
+  if (!storedCapacity || storedCapacity <= 0) return 1;
+  for (let level = 1; level <= 100; level++) {
+    if (getCapacity(level) >= storedCapacity) return level;
+  }
+  return 100;
+}
+
+/**
  * Infer shield level from stored maxShieldStrength value
  * Used for migration of existing players
  * 
@@ -163,6 +175,17 @@ export function inferShieldLevel(storedMaxShields: number): number {
   
   // Default to level 1 if we can't determine
   return 1;
+}
+
+/**
+ * Smallest shield level L such that getMaxShields(L) >= storedMaxShields.
+ */
+export function minShieldLevelForAtLeast(storedMaxShields: number): number {
+  if (!storedMaxShields || storedMaxShields <= 0) return 1;
+  for (let level = 1; level <= 100; level++) {
+    if (getMaxShields(level) >= storedMaxShields) return level;
+  }
+  return 100;
 }
 
 /**

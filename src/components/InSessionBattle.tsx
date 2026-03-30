@@ -94,11 +94,14 @@ import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type 
 import LiveEventReflectionPanel from './LiveEventReflectionPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
+import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
+import './liveEvent/flowState.css';
 import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
 import { parseClassFlowSprint } from '../utils/liveEventSprintService';
 import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
+import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
 import { ARTIFACT_PERK_OPTIONS } from '../constants/artifactPerks';
 import { getPlayerSkillState } from '../utils/skillStateService';
 
@@ -150,6 +153,10 @@ interface SessionPlayer {
   maxShield?: number;
   eliminated?: boolean;
   eliminatedBy?: string;
+  successStreak?: number;
+  flowStateActive?: boolean;
+  flowStateActivatedAt?: number | null;
+  flowStateNonce?: number;
 }
 
 type PlayerInspectTab = 'loadout' | 'artifacts';
@@ -344,7 +351,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [brQuickTargetUid, setBrQuickTargetUid] = useState<string | null>(null);
   /** Dedupe auto-advance per question round (`quizRoundIndex:questionId`). */
   const brAutoAdvanceDedupeRef = useRef<string | null>(null);
-  /** Host-only: seconds until auto-advance after the answer timer ends (Battle Royale modes). */
+  /** Seconds until auto-advance after the answer timer ends (Battle Royale / Team BR; all clients). */
   const [brInterQuestionSecondsLeft, setBrInterQuestionSecondsLeft] = useState<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
@@ -996,7 +1003,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     );
   }, [sessionId, isSessionHost, quizSession?.currentQuestionId, quizSession?.quizRoundIndex]);
 
-  // Battle modes: host client auto-advances after question timer + configured gap (no Next click).
+  // Battle modes: host schedules one-shot advance at (answer deadline + autoAdvanceDelayMs).
+  // Previous logic only re-ran when Firestore changed, so after the timer expired nothing re-ran and auto-advance never fired.
   useEffect(() => {
     if (!isSessionHost || !currentUser || !quizSession || !isBattleQuizMode(quizSession.gameMode)) return;
     const delay =
@@ -1006,12 +1014,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     if (delay == null || delay <= 0) return;
     if (quizSession.status !== 'question_live' || !quizSession.currentQuestionId) return;
     const ends = quizSession.questionEndsAt ?? 0;
-    if (!ends || Date.now() <= ends) return;
+    if (!ends) return;
+
     const round = quizSession.quizRoundIndex ?? 1;
     const dedupeKey = `${round}:${quizSession.currentQuestionId}`;
-    if (brAutoAdvanceDedupeRef.current === dedupeKey) return;
+    const fireAt = ends + delay;
+    const msUntilAdvance = Math.max(0, fireAt - Date.now());
     const prevIdx = quizSession.questionIndex ?? 0;
     const total = quizSession.questionOrder?.length ?? 0;
+
     const timer = window.setTimeout(async () => {
       if (brAutoAdvanceDedupeRef.current === dedupeKey) return;
       brAutoAdvanceDedupeRef.current = dedupeKey;
@@ -1031,7 +1042,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         console.error('auto advance quiz', e);
         brAutoAdvanceDedupeRef.current = null;
       }
-    }, delay);
+    }, msUntilAdvance);
+
     return () => clearTimeout(timer);
   }, [
     isSessionHost,
@@ -1050,9 +1062,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     appendBattleLog,
   ]);
 
-  // Host UI: countdown between end of answer timer and auto-advance
+  // Countdown between answer deadline and auto-advance (all clients — host runs the advance timer above).
   useEffect(() => {
-    if (!isSessionHost || !quizSession || !isBattleQuizMode(quizSession.gameMode)) {
+    if (!quizSession || !isBattleQuizMode(quizSession.gameMode)) {
       setBrInterQuestionSecondsLeft(null);
       return;
     }
@@ -1898,6 +1910,29 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
   const currentPlayer = sessionPlayers.find(p => p.userId === currentUser?.uid);
 
+  const [flowActivationVisible, setFlowActivationVisible] = useState(false);
+  const flowNonceSyncRef = useRef<{ sessionId: string; uid: string; nonce: number } | null>(null);
+
+  useEffect(() => {
+    if (!sessionId || !currentUser?.uid) return;
+    const cp = sessionPlayers.find((p) => p.userId === currentUser.uid);
+    if (!cp) return;
+    const nonce = cp.flowStateNonce ?? 0;
+    const active = cp.flowStateActive === true;
+    const sync = flowNonceSyncRef.current;
+    if (!sync || sync.sessionId !== sessionId || sync.uid !== currentUser.uid) {
+      flowNonceSyncRef.current = { sessionId, uid: currentUser.uid, nonce };
+      return;
+    }
+    if (active && nonce > sync.nonce) {
+      flowNonceSyncRef.current = { sessionId, uid: currentUser.uid, nonce };
+      setFlowActivationVisible(true);
+      const t = window.setTimeout(() => setFlowActivationVisible(false), 3600);
+      return () => window.clearTimeout(t);
+    }
+    flowNonceSyncRef.current = { sessionId, uid: currentUser.uid, nonce };
+  }, [sessionId, currentUser?.uid, sessionPlayers]);
+
   /** Battle / Team BR: eliminated players and eliminator names for the center column */
   const battleRoyaleEliminations = useMemo(() => {
     if (!quizSession || !isBattleQuizMode(quizSession.gameMode)) return [];
@@ -2367,9 +2402,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const effectivePowerLevel =
       finitePowerLevel(player?.powerLevel) ?? finitePowerLevel(student.powerLevel);
 
+    const inFlowState = player?.flowStateActive === true;
+
     return (
       <div
         key={student.id}
+        className={inFlowState ? 'mst-flow-state-card' : undefined}
         onClick={async (e) => {
           // If a move is selected, use this player as target
           // Allow targeting ALL players (including those not in session)
@@ -2538,6 +2576,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           border: '2px solid white',
           boxShadow: '0 0 0 1px ' + (isPresent ? '#10b981' : (isActiveInSession ? '#ef4444' : '#9ca3af'))
         }} title={isPresent ? 'Present in Session' : (isActiveInSession ? 'Not Present' : 'Not in Session')} />
+        {inFlowState && (
+          <span className="mst-flow-badge-chip" title="Flow State — 3+ successes in a row">
+            FLOW
+          </span>
+        )}
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
           {(student.photoURL || player?.photoURL) ? (
@@ -2995,6 +3038,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
   return (
     <>
+      <FlowStateActivationOverlay
+        visible={flowActivationVisible}
+        displayName={currentUser?.displayName || currentPlayer?.displayName || 'You'}
+      />
       <LiveEventDebugOverlay
         sessionId={sessionId}
         classId={classId}
@@ -4112,16 +4159,70 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 };
                 return currentQ ? (
                   <div key={`${quizSession.currentQuestionId}-${quizSession.quizRoundIndex ?? 0}`}>
+                    {currentUser && currentPlayer && (
+                      <div
+                        style={{
+                          fontSize: '0.78rem',
+                          marginBottom: '0.5rem',
+                          padding: '0.4rem 0.6rem',
+                          borderRadius: '0.5rem',
+                          background: currentPlayer.flowStateActive ? '#dbeafe' : '#f0f9ff',
+                          color: '#0c4a6e',
+                          border: currentPlayer.flowStateActive ? '1px solid #38bdf8' : '1px solid #bae6fd',
+                        }}
+                      >
+                        Success streak: <strong>{currentPlayer.successStreak ?? 0}</strong>
+                        {currentPlayer.flowStateActive ? (
+                          <span style={{ marginLeft: '0.35rem', fontWeight: 800, color: '#0369a1' }}>
+                            · FLOW STATE
+                          </span>
+                        ) : (currentPlayer.successStreak ?? 0) > 0 ? (
+                          <span style={{ marginLeft: '0.35rem', color: '#64748b' }}>
+                            (
+                            {Math.max(0, FLOW_STATE_SUCCESS_THRESHOLD - (currentPlayer.successStreak ?? 0))}{' '}
+                            more to Flow)
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                     {isBattle && (
                       <div style={{ padding: '0.5rem 0.75rem', background: '#1e293b', color: '#e2e8f0', borderRadius: '0.5rem', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                         <strong>
                           {quizSession.gameMode === 'battle_royale' ? 'Battle Royale' : 'Team Battle Royale'}
                         </strong>
                         {' · '}
-                        Streak {myStreak} · Energy {myEnergy}
+                        Combat streak {myStreak} · Energy {myEnergy}
                         {myStrong ? ' · Strong ready' : ''}
+                        {currentPlayer?.flowStateActive ? (
+                          <span style={{ color: '#38bdf8' }}> · Flow State</span>
+                        ) : null}
                       </div>
                     )}
+                    {isBattle &&
+                      (() => {
+                        const gapMs =
+                          quizSession.gameMode === 'battle_royale'
+                            ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
+                            : quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs;
+                        if (gapMs == null || gapMs <= 0) return null;
+                        if (brInterQuestionSecondsLeft == null || brInterQuestionSecondsLeft <= 0) return null;
+                        return (
+                          <div
+                            style={{
+                              fontSize: '0.9rem',
+                              marginBottom: '0.5rem',
+                              padding: '0.45rem 0.75rem',
+                              borderRadius: '0.5rem',
+                              background: 'linear-gradient(90deg, #ecfdf5, #d1fae5)',
+                              color: '#047857',
+                              fontWeight: 700,
+                              border: '1px solid #6ee7b7',
+                            }}
+                          >
+                            Next question in {brInterQuestionSecondsLeft}s
+                          </div>
+                        );
+                      })()}
                     <LiveQuizQuestionCard
                       question={currentQ}
                       questionNumber={(quizSession.questionIndex ?? 0) + 1}
@@ -4296,26 +4397,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     {isSessionHost && (
                       <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.9rem', color: '#64748b' }}>Answers: {quizResponseCount} / {sessionPlayers.length}</span>
-                        {(() => {
-                          const gapMs =
-                            quizSession.gameMode === 'battle_royale'
-                              ? quizSession.battleRoyaleConfig?.autoAdvanceDelayMs
-                              : quizSession.teamBattleRoyaleConfig?.autoAdvanceDelayMs;
-                          if (
-                            !isBattle ||
-                            gapMs == null ||
-                            gapMs <= 0 ||
-                            brInterQuestionSecondsLeft == null ||
-                            brInterQuestionSecondsLeft <= 0
-                          ) {
-                            return null;
-                          }
-                          return (
-                            <span style={{ fontSize: '0.9rem', color: '#059669', fontWeight: 700 }}>
-                              Next question auto in {brInterQuestionSecondsLeft}s
-                            </span>
-                          );
-                        })()}
                         <button
                           onClick={async () => {
                             if (!currentUser) return;

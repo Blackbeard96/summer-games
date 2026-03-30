@@ -39,6 +39,12 @@ export interface SessionPlayer {
   maxHp?: number;
   shield?: number;
   maxShield?: number;
+  /** Consecutive successful participation events (quiz correct, sprint reward, host PP) — mirrors stats */
+  successStreak?: number;
+  flowStateActive?: boolean;
+  flowStateActivatedAt?: number | null;
+  /** Bumps when entering Flow State; clients use for one-shot entry animation */
+  flowStateNonce?: number;
 }
 
 export interface InSessionRoom {

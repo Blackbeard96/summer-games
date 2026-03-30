@@ -148,7 +148,7 @@ const BattlePassCompactCard: React.FC<BattlePassCompactCardProps> = ({
               cursor: 'pointer',
             }}
           >
-            Season 1 — Full Battle Pass →
+            Season 1 — Coming Soon
           </button>
         )}
       </div>

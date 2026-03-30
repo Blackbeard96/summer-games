@@ -1,6 +1,6 @@
 /**
- * Live Event participation streak (Season 1).
- * Streak *starts* at 3 consecutive participation awards; then increments.
+ * Live Event participation streak / Flow State (Season 1).
+ * Flow State enters at 3 consecutive successful participation awards (quiz, objectives, host PP).
  */
 
 export interface ParticipationStreakState {
@@ -33,14 +33,14 @@ export function applyParticipationStreakAward(
   const next = { consecutiveAwards };
   let battleLogLine: string | null = null;
   if (consecutiveAwards === 3) {
-    battleLogLine = `🔥 ${playerName} started a streak! (3 in a row)`;
+    battleLogLine = `✨ ${playerName} entered Flow State! (${consecutiveAwards} successes in a row)`;
   } else if (consecutiveAwards > 3) {
-    battleLogLine = `🔥 ${playerName} is on a ${consecutiveAwards}-point streak!`;
+    battleLogLine = `🔥 ${playerName} is on a ${consecutiveAwards}-success streak (Flow State active)`;
   }
   return { next, battleLogLine };
 }
 
 export function breakParticipationStreakMessage(playerName: string, hadStreak: boolean): string | null {
   if (!hadStreak) return null;
-  return `⚡ ${playerName}'s streak was broken.`;
+  return `⚡ ${playerName}'s Flow State ended (streak broken).`;
 }

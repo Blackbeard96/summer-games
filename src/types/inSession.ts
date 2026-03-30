@@ -30,6 +30,11 @@ export interface InSessionPlayer {
   powerPoints: number;
   participationCount: number; // Participation points earned
   movesEarned: number; // Moves available from participation
+  /** Live Event Flow State (mirrors stats consecutive participation on success path) */
+  successStreak?: number;
+  flowStateActive?: boolean;
+  flowStateActivatedAt?: number | null;
+  flowStateNonce?: number;
   eliminated?: boolean; // Whether player is eliminated
   /** Set when eliminated by another player (BR / live combat); used in session summary. */
   eliminatedBy?: string;
