@@ -598,12 +598,13 @@ service cloud.firestore {
     
     // In Session Rooms collection - classroom battle sessions
     match /inSessionRooms/{sessionId} {
-      // Allow read if user is in the class or is admin/Yondaime
+      // Allow read if user is in the class, session host/teacher, or staff (hosts are often not in classrooms.students)
       allow read: if request.auth != null && (
         // Admin/Yondaime can read all sessions
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
+        isInSessionRoomHost(sessionId) ||
         // Student can read if they're in the class
         (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
@@ -617,8 +618,10 @@ service cloud.firestore {
       );
       
       // Host/admin OR students in the session class (live event battle state, moves, revive potion, etc.)
+      // teacherId matches hostUid on new sessions; allow both so older docs or edge cases still authorize the teacher.
       allow update: if request.auth != null && (
         resource.data.hostUid == request.auth.uid ||
+        resource.data.teacherId == request.auth.uid ||
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||

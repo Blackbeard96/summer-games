@@ -20,7 +20,7 @@ import {
 } from 'firebase/firestore';
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
-import { initializePlayerStats, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
+import { ensurePlayerStatsIfMissing, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
 
 export interface SessionPlayer {
   userId: string;
@@ -253,6 +253,14 @@ export async function joinSession(
               // Ignore - presence is optional
             }
           }
+          try {
+            await ensurePlayerStatsIfMissing(sessionId, player.userId, {
+              playerName: player.displayName,
+              startingPP: player.powerPoints
+            });
+          } catch (_) {
+            // stats heal is best-effort
+          }
           return { success: true };
         }
       }
@@ -362,17 +370,17 @@ export async function joinSession(
       return { isNewPlayer, playerCount: updatedPlayers.length };
     });
     
-    // Initialize stats for new player (outside transaction to avoid transaction timeout)
-    if (result.isNewPlayer) {
-      try {
-        await initializePlayerStats(sessionId, player.userId, player.displayName, player.powerPoints);
-        if (DEBUG_JOIN) {
-          debug('inSessionService', `📊 Initialized stats for new player ${player.userId}`);
-        }
-      } catch (statsError) {
-        debugError('inSessionService', `Error initializing stats for ${player.userId}`, statsError);
-        // Don't fail join if stats init fails
+    // Ensure stats subdoc exists (new join, rejoin after failed init, or race recovery)
+    try {
+      await ensurePlayerStatsIfMissing(sessionId, player.userId, {
+        playerName: player.displayName,
+        startingPP: player.powerPoints
+      });
+      if (DEBUG_JOIN) {
+        debug('inSessionService', `📊 Ensured stats doc for ${player.userId} (isNewPlayer=${result.isNewPlayer})`);
       }
+    } catch (statsError) {
+      debugError('inSessionService', `Error ensuring stats for ${player.userId}`, statsError);
     }
     
     if (DEBUG_JOIN) {
@@ -417,6 +425,12 @@ export async function joinSession(
             } catch (presenceError) {
               // Ignore presence errors
             }
+            try {
+              await ensurePlayerStatsIfMissing(sessionId, player.userId, {
+                playerName: player.displayName,
+                startingPP: player.powerPoints
+              });
+            } catch (_) {}
             return { success: true };
           }
         }

@@ -671,14 +671,23 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }));
     }
     
-    // Show user-friendly error (preserve Live Event PP messages from transaction)
-    const userMessage =
-      typeof errorMessage === 'string' && errorMessage.includes('Participation Points')
-        ? errorMessage
-        : errorCode === 'permission-denied'
-          ? 'You do not have permission to perform this action.'
-          : errorCode === 'failed-precondition'
-            ? 'The session state has changed. Please try again.'
+    // Show user-friendly error; pass through our transaction throws (eliminated, not in session, PP, etc.)
+    const isOurMessage =
+      typeof errorMessage === 'string' &&
+      (errorMessage.includes('Participation Points') ||
+        errorMessage.includes('eliminated') ||
+        errorMessage.includes('not found in session') ||
+        errorMessage.startsWith('Session ') ||
+        errorMessage.startsWith('Actor ') ||
+        errorMessage.startsWith('Target '));
+    const userMessage = isOurMessage
+      ? errorMessage
+      : errorCode === 'permission-denied'
+        ? 'You do not have permission to perform this action.'
+        : errorCode === 'failed-precondition' || errorCode === 'aborted'
+          ? 'The session state changed or another move was applying. Please try again.'
+          : typeof errorMessage === 'string' && errorMessage.length > 0 && errorMessage.length < 200
+            ? errorMessage
             : 'Failed to apply move. Please try again.';
     
     return {

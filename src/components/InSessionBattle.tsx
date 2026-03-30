@@ -47,8 +47,7 @@ import {
   type ActionType
 } from '../utils/inSessionActionsService';
 import { 
-  trackSkillUsage,
-  trackDamage,
+  ensurePlayerStatsIfMissing,
   trackElimination,
   trackParticipation,
   getSessionSummary,
@@ -574,6 +573,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           const alreadyInSession = sessionData.players?.some((p: any) => p.userId === currentUser.uid) || false;
           if (alreadyInSession) {
             debug('inSessionBattle', `User ${currentUser.uid} already in session, skipping join`);
+            void ensurePlayerStatsIfMissing(sessionId, currentUser.uid, {}).catch(() => {});
             joinInProgress = false;
             return;
           }
@@ -1495,7 +1495,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             photoURL: profile?.photoURL || player.photoURL,
             isPlayer: true,
             speed: 50,
-            movesEarned: player.movesEarned ?? 0
+            movesEarned: player.movesEarned ?? 0,
+            eliminated: player.eliminated === true,
           };
         }),
     [sessionPlayers, currentUser?.uid, students, userProfiles, playerVaultData, vault]
@@ -4714,6 +4715,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   movesEarned: currentPlayer?.movesEarned || 0,
                   willOpenMenu: !!(currentPlayer && (currentPlayer.movesEarned || 0) > 0)
                 });
+                if (currentPlayer?.eliminated) {
+                  alert('You have been eliminated and cannot use skills.');
+                  return;
+                }
                 if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
                   setShowMoveMenu(true);
                   console.log('✅ [InSessionBattle] Move menu opened');
@@ -4721,10 +4726,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   console.warn('⚠️ [InSessionBattle] Cannot open menu - no moves available');
                 }
               }}
-              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0}
+              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0 || currentPlayer.eliminated === true}
               style={{
                 width: '100%',
-                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) 
+                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && currentPlayer.eliminated !== true) 
                   ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' 
                   : '#9ca3af',
                 color: 'white',
@@ -4733,39 +4738,52 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 padding: '1rem',
                 fontSize: '1.125rem',
                 fontWeight: 'bold',
-                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) ? 'pointer' : 'not-allowed',
+                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 'pointer' : 'not-allowed',
                 transition: 'all 0.2s',
-                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) 
+                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
                   ? '0 4px 12px rgba(239, 68, 68, 0.3)' 
                   : 'none',
-                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) ? 1 : 0.6
+                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 1 : 0.6
               }}
               onMouseEnter={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 6px 16px rgba(239, 68, 68, 0.4)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
                   e.currentTarget.style.transform = 'scale(1)';
                   e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.3)';
                 }
               }}
-              title={(currentPlayer && (currentPlayer.movesEarned || 0) === 0) ? 'No moves available. Earn Par. Pt. to make moves!' : 'Select a move to attack'}
+              title={
+                currentPlayer?.eliminated
+                  ? 'Eliminated — you cannot use skills'
+                  : (currentPlayer && (currentPlayer.movesEarned || 0) === 0)
+                    ? 'No moves available. Earn Par. Pt. to make moves!'
+                    : 'Select a move to attack'
+              }
             >
-              ⚔️ FIGHT {(!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
+              ⚔️ FIGHT{' '}
+              {currentPlayer?.eliminated
+                ? '(Eliminated)'
+                : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button
               onClick={() => {
+                if (currentPlayer?.eliminated) {
+                  alert('You have been eliminated and cannot use your bag.');
+                  return;
+                }
                 if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
                   setShowBagModal(true);
                 }
               }}
-              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0}
+              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0 || currentPlayer.eliminated === true}
               style={{
                 width: '100%',
-                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) 
+                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
                   ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' 
                   : '#9ca3af',
                 color: 'white',
@@ -4774,28 +4792,37 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 padding: '1rem',
                 fontSize: '1.125rem',
                 fontWeight: 'bold',
-                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) ? 'pointer' : 'not-allowed',
+                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 'pointer' : 'not-allowed',
                 transition: 'all 0.2s',
-                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) 
+                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
                   ? '0 4px 12px rgba(245, 158, 11, 0.3)' 
                   : 'none',
-                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0) ? 1 : 0.6
+                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 1 : 0.6
               }}
               onMouseEnter={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.4)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
+                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
                   e.currentTarget.style.transform = 'scale(1)';
                   e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.3)';
                 }
               }}
-              title={(currentPlayer && (currentPlayer.movesEarned || 0) === 0) ? 'No moves available. Earn Par. Pt. to use items!' : 'Use items from your bag'}
+              title={
+                currentPlayer?.eliminated
+                  ? 'Eliminated — bag locked'
+                  : (currentPlayer && (currentPlayer.movesEarned || 0) === 0)
+                    ? 'No moves available. Earn Par. Pt. to use items!'
+                    : 'Use items from your bag'
+              }
             >
-              🎒 BAG {(!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
+              🎒 BAG{' '}
+              {currentPlayer?.eliminated
+                ? '(Eliminated)'
+                : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button
               type="button"

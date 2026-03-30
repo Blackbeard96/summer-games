@@ -42,6 +42,7 @@ import { searchStudents } from '../utils/searchUtils';
 import MissionAdmin from '../components/MissionAdmin';
 import IslandRaidLevelsAdmin from '../components/IslandRaidLevelsAdmin';
 import Season1AdminPanel from '../components/admin/Season1AdminPanel';
+import VaultRecoveryAdmin from '../components/admin/VaultRecoveryAdmin';
 
 interface Classroom {
   id: string;
@@ -219,7 +220,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'season1' | 'progression-repair' | 'uxp-approval' | 'missions' | 'island-raid-levels'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'season1' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -3122,6 +3123,25 @@ const AdminPanel: React.FC = () => {
           🔧 Progression Repair
         </button>
         <button
+          onClick={() => setActiveTab('vault-recovery')}
+          style={{
+            backgroundColor: activeTab === 'vault-recovery' ? '#0d9488' : '#e5e7eb',
+            color: activeTab === 'vault-recovery' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            marginRight: '0.5rem',
+            marginBottom: '0.5rem'
+          }}
+        >
+          🏦 Vault recovery
+        </button>
+        <button
           onClick={() => setActiveTab('uxp-approval')}
           style={{
             padding: '0.75rem 1.5rem',
@@ -3201,6 +3221,8 @@ const AdminPanel: React.FC = () => {
         <IslandRaidLevelsAdmin />
       ) : activeTab === 'progression-repair' ? (
         <ProgressionRepairTool />
+      ) : activeTab === 'vault-recovery' ? (
+        <VaultRecoveryAdmin />
       ) : activeTab === 'uxp-approval' ? (
         <UXPApproval />
       ) : activeTab === 'manifests' ? (

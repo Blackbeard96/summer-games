@@ -71,6 +71,42 @@ export async function initializePlayerStats(
 }
 
 /**
+ * Ensures stats/{playerId} exists. Use when join used the "already in session" fast path,
+ * failed-precondition recovery, or stats init failed — otherwise trackSkillUsage no-ops and attacks don't register.
+ */
+export async function ensurePlayerStatsIfMissing(
+  sessionId: string,
+  playerId: string,
+  defaults?: { playerName?: string; startingPP?: number }
+): Promise<boolean> {
+  try {
+    const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+    const snap = await getDoc(statsRef);
+    if (snap.exists()) return true;
+
+    let playerName = defaults?.playerName ?? 'Player';
+    let startingPP = defaults?.startingPP ?? 0;
+    const roomRef = doc(db, 'inSessionRooms', sessionId);
+    const roomSnap = await getDoc(roomRef);
+    if (roomSnap.exists()) {
+      const players = (roomSnap.data() as { players?: Array<{ userId: string; displayName?: string; powerPoints?: number }> }).players ?? [];
+      const row = players.find((p) => p.userId === playerId);
+      if (row) {
+        if (row.displayName) playerName = row.displayName;
+        if (typeof row.powerPoints === 'number') startingPP = row.powerPoints;
+      }
+    }
+
+    const ok = await initializePlayerStats(sessionId, playerId, playerName, startingPP);
+    if (ok) debug('inSessionStats', `ensurePlayerStatsIfMissing: created stats for ${playerId}`);
+    return ok;
+  } catch (error) {
+    debugError('inSessionStats', `ensurePlayerStatsIfMissing failed for ${playerId}`, error);
+    return false;
+  }
+}
+
+/**
  * Track a skill usage
  */
 export async function trackSkillUsage(
@@ -83,14 +119,14 @@ export async function trackSkillUsage(
   healing?: number
 ): Promise<boolean> {
   try {
+    await ensurePlayerStatsIfMissing(sessionId, playerId, {});
     const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
     
     await runTransaction(db, async (transaction) => {
       const statsDoc = await transaction.get(statsRef);
       
       if (!statsDoc.exists()) {
-        debug('inSessionStats', `Stats not found for player ${playerId}, initializing...`);
-        // Stats should have been initialized on join, but handle gracefully
+        debug('inSessionStats', `Stats still missing for ${playerId} after ensure — skip skill tracking`);
         return;
       }
       
@@ -122,11 +158,11 @@ export async function trackSkillUsage(
         });
       }
       
+      // damageDealt is updated only in trackDamage (health + shield) to avoid double-counting
       transaction.update(statsRef, {
         ppSpent: newPPSpent,
         skillsUsed,
         totalSkillsUsed: (stats.totalSkillsUsed || 0) + 1,
-        damageDealt: (stats.damageDealt || 0) + (damage || 0),
         healingGiven: (stats.healingGiven || 0) + (healing || 0)
       });
     });
@@ -150,6 +186,8 @@ export async function trackDamage(
   shieldDamage?: number
 ): Promise<boolean> {
   try {
+    await ensurePlayerStatsIfMissing(sessionId, attackerId, {});
+    await ensurePlayerStatsIfMissing(sessionId, targetId, {});
     const attackerStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', attackerId);
     const targetStatsRef = doc(db, 'inSessionRooms', sessionId, 'stats', targetId);
     
