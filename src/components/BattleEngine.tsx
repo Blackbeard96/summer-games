@@ -20,6 +20,7 @@ import { getLevelFromXP } from '../utils/leveling';
 import BattleArena from './BattleArena';
 import MultiplayerBattleArena from './MultiplayerBattleArena';
 import BattleAnimations from './BattleAnimations';
+import { resolveSkillVfxConfig, getStoredVfxQuality } from '../skillAnimation';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
@@ -4019,11 +4020,20 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // In In Session mode, Island Raid mode, single player mode, or single-player with AI, execute immediately
     console.log('✅ [executePlayerMove] Executing move immediately', { isSinglePlayerWithAI, isInSession, isIslandRaid, isMultiplayer, gameId });
-    // Start animation
-    setBattleState(prev => ({
+    const actorName =
+      allies.find((a) => a.id === currentUser?.uid)?.name ||
+      currentUser?.displayName ||
+      'Player';
+    const vfxCfg = resolveSkillVfxConfig(move, getStoredVfxQuality());
+    const castLine =
+      vfxCfg.log?.prependCastLine && vfxCfg.log.castLineTemplate
+        ? vfxCfg.log.castLineTemplate.replace('%a', actorName).replace('%s', move.name)
+        : null;
+    setBattleState((prev) => ({
       ...prev,
       currentAnimation: move,
-      isAnimating: true
+      isAnimating: true,
+      battleLog: castLine ? [...prev.battleLog, castLine] : prev.battleLog,
     }));
   }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession, allies, currentUser]);
 
@@ -7916,6 +7926,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           move={battleState.currentAnimation}
           isPlayerMove={battleState.isPlayerTurn}
           onAnimationComplete={handleAnimationComplete}
+          actorDisplayName={
+            allies.find((a) => a.id === currentUser?.uid)?.name ||
+            currentUser?.displayName ||
+            undefined
+          }
         />
       )}
 

@@ -7,12 +7,16 @@ import {
   refundOneArtifactToInventory
 } from '../utils/artifactInventoryConsume';
 import { fetchMergedMarketplaceCatalog } from '../utils/marketplaceStoreMerge';
-import { isBattleVaultConsumable } from '../utils/marketplaceConsumableUtils';
+import { isBattleVaultConsumable, resolveConsumableEffectForItem } from '../utils/marketplaceConsumableUtils';
+import { applyLiveEventBagConsumable } from '../utils/liveEventBagConsumable';
+
+export type BagArtifactUsedOptions = { skipParticipationMove?: boolean };
 
 interface BagModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onArtifactUsed?: () => void;
+  /** Live Events: omit skipParticipationMove (or false) to consume movesEarned after vault-only bag use (e.g. Double PP). Heal/shield/revive in-session consume moves inside Firestore. */
+  onArtifactUsed?: (options?: BagArtifactUsedOptions) => void | Promise<void>;
   /** When set, Revive Potion can target eliminated classmates in this Live Event session. */
   liveSessionId?: string;
   sessionPlayers?: Array<{ userId: string; displayName: string; eliminated?: boolean }>;
@@ -158,7 +162,7 @@ const BagModal: React.FC<BagModalProps> = ({
     }
 
     await refreshInventory();
-    onArtifactUsed?.();
+    await onArtifactUsed?.({ skipParticipationMove: true });
     setReviveTargetUid('');
     onClose();
   };
@@ -169,11 +173,38 @@ const BagModal: React.FC<BagModalProps> = ({
       return;
     }
     if (
-      window.confirm(`Use ${artifactName}? This will count as your move and end your turn.`)
+      !window.confirm(`Use ${artifactName}? This will count as your move and end your turn.`)
     ) {
-      await activateArtifact(artifactName, onArtifactUsed);
-      onClose();
+      return;
     }
+
+    if (liveSessionId && currentUser) {
+      const catalog = await fetchMergedMarketplaceCatalog();
+      const listing = catalog.find((x) => x.name === artifactName);
+      const eff = listing ? resolveConsumableEffectForItem(listing) : null;
+      if (eff && (eff.effectType === 'restore_health' || eff.effectType === 'restore_shields')) {
+        const displayName = currentUser.displayName || 'Player';
+        const res = await applyLiveEventBagConsumable(
+          liveSessionId,
+          currentUser.uid,
+          displayName,
+          artifactName
+        );
+        if (!res.ok) {
+          alert(res.error || 'Could not use item');
+          return;
+        }
+        await refreshInventory();
+        await onArtifactUsed?.({ skipParticipationMove: true });
+        onClose();
+        return;
+      }
+    }
+
+    await activateArtifact(artifactName, async () => {
+      await onArtifactUsed?.();
+    });
+    onClose();
   };
 
   return (

@@ -1,0 +1,262 @@
+/* Skill animation layer — keep silhouettes readable; intensity via opacity */
+
+.mst-skill-root {
+  --mst-accent: #94a3b8;
+  --mst-manifest-tint: rgba(148, 163, 184, 0.25);
+}
+
+.mst-skill-root[data-element='fire'] { --mst-accent: #f97316; --mst-manifest-tint: rgba(249, 115, 22, 0.2); }
+.mst-skill-root[data-element='water'] { --mst-accent: #38bdf8; --mst-manifest-tint: rgba(56, 189, 248, 0.2); }
+.mst-skill-root[data-element='air'] { --mst-accent: #e0f2fe; --mst-manifest-tint: rgba(224, 242, 254, 0.2); }
+.mst-skill-root[data-element='earth'] { --mst-accent: #84cc16; --mst-manifest-tint: rgba(132, 204, 22, 0.2); }
+.mst-skill-root[data-element='lightning'] { --mst-accent: #facc15; --mst-manifest-tint: rgba(250, 204, 21, 0.25); }
+.mst-skill-root[data-element='light'] { --mst-accent: #fef9c3; --mst-manifest-tint: rgba(254, 249, 195, 0.25); }
+.mst-skill-root[data-element='shadow'] { --mst-accent: #64748b; --mst-manifest-tint: rgba(100, 116, 139, 0.35); }
+.mst-skill-root[data-element='truth'] { --mst-accent: #e2e8f0; --mst-manifest-tint: rgba(226, 232, 240, 0.3); }
+
+@keyframes mstFlash {
+  0% { opacity: 0; }
+  35% { opacity: var(--mst-flash-op, 0.35); }
+  100% { opacity: 0; }
+}
+
+@keyframes mstBannerIn {
+  from { transform: translateX(-50%) translateY(-24px); opacity: 0; }
+  to { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+
+@keyframes mstProjectile {
+  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(var(--mst-proj-dx), var(--mst-proj-dy)) scale(1); opacity: 0.85; }
+}
+
+@keyframes mstImpact {
+  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+}
+
+@keyframes mstShakeLight {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-2px, 1px); }
+  50% { transform: translate(2px, -1px); }
+  75% { transform: translate(-1px, -2px); }
+}
+
+@keyframes mstShakeMed {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-4px, 2px); }
+  40% { transform: translate(4px, -3px); }
+  60% { transform: translate(-3px, -2px); }
+  80% { transform: translate(3px, 2px); }
+}
+
+@keyframes mstScanLine {
+  0% { top: 15%; opacity: 0; }
+  15% { opacity: 0.6; }
+  100% { top: 85%; opacity: 0; }
+}
+
+@keyframes mstGlitch {
+  0%, 100% { clip-path: inset(0 0 0 0); transform: translate(0); }
+  20% { clip-path: inset(10% 0 25% 0); transform: translate(-3px, 2px); }
+  40% { clip-path: inset(30% 0 5% 0); transform: translate(2px, -2px); }
+  60% { clip-path: inset(5% 0 40% 0); transform: translate(-2px, -1px); }
+}
+
+.mst-skill-flash {
+  position: absolute;
+  inset: 0;
+  background: var(--mst-accent);
+  animation: mstFlash 0.45s ease-out;
+  pointer-events: none;
+}
+
+.mst-skill-banner {
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.65rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 800;
+  font-size: clamp(0.95rem, 2.5vw, 1.35rem);
+  font-family: ui-monospace, monospace;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.88);
+  border: 3px solid var(--mst-accent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  animation: mstBannerIn 0.4s ease-out;
+  text-align: center;
+  max-width: min(92vw, 520px);
+}
+
+.mst-skill-caster-glow {
+  position: absolute;
+  top: 50%;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--mst-accent) 0%, transparent 70%);
+  opacity: 0.45;
+  filter: blur(4px);
+  transition: opacity 0.2s ease;
+}
+
+.mst-skill-caster-glow[data-side='player'] { left: 18%; transform: translate(-50%, -50%); }
+.mst-skill-caster-glow[data-side='opponent'] { left: 82%; transform: translate(-50%, -50%); }
+
+.mst-skill-projectile {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fff 0%, var(--mst-accent) 40%, transparent 70%);
+  box-shadow: 0 0 24px var(--mst-accent);
+  --mst-proj-dx: 0;
+  --mst-proj-dy: 0;
+  animation: mstProjectile var(--mst-proj-dur, 0.6s) ease-in forwards;
+}
+
+.mst-skill-projectile[data-dir='to-enemy'] {
+  --mst-proj-dx: calc(-50% + 28vw);
+  --mst-proj-dy: -50%;
+}
+
+.mst-skill-projectile[data-dir='to-player'] {
+  --mst-proj-dx: calc(-50% - 28vw);
+  --mst-proj-dy: -50%;
+}
+
+.mst-skill-impact {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 3px solid var(--mst-accent);
+  animation: mstImpact var(--mst-impact-dur, 0.55s) ease-out forwards;
+  pointer-events: none;
+}
+
+.mst-skill-impact[data-side='enemy'] { left: 78%; }
+.mst-skill-impact[data-side='player'] { left: 22%; }
+
+.mst-skill-manifest-reading::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 18px,
+    rgba(56, 189, 248, 0.08) 18px,
+    rgba(56, 189, 248, 0.08) 20px
+  );
+  pointer-events: none;
+  animation: mstScanLine var(--mst-scan-dur, 1.2s) ease-in-out;
+}
+
+.mst-skill-manifest-writing::before {
+  content: '◇';
+  position: absolute;
+  bottom: 22%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 2rem;
+  color: var(--mst-accent);
+  opacity: 0.5;
+  animation: mstBannerIn 0.6s ease-out reverse;
+}
+
+.mst-skill-manifest-gaming {
+  position: absolute;
+  inset: 12% 8%;
+  border: 1px dashed rgba(34, 211, 238, 0.35);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.mst-skill-shake[data-level='light'] { animation: mstShakeLight 0.5s ease; }
+.mst-skill-shake[data-level='medium'] { animation: mstShakeMed 0.65s ease; }
+.mst-skill-shake[data-level='heavy'] { animation: mstShakeMed 0.9s ease; }
+
+.mst-skill-glitch {
+  animation: mstGlitch 0.45s steps(2) 2;
+}
+
+/* Target reactions (applied to overlay hit zone) */
+.mst-react-flinch { animation: mstShakeLight 0.35s ease; }
+.mst-react-shield { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.65) inset; }
+.mst-react-heal { box-shadow: 0 0 40px rgba(52, 211, 153, 0.55); }
+.mst-react-buff { box-shadow: 0 0 36px rgba(250, 204, 21, 0.45); }
+.mst-react-debuff { box-shadow: 0 0 36px rgba(100, 116, 139, 0.55); }
+.mst-react-shock { animation: mstShakeMed 0.28s ease 2; }
+
+/* Status mini-auras on portraits (BattleArena) */
+.mst-portrait-aura {
+  position: relative;
+}
+.mst-portrait-aura[data-mst-status='mst-st-burn']::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  box-shadow: 0 0 12px 2px rgba(249, 115, 22, 0.45);
+  pointer-events: none;
+  animation: mstFlash 2.5s ease-in-out infinite;
+}
+.mst-portrait-aura[data-mst-status='mst-st-shock']::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px dashed rgba(250, 204, 21, 0.5);
+  pointer-events: none;
+  animation: mstShakeLight 1.2s ease-in-out infinite;
+}
+.mst-portrait-aura[data-mst-status='mst-st-root']::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 15%;
+  right: 15%;
+  height: 18%;
+  background: rgba(120, 113, 108, 0.45);
+  border-radius: 40%;
+  pointer-events: none;
+}
+.mst-portrait-aura[data-mst-status='mst-st-silence']::after {
+  content: '';
+  position: absolute;
+  inset: 10%;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.55);
+  pointer-events: none;
+}
+.mst-portrait-aura[data-mst-status='mst-st-fortify']::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 3px solid rgba(59, 130, 246, 0.5);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mst-skill-flash,
+  .mst-skill-banner,
+  .mst-skill-projectile,
+  .mst-skill-impact,
+  .mst-skill-shake,
+  .mst-react-flinch,
+  .mst-react-shock,
+  .mst-skill-glitch {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

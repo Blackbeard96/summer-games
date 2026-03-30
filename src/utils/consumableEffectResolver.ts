@@ -35,6 +35,7 @@ export interface SessionPlayerMutable {
   shield?: number;
   maxShield?: number;
   powerPoints?: number;
+  movesEarned?: number;
 }
 
 export interface SessionApplyResult {

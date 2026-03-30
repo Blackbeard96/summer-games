@@ -25,6 +25,8 @@ export const STATUS_DEFENSE_PERK_ID = 'status-defense';
 export const ARTIFACT_SYNERGY_PERK_ID = 'artifact-synergy';
 export const HEALING_BOOST_PERK_ID = 'healing-boost';
 export const PP_ECONOMY_PERK_ID = 'pp-economy';
+/** Vault Siege: chance to apply skip-next-attack freeze on offensive hit */
+export const FREEZE_ON_HIT_PERK_ID = 'freeze-on-hit';
 
 /** Level range used for linear scaling (10%→100%, 5%→30%, etc.). */
 export const ARTIFACT_PERK_SCALE_MAX_LEVEL = 10;
@@ -284,6 +286,27 @@ export function getOutgoingDamageMultiplierFromCostReductionPerk(
   const base = 1 + getCostReductionPerkSkillEffectivenessBonusFraction(equipped, rawCatalog);
   const bonus = 1 + Math.max(0, Number(lawEffects?.rrCandySkillBonusFraction || 0));
   return base * bonus;
+}
+
+/**
+ * Vault Siege freeze chance from Freeze perk(s): 5% (L1) → 20% (L10) per piece, × synergy; cap 25% total.
+ */
+export function getVaultSiegeFreezeChancePercentFromEquipped(
+  equipped: Record<string, unknown> | null | undefined,
+  rawCatalog: Record<string, unknown> | null | undefined
+): number {
+  const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
+  let sum = 0;
+  for (const slot of EQUIP_SLOTS) {
+    const art = eq[slot] as Record<string, unknown> | undefined;
+    if (!art || !perkIdsForArtifact(art, rawCatalog).includes(FREEZE_ON_HIT_PERK_ID)) continue;
+    const level = clampArtifactLevelForPerks((art as { level?: number }).level);
+    const base = perkEffectLinear(level, 0.05, 0.2, ARTIFACT_PERK_SCALE_MAX_LEVEL);
+    const name = String((art as { name?: string }).name || '');
+    const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
+    sum += base * syn;
+  }
+  return Math.min(0.25, sum) * 100;
 }
 
 /**

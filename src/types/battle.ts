@@ -27,6 +27,8 @@ export interface Vault {
   movesRemaining: number; // Daily moves remaining
   maxMovesPerDay: number; // Maximum moves per day
   lastMoveReset: Date; // When moves were last reset
+  /** Vault Siege: skip the next N vault attack attempts (frozen). Consumed when the player tries to attack. */
+  vaultSiegeFreezeSkipsRemaining?: number;
   capacityUpgrades?: number; // Number of capacity upgrades purchased (deprecated - use capacityLevel)
   shieldUpgrades?: number; // Number of shield upgrades purchased (deprecated - use shieldLevel)
   generatorUpgrades?: number; // Number of generator upgrades purchased (deprecated - use generatorLevel)
@@ -297,6 +299,8 @@ export interface VaultSiegeAttack {
   // Track PP stolen for restoration purposes
   ppStolenFromTarget: number;
   ppStolenDate: Date;
+  /** Attacker was frozen; no damage — still consumes a daily vault siege attempt */
+  skippedByFreeze?: boolean;
 }
 
 export interface BattleLobby {
@@ -1286,6 +1290,7 @@ export const ACTION_CARD_DAMAGE_VALUES: Record<string, { damage: number | { min:
   'Shield Restore': { damage: 0 }, // Self-heal
   'Teleport PP': { damage: { min: 20, max: 30 } }, // 25 ± 5
   'Double XP': { damage: 0 }, // Utility
+  'Freeze': { damage: { min: 16, max: 24 } }, // strength ~20, shields then vault health
 };
 
 // PP Range for each move (for display purposes)

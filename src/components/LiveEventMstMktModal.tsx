@@ -17,6 +17,8 @@ export interface LiveEventMstMktModalProps {
   displayName: string;
   /** Needed for Revive: pick eliminated teammate (or use Bag for more control). */
   sessionPlayers?: SessionPlayer[];
+  /** After a successful buy (e.g. refresh bag inventory from Firestore). */
+  onPurchaseComplete?: () => void;
 }
 
 function itemDisabled(item: LiveEventMstRuntimeItem, player: SessionPlayer | null): string | null {
@@ -42,6 +44,7 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
   currentUserId,
   displayName,
   sessionPlayers = [],
+  onPurchaseComplete,
 }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [items, setItems] = useState<LiveEventMstRuntimeItem[]>([]);
@@ -100,6 +103,7 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
         alert(res.error || 'Purchase failed');
         return;
       }
+      onPurchaseComplete?.();
       onClose();
     } finally {
       setBusyId(null);

@@ -17,6 +17,8 @@ import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { formatOpponentName } from '../utils/opponentNameFormatter';
+import { statusEffectVisualClass } from '../skillAnimation/statusVisuals';
+import './skillAnimation/skillAnimation.css';
 
 interface BattleArenaProps {
   onMoveSelect: (move: Move | null) => void;
@@ -397,7 +399,10 @@ const BattleArena: React.FC<BattleArenaProps> = ({
 
 
       {/* Player Profile Picture */}
-      <div style={{
+      <div
+        className={playerEffects.length > 0 ? 'mst-portrait-aura' : undefined}
+        data-mst-status={playerEffects.length > 0 ? statusEffectVisualClass(playerEffects[0].type) : undefined}
+        style={{
         position: 'absolute',
         bottom: '20px',
         left: '20px',
@@ -414,7 +419,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         fontSize: '4rem',
         animation: isPlayerTurn ? 'pulse 1s infinite' : 'none',
         zIndex: 2
-      }}>
+      }}
+      >
         {(() => {
           console.log('BattleArena: Rendering player profile - userPhotoURL:', userPhotoURL);
           console.log('BattleArena: userPhotoURL type:', typeof userPhotoURL);
@@ -621,6 +627,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 onTargetSelect(availableTargets[0].id);
               }
             }}
+            className={opponentEffects.length > 0 ? 'mst-portrait-aura' : undefined}
+            data-mst-status={opponentEffects.length > 0 ? statusEffectVisualClass(opponentEffects[0].type) : undefined}
             style={{
               position: 'absolute',
               top: '20px',

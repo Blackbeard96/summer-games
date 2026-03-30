@@ -186,7 +186,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 }) => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { vault, refreshVaultData, moves } = useBattle();
+  const { vault, refreshVaultData, moves, refreshInventory } = useBattle();
   const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
   const [battleLog, setBattleLog] = useState<string[]>(['📚 In Session Battle Started!']);
   const [selectedStudentForPP, setSelectedStudentForPP] = useState<string | null>(null);
@@ -4892,9 +4892,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         onClose={() => setShowBagModal(false)}
         liveSessionId={sessionId}
         sessionPlayers={sessionPlayers}
-        onArtifactUsed={() => {
-          // Handle artifact used - end turn
+        onArtifactUsed={async (opts) => {
           setShowBagModal(false);
+          if (!opts?.skipParticipationMove) {
+            await handleMoveConsumption();
+          }
         }}
       />
       {currentUser && (
@@ -4906,6 +4908,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           currentUserId={currentUser.uid}
           displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
           sessionPlayers={sessionPlayers as ServiceSessionPlayer[]}
+          onPurchaseComplete={() => {
+            void refreshInventory();
+          }}
         />
       )}
       <VaultModal 

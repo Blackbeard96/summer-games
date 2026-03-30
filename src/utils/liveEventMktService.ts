@@ -52,7 +52,8 @@ function sessionIsActive(status: unknown): boolean {
   return status === 'live' || status === 'active';
 }
 
-async function syncBuyerVault(
+/** Mirror session HP/shields to vault after MST MKT or bag consumable (Live Event). */
+export async function syncLiveEventPlayerVault(
   uid: string,
   hp: number | undefined,
   shield: number | undefined
@@ -67,7 +68,7 @@ async function syncBuyerVault(
       await updateDoc(vaultRef, updates);
     }
   } catch (e) {
-    debugError('liveEventMkt', 'syncBuyerVault', e);
+    debugError('liveEventMkt', 'syncLiveEventPlayerVault', e);
   }
 }
 
@@ -99,9 +100,14 @@ export async function purchaseLiveEventMstMktItem(
 
     await runTransaction(db, async (transaction) => {
       const sessionRef = doc(db, 'inSessionRooms', sessionId);
+      const studentRef = doc(db, 'students', buyerUid);
       const sessionDoc = await transaction.get(sessionRef);
+      const studentDoc = await transaction.get(studentRef);
       if (!sessionDoc.exists()) {
         throw new Error('Session not found');
+      }
+      if (!studentDoc.exists()) {
+        throw new Error('Student profile not found');
       }
       const data = sessionDoc.data();
       if (!sessionIsActive(data.status)) {
@@ -125,6 +131,12 @@ export async function purchaseLiveEventMstMktItem(
       }
 
       const battleLog = [...(data.battleLog || [])];
+      const studentInv = [...(studentDoc.data().inventory || [])];
+
+      const pushItemToBag = () => {
+        studentInv.push(itemName);
+        transaction.update(studentRef, { inventory: studentInv });
+      };
 
       if (effect.effectType === 'revive_eliminated_self') {
         const hpPct = Math.max(1, Math.min(100, Math.floor(effect.amount)));
@@ -134,10 +146,9 @@ export async function purchaseLiveEventMstMktItem(
         if (buyerEliminated) {
           const revived = { ...row } as Parameters<typeof reviveEliminatedSessionPlayerRow>[0];
           const newHp = reviveEliminatedSessionPlayerRow(revived, hpPct);
-          const maxHp = revived.maxHp ?? 100;
           revived.powerPoints = pp - costPp;
           players[idx] = revived as (typeof players)[number];
-          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT and returned at ${newHp}/${maxHp} HP!`;
+          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT and returned at ${newHp}/${revived.maxHp ?? 100} HP!`;
           hpAfter = revived.hp;
           shieldAfter = revived.shield;
           needsEliminationClear = true;
@@ -151,29 +162,25 @@ export async function purchaseLiveEventMstMktItem(
           if (!targetRow.eliminated) throw new Error('That player is not eliminated');
           const tName = (targetRow.displayName as string) || 'Player';
           const newHp = reviveEliminatedSessionPlayerRow(targetRow, hpPct);
-          const maxHp = targetRow.maxHp ?? 100;
           players[tIdx] = targetRow as (typeof players)[number];
           const buyerNext = { ...row, powerPoints: pp - costPp };
           players[idx] = buyerNext as (typeof players)[number];
-          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT for ${tName}! They return at ${newHp}/${maxHp} HP.`;
+          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT for ${tName}! They return at ${newHp}/${targetRow.maxHp ?? 100} HP.`;
           hpAfter = targetRow.hp;
           shieldAfter = targetRow.shield;
           needsEliminationClear = true;
           eliminationClearUid = pick;
         } else {
-          const applied = applyConsumableEffectToSessionPlayer({
-            player: row,
-            effect,
-            buyerDisplayName,
-            itemName,
-          });
-          if (!applied.ok || !applied.logLine) {
-            throw new Error(applied.error || 'Could not apply consumable effect');
-          }
-          logLineOut = applied.logLine;
-          const nextRow = { ...applied.player, powerPoints: pp - costPp };
+          pushItemToBag();
+          const nextRow = { ...row, powerPoints: pp - costPp };
           players[idx] = nextRow as (typeof players)[number];
+          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT — added to bag.`;
         }
+      } else if (effect.effectType === 'restore_health' || effect.effectType === 'restore_shields') {
+        pushItemToBag();
+        const nextRow = { ...row, powerPoints: pp - costPp };
+        players[idx] = nextRow as (typeof players)[number];
+        logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT — added to bag.`;
       } else {
         const applied = applyConsumableEffectToSessionPlayer({
           player: row,
@@ -210,7 +217,7 @@ export async function purchaseLiveEventMstMktItem(
     }
 
     const vaultUid = eliminationClearUid || buyerUid;
-    await syncBuyerVault(vaultUid, hpAfter, shieldAfter);
+    await syncLiveEventPlayerVault(vaultUid, hpAfter, shieldAfter);
 
     debug('liveEventMkt', `Purchase ${storeItemId} by ${buyerUid}`);
     return { ok: true, logLine: logLineOut };

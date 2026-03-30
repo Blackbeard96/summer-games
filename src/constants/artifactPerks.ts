@@ -83,12 +83,18 @@ export const ARTIFACT_PERK_OPTIONS: ArtifactPerkOption[] = [
     id: 'artifact-synergy',
     label: 'Artifact Synergy',
     description:
-      'Matching set bonus: other equipped artifacts whose names share the same leading set word as this item (e.g. “Unveiled” from “Unveiled Leg Armor”) gain +10% effectiveness on their combat perks (damage boost, manifest boost, elemental boost, shield boost, Cost Reduction, etc.) per synergizing piece, up to +30% total. This item does not buff itself.'
+      'Matching set bonus: other equipped artifacts whose names share the same leading set word as this item (e.g. “Unveiled” from “Unveiled Leg Armor”) gain +10% effectiveness on their combat perks (damage boost, manifest boost, elemental boost, shield boost, Cost Reduction, Freeze on hit, etc.) per synergizing piece, up to +30% total. This item does not buff itself.'
   },
   {
     id: 'vault-defense',
     label: 'Vault Defense',
     description: 'Increases vault protection during battle.'
+  },
+  {
+    id: 'freeze-on-hit',
+    label: 'Freeze',
+    description:
+      'Vault Siege: when your offensive skill deals shield or vault health damage, chance to freeze the defender — they skip their next vault attack attempt (daily move still consumed). 5% at artifact level 1 up to 20% at level 10 per piece; multiple pieces stack toward a 25% total cap. Artifact Synergy can increase this chance.'
   }
 ];
 

@@ -47,8 +47,10 @@ import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMastery
 import {
   applyVaultShieldBoostFromEquipped,
   getElementalAccessElementFromStudent,
+  getVaultSiegeFreezeChancePercentFromEquipped,
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
+import { buildInitialActionCardsFromAdmin, mergeUserActionCardsWithAdmin } from '../utils/actionCardAdminMerge';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 import { getRRCandyMoves, hasRRCandyUnlocked } from '../utils/rrCandyMoves';
 import { getRRCandyStatus } from '../utils/rrCandyUtils';
@@ -883,24 +885,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setMoves(finalMoves);
         }
 
-        // Initialize or fetch action cards - use a simpler approach
+        // Initialize or fetch action cards — merge adminSettings overrides (same source as Action Cards admin)
         const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
-        const cardsDoc = await getDoc(cardsRef);
-        
+        const adminActionRef = doc(db, 'adminSettings', 'actionCards');
+        const [cardsDoc, adminActionDoc] = await Promise.all([
+          getDoc(cardsRef),
+          getDoc(adminActionRef),
+        ]);
+        const adminActionCards: ActionCard[] | null =
+          adminActionDoc.exists() && Array.isArray(adminActionDoc.data().cards)
+            ? (adminActionDoc.data().cards as ActionCard[])
+            : null;
+
         if (!cardsDoc.exists()) {
-          // Create initial action cards
-          const initialCards: ActionCard[] = ACTION_CARD_TEMPLATES.map((template, index) => ({
-            ...template,
-            id: `card_${index + 1}`,
-            unlocked: index < 2, // First 2 cards unlocked by default
-          }));
+          const initialCards: ActionCard[] = buildInitialActionCardsFromAdmin(adminActionCards);
           console.log('BattleContext: Creating initial action cards:', initialCards);
           await setDoc(cardsRef, { cards: initialCards });
           setActionCards(initialCards);
         } else {
-          const cardsData = cardsDoc.data().cards || [];
-          console.log('BattleContext: Loading existing action cards:', cardsData);
-          setActionCards(cardsData);
+          const cardsData = (cardsDoc.data().cards || []) as ActionCard[];
+          const merged = mergeUserActionCardsWithAdmin(cardsData, adminActionCards);
+          console.log('BattleContext: Loading existing action cards (admin merge):', merged);
+          setActionCards(merged);
         }
 
       } catch (err) {
@@ -2779,25 +2785,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await setDoc(movesRef, { moves: newMoves });
       setMoves(newMoves);
       
-      // Force refresh action cards from templates, preserving mastery levels
+      // Force refresh action cards from templates + admin overrides, preserving mastery levels
       const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
       const cardsDoc = await getDoc(cardsRef);
       const existingCards = cardsDoc.exists() ? (cardsDoc.data().cards || []) : [];
-      
-      const updatedActionCards = ACTION_CARD_TEMPLATES.map((template, index) => {
-        // Try to find existing card by name to preserve mastery level
-        const existingCard = existingCards.find((c: ActionCard) => 
-          c.name === template.name || 
-          (c.id === `card_${index + 1}`)
+      const adminACSnap = await getDoc(doc(db, 'adminSettings', 'actionCards'));
+      const adminACList =
+        adminACSnap.exists() && Array.isArray(adminACSnap.data().cards)
+          ? (adminACSnap.data().cards as ActionCard[])
+          : null;
+      const templateBase = buildInitialActionCardsFromAdmin(adminACList);
+
+      const updatedActionCards = templateBase.map((template, index) => {
+        const existingCard = existingCards.find(
+          (c: ActionCard) => c.name === template.name || c.id === `card_${index + 1}`
         );
-        
         return {
           ...template,
           id: `card_${index + 1}`,
-          unlocked: index < 2, // First 2 cards unlocked by default
-          // Preserve mastery level if card exists, otherwise default to 1
+          unlocked: index < 2,
           masteryLevel: existingCard?.masteryLevel || 1,
-          upgradeCost: template.upgradeCost || 100, // Default upgrade cost
+          upgradeCost: template.upgradeCost || 100,
+          uses: existingCard?.uses ?? template.uses,
         };
       });
       
@@ -3291,7 +3300,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentUser) return;
     
     try {
-      const cardsRef = doc(db, 'users', currentUser.uid, 'battle', 'actionCards');
+      const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
       const updatedCards = actionCards.map(card => 
         card.id === cardId ? { ...card, unlocked: true } : card
       );
@@ -4041,13 +4050,6 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
       
-      // Reset attacker's cooldown when they attack someone (they're no longer protected)
-      if (vault.vaultHealthCooldown) {
-        const attackerVaultRef = doc(db, 'vaults', currentUser.uid);
-        await updateDoc(attackerVaultRef, { vaultHealthCooldown: deleteField() });
-        console.log('✅ Reset attacker cooldown - player attacked someone');
-      }
-      
       // Get target student data to sync vault PP from student PP (student PP is the source of truth)
       const targetStudentRef = doc(db, 'students', targetUserId);
       const targetStudentDoc = await getDoc(targetStudentRef);
@@ -4075,6 +4077,92 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log(`🔄 Syncing target vault PP from ${targetVaultData.currentPP} to ${targetStudentPP} (from student PP)`);
         await updateDoc(targetVaultRef, { currentPP: targetStudentPP });
         targetVaultData.currentPP = targetStudentPP; // Update local copy for calculations
+      }
+
+      // Vault Siege: attacker is frozen — skip this attack (consumes one freeze stack + one daily attempt)
+      const attackerVaultRefForFreeze = doc(db, 'vaults', currentUser.uid);
+      const attackerVaultSnapForFreeze = await getDoc(attackerVaultRefForFreeze);
+      if (attackerVaultSnapForFreeze.exists()) {
+        const avFreeze = attackerVaultSnapForFreeze.data() as Vault;
+        const freezeSkips = avFreeze.vaultSiegeFreezeSkipsRemaining ?? 0;
+        if (freezeSkips > 0) {
+          const targetNameFrozen = targetStudentDoc.exists()
+            ? (targetStudentDoc.data().displayName || 'Unknown')
+            : 'Unknown';
+          const attackerNameFrozen = currentUser.displayName || 'Unknown';
+          const vhFrozen =
+            targetVaultData.vaultHealth ?? Math.floor((targetVaultData.capacity || 1000) * 0.1);
+          await updateDoc(attackerVaultRefForFreeze, {
+            vaultSiegeFreezeSkipsRemaining: Math.max(0, freezeSkips - 1),
+          });
+          setVault((prev) =>
+            prev
+              ? { ...prev, vaultSiegeFreezeSkipsRemaining: Math.max(0, freezeSkips - 1) }
+              : prev
+          );
+          const freezeSkipAttackData: Record<string, unknown> = {
+            attackerId: currentUser.uid,
+            attackerName: attackerNameFrozen,
+            targetId: targetUserId,
+            targetName: targetNameFrozen,
+            moveId: moveId || null,
+            moveName: null,
+            damage: 0,
+            ppStolen: 0,
+            shieldDamage: 0,
+            message:
+              'You were frozen and your vault attack was skipped — the freeze wore off.',
+            skippedByFreeze: true,
+            overshieldAbsorbed: false,
+            timestamp: serverTimestamp(),
+            targetVaultBefore: {
+              currentPP: targetVaultData.currentPP,
+              vaultHealth: vhFrozen,
+              shieldStrength: targetVaultData.shieldStrength,
+              overshield: targetVaultData.overshield || 0,
+            },
+            targetVaultAfter: {
+              currentPP: targetVaultData.currentPP,
+              vaultHealth: vhFrozen,
+              shieldStrength: targetVaultData.shieldStrength,
+              overshield: targetVaultData.overshield || 0,
+            },
+            ppStolenFromTarget: 0,
+            ppStolenDate: serverTimestamp(),
+          };
+          if (moveId) {
+            const mv = moves.find((m) => m.id === moveId);
+            freezeSkipAttackData.moveName = mv?.name ?? null;
+          }
+          if (actionCardId) {
+            freezeSkipAttackData.actionCardId = actionCardId;
+            const card = actionCards.find((c) => c.id === actionCardId);
+            freezeSkipAttackData.actionCardName = card?.name ?? null;
+          }
+          await addDoc(collection(db, 'vaultSiegeAttacks'), freezeSkipAttackData);
+          await refreshVaultData();
+          if (currentUser) {
+            updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch((err) =>
+              console.error('❌ [Daily Challenge] Error updating attack_vault progress:', err)
+            );
+          }
+          return {
+            success: false,
+            message:
+              'You are frozen! Your vault attack was skipped and the freeze wore off.',
+            ppStolen: 0,
+            xpGained: 0,
+            shieldDamage: 0,
+            overshieldAbsorbed: false,
+          };
+        }
+      }
+
+      // Reset attacker's cooldown when they attack someone (they're no longer protected)
+      if (vault.vaultHealthCooldown) {
+        const attackerVaultRef = doc(db, 'vaults', currentUser.uid);
+        await updateDoc(attackerVaultRef, { vaultHealthCooldown: deleteField() });
+        console.log('✅ Reset attacker cooldown - player attacked someone');
       }
       
       console.log('🔍 COMPARISON - Target data sources:', {
@@ -4110,6 +4198,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let ppStolen = 0;
       let shieldDamage = 0;
       let message = '';
+      /** Freeze action card: turns to add to target's vaultSiegeFreezeSkipsRemaining (if not blocked by overshield) */
+      let freezeTurnsToAddFromCard = 0;
       
       if (selectedMove) {
         console.log(`🔍 Processing move: ${selectedMove.name}, type: ${selectedMove.type}, damage: ${selectedMove.damage}, shieldBoost: ${selectedMove.shieldBoost}`);
@@ -4379,6 +4469,30 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             ppStolen = Math.min(selectedCard.effect.strength, targetVaultData.vaultHealth);
             message += ` • Used ${selectedCard.name} to damage vault health`;
             break;
+          case 'freeze': {
+            const str = selectedCard.effect.strength;
+            let cardShieldDmg = 0;
+            let cardVaultDmg = 0;
+            if (targetVaultData.shieldStrength > 0) {
+              cardShieldDmg = Math.min(str, targetVaultData.shieldStrength);
+              const remaining = str - cardShieldDmg;
+              if (remaining > 0) {
+                cardVaultDmg = Math.min(remaining, targetVaultData.vaultHealth);
+              }
+            } else {
+              cardVaultDmg = Math.min(str, targetVaultData.vaultHealth);
+            }
+            shieldDamage += cardShieldDmg;
+            ppStolen += cardVaultDmg;
+            const freezeChance = selectedCard.effect.chance ?? 85;
+            if (Math.random() * 100 < freezeChance) {
+              freezeTurnsToAddFromCard = selectedCard.effect.duration ?? 1;
+              message += ` • Used ${selectedCard.name} — damage dealt; target frozen (skips next vault attack attempt)`;
+            } else {
+              message += ` • Used ${selectedCard.name} — damage dealt; freeze did not apply`;
+            }
+            break;
+          }
           default:
             message += ` • Used ${selectedCard.name}`;
         }
@@ -4425,6 +4539,39 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch (notificationError) {
           console.error('❌ Error creating overshield notification:', notificationError);
         }
+      }
+
+      const siegeDealtShieldOrVaultDamage = shieldDamage > 0 || ppStolen > 0;
+      let extraFreezeSkipsFromPerk = 0;
+      if (
+        !overshieldAbsorbed &&
+        siegeDealtShieldOrVaultDamage &&
+        selectedMove &&
+        !(selectedMove.type === 'defense' && selectedMove.shieldBoost)
+      ) {
+        const attackerStudentForPerkRef = doc(db, 'students', currentUser.uid);
+        const attackerStudentForPerkSnap = await getDoc(attackerStudentForPerkRef);
+        const equippedForPerk = attackerStudentForPerkSnap.exists()
+          ? attackerStudentForPerkSnap.data().equippedArtifacts
+          : null;
+        const equippableCatSnap = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
+        const equippableCatRaw = equippableCatSnap.exists() ? equippableCatSnap.data() : null;
+        const freezeChancePct = getVaultSiegeFreezeChancePercentFromEquipped(
+          equippedForPerk,
+          equippableCatRaw
+        );
+        if (freezeChancePct > 0 && Math.random() * 100 < freezeChancePct) {
+          extraFreezeSkipsFromPerk = 1;
+          message += ` • ❄️ Freeze perk: defender may skip their next vault attack`;
+        }
+      }
+
+      const totalFreezeSkipsToApply =
+        (!overshieldAbsorbed ? freezeTurnsToAddFromCard : 0) + extraFreezeSkipsFromPerk;
+      if (totalFreezeSkipsToApply > 0) {
+        (updates as Record<string, unknown>).vaultSiegeFreezeSkipsRemaining = increment(
+          totalFreezeSkipsToApply
+        );
       }
       
       if (shieldDamage > 0) {
@@ -4652,6 +4799,23 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     
       const attackDocRef = await addDoc(collection(db, 'vaultSiegeAttacks'), attackData);
+
+      if (actionCardId && selectedCard) {
+        const cardsRef = doc(db, 'battleActionCards', currentUser.uid);
+        const cardsSnap = await getDoc(cardsRef);
+        if (cardsSnap.exists()) {
+          const rawCards = (cardsSnap.data().cards || []) as ActionCard[];
+          const nextCards = rawCards.map((c) =>
+            c.id === actionCardId ? { ...c, uses: Math.max(0, (c.uses ?? 0) - 1) } : c
+          );
+          await updateDoc(cardsRef, { cards: nextCards });
+          setActionCards((prev) =>
+            prev.map((c) =>
+              c.id === actionCardId ? { ...c, uses: Math.max(0, (c.uses ?? 0) - 1) } : c
+            )
+          );
+        }
+      }
     
       console.log('Vault siege attack completed:', {
         attackId: attackDocRef.id,

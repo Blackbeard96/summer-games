@@ -24,6 +24,8 @@ type SessionPlayerLike = {
   maxShield?: number;
   /** Session PP balance (Live Event MST MKT / rewards). */
   powerPoints?: number;
+  /** Participation moves — using a Revive Potion from the bag spends one. */
+  movesEarned?: number;
 };
 
 /** Mutates row: clears elimination and sets HP from percent of max (1–100). */
@@ -70,7 +72,11 @@ export async function applyRevivePotionInLiveEvent(
       if (aIdx < 0) throw new Error('You are not in this session');
 
       const selfRevive = actorUid === targetUid;
-      const actor = players[aIdx] as { eliminated?: boolean };
+      const actor = players[aIdx] as SessionPlayerLike;
+      const movesAvail = Math.max(0, Math.floor(Number(actor.movesEarned) || 0));
+      if (movesAvail < 1) {
+        throw new Error('No moves available — earn participation to use items.');
+      }
 
       if (selfRevive) {
         if (!actor.eliminated) {
@@ -80,6 +86,7 @@ export async function applyRevivePotionInLiveEvent(
         if (target.userId !== actorUid) throw new Error('Invalid self-revive target');
         const newHp = reviveEliminatedSessionPlayerRow(target, hpPct);
         const maxHp = target.maxHp ?? 100;
+        target.movesEarned = movesAvail - 1;
         players[tIdx] = target as (typeof players)[number];
         const battleLog = [...(data.battleLog || [])];
         battleLog.push(
@@ -103,6 +110,10 @@ export async function applyRevivePotionInLiveEvent(
       const newHp = reviveEliminatedSessionPlayerRow(target, hpPct);
       const maxHp = target.maxHp ?? 100;
       players[tIdx] = target as (typeof players)[number];
+
+      const buyer = { ...(players[aIdx] as Record<string, unknown>) } as SessionPlayerLike;
+      buyer.movesEarned = movesAvail - 1;
+      players[aIdx] = buyer as (typeof players)[number];
 
       const battleLog = [...(data.battleLog || [])];
       battleLog.push(
