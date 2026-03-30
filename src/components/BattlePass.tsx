@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp, increment } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  setDoc,
+  serverTimestamp,
+  increment,
+  runTransaction,
+} from 'firebase/firestore';
 import { db } from '../firebase';
 import BattlePassRewardModal from './BattlePassRewardModal';
 
@@ -32,7 +40,7 @@ interface BattlePassProps {
 
 const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
   const { currentUser } = useAuth();
-  const { vault, syncVaultPP } = useBattle();
+  const { vault, refreshVaultData } = useBattle();
   const [battlePassProgress, setBattlePassProgress] = useState<any>(null);
   const [currentTier, setCurrentTier] = useState(0);
   const [totalXP, setTotalXP] = useState(0);
@@ -133,8 +141,8 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
     if (!currentUser || !vault || battlePassProgress?.isPremium) return;
 
     const premiumCost = 99;
-    
-    // Check if player has enough PP
+
+    // UI hint only; authoritative balance comes from the transaction (vault doc).
     if (vault.currentPP < premiumCost) {
       alert(`Not enough PP! You need ${premiumCost} PP to purchase Premium Battle Pass.`);
       return;
@@ -143,40 +151,79 @@ const BattlePass: React.FC<BattlePassProps> = ({ isOpen, onClose, season }) => {
     try {
       setPurchasingPremium(true);
 
-      // Calculate new PP
-      const newPP = vault.currentPP - premiumCost;
-
-      // Update student PP
       const studentRef = doc(db, 'students', currentUser.uid);
-      await updateDoc(studentRef, {
-        powerPoints: newPP
-      });
-
-      // Update vault PP
       const vaultRef = doc(db, 'vaults', currentUser.uid);
-      await updateDoc(vaultRef, {
-        currentPP: newPP
-      });
-
-      // Update battle pass to premium
       const battlePassRef = doc(db, 'battlePass', `${currentUser.uid}_season${season}`);
-      await updateDoc(battlePassRef, {
-        isPremium: true
+
+      await runTransaction(db, async (transaction) => {
+        const [vSnap, sSnap, bpSnap] = await Promise.all([
+          transaction.get(vaultRef),
+          transaction.get(studentRef),
+          transaction.get(battlePassRef),
+        ]);
+
+        const currentVaultPP = Math.max(
+          0,
+          Math.floor(Number(vSnap.exists() ? vSnap.data().currentPP : 0) || 0)
+        );
+        if (currentVaultPP < premiumCost) {
+          throw new Error(
+            `Not enough PP! You need ${premiumCost} PP (vault has ${currentVaultPP}).`
+          );
+        }
+
+        const newPP = currentVaultPP - premiumCost;
+
+        if (sSnap.exists()) {
+          transaction.update(studentRef, { powerPoints: newPP });
+        } else {
+          transaction.set(studentRef, { powerPoints: newPP }, { merge: true });
+        }
+
+        if (vSnap.exists()) {
+          transaction.update(vaultRef, { currentPP: newPP });
+        } else {
+          transaction.set(vaultRef, { currentPP: newPP }, { merge: true });
+        }
+
+        const tierNow = calculateTier(totalXP);
+        if (bpSnap.exists()) {
+          transaction.update(battlePassRef, { isPremium: true });
+        } else {
+          transaction.set(
+            battlePassRef,
+            {
+              userId: currentUser.uid,
+              season,
+              totalXP,
+              currentTier: tierNow,
+              claimedTiers: [],
+              isPremium: true,
+              createdAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
       });
 
-      // Sync vault PP
-      await syncVaultPP();
+      // Do not call syncVaultPP() here: it uses stale React vault.currentPP and Math.max(),
+      // which could undo the deduction or fail writes. Reload from Firestore instead.
+      await refreshVaultData();
 
-      // Update local state
-      setBattlePassProgress({
-        ...battlePassProgress,
-        isPremium: true
-      });
+      setBattlePassProgress((prev: Record<string, unknown> | null) => ({
+        ...(prev || {}),
+        isPremium: true,
+      }));
 
       alert(`Premium Battle Pass purchased! Spent ${premiumCost} PP.`);
     } catch (error) {
       console.error('Error purchasing premium:', error);
-      alert('Failed to purchase Premium Battle Pass. Please try again.');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(
+        msg.startsWith('Not enough PP')
+          ? msg
+          : `Failed to purchase Premium Battle Pass: ${msg}`
+      );
     } finally {
       setPurchasingPremium(false);
     }
