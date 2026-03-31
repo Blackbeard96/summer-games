@@ -60,9 +60,9 @@ const EXAMPLE_JSON = `[
     "displayName": "Main Character M",
     "capacity": 10000,
     "capacityLevel": 12,
-    "maxShieldStrength": 22000,
+    "maxShieldStrength": 23000,
     "shieldLevel": 12,
-    "shieldStrength": 22000,
+    "shieldStrength": 23000,
     "currentPP": 10000,
     "vaultHealth": 1000,
     "maxVaultHealth": 1000,
@@ -77,6 +77,8 @@ const VaultRecoveryAdmin: React.FC = () => {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+  const [shieldQuickValue, setShieldQuickValue] = useState('23000');
+  const [shieldQuickLoading, setShieldQuickLoading] = useState(false);
 
   const runLookup = async () => {
     if (!lookupName.trim()) {
@@ -92,6 +94,62 @@ const VaultRecoveryAdmin: React.FC = () => {
       else setLog((l) => [...l, `UID for "${lookupName.trim()}": ${uid}`]);
     } finally {
       setLookupLoading(false);
+    }
+  };
+
+  const maxOutShieldsForLookupUid = async () => {
+    if (!lookupUid) return;
+    setShieldQuickLoading(true);
+    try {
+      const vaultRef = doc(db, 'vaults', lookupUid);
+      const snap = await getDoc(vaultRef);
+      if (!snap.exists()) {
+        alert('No vault document for this UID.');
+        return;
+      }
+      const max = Math.max(0, Math.floor(Number(snap.data().maxShieldStrength) || 0));
+      if (max <= 0) {
+        alert('Vault has no maxShieldStrength; fix max in JSON below first.');
+        return;
+      }
+      await updateDoc(vaultRef, { shieldStrength: max });
+      setLog((l) => [
+        ...l,
+        `[${new Date().toISOString()}] ${lookupUid}: shieldStrength set to max (${max}).`,
+      ]);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(msg);
+    } finally {
+      setShieldQuickLoading(false);
+    }
+  };
+
+  const setShieldsToQuickValue = async () => {
+    if (!lookupUid) return;
+    const n = Math.max(0, Math.floor(Number(String(shieldQuickValue).replace(/,/g, ''))));
+    if (!Number.isFinite(n)) {
+      alert('Enter a valid whole number for shields.');
+      return;
+    }
+    setShieldQuickLoading(true);
+    try {
+      const vaultRef = doc(db, 'vaults', lookupUid);
+      const snap = await getDoc(vaultRef);
+      if (!snap.exists()) {
+        alert('No vault document for this UID.');
+        return;
+      }
+      await updateDoc(vaultRef, { shieldStrength: n });
+      setLog((l) => [
+        ...l,
+        `[${new Date().toISOString()}] ${lookupUid}: shieldStrength set to ${n}.`,
+      ]);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(msg);
+    } finally {
+      setShieldQuickLoading(false);
     }
   };
 
@@ -174,6 +232,14 @@ const VaultRecoveryAdmin: React.FC = () => {
         numbers, then paste them here as JSON. Each row needs <code>userId</code> or <code>displayName</code>{' '}
         plus the vault fields to write. Optional <code>syncStudentPP: true</code> sets{' '}
         <code>students/&lt;uid&gt;.powerPoints</code> to match <code>currentPP</code>.
+        <br />
+        <br />
+        <strong>Why current shields dropped but max stayed high:</strong> Live Events copy combat shield
+        back to the vault after hits and when the session ends. If session shield was low (e.g. after
+        fights), the vault <code>shieldStrength</code> is overwritten—<code>maxShieldStrength</code> does
+        not change. Use the quick actions below or set <code>shieldStrength</code> in JSON (and{' '}
+        <code>maxShieldStrength</code> if you need a new cap). Economy tiers often round near 23k (e.g.
+        22,890).
       </p>
 
       <div style={{ marginBottom: '1.25rem' }}>
@@ -211,7 +277,60 @@ const VaultRecoveryAdmin: React.FC = () => {
           </button>
         </div>
         {lookupUid && (
-          <p style={{ marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{lookupUid}</p>
+          <div style={{ marginTop: '0.75rem' }}>
+            <p style={{ margin: '0 0 0.5rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{lookupUid}</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={maxOutShieldsForLookupUid}
+                disabled={shieldQuickLoading}
+                style={{
+                  padding: '0.45rem 0.85rem',
+                  background: shieldQuickLoading ? '#9ca3af' : '#0369a1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: shieldQuickLoading ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                }}
+              >
+                Max out shields (current = maxShieldStrength)
+              </button>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.875rem' }}>
+                Or set current to
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={shieldQuickValue}
+                  onChange={(e) => setShieldQuickValue(e.target.value)}
+                  style={{
+                    width: '6.5rem',
+                    padding: '0.35rem 0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.35rem',
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={setShieldsToQuickValue}
+                disabled={shieldQuickLoading}
+                style={{
+                  padding: '0.45rem 0.85rem',
+                  background: shieldQuickLoading ? '#9ca3af' : '#1d4ed8',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: shieldQuickLoading ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                }}
+              >
+                Apply shield value
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

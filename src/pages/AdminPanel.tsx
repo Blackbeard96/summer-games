@@ -1533,36 +1533,16 @@ const AdminPanel: React.FC = () => {
       const maxVaultHealth = Math.floor(maxPP * 0.1);
       const newVaultHealth = Math.min(newPP, maxVaultHealth);
       
-      // Update both collections in parallel
-      await Promise.all([
-        updateDoc(studentRef, { powerPoints: newPP }),
-        vaultDoc.exists() 
-          ? updateDoc(vaultRef, { 
-              currentPP: newPP,
-              vaultHealth: newVaultHealth
-            })
-          : setDoc(vaultRef, {
-              id: studentId,
-              ownerId: studentId,
-              capacity: maxPP,
-              currentPP: newPP,
-              vaultHealth: newVaultHealth,
-              maxVaultHealth: maxVaultHealth,
-              shieldStrength: 100,
-              maxShieldStrength: 100,
-              overshield: 0,
-              generatorLevel: 1,
-              generatorPendingPP: 0,
-              generatorLastReset: serverTimestamp(),
-              lastUpgrade: serverTimestamp(),
-              debtStatus: false,
-              debtAmount: 0,
-              lastDuesPaid: serverTimestamp(),
-              movesRemaining: 3,
-              maxMovesPerDay: 3,
-              lastMoveReset: serverTimestamp(),
-            })
-      ]);
+      // Update student PP first; only update vault if it already exists.
+      await updateDoc(studentRef, { powerPoints: newPP });
+      if (vaultDoc.exists()) {
+        await updateDoc(vaultRef, {
+          currentPP: newPP,
+          vaultHealth: newVaultHealth
+        });
+      } else {
+        console.warn(`[AdminPanel] Skipping vault creation for ${studentId} during PP adjust (vault missing)`);
+      }
       
       setStudents(prev =>
         prev.map(s =>
@@ -1593,36 +1573,16 @@ const AdminPanel: React.FC = () => {
       const maxVaultHealth = Math.floor(maxPP * 0.1);
       const newVaultHealth = Math.min(newPP, maxVaultHealth);
       
-      // Update both collections in parallel
-      await Promise.all([
-        updateDoc(studentRef, { powerPoints: newPP }),
-        vaultDoc.exists() 
-          ? updateDoc(vaultRef, { 
-              currentPP: newPP,
-              vaultHealth: newVaultHealth
-            })
-          : setDoc(vaultRef, {
-              id: studentId,
-              ownerId: studentId,
-              capacity: maxPP,
-              currentPP: newPP,
-              vaultHealth: newVaultHealth,
-              maxVaultHealth: maxVaultHealth,
-              shieldStrength: 100,
-              maxShieldStrength: 100,
-              overshield: 0,
-              generatorLevel: 1,
-              generatorPendingPP: 0,
-              generatorLastReset: serverTimestamp(),
-              lastUpgrade: serverTimestamp(),
-              debtStatus: false,
-              debtAmount: 0,
-              lastDuesPaid: serverTimestamp(),
-              movesRemaining: 3,
-              maxMovesPerDay: 3,
-              lastMoveReset: serverTimestamp(),
-            })
-      ]);
+      // Update student PP first; only update vault if it already exists.
+      await updateDoc(studentRef, { powerPoints: newPP });
+      if (vaultDoc.exists()) {
+        await updateDoc(vaultRef, {
+          currentPP: newPP,
+          vaultHealth: newVaultHealth
+        });
+      } else {
+        console.warn(`[AdminPanel] Skipping vault creation for ${studentId} during PP adjust (vault missing)`);
+      }
       
       setStudents(prev =>
         prev.map(s =>
@@ -1685,32 +1645,12 @@ const AdminPanel: React.FC = () => {
         const newVaultHealth = Math.min(newPP, maxVaultHealth);
         
         if (vaultDoc.exists()) {
-          batch.update(vaultRef, { 
+          batch.update(vaultRef, {
             currentPP: newPP,
             vaultHealth: newVaultHealth
           });
         } else {
-          batch.set(vaultRef, {
-            id: studentId,
-            ownerId: studentId,
-            capacity: maxPP,
-            currentPP: newPP,
-            vaultHealth: newVaultHealth,
-            maxVaultHealth: maxVaultHealth,
-            shieldStrength: 100,
-            maxShieldStrength: 100,
-            overshield: 0,
-            generatorLevel: 1,
-            generatorPendingPP: 0,
-            generatorLastReset: serverTimestamp(),
-            lastUpgrade: serverTimestamp(),
-            debtStatus: false,
-            debtAmount: 0,
-            lastDuesPaid: serverTimestamp(),
-            movesRemaining: 3,
-            maxMovesPerDay: 3,
-            lastMoveReset: serverTimestamp(),
-          });
+          console.warn(`[AdminPanel] Skipping vault creation for ${studentId} during batch PP update (vault missing)`);
         }
         
         updatedStudents.push({ id: studentId, newPP, oldPP });

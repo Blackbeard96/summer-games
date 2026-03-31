@@ -928,6 +928,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         // CRITICAL FIX: Even on error, try to fetch student PP and sync it
         let fallbackPP = 0;
+        let fallbackVaultFromDb: Vault | null = null;
         try {
           const studentRef = doc(db, 'students', currentUser.uid);
           const studentDoc = await getDoc(studentRef);
@@ -939,36 +940,26 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             // Try to update vault with student PP
             const vaultRef = doc(db, 'vaults', currentUser.uid);
             const vaultDoc = await getDoc(vaultRef);
-            const maxVaultHealth = Math.floor(1000 * 0.1);
-            const vaultHealth = Math.min(fallbackPP, maxVaultHealth);
             
             if (vaultDoc.exists()) {
+              const vaultData = vaultDoc.data();
+              const existingCapacity = Number(vaultData.capacity) || 1000;
+              const existingMaxVaultHealth = Number(vaultData.maxVaultHealth) || Math.floor(existingCapacity * 0.1);
+              const vaultHealth = Math.min(fallbackPP, existingMaxVaultHealth);
               await updateDoc(vaultRef, {
                 currentPP: fallbackPP,
                 vaultHealth: vaultHealth
               });
-            } else {
-              await setDoc(vaultRef, {
-                id: currentUser.uid,
-                ownerId: currentUser.uid,
-                capacity: 1000,
+              fallbackVaultFromDb = {
+                ...(vaultData as Vault),
                 currentPP: fallbackPP,
-                vaultHealth: vaultHealth,
-                maxVaultHealth: maxVaultHealth,
-                shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-                maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-                overshield: 0,
-                generatorLevel: 1,
-                generatorPendingPP: 0,
-                generatorLastReset: serverTimestamp(),
-                lastUpgrade: serverTimestamp(),
-                debtStatus: false,
-                debtAmount: 0,
-                lastDuesPaid: serverTimestamp(),
-                movesRemaining: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
-                maxMovesPerDay: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
-                lastMoveReset: serverTimestamp(),
-              });
+                vaultHealth,
+                maxVaultHealth: existingMaxVaultHealth,
+              } as Vault;
+            } else {
+              // Never create a level-1 fallback vault in error recovery.
+              // This can overwrite progression when reads fail transiently.
+              console.warn('BattleContext: Error recovery skipped vault creation because vault doc is missing');
             }
             console.log('BattleContext: Successfully synced PP in error recovery');
           }
@@ -979,31 +970,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // TEMPORARY FIX: Don't show error to user for Firestore assertion errors
         // These are internal Firebase issues, not user-facing problems
         if (err instanceof Error && err.message.includes('INTERNAL ASSERTION FAILED')) {
-          console.warn('BattleContext: Firestore internal assertion error - using defaults with synced PP');
-          // Set default values silently, but use synced PP
-          const maxVaultHealth = Math.floor(1000 * 0.1);
-          const defaultVault: Vault = {
-            id: currentUser.uid,
-            ownerId: currentUser.uid,
-            capacity: 1000,
-            currentPP: fallbackPP,
-            vaultHealth: Math.min(fallbackPP, maxVaultHealth),
-            maxVaultHealth: maxVaultHealth,
-            shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-            maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-            overshield: 0,
-            generatorLevel: 1,
-            generatorPendingPP: 0,
-            generatorLastReset: new Date(),
-            lastUpgrade: new Date(),
-            debtStatus: false,
-            debtAmount: 0,
-            lastDuesPaid: new Date(),
-            movesRemaining: 10,
-            maxMovesPerDay: 10,
-            lastMoveReset: new Date()
-          };
-          setVault(defaultVault);
+          console.warn('BattleContext: Firestore internal assertion error - preserving existing vault state');
+          if (fallbackVaultFromDb) {
+            setVault(fallbackVaultFromDb);
+          }
           setActionCards([]);
           return; // Don't set error state
         }
@@ -1037,30 +1007,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }));
         }
         
-        // Set default values to prevent complete failure, but use synced PP
-        const maxVaultHealth = Math.floor(1000 * 0.1);
-        const defaultVault: Vault = {
-          id: currentUser.uid,
-          ownerId: currentUser.uid,
-          capacity: 1000,
-          currentPP: fallbackPP,
-          vaultHealth: Math.min(fallbackPP, maxVaultHealth),
-          maxVaultHealth: maxVaultHealth,
-          shieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-          maxShieldStrength: BATTLE_CONSTANTS.BASE_SHIELD_STRENGTH,
-          overshield: 0,
-          generatorLevel: 1,
-          generatorPendingPP: 0,
-          generatorLastReset: new Date(),
-          lastUpgrade: new Date(),
-          debtStatus: false,
-          debtAmount: 0,
-          lastDuesPaid: new Date(),
-          movesRemaining: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
-          maxMovesPerDay: BATTLE_CONSTANTS.MOVE_SLOTS_BASE,
-          lastMoveReset: new Date(),
-        };
-        setVault(defaultVault);
+        // Preserve DB-backed vault data when available; never force a level-1 local fallback.
+        if (fallbackVaultFromDb) {
+          setVault(fallbackVaultFromDb);
+        }
         setMoves(fallbackMoves);
         setActionCards(ACTION_CARD_TEMPLATES.map((template, index) => ({
           ...template,
