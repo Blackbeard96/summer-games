@@ -2365,7 +2365,10 @@ const Profile = () => {
                                             used: artifactStatus === 'used',
                                             pending: artifactStatus === 'pending',
                                             submittedAt: new Date(),
-                                            isLegacy: true
+                                            isLegacy: true,
+                                            ...(artifactStatus === 'pending'
+                                              ? { pendingApproval: true, approvalStatus: 'pending' as const }
+                                              : {}),
                                           };
                                         }
                                         return artifact;
@@ -2376,7 +2379,10 @@ const Profile = () => {
                                             ...artifact, 
                                             used: artifactStatus === 'used',
                                             pending: artifactStatus === 'pending',
-                                            submittedAt: new Date()
+                                            submittedAt: new Date(),
+                                            ...(artifactStatus === 'pending'
+                                              ? { pendingApproval: true, approvalStatus: 'pending' as const }
+                                              : {}),
                                           };
                                         }
                                         return artifact;

@@ -15,6 +15,24 @@ interface PendingUXPArtifact {
   artifactKey: string; // The key in the artifacts object/array
 }
 
+/** Profile "use on assignment" sets `pending: true`; Marketplace sets pendingApproval / approvalStatus. */
+function isPendingUxPRequest(artifact: Record<string, unknown> | null | undefined): boolean {
+  if (!artifact || typeof artifact !== 'object') return false;
+  return (
+    artifact.pendingApproval === true ||
+    artifact.approvalStatus === 'pending' ||
+    artifact.pending === true ||
+    artifact.status === 'pending'
+  );
+}
+
+function isUxPArtifactLike(artifact: { name?: string; id?: string } | null | undefined): boolean {
+  if (!artifact) return false;
+  const name = String(artifact.name ?? '');
+  const id = String(artifact.id ?? '');
+  return name.includes('UXP') || id.startsWith('uxp-credit');
+}
+
 const UXPApproval: React.FC = () => {
   const { currentUser, isAdmin } = useAuth();
   const [pendingArtifacts, setPendingArtifacts] = useState<PendingUXPArtifact[]>([]);
@@ -92,20 +110,18 @@ const UXPApproval: React.FC = () => {
         // Check if artifacts is an array
         if (Array.isArray(artifacts)) {
           artifacts.forEach((artifact: any, index: number) => {
-            if (artifact && (artifact.name?.includes('UXP') || artifact.id?.startsWith('uxp-credit'))) {
-              if (artifact.pendingApproval === true || artifact.approvalStatus === 'pending') {
-                allPending.push({
-                  userId: userDoc.id,
-                  userDisplayName: userInfo.displayName,
-                  userEmail: userInfo.email,
-                  artifactId: artifact.id,
-                  artifactName: artifact.name,
-                  artifactData: artifact,
-                  purchasedAt: artifact.purchasedAt?.toDate?.() || new Date(),
-                  collectionType: 'users',
-                  artifactKey: `array_${index}`
-                });
-              }
+            if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+              allPending.push({
+                userId: userDoc.id,
+                userDisplayName: userInfo.displayName,
+                userEmail: userInfo.email,
+                artifactId: artifact.id,
+                artifactName: artifact.name,
+                artifactData: artifact,
+                purchasedAt: artifact.purchasedAt?.toDate?.() || artifact.submittedAt?.toDate?.() || new Date(),
+                collectionType: 'users',
+                artifactKey: `array_${index}`
+              });
             }
           });
         } else {
@@ -113,21 +129,19 @@ const UXPApproval: React.FC = () => {
           Object.keys(artifacts).forEach(key => {
             if (key.includes('_purchase')) {
               const artifact = artifacts[key];
-              if (artifact && (artifact.name?.includes('UXP') || artifact.id?.startsWith('uxp-credit'))) {
-                if (artifact.pendingApproval === true || artifact.approvalStatus === 'pending') {
-                  const baseId = key.replace('_purchase', '');
-                  allPending.push({
-                    userId: userDoc.id,
-                    userDisplayName: userInfo.displayName,
-                    userEmail: userInfo.email,
-                    artifactId: artifact.id || baseId,
-                    artifactName: artifact.name,
-                    artifactData: artifact,
-                    purchasedAt: artifact.purchasedAt?.toDate?.() || new Date(),
-                    collectionType: 'users',
-                    artifactKey: key
-                  });
-                }
+              if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+                const baseId = key.replace(/_purchase$/i, '');
+                allPending.push({
+                  userId: userDoc.id,
+                  userDisplayName: userInfo.displayName,
+                  userEmail: userInfo.email,
+                  artifactId: artifact.id || baseId,
+                  artifactName: artifact.name,
+                  artifactData: artifact,
+                  purchasedAt: artifact.purchasedAt?.toDate?.() || artifact.submittedAt?.toDate?.() || new Date(),
+                  collectionType: 'users',
+                  artifactKey: key
+                });
               }
             }
           });
@@ -142,17 +156,35 @@ const UXPApproval: React.FC = () => {
         // Get user info from map
         const userInfo = getUserInfo(studentDoc.id);
 
-        // Students collection uses object format
-        Object.keys(artifacts).forEach(key => {
-          if (key.includes('_purchase')) {
-            const artifact = artifacts[key];
-            if (artifact && (artifact.name?.includes('UXP') || artifact.id?.startsWith('uxp-credit'))) {
-              if (artifact.pendingApproval === true || artifact.approvalStatus === 'pending') {
-                const baseId = key.replace('_purchase', '');
-                // Check if we already have this from users collection
-                const exists = allPending.find(p => 
-                  p.userId === studentDoc.id && 
-                  (p.artifactId === (artifact.id || baseId))
+        if (Array.isArray(artifacts)) {
+          artifacts.forEach((artifact: any, index: number) => {
+            if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+              const exists = allPending.some(
+                (p) => p.userId === studentDoc.id && p.artifactKey === `array_${index}`
+              );
+              if (!exists) {
+                allPending.push({
+                  userId: studentDoc.id,
+                  userDisplayName: userInfo.displayName,
+                  userEmail: userInfo.email,
+                  artifactId: artifact.id,
+                  artifactName: artifact.name,
+                  artifactData: artifact,
+                  purchasedAt: artifact.purchasedAt?.toDate?.() || artifact.submittedAt?.toDate?.() || new Date(),
+                  collectionType: 'students',
+                  artifactKey: `array_${index}`
+                });
+              }
+            }
+          });
+        } else {
+          Object.keys(artifacts).forEach((key) => {
+            if (key.includes('_purchase')) {
+              const artifact = artifacts[key];
+              if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+                const baseId = key.replace(/_purchase$/i, '');
+                const exists = allPending.some(
+                  (p) => p.userId === studentDoc.id && p.artifactKey === key
                 );
                 if (!exists) {
                   allPending.push({
@@ -162,15 +194,15 @@ const UXPApproval: React.FC = () => {
                     artifactId: artifact.id || baseId,
                     artifactName: artifact.name,
                     artifactData: artifact,
-                    purchasedAt: artifact.purchasedAt?.toDate?.() || new Date(),
+                    purchasedAt: artifact.purchasedAt?.toDate?.() || artifact.submittedAt?.toDate?.() || new Date(),
                     collectionType: 'students',
                     artifactKey: key
                   });
                 }
               }
             }
-          }
-        });
+          });
+        }
       }
 
       // Sort by purchase date (newest first)
@@ -187,9 +219,27 @@ const UXPApproval: React.FC = () => {
   const handleApprove = async (pending: PendingUXPArtifact) => {
     if (!currentUser || !isAdmin) return;
     
-    setProcessing(pending.userId + '_' + pending.artifactId);
+    setProcessing(`${pending.userId}_${pending.artifactKey}`);
     try {
       const batch = writeBatch(db);
+
+      const filterArrayApprove = (arr: unknown[]) => {
+        const m = /^array_(\d+)$/.exec(pending.artifactKey);
+        if (m) {
+          const i = parseInt(m[1], 10);
+          if (i >= 0 && i < arr.length) {
+            return arr.filter((_, idx) => idx !== i);
+          }
+        }
+        return arr.filter(
+          (art: any) =>
+            !(
+              art?.id === pending.artifactId &&
+              isUxPArtifactLike(art) &&
+              isPendingUxPRequest(art)
+            )
+        );
+      };
 
       // Remove artifact from users collection
       const userRef = doc(db, 'users', pending.userId);
@@ -200,13 +250,8 @@ const UXPApproval: React.FC = () => {
         const artifacts = userData.artifacts || {};
         
         if (Array.isArray(artifacts)) {
-          // Remove from array
-          const updatedArtifacts = artifacts.filter((art: any) => 
-            !(art.id === pending.artifactId && (art.pendingApproval === true || art.approvalStatus === 'pending'))
-          );
-          batch.update(userRef, { artifacts: updatedArtifacts });
+          batch.update(userRef, { artifacts: filterArrayApprove(artifacts) });
         } else {
-          // Remove from object
           const updatedArtifacts = { ...artifacts };
           delete updatedArtifacts[pending.artifactId];
           delete updatedArtifacts[`${pending.artifactId}_purchase`];
@@ -221,16 +266,22 @@ const UXPApproval: React.FC = () => {
       if (studentDoc.exists()) {
         const studentData = studentDoc.data();
         const artifacts = studentData.artifacts || {};
-        const updatedArtifacts = { ...artifacts };
-        delete updatedArtifacts[pending.artifactId];
-        delete updatedArtifacts[`${pending.artifactId}_purchase`];
+        let nextArtifacts: Record<string, unknown> | unknown[];
+
+        if (Array.isArray(artifacts)) {
+          nextArtifacts = filterArrayApprove(artifacts);
+        } else {
+          const updatedArtifacts = { ...artifacts };
+          delete updatedArtifacts[pending.artifactId];
+          delete updatedArtifacts[`${pending.artifactId}_purchase`];
+          nextArtifacts = updatedArtifacts;
+        }
         
-        // Also remove from inventory if present
         const inventory = studentData.inventory || [];
         const updatedInventory = inventory.filter((item: string) => item !== pending.artifactName);
         
         batch.update(studentRef, { 
-          artifacts: updatedArtifacts,
+          artifacts: nextArtifacts,
           inventory: updatedInventory
         });
       }
@@ -391,32 +442,32 @@ const UXPApproval: React.FC = () => {
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   onClick={() => handleApprove(pending)}
-                  disabled={processing === pending.userId + '_' + pending.artifactId}
+                  disabled={processing === `${pending.userId}_${pending.artifactKey}`}
                   style={{
                     padding: '0.5rem 1rem',
                     background: '#10b981',
                     color: 'white',
                     border: 'none',
                     borderRadius: '0.5rem',
-                    cursor: processing === pending.userId + '_' + pending.artifactId ? 'not-allowed' : 'pointer',
+                    cursor: processing === `${pending.userId}_${pending.artifactKey}` ? 'not-allowed' : 'pointer',
                     fontWeight: 'bold',
-                    opacity: processing === pending.userId + '_' + pending.artifactId ? 0.5 : 1
+                    opacity: processing === `${pending.userId}_${pending.artifactKey}` ? 0.5 : 1
                   }}
                 >
-                  {processing === pending.userId + '_' + pending.artifactId ? 'Processing...' : 'Approve'}
+                  {processing === `${pending.userId}_${pending.artifactKey}` ? 'Processing...' : 'Approve'}
                 </button>
                 <button
                   onClick={() => handleReject(pending)}
-                  disabled={processing === pending.userId + '_' + pending.artifactId}
+                  disabled={processing === `${pending.userId}_${pending.artifactKey}`}
                   style={{
                     padding: '0.5rem 1rem',
                     background: '#ef4444',
                     color: 'white',
                     border: 'none',
                     borderRadius: '0.5rem',
-                    cursor: processing === pending.userId + '_' + pending.artifactId ? 'not-allowed' : 'pointer',
+                    cursor: processing === `${pending.userId}_${pending.artifactKey}` ? 'not-allowed' : 'pointer',
                     fontWeight: 'bold',
-                    opacity: processing === pending.userId + '_' + pending.artifactId ? 0.5 : 1
+                    opacity: processing === `${pending.userId}_${pending.artifactKey}` ? 0.5 : 1
                   }}
                 >
                   Reject

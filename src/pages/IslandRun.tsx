@@ -1,7 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { doc, collection, getDocs, query, where, onSnapshot, addDoc, updateDoc, serverTimestamp, getDoc, Timestamp } from 'firebase/firestore';
+import {
+  doc,
+  collection,
+  getDocs,
+  query,
+  where,
+  onSnapshot,
+  addDoc,
+  serverTimestamp,
+  getDoc,
+  Timestamp,
+  type QuerySnapshot,
+  type DocumentData,
+} from 'firebase/firestore';
 import { db } from '../firebase';
 import { IslandRunLobby, IslandRunTeam } from '../types/islandRun';
 import { getLevelFromXP } from '../utils/leveling';
@@ -12,6 +25,7 @@ const IslandRun: React.FC = () => {
   const navigate = useNavigate();
   const [lobbies, setLobbies] = useState<IslandRunLobby[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showCreateLobby, setShowCreateLobby] = useState(false);
   const [newLobbyName, setNewLobbyName] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<'easy' | 'normal' | 'hard' | 'nightmare'>('normal');
@@ -35,54 +49,92 @@ const IslandRun: React.FC = () => {
   }, [selectedDifficulty]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setLoading(false);
+      setLoadError(null);
+      return;
+    }
+
+    setLoadError(null);
+    setLoading(true);
 
     // Run cleanup on mount (mark empty/inactive lobbies as expired)
     cleanupExpiredRaidLobbiesClient().catch(err => 
       console.error('Error cleaning up expired lobbies:', err)
     );
 
-    // Listen for active lobbies (exclude expired)
-    const lobbiesRef = collection(db, 'islandRunLobbies');
-    const q = query(lobbiesRef, where('status', 'in', ['waiting', 'starting']));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const buildLobbyListFromSnapshot = (snapshot: { forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void }) => {
       const now = Timestamp.now();
       const tenMinutesAgo = Timestamp.fromMillis(now.toMillis() - 10 * 60 * 1000);
       const lobbyList: IslandRunLobby[] = [];
-      
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        const players = data.players || [];
+
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const players = (data.players as unknown[]) || [];
         const lastActivityAt = data.lastActivityAt as Timestamp | undefined;
         const createdAt = data.createdAt as Timestamp | undefined;
-        
-        // Filter out lobbies that are inactive for 10+ minutes
-        // Check both lastActivityAt and createdAt (fallback)
+
         const checkTimestamp = lastActivityAt || createdAt;
         if (checkTimestamp && checkTimestamp.toMillis() < tenMinutesAgo.toMillis()) {
-          // Skip this lobby - it's inactive for 10+ minutes (will be deleted by cleanup)
           return;
         }
-        
+
         lobbyList.push({
-          id: doc.id,
+          id: docSnap.id,
           ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          players: players
+          createdAt: (data.createdAt as { toDate?: () => Date } | undefined)?.toDate?.() || new Date(),
+          players,
         } as IslandRunLobby);
       });
-      
-      setLobbies(lobbyList);
+
+      return lobbyList;
+    };
+
+    // Listen for active lobbies (exclude expired)
+    const lobbiesRef = collection(db, 'islandRunLobbies');
+    const q = query(lobbiesRef, where('status', 'in', ['waiting', 'starting']));
+
+    const finishWithError = async (message: string, err: unknown) => {
+      console.error('Island Raid lobbies:', message, err);
+      setLoadError(message);
       setLoading(false);
-    }, (error) => {
-      // Suppress Firestore internal assertion errors (known Firefox issue)
-      if (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-          error.message?.includes('Unexpected state')) {
-        return;
+      try {
+        const snap = await getDocs(q);
+        setLobbies(buildLobbyListFromSnapshot(snap));
+      } catch (fallbackErr) {
+        console.error('Island Raid lobbies fallback fetch failed:', fallbackErr);
+        setLobbies([]);
       }
-      console.error('Error listening to lobbies:', error);
-    });
+    };
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setLobbies(buildLobbyListFromSnapshot(snapshot));
+        setLoadError(null);
+        setLoading(false);
+      },
+      async (error) => {
+        const msg = error?.message || String(error);
+        const isFirefoxInternal =
+          msg.includes('INTERNAL ASSERTION FAILED') || msg.includes('Unexpected state');
+
+        if (isFirefoxInternal) {
+          await finishWithError('Live updates unavailable in this browser; showing a one-time list.', error);
+          return;
+        }
+
+        if ((error as { code?: string })?.code === 'permission-denied') {
+          await finishWithError(
+            'Could not load lobbies (permission denied). Ask an admin to deploy Firestore rules for islandRunLobbies.',
+            error
+          );
+          return;
+        }
+
+        await finishWithError('Could not load lobbies. Check your connection and try again.', error);
+      }
+    );
 
     // Run cleanup periodically (every 2 minutes)
     const cleanupInterval = setInterval(() => {
@@ -195,6 +247,35 @@ const IslandRun: React.FC = () => {
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
+      {!currentUser && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.85rem 1rem',
+            background: '#fef3c7',
+            border: '1px solid #fbbf24',
+            borderRadius: '0.5rem',
+            color: '#92400e',
+            textAlign: 'center',
+          }}
+        >
+          Sign in to create or join Island Raid lobbies.
+        </div>
+      )}
+      {loadError && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.85rem 1rem',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: '0.5rem',
+            color: '#991b1b',
+          }}
+        >
+          {loadError}
+        </div>
+      )}
       {/* Header */}
       <div style={{
         background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',

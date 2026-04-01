@@ -4,6 +4,7 @@ import { collection, getDocs, orderBy, query } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import { fetchLiveEventPlacementAggregates } from '../utils/liveEventPlacementAggregation';
 import { fetchSquadLeaderboardRows, type SquadLeaderboardRow } from '../utils/squadLeaderboardAggregation';
+import PlayerBuildInspectModal from '../components/PlayerBuildInspectModal';
 
 interface Student {
   id: string;
@@ -40,6 +41,23 @@ const Leaderboard = () => {
   const [placementLoading, setPlacementLoading] = useState(false);
   const [squadsLoading, setSquadsLoading] = useState(false);
   const [squadMembersModalSquad, setSquadMembersModalSquad] = useState<SquadLeaderboardRow | null>(null);
+  const [buildInspectOpen, setBuildInspectOpen] = useState(false);
+  const [buildInspectPlayerId, setBuildInspectPlayerId] = useState<string | null>(null);
+  const [buildInspectRoster, setBuildInspectRoster] = useState<{
+    displayName?: string;
+    photoURL?: string;
+    powerLevel?: number | null;
+  } | null>(null);
+
+  const openBuildInspect = (student: Student) => {
+    setBuildInspectPlayerId(student.id);
+    setBuildInspectRoster({
+      displayName: student.displayName,
+      photoURL: student.photoURL,
+      powerLevel: student.powerLevel ?? null,
+    });
+    setBuildInspectOpen(true);
+  };
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -162,11 +180,12 @@ const Leaderboard = () => {
     withData.sort((a, b) => {
       if (placementSort === 'top3') {
         if (b.top3 !== a.top3) return b.top3 - a.top3;
-        if (b.firstPlace !== a.firstPlace) return b.firstPlace - a.firstPlace;
-      } else {
-        if (b.firstPlace !== a.firstPlace) return b.firstPlace - a.firstPlace;
-        if (b.top3 !== a.top3) return b.top3 - a.top3;
+        // Do not tie-break with firstPlace: when everyone ties on top3 (common), that
+        // reproduced the 1st-place order and made the two toggles look identical.
+        return (a.student.displayName || '').localeCompare(b.student.displayName || '');
       }
+      if (b.firstPlace !== a.firstPlace) return b.firstPlace - a.firstPlace;
+      if (b.top3 !== a.top3) return b.top3 - a.top3;
       return (a.student.displayName || '').localeCompare(b.student.displayName || '');
     });
     return withData;
@@ -501,6 +520,27 @@ const Leaderboard = () => {
                       </div>
                     </div>
 
+                    <button
+                      type="button"
+                      onClick={() => openBuildInspect(student)}
+                      title="View loadout and equipped artifacts"
+                      style={{
+                        flexShrink: 0,
+                        alignSelf: 'center',
+                        fontSize: '0.65rem',
+                        padding: '0.35rem 0.55rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid rgba(56, 189, 248, 0.45)',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        color: '#e0f2fe',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      View build
+                    </button>
+
                     <div
                       style={{
                         display: 'flex',
@@ -772,6 +812,26 @@ const Leaderboard = () => {
                           )}
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => openBuildInspect(student)}
+                        title="View loadout and equipped artifacts"
+                        style={{
+                          flexShrink: 0,
+                          alignSelf: 'center',
+                          fontSize: '0.65rem',
+                          padding: '0.35rem 0.55rem',
+                          borderRadius: '0.375rem',
+                          border: '1px solid rgba(56, 189, 248, 0.45)',
+                          background: 'rgba(15, 23, 42, 0.6)',
+                          color: '#e0f2fe',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        View build
+                      </button>
                       <div
                         style={{
                           display: 'flex',
@@ -796,6 +856,20 @@ const Leaderboard = () => {
           </>
         )}
       </div>
+
+      <PlayerBuildInspectModal
+        open={buildInspectOpen}
+        onClose={() => {
+          setBuildInspectOpen(false);
+          setBuildInspectPlayerId(null);
+          setBuildInspectRoster(null);
+        }}
+        playerId={buildInspectPlayerId}
+        rosterDisplayName={buildInspectRoster?.displayName}
+        rosterPhotoURL={buildInspectRoster?.photoURL}
+        rosterPowerLevel={buildInspectRoster?.powerLevel ?? null}
+        viewerSubtitle="Leaderboard — loadout & artifacts"
+      />
 
       {squadMembersModalSquad && (
         <div
@@ -918,6 +992,33 @@ const Leaderboard = () => {
                           {m.manifestationType}
                         </span>
                       )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openBuildInspect({
+                            id: m.uid,
+                            displayName: m.displayName,
+                            photoURL: m.photoURL,
+                            powerLevel: m.powerLevel ?? null,
+                          });
+                        }}
+                        title="View loadout and equipped artifacts"
+                        style={{
+                          flexShrink: 0,
+                          fontSize: '0.6rem',
+                          padding: '0.3rem 0.45rem',
+                          borderRadius: '0.35rem',
+                          border: '1px solid rgba(56, 189, 248, 0.45)',
+                          background: 'rgba(15, 23, 42, 0.75)',
+                          color: '#e0f2fe',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        View build
+                      </button>
                     </li>
                   ))}
                 </ul>
