@@ -10,6 +10,7 @@ import {
 import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
 import { useAuth } from '../context/AuthContext';
 import { getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
+import { formatBattleMoveTargetLabel } from '../utils/battleMoveTargetUi';
 import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getRRCandyMoves, getRRCandyDisplayName, shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
@@ -720,9 +721,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     () =>
       getSkillsMasteryPerkDisplaySnapshot(
         equippedArtifacts as Record<string, unknown> | null,
-        equippableCatalogRaw
+        equippableCatalogRaw,
+        universalLawEffects
       ),
-    [equippedArtifacts, equippableCatalogRaw]
+    [equippedArtifacts, equippableCatalogRaw, universalLawEffects]
   );
 
   const renderMoveCard = (move: Move) => {
@@ -1465,7 +1467,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             }}>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>TARGET</div>
               <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151', textTransform: 'capitalize' }}>
-                {move.targetType.replace('_', ' ')}
+                {formatBattleMoveTargetLabel(move)}
               </div>
             </div>
           )}
@@ -2460,7 +2462,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         combatPerkUi.costReductionSkillEffectivenessPercent > 0 ||
         combatPerkUi.healingRegenPerTurn > 0 ||
         combatPerkUi.ppEconomyPercent > 0 ||
-        combatPerkUi.synergyNotes.length > 0) && (
+        combatPerkUi.synergyNotes.length > 0 ||
+        combatPerkUi.universalLawBoonLines.length > 0) && (
         <div
           style={{
             marginBottom: '1rem',
@@ -2471,7 +2474,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           }}
         >
           <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#92400e', marginBottom: '0.35rem' }}>
-            ⚔️ Equipped artifact perks (reflected in damage & Live Event costs on cards below)
+            ⚔️ Active perks in battle (artifacts + Universal Law boons; reflected in damage & Live Event costs below)
           </div>
           <ul
             style={{
@@ -2533,6 +2536,11 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             {combatPerkUi.synergyNotes.map((line, i) => (
               <li key={i}>
                 <strong>Artifact Synergy:</strong> {line}
+              </li>
+            ))}
+            {combatPerkUi.universalLawBoonLines.map((line, i) => (
+              <li key={`law-${i}`}>
+                <strong>Skill Tree (Universal Law):</strong> {line}
               </li>
             ))}
           </ul>

@@ -22,6 +22,8 @@ import { normalizeElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
 import type { SkillAvailabilityResult } from '../utils/skillAvailability';
 import ElementalAdvantageGuide from './ElementalAdvantageGuide';
+import type { UniversalLawBoonEffects } from '../utils/universalLawBoons';
+import { formatBattleMoveTargetLabel } from '../utils/battleMoveTargetUi';
 
 interface Participant {
   id: string;
@@ -70,6 +72,9 @@ interface MultiplayerBattleArenaProps {
   skillAvailabilityByMoveId?: Record<string, SkillAvailabilityResult>;
   showSkipStunnedTurn?: boolean;
   onSkipStunnedTurn?: () => void | Promise<void>;
+  equippableCatalogRaw?: Record<string, unknown> | null;
+  universalLawEffects?: UniversalLawBoonEffects | null;
+  universalLawBoonLines?: string[];
 }
 
 const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
@@ -98,6 +103,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   skillAvailabilityByMoveId,
   showSkipStunnedTurn = false,
   onSkipStunnedTurn,
+  equippableCatalogRaw = null,
+  universalLawEffects = null,
+  universalLawBoonLines = [],
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -648,6 +656,36 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         ⚔️ MST BATTLE ARENA ⚔️
       </div>
 
+      {universalLawBoonLines.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top:
+              currentWave !== undefined && maxWaves !== undefined && maxWaves > 1 ? '118px' : '56px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 4,
+            maxWidth: 'min(520px, 90vw)',
+            padding: '0.3rem 0.55rem',
+            borderRadius: '0.45rem',
+            background: 'rgba(15, 23, 42, 0.82)',
+            border: '1px solid rgba(234, 179, 8, 0.45)',
+            color: '#fef9c3',
+            fontSize: '0.65rem',
+            lineHeight: 1.3,
+            textAlign: 'center',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: '0.15rem', color: '#fde047' }}>Skill Tree · Universal Laws</div>
+          <ul style={{ margin: 0, paddingLeft: '1rem', textAlign: 'left' }}>
+            {universalLawBoonLines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Wave Information */}
       {currentWave !== undefined && maxWaves !== undefined && maxWaves > 1 && (
         <div style={{
@@ -1151,8 +1189,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                       ? computeLiveEventParticipationSkillCost(
                           move,
                           equippedArtifacts,
-                          null,
-                          getSkillCostReductionFromBattleEffects(playerEffects as never)
+                          equippableCatalogRaw,
+                          getSkillCostReductionFromBattleEffects(playerEffects as never),
+                          universalLawEffects
                         )
                       : null;
                   const participationAvailable =
@@ -1315,7 +1354,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                         )}
                         {move.targetType && (
                           <div style={{ color: '#6b7280', fontWeight: 'bold', fontSize: '0.65rem', textTransform: 'capitalize' }}>
-                            🎯 Target: {move.targetType.replace('_', ' ')}
+                            🎯 Target: {formatBattleMoveTargetLabel(move)}
                           </div>
                         )}
                         {effectiveMasteryLevel > move.masteryLevel && move.category === 'elemental' && equippedArtifacts && (() => {

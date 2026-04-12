@@ -289,6 +289,7 @@ export function level2SkillToMove(skill: Level2ManifestSkillRecord, manifestType
     currentCooldown: 0,
     unlocked: true,
     masteryLevel: 1,
+    /** Engine still treats this as single-target pick; skill cards label it class-wide (Live Event Meta). */
     targetType: 'single',
     effectKey: 'level2_manifest',
     useSessionPowerPoints: true,

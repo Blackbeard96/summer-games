@@ -12,6 +12,7 @@ import { getAllQuizSets } from '../utils/trainingGroundsService';
 import { listAssessmentsForMissionLinking, type AssessmentPickItem } from '../utils/assessmentGoalsFirestore';
 import { fetchCpuOpponentsMergedWithDefaults, type CPUOpponent } from '../utils/cpuOpponentsCatalog';
 import { getAvailableArtifactsAsync, type ArtifactOption } from '../utils/artifactCompensation';
+import { MISSION_STEP_NAVIGATE_OPTIONS } from '../utils/missionStepNavigate';
 
 interface MissionSequenceBuilderProps {
   sequence: MissionSequenceStep[];
@@ -600,6 +601,7 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
           uploading={uploading}
           setUploading={setUploading}
           missionId={missionId}
+          variant={variant}
         />
       )}
     </div>
@@ -615,6 +617,7 @@ interface StepEditorModalProps {
   uploading: boolean;
   setUploading: (uploading: boolean) => void;
   missionId?: string;
+  variant?: 'mission' | 'cpuAwakeningMedia';
 }
 
 const StepEditorModal: React.FC<StepEditorModalProps> = ({
@@ -624,8 +627,10 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
   onDraftPersist,
   uploading,
   setUploading,
-  missionId
+  missionId,
+  variant = 'mission',
 }) => {
+  const isMediaOnly = variant === 'cpuAwakeningMedia';
   const [editedStep, setEditedStep] = useState<MissionSequenceStep>(step);
   const editedStepRef = useRef(editedStep);
   editedStepRef.current = editedStep;
@@ -966,6 +971,34 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
             />
           </div>
 
+          {!isMediaOnly && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                After player taps Continue (optional)
+              </label>
+              <select
+                value={editedStep.navigateTo ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEditedStep({
+                    ...editedStep,
+                    navigateTo: v ? v : undefined,
+                  });
+                }}
+                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+              >
+                {MISSION_STEP_NAVIGATE_OPTIONS.map((o) => (
+                  <option key={o.path || 'none'} value={o.path}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                Opens that page after advancing the mission. Progress is saved so they can return here and continue.
+              </p>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
             <button
               type="button"
@@ -1236,6 +1269,34 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
               style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
             />
           </div>
+
+          {!isMediaOnly && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                After player taps Continue (optional)
+              </label>
+              <select
+                value={editedStep.navigateTo ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEditedStep({
+                    ...editedStep,
+                    navigateTo: v ? v : undefined,
+                  });
+                }}
+                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+              >
+                {MISSION_STEP_NAVIGATE_OPTIONS.map((o) => (
+                  <option key={o.path || 'none'} value={o.path}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                Opens that page after advancing the mission. Progress is saved so they can return here and continue.
+              </p>
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
             <button

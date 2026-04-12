@@ -50,6 +50,7 @@ import {
   getVaultSiegeFreezeChancePercentFromEquipped,
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
+import { getPlayerUniversalLawEffects, type UniversalLawBoonEffects } from '../utils/universalLawBoons';
 import { buildInitialActionCardsFromAdmin, mergeUserActionCardsWithAdmin } from '../utils/actionCardAdminMerge';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 import { normalizeElementType } from '../types/elementTypes';
@@ -212,6 +213,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   /** Raw equipped + catalog for Shield Boost (vault UI uses boosted values). */
   const [perkEquippedSnapshot, setPerkEquippedSnapshot] = useState<Record<string, unknown> | null>(null);
   const [perkCatalogSnapshot, setPerkCatalogSnapshot] = useState<Record<string, unknown> | null>(null);
+  const [universalLawEffectsSnapshot, setUniversalLawEffectsSnapshot] = useState<UniversalLawBoonEffects | null>(
+    null
+  );
   const [moves, setMoves] = useState<Move[]>([]);
   const [actionCards, setActionCards] = useState<ActionCard[]>([]);
   const [currentBattle, setCurrentBattle] = useState<BattleState | null>(null);
@@ -267,6 +271,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setPerkCatalogSnapshot(equippableCatalogForPerks);
         } catch {
           setPerkCatalogSnapshot(null);
+        }
+        try {
+          setUniversalLawEffectsSnapshot(await getPlayerUniversalLawEffects(currentUser.uid));
+        } catch {
+          setUniversalLawEffectsSnapshot(null);
         }
         
         // Extract manifest ID properly - do NOT default to 'reading' if manifest is missing
@@ -1318,6 +1327,29 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.error('BattleContext: Error in student listener:', error);
     });
 
+    const skillStateRef = doc(db, 'players', currentUser.uid, 'skill_state', 'main');
+    const refreshUniversalLawSnapshot = async () => {
+      try {
+        setUniversalLawEffectsSnapshot(await getPlayerUniversalLawEffects(currentUser.uid));
+      } catch {
+        setUniversalLawEffectsSnapshot(null);
+      }
+    };
+    void refreshUniversalLawSnapshot();
+    const unsubscribeSkillState = onSnapshot(
+      skillStateRef,
+      () => {
+        void refreshUniversalLawSnapshot();
+      },
+      (error) => {
+        if (isFirestoreInternalError(error)) {
+          console.warn('BattleContext: skill_state listener error ignored');
+          return;
+        }
+        console.error('BattleContext: skill_state listener:', error);
+      }
+    );
+
     return () => {
       if (vaultSyncTimeout) {
         clearTimeout(vaultSyncTimeout);
@@ -1325,6 +1357,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       unsubscribeVault();
       unsubscribeStudent();
       unsubscribeMoves();
+      unsubscribeSkillState();
     };
   }, [currentUser]);
 
@@ -1554,14 +1587,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (updates.overshield !== undefined) {
         updates.overshield = Math.min(1, Math.max(0, updates.overshield));
       }
-      // Never persist shields above max (prevents UI / battle desync from growing past cap)
+      // Never persist shields above a sane cap (prevents UI / battle desync from growing past cap).
+      // When current shields exceed stored max (stale max), cap must be at least current or restores clamp down incorrectly.
       if (updates.shieldStrength !== undefined) {
-        const cap = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
-        if (cap > 0) {
-          updates.shieldStrength = Math.min(cap, Math.max(0, Math.floor(Number(updates.shieldStrength) || 0)));
-        } else {
-          updates.shieldStrength = Math.max(0, Math.floor(Number(updates.shieldStrength) || 0));
-        }
+        const capFromVault = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+        const currentSh = Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
+        const cap = Math.max(capFromVault, currentSh, 1);
+        updates.shieldStrength = Math.min(cap, Math.max(0, Math.floor(Number(updates.shieldStrength) || 0)));
       }
       
       const vaultRef = doc(db, 'vaults', currentUser.uid);
@@ -4636,9 +4668,16 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           : null;
         const equippableCatSnap = await getDoc(doc(db, 'adminSettings', 'equippableArtifacts'));
         const equippableCatRaw = equippableCatSnap.exists() ? equippableCatSnap.data() : null;
+        let lawFxForSiege: UniversalLawBoonEffects | null = null;
+        try {
+          lawFxForSiege = await getPlayerUniversalLawEffects(currentUser.uid);
+        } catch {
+          lawFxForSiege = null;
+        }
         const freezeChancePct = getVaultSiegeFreezeChancePercentFromEquipped(
           equippedForPerk,
-          equippableCatRaw
+          equippableCatRaw,
+          lawFxForSiege
         );
         if (freezeChancePct > 0 && Math.random() * 100 < freezeChancePct) {
           extraFreezeSkipsFromPerk = 1;
@@ -5580,8 +5619,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const vaultForUI = useMemo((): Vault | null => {
     if (!vault) return null;
-    return applyVaultShieldBoostFromEquipped(vault, perkEquippedSnapshot, perkCatalogSnapshot);
-  }, [vault, perkEquippedSnapshot, perkCatalogSnapshot]);
+    return applyVaultShieldBoostFromEquipped(
+      vault,
+      perkEquippedSnapshot,
+      perkCatalogSnapshot,
+      universalLawEffectsSnapshot
+    );
+  }, [vault, perkEquippedSnapshot, perkCatalogSnapshot, universalLawEffectsSnapshot]);
 
   // Impenetrable perk: at most one overshield per Eastern day when perk is equipped and vault has no overshield
   useEffect(() => {

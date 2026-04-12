@@ -14,7 +14,12 @@
 
 import type { Move } from '../types/battle';
 import type { SkillEffectInstance } from '../types/skillEffects';
-import { shieldOffMaxShieldRemoveFraction, shieldOffMaxShieldRemovePercent } from './rrCandyMoves';
+import {
+  computeRrCandyShieldOnRestore,
+  shieldOffMaxShieldRemoveFraction,
+  shieldOffMaxShieldRemovePercent,
+  rrCandyShieldOffPercentDenominator,
+} from './rrCandyMoves';
 import { getMoveDamage } from './moveOverrides';
 import { calculateDamageRange, rollDamage, calculateShieldBoostRange, calculateHealingRange } from './damageCalculator';
 import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier, getElementalRingLevel } from './artifactUtils';
@@ -412,22 +417,25 @@ export async function resolveSkillAction(
 
   // Handle special RR Candy moves
   if (skill.id === 'rr-candy-on-off-shields-on') {
-    // Shield ON - Restore 50% of max shields
-    const maxShields = target.maxShield || target.maxShieldStrength || 100;
-    const shieldRestoreAmount = Math.floor(maxShields * 0.5);
+    const maxStat = Math.max(0, Math.floor(Number(target.maxShield ?? target.maxShieldStrength) || 0));
+    const currentSh = Math.max(0, Math.floor(Number(target.shield ?? target.shieldStrength) || 0));
+    const maxForRestore = maxStat > 0 ? maxStat : 100;
+    const shieldRestoreAmount = computeRrCandyShieldOnRestore(maxForRestore, currentSh);
     result.shieldBoost = shieldRestoreAmount;
     result.targetDelta.shield = shieldRestoreAmount;
-    // Replace any existing log messages with the RR Candy message
     result.logMessages = [`🔋 ${actor.name} used ${skill.name} to restore ${shieldRestoreAmount} shields (50% of max)!`];
   } else if (skill.id === 'rr-candy-on-off-shields-off') {
-    const maxShields = target.maxShield || target.maxShieldStrength || 100;
     const pct = shieldOffMaxShieldRemovePercent(effectiveMasteryLevel);
     const frac = shieldOffMaxShieldRemoveFraction(effectiveMasteryLevel);
-    const shieldRemoveAmount = Math.floor(maxShields * frac);
+    const denom = rrCandyShieldOffPercentDenominator({
+      maxShieldStrength: target.maxShield ?? target.maxShieldStrength,
+      shieldStrength: target.shield ?? target.shieldStrength,
+    });
+    const shieldRemoveAmount = Math.floor(denom * frac);
     result.shieldDamage = shieldRemoveAmount;
     result.targetDelta.shield = -shieldRemoveAmount;
     result.logMessages = [
-      `🛡️ ${actor.name} used ${skill.name} to remove ${shieldRemoveAmount} shields from ${target.name} (${pct}% of max shields: ${maxShields})!`,
+      `🛡️ ${actor.name} used ${skill.name} to remove ${shieldRemoveAmount} shields from ${target.name} (${pct}% of max shields base ${denom})!`,
     ];
   }
 

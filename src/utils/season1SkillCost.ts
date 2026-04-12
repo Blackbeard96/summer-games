@@ -1,6 +1,7 @@
 import type { Move } from '../types/battle';
 import type { EnergyType, EnergiesMap } from '../types/season1';
 import { computeLiveEventParticipationSkillCost, type LiveEventSkillCostBreakdown } from './liveEventSkillCost';
+import type { UniversalLawBoonEffects } from './universalLawBoons';
 
 export interface Season1ResourceResolution {
   canUse: boolean;
@@ -24,13 +25,15 @@ export function resolveSeason1SkillCost(
   options: {
     reductionFromEffects?: number;
     awakenedFlow?: boolean;
+    universalLawEffects?: UniversalLawBoonEffects | null;
   } = {}
 ): Season1ResourceResolution {
   const breakdown = computeLiveEventParticipationSkillCost(
     move,
     equippedArtifacts ?? null,
     null,
-    options.reductionFromEffects ?? 0
+    options.reductionFromEffects ?? 0,
+    options.universalLawEffects ?? null
   );
 
   const s1 = move.season1Cost;

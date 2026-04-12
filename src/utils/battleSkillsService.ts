@@ -3,8 +3,9 @@
  *
  * SINGLE SOURCE OF TRUTH for battle-eligible skills.
  * - Unified 6-skill loadout: battle uses EQUIPPED skills only (manifest, elemental, RR Candy, artifact).
- * - getEquippedSkillsForBattle: returns equipped skills for battle (up to max loadout slots) plus the
- *   Level 2 Manifest meta move when the player has one saved (7th skill in Live Events).
+ * - getEquippedSkillsForBattle: returns equipped skills for battle (up to max loadout slots), then appends
+ *   any unlocked RR Candy moves not already in the loadout (they are not auto-inserted into equippedSkillIds),
+ *   then the Level 2 Manifest meta move when the player has one saved.
  * - getUserUnlockedSkillsForBattle: returns all unlocked (for loadout UI / backward compat).
  *
  * Cooldowns are tracked in battle state, NOT in skill library.
@@ -740,9 +741,9 @@ export async function getUserBattleSkillsWithCooldowns(
 }
 
 /**
- * Get EQUIPPED skills for battle (unified 6-skill loadout).
- * Only these skills appear in battle. If equippedSkillIds is empty, falls back to first
- * MAX_EQUIPPED_SKILLS of unlocked pool for backward compatibility.
+ * Get EQUIPPED skills for battle (unified loadout slots from skill_state).
+ * If equippedSkillIds is empty, falls back to the first `maxSlots` unlocked skills.
+ * Unlocked RR Candy moves are always appended if missing from the equipped id list (see module header).
  */
 export async function getEquippedSkillsForBattle(
   userId: string,
@@ -761,15 +762,22 @@ export async function getEquippedSkillsForBattle(
     const byId = new Map<string, Move>();
     unlocked.forEach(m => byId.set(m.id, m));
 
-    const appendLevel2Meta = async (base: Move[]): Promise<Move[]> => {
+    /** RR Candy + L2 manifest are not stored in equippedSkillIds; append here so battle matches unlock state. */
+    const appendRrCandyAndLevel2Meta = async (base: Move[]): Promise<Move[]> => {
+      let out = [...base];
+      const rrExtras = unlocked.filter(
+        (m) => typeof m.id === 'string' && m.id.startsWith('rr-candy-') && !out.some((b) => b.id === m.id)
+      );
+      if (rrExtras.length > 0) {
+        out = [...out, ...rrExtras];
+      }
       try {
         const l2 = await getActiveLevel2ManifestMove(userId);
-        if (!l2) return base;
-        if (base.some((m) => m.id === l2.id)) return base;
-        return [...base, l2];
+        if (l2 && !out.some((m) => m.id === l2.id)) out = [...out, l2];
       } catch {
-        return base;
+        /* ignore */
       }
+      return out;
     };
 
     if (equippedIds.length > 0) {
@@ -782,7 +790,7 @@ export async function getEquippedSkillsForBattle(
       if (process.env.NODE_ENV === 'development') {
         console.log('🎯 getEquippedSkillsForBattle (equipped):', { count: result.length, ids: equippedIds });
       }
-      return appendLevel2Meta(result);
+      return appendRrCandyAndLevel2Meta(result);
     }
 
     const fallback = unlocked.slice(0, maxSlots);
@@ -801,9 +809,9 @@ export async function getEquippedSkillsForBattle(
       if (process.env.NODE_ENV === 'development') {
         console.log('🎯 getEquippedSkillsForBattle (fallback, persisted):', { count: fallback.length, ids });
       }
-      return appendLevel2Meta(fallback);
+      return appendRrCandyAndLevel2Meta(fallback);
     }
-    return appendLevel2Meta([]);
+    return appendRrCandyAndLevel2Meta([]);
   } catch (error) {
     console.error('Error getEquippedSkillsForBattle:', error);
     return [];

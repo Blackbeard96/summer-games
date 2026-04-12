@@ -9,7 +9,7 @@ import {
   findEquippableDefinitionRow,
   mergeEquippableCatalogLayers,
 } from './battleSkillsService';
-import type { UniversalLawBoonEffects } from './universalLawBoons';
+import { formatUniversalLawBoonBattleSummary, type UniversalLawBoonEffects } from './universalLawBoons';
 
 export const ELEMENTAL_ACCESS_PERK_ID = 'elemental-access';
 export const SHIELD_BOOST_PERK_ID = 'shield-boost';
@@ -30,6 +30,31 @@ export const FREEZE_ON_HIT_PERK_ID = 'freeze-on-hit';
 
 /** Level range used for linear scaling (10%→100%, 5%→30%, etc.). */
 export const ARTIFACT_PERK_SCALE_MAX_LEVEL = 10;
+
+/** Universal Law (e.g. Shared Resonance): multiply numeric totals from artifact perks by (1 + bonus). */
+function artifactPerkStrengthMultiplierFromLaw(lawEffects?: UniversalLawBoonEffects | null): number {
+  const m = Math.max(0, Math.min(1, Number(lawEffects?.artifactPerkMultiplierBonusFraction ?? 0)));
+  return 1 + m;
+}
+
+/** Scale a 0..1 bonus fraction from gear perks before caps (Shared Resonance). */
+function scaleCappedArtifactPerkBonusFraction(
+  artifactBonusFraction: number,
+  lawEffects?: UniversalLawBoonEffects | null
+): number {
+  const f = Number(artifactBonusFraction);
+  if (!Number.isFinite(f) || f <= 0) return 0;
+  return Math.min(1, f * artifactPerkStrengthMultiplierFromLaw(lawEffects));
+}
+
+function scaleArtifactPerkFlatTotal(
+  total: number,
+  lawEffects?: UniversalLawBoonEffects | null
+): number {
+  const t = Math.max(0, Number(total) || 0);
+  if (t <= 0) return 0;
+  return Math.max(0, Math.round(t * artifactPerkStrengthMultiplierFromLaw(lawEffects)));
+}
 
 function clampArtifactLevelForPerks(level: unknown): number {
   return Math.max(1, Math.min(ARTIFACT_PERK_SCALE_MAX_LEVEL, Math.floor(Number(level) || 1)));
@@ -240,7 +265,8 @@ function artifactHasCostReductionPerk(
  */
 export function getLiveEventPpCostReductionFromEquipped(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
   let total = 0;
@@ -254,7 +280,8 @@ export function getLiveEventPpCostReductionFromEquipped(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     total += Math.max(0, Math.round(base * syn));
   }
-  return Math.min(12, total);
+  const scaled = scaleArtifactPerkFlatTotal(total, lawEffects);
+  return Math.min(12, scaled);
 }
 
 /**
@@ -283,7 +310,9 @@ export function getOutgoingDamageMultiplierFromCostReductionPerk(
   rawCatalog: Record<string, unknown> | null | undefined,
   lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  const base = 1 + getCostReductionPerkSkillEffectivenessBonusFraction(equipped, rawCatalog);
+  const artifactFrac = getCostReductionPerkSkillEffectivenessBonusFraction(equipped, rawCatalog);
+  const scaledArtifact = scaleCappedArtifactPerkBonusFraction(artifactFrac, lawEffects);
+  const base = 1 + scaledArtifact;
   const bonus = 1 + Math.max(0, Number(lawEffects?.rrCandySkillBonusFraction || 0));
   return base * bonus;
 }
@@ -293,7 +322,8 @@ export function getOutgoingDamageMultiplierFromCostReductionPerk(
  */
 export function getVaultSiegeFreezeChancePercentFromEquipped(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
   let sum = 0;
@@ -306,7 +336,8 @@ export function getVaultSiegeFreezeChancePercentFromEquipped(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     sum += base * syn;
   }
-  return Math.min(0.25, sum) * 100;
+  const scaled = Math.min(0.25, sum * artifactPerkStrengthMultiplierFromLaw(lawEffects));
+  return scaled * 100;
 }
 
 /**
@@ -369,7 +400,9 @@ export function getOutgoingDamageMultiplierFromManifestBoostPerk(
   rawCatalog: Record<string, unknown> | null | undefined,
   lawEffects?: UniversalLawBoonEffects | null
 ): number {
-  const base = 1 + getManifestBoostBonusFraction(equipped, rawCatalog);
+  const artifactFrac = getManifestBoostBonusFraction(equipped, rawCatalog);
+  const scaledArtifact = scaleCappedArtifactPerkBonusFraction(artifactFrac, lawEffects);
+  const base = 1 + scaledArtifact;
   const bonus = 1 + Math.max(0, Number(lawEffects?.manifestSkillBonusFraction || 0));
   return base * bonus;
 }
@@ -408,7 +441,8 @@ export function getOutgoingDamageMultiplierFromElementalBoostPerk(
  */
 export function getStatusDefenseMitigationFraction(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
   let sum = 0;
@@ -421,7 +455,8 @@ export function getStatusDefenseMitigationFraction(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     sum += base * syn;
   }
-  return Math.min(0.3, sum);
+  const scaled = Math.min(0.3, sum * artifactPerkStrengthMultiplierFromLaw(lawEffects));
+  return scaled;
 }
 
 /**
@@ -430,7 +465,8 @@ export function getStatusDefenseMitigationFraction(
  */
 export function getHealingBoostRegenPerTurn(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): number {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
   let sum = 0;
@@ -443,7 +479,8 @@ export function getHealingBoostRegenPerTurn(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     sum += Math.max(0, Math.round(base * syn));
   }
-  return Math.min(50, sum);
+  const scaled = scaleArtifactPerkFlatTotal(sum, lawEffects);
+  return Math.min(50, scaled);
 }
 
 /**
@@ -466,8 +503,9 @@ export function getPpEconomyBonusFraction(
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);
     sum += base * syn;
   }
+  const scaledArtifactSum = Math.min(0.5, sum * artifactPerkStrengthMultiplierFromLaw(lawEffects));
   const lawBonus = Math.max(0, Number(lawEffects?.battleRewardPpMultiplierBonusFraction || 0));
-  return Math.min(0.8, sum + lawBonus);
+  return Math.min(0.8, scaledArtifactSum + lawBonus);
 }
 
 /** Floor of basePP × (1 + PP Economy bonus). Target still loses only the base stolen amount when used for steals. */
@@ -502,24 +540,49 @@ export interface SkillsMasteryPerkDisplaySnapshot {
   /** Rounded % bonus on PP received (cap 50%). */
   ppEconomyPercent: number;
   synergyNotes: string[];
+  /** Universal Law Skill Tree — same bonuses as combat (for labels under artifact perks). */
+  universalLawBoonLines: string[];
 }
 
 export function getSkillsMasteryPerkDisplaySnapshot(
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): SkillsMasteryPerkDisplaySnapshot {
   const eq = enrichEquippedForPerkEffects(equipped, rawCatalog);
-  const damageBoostMultiplier = getOutgoingDamageMultiplierFromDamageBoostPerk(equipped, rawCatalog);
-  const manifestBoostMultiplier = getOutgoingDamageMultiplierFromManifestBoostPerk(equipped, rawCatalog);
-  const elementalBoostMultiplier = getOutgoingDamageMultiplierFromElementalBoostPerk(equipped, rawCatalog);
-  const statusDefensePercent = Math.round(getStatusDefenseMitigationFraction(equipped, rawCatalog) * 100);
-  const liveEventPpCostReduction = getLiveEventPpCostReductionFromEquipped(equipped, rawCatalog);
-  const costReductionSkillMultiplier = getOutgoingDamageMultiplierFromCostReductionPerk(equipped, rawCatalog);
+  const damageBoostMultiplier = getOutgoingDamageMultiplierFromDamageBoostPerk(
+    equipped,
+    rawCatalog,
+    lawEffects
+  );
+  const manifestBoostMultiplier = getOutgoingDamageMultiplierFromManifestBoostPerk(
+    equipped,
+    rawCatalog,
+    lawEffects
+  );
+  const elementalBoostMultiplier = getOutgoingDamageMultiplierFromElementalBoostPerk(
+    equipped,
+    rawCatalog,
+    lawEffects
+  );
+  const statusDefensePercent = Math.round(
+    getStatusDefenseMitigationFraction(equipped, rawCatalog, lawEffects) * 100
+  );
+  const liveEventPpCostReduction = getLiveEventPpCostReductionFromEquipped(
+    equipped,
+    rawCatalog,
+    lawEffects
+  );
+  const costReductionSkillMultiplier = getOutgoingDamageMultiplierFromCostReductionPerk(
+    equipped,
+    rawCatalog,
+    lawEffects
+  );
   const costReductionSkillEffectivenessPercent = Math.round(
     (costReductionSkillMultiplier - 1) * 100
   );
-  const healingRegenPerTurn = getHealingBoostRegenPerTurn(equipped, rawCatalog);
-  const ppEconomyPercent = Math.round(getPpEconomyBonusFraction(equipped, rawCatalog) * 100);
+  const healingRegenPerTurn = getHealingBoostRegenPerTurn(equipped, rawCatalog, lawEffects);
+  const ppEconomyPercent = Math.round(getPpEconomyBonusFraction(equipped, rawCatalog, lawEffects) * 100);
 
   const synergyNotes: string[] = [];
   const seenKw = new Set<string>();
@@ -546,6 +609,8 @@ export function getSkillsMasteryPerkDisplaySnapshot(
     );
   }
 
+  const universalLawBoonLines = formatUniversalLawBoonBattleSummary(lawEffects ?? null);
+
   return {
     damageBoostMultiplier,
     damageBoostPercent: Math.round((damageBoostMultiplier - 1) * 100),
@@ -560,6 +625,7 @@ export function getSkillsMasteryPerkDisplaySnapshot(
     healingRegenPerTurn,
     ppEconomyPercent,
     synergyNotes,
+    universalLawBoonLines,
   };
 }
 
@@ -576,7 +642,10 @@ export function effectiveSkillCooldownTurns(
     moveMeta?.category === 'system'
       ? Math.max(0, Number(lawEffects?.artifactSkillCooldownReductionFraction || 0))
       : 0;
-  const perkReduction = Math.min(0.25, getLiveEventPpCostReductionFromEquipped(equipped, rawCatalog) * 0.01);
+  const perkReduction = Math.min(
+    0.25,
+    getLiveEventPpCostReductionFromEquipped(equipped, rawCatalog, lawEffects) * 0.01
+  );
   const totalReduction = Math.min(0.85, globalReduction + artifactReduction + perkReduction);
   return Math.max(0, Math.floor(b * (1 - totalReduction)));
 }
@@ -596,10 +665,12 @@ export function getElementalAccessElementFromStudent(studentData: Record<string,
 export function applyVaultShieldBoostFromEquipped<T extends { maxShieldStrength?: number; shieldStrength?: number }>(
   vault: T,
   equipped: Record<string, unknown> | null | undefined,
-  rawCatalog: Record<string, unknown> | null | undefined
+  rawCatalog: Record<string, unknown> | null | undefined,
+  lawEffects?: UniversalLawBoonEffects | null
 ): T {
-  const bonus =
+  const rawBonus =
     getShieldBoostFlatBonus(equipped, rawCatalog) + getImpenetrableShieldStatFlatBonus(equipped, rawCatalog);
+  const bonus = scaleArtifactPerkFlatTotal(rawBonus, lawEffects);
   if (bonus <= 0) return vault;
   const baseMax = Math.max(0, Number(vault.maxShieldStrength) || 0);
   const baseCur = Math.max(0, Number(vault.shieldStrength) || 0);

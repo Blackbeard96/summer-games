@@ -352,8 +352,12 @@ export async function getRRCandyStatusAsync(userId: string): Promise<RRCandyStat
   const { doc, getDoc } = await import('firebase/firestore');
 
   try {
-    const { migrateExistingKonfigOwners } = await import('../services/rrCandyPlayerStateService');
-    await migrateExistingKonfigOwners(userId);
+    try {
+      const { migrateExistingKonfigOwners } = await import('../services/rrCandyPlayerStateService');
+      await migrateExistingKonfigOwners(userId);
+    } catch (migrateErr) {
+      console.warn('getRRCandyStatusAsync: Konfig starter migration skipped (unlock still from chapter data)', migrateErr);
+    }
 
     const userRef = doc(db, 'users', userId);
     const studentRef = doc(db, 'students', userId);

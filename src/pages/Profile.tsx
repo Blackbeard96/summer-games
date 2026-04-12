@@ -1121,9 +1121,17 @@ const Profile = () => {
       )}
       
       {/* Two-column layout: Left (Player Card + Journey) and Right (Profile Settings) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '2rem', marginBottom: '2rem' }}>
-        {/* Left Column - Player Card */}
-        <div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1.5fr',
+          gap: '2rem',
+          marginBottom: '2rem',
+          alignItems: 'start',
+        }}
+      >
+        {/* Left Column - Player Card (stay top-aligned; right column may be taller) */}
+        <div style={{ alignSelf: 'start' }}>
           {/* Player Card on top */}
           <div style={{ marginBottom: '2rem' }}>
             <PlayerCard
@@ -1163,19 +1171,24 @@ const Profile = () => {
         {/* Right Column - Profile Settings or Skill Tree Settings */}
         <div>
           {isSkillTreeShowing ? (
-            /* Skill Tree Page - Ghost of Tsushima Inspired */
-            <div style={{
-              background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
-              borderRadius: '0.75rem',
-              padding: '2rem',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              marginBottom: '2rem',
-              minHeight: '600px',
-              maxHeight: 'calc(100vh - 200px)',
-              position: 'relative',
-              overflow: 'hidden'
-            }}>
+            /* Skill Tree Page — flex column capped to viewport so inner grid can scroll */
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+                borderRadius: '0.75rem',
+                padding: '1.25rem 1.5rem',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                marginBottom: '2rem',
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                width: '100%',
+                height: 'calc(100dvh - 7.5rem)',
+                maxHeight: 'calc(100dvh - 7.5rem)',
+                overflow: 'hidden',
+              }}
+            >
               {/* Background texture overlay */}
               <div style={{
                 position: 'absolute',
@@ -1197,12 +1210,15 @@ const Profile = () => {
               }} />
               
               {/* Title + back */}
-              <div style={{
-                position: 'relative',
-                zIndex: 1,
-                marginBottom: '2rem',
-                textAlign: 'center'
-              }}>
+              <div
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  marginBottom: '1rem',
+                  textAlign: 'center',
+                  flexShrink: 0,
+                }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '0.75rem' }}>
                   <button
                     type="button"
@@ -1243,8 +1259,18 @@ const Profile = () => {
                 </p>
               </div>
 
-              {/* Universal Law Skill Tree Component */}
-              <div style={{ position: 'relative', zIndex: 1 }}>
+              {/* Universal Law Skill Tree — fills remaining height; page scrolls inside */}
+              <div
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
                 {currentUser?.uid ? (
                   <UniversalLawSkillTreePage
                     userId={currentUser.uid}
@@ -1261,16 +1287,19 @@ const Profile = () => {
               </div>
 
               {/* Info Footer */}
-              <div style={{
-                position: 'relative',
-                zIndex: 1,
-                marginTop: '2rem',
-                padding: '1rem',
-                background: 'rgba(0, 0, 0, 0.3)',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                textAlign: 'center'
-              }}>
+              <div
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  marginTop: '0.75rem',
+                  padding: '0.65rem 0.75rem',
+                  background: 'rgba(0, 0, 0, 0.3)',
+                  borderRadius: '0.5rem',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  textAlign: 'center',
+                  flexShrink: 0,
+                }}
+              >
                 <p style={{
                   fontSize: '0.75rem',
                   color: 'rgba(255, 255, 255, 0.5)',

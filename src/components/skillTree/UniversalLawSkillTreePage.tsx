@@ -204,25 +204,30 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
   const allTrees = getAllLawTrees();
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '200px 1fr 350px',
-      gap: '1.5rem',
-      height: '100%',
-      minHeight: '600px',
-      maxHeight: 'calc(100vh - 300px)',
-      overflow: 'hidden'
-    }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(160px, 200px) minmax(0, 1fr) minmax(280px, 350px)',
+        gap: '1rem',
+        height: '100%',
+        minHeight: 0,
+        maxHeight: '100%',
+        overflow: 'hidden',
+      }}
+    >
       {/* Left: Law Selector */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.1) 100%)',
-        borderRadius: '0.75rem',
-        padding: '1rem',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        overflowY: 'auto'
-      }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.1) 100%)',
+          borderRadius: '0.75rem',
+          padding: '1rem',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          overflowY: 'auto',
+          minHeight: 0,
+        }}
+      >
         <h3 style={{
           fontSize: '0.875rem',
           fontWeight: 'bold',
@@ -333,19 +338,21 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
       </div>
 
       {/* Middle: Node Cluster */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.1) 100%)',
-        borderRadius: '0.75rem',
-        padding: '2rem',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        position: 'relative',
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 0
-      }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.1) 100%)',
+          borderRadius: '0.75rem',
+          padding: '1rem',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          position: 'relative',
+          overflow: 'auto',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: 0,
+        }}
+      >
         {selectedTree ? (
           getBoonNodesByLaw(selectedTree.id).length > 0 ? (
             <div style={{
@@ -466,192 +473,243 @@ export const UniversalLawSkillTreePage: React.FC<UniversalLawSkillTreePageProps>
       </div>
 
       {/* Right: Detail Panel */}
-      <div style={{
-        background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.2) 100%)',
-        borderRadius: '0.75rem',
-        border: '2px solid rgba(234, 179, 8, 0.3)',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column'
-      }}>
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.2) 100%)',
+          borderRadius: '0.75rem',
+          border: '2px solid rgba(234, 179, 8, 0.3)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
         {selectedNode ? (
-          <div style={{
-            padding: '1.5rem',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            color: '#fff',
-            overflowY: 'auto'
-          }}>
-            {/* Skill Title */}
-            <div style={{
-              fontSize: '1.5rem',
-              fontWeight: 'bold',
-              marginBottom: '1rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.75rem'
-            }}>
-              <span>{selectedNode.icon || '◇'}</span>
-              <span>{selectedNode.title}</span>
-            </div>
-
-            {/* Law Info */}
-            {selectedTree && (
-              <div style={{
-                marginBottom: '1.5rem',
-                padding: '0.75rem',
-                background: 'rgba(255, 255, 255, 0.05)',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(255, 255, 255, 0.1)'
-              }}>
-                <div style={{
-                  fontSize: '0.75rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'rgba(255, 255, 255, 0.6)',
-                  marginBottom: '0.25rem'
-                }}>
-                  {selectedTree.title}
-                </div>
-                <div style={{
-                  fontSize: '0.875rem',
-                  color: 'rgba(255, 255, 255, 0.8)',
-                  fontStyle: 'italic'
-                }}>
-                  {selectedTree.description}
-                </div>
-              </div>
-            )}
-
-            {/* Node Details */}
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{
-                fontSize: '0.875rem',
-                fontWeight: 'bold',
-                textTransform: 'uppercase',
-                letterSpacing: '0.1em',
-                color: 'rgba(255, 255, 255, 0.6)',
-                marginBottom: '0.75rem'
-              }}>
-                Boon Effect
-              </h3>
-              <p style={{
-                fontSize: '1rem',
-                lineHeight: '1.6',
-                color: 'rgba(255, 255, 255, 0.9)'
-              }}>
-                {selectedNode.description}
-              </p>
-            </div>
-
-            {/* Requirements */}
-            {!isNodeLearned && (
-              <div style={{
-                marginBottom: '1.5rem',
-                padding: '1rem',
-                background: 'rgba(255, 255, 255, 0.05)',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(255, 255, 255, 0.1)'
-              }}>
-                <h4 style={{
-                  fontSize: '0.75rem',
+          <>
+            {/* Scrolls; unlock stays in footer below */}
+            <div
+              style={{
+                padding: '0.85rem 1rem 0.5rem',
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                color: '#fff',
+              }}
+            >
+              {/* Skill Title */}
+              <div
+                style={{
+                  fontSize: '1.2rem',
                   fontWeight: 'bold',
+                  marginBottom: '0.65rem',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'rgba(255, 255, 255, 0.6)',
-                  marginBottom: '0.5rem'
-                }}>
-                  Requirements
-                </h4>
-                <ul style={{
-                  listStyle: 'none',
-                  padding: 0,
-                  margin: 0
-                }}>
-                  <li style={{
-                    fontSize: '0.875rem',
-                    color: selectedEligibility?.insufficientPP ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
-                    marginBottom: '0.25rem',
-                    paddingLeft: '1rem',
-                    position: 'relative'
-                  }}>
-                    <span style={{
-                      position: 'absolute',
-                      left: 0,
-                      color: 'rgba(255, 255, 255, 0.5)'
-                    }}>•</span>
-                    Cost: ⚡ {selectedNode.costPP.toLocaleString()} PP
-                  </li>
-                  <li style={{
-                    fontSize: '0.875rem',
-                    color: selectedEligibility?.insufficientTruthMetal ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
-                    marginBottom: '0.25rem',
-                    paddingLeft: '1rem',
-                    position: 'relative'
-                  }}>
-                    <span style={{
-                      position: 'absolute',
-                      left: 0,
-                      color: 'rgba(255, 255, 255, 0.5)'
-                    }}>•</span>
-                    Cost: 🔩 {selectedNode.costTruthMetalShards.toLocaleString()} Truth Metal
-                  </li>
-                  {selectedNode.prerequisites.length > 0 && (
-                    <li style={{
-                      fontSize: '0.875rem',
-                      color: (selectedEligibility?.missingPrerequisites.length || 0) > 0
-                        ? '#fca5a5'
-                        : 'rgba(255, 255, 255, 0.8)',
-                      marginBottom: '0.25rem',
-                      paddingLeft: '1rem',
-                      position: 'relative'
-                    }}>
-                      <span style={{
-                        position: 'absolute',
-                        left: 0,
-                        color: 'rgba(255, 255, 255, 0.5)'
-                      }}>•</span>
-                      Prerequisites: {selectedNode.prerequisites.length} node(s)
+                  letterSpacing: '0.05em',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}
+              >
+                <span>{selectedNode.icon || '◇'}</span>
+                <span>{selectedNode.title}</span>
+              </div>
+
+              {/* Law Info */}
+              {selectedTree && (
+                <div
+                  style={{
+                    marginBottom: '0.75rem',
+                    padding: '0.55rem 0.65rem',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: '0.5rem',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: '0.7rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.1em',
+                      color: 'rgba(255, 255, 255, 0.6)',
+                      marginBottom: '0.2rem',
+                    }}
+                  >
+                    {selectedTree.title}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.8rem',
+                      lineHeight: 1.45,
+                      color: 'rgba(255, 255, 255, 0.8)',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    {selectedTree.description}
+                  </div>
+                </div>
+              )}
+
+              {/* Node Details */}
+              <div style={{ marginBottom: '0.75rem' }}>
+                <h3
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.1em',
+                    color: 'rgba(255, 255, 255, 0.6)',
+                    marginBottom: '0.4rem',
+                  }}
+                >
+                  Boon Effect
+                </h3>
+                <p
+                  style={{
+                    fontSize: '0.9rem',
+                    lineHeight: 1.5,
+                    color: 'rgba(255, 255, 255, 0.9)',
+                    margin: 0,
+                  }}
+                >
+                  {selectedNode.description}
+                </p>
+              </div>
+
+              {/* Requirements */}
+              {!isNodeLearned && (
+                <div
+                  style={{
+                    marginBottom: '0.5rem',
+                    padding: '0.65rem 0.75rem',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: '0.5rem',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  <h4
+                    style={{
+                      fontSize: '0.7rem',
+                      fontWeight: 'bold',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.1em',
+                      color: 'rgba(255, 255, 255, 0.6)',
+                      marginBottom: '0.35rem',
+                    }}
+                  >
+                    Requirements
+                  </h4>
+                  <ul
+                    style={{
+                      listStyle: 'none',
+                      padding: 0,
+                      margin: 0,
+                    }}
+                  >
+                    <li
+                      style={{
+                        fontSize: '0.8rem',
+                        color: selectedEligibility?.insufficientPP ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
+                        marginBottom: '0.2rem',
+                        paddingLeft: '1rem',
+                        position: 'relative',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          color: 'rgba(255, 255, 255, 0.5)',
+                        }}
+                      >
+                        •
+                      </span>
+                      Cost: ⚡ {selectedNode.costPP.toLocaleString()} PP
                     </li>
-                  )}
-                </ul>
-              </div>
-            )}
+                    <li
+                      style={{
+                        fontSize: '0.8rem',
+                        color: selectedEligibility?.insufficientTruthMetal ? '#fca5a5' : 'rgba(255, 255, 255, 0.8)',
+                        marginBottom: '0.2rem',
+                        paddingLeft: '1rem',
+                        position: 'relative',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          color: 'rgba(255, 255, 255, 0.5)',
+                        }}
+                      >
+                        •
+                      </span>
+                      Cost: 🔩 {selectedNode.costTruthMetalShards.toLocaleString()} Truth Metal
+                    </li>
+                    {selectedNode.prerequisites.length > 0 && (
+                      <li
+                        style={{
+                          fontSize: '0.8rem',
+                          color:
+                            (selectedEligibility?.missingPrerequisites.length || 0) > 0
+                              ? '#fca5a5'
+                              : 'rgba(255, 255, 255, 0.8)',
+                          marginBottom: '0.2rem',
+                          paddingLeft: '1rem',
+                          position: 'relative',
+                        }}
+                      >
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            color: 'rgba(255, 255, 255, 0.5)',
+                          }}
+                        >
+                          •
+                        </span>
+                        Prerequisites: {selectedNode.prerequisites.length} node(s)
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+            </div>
 
-            {/* Learn Status */}
-            {isNodeLearned ? (
-              <div style={{
-                padding: '1rem',
-                background: 'rgba(16, 185, 129, 0.2)',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(16, 185, 129, 0.5)',
-                textAlign: 'center',
-                color: '#10b981',
-                fontWeight: 'bold',
-                textTransform: 'uppercase',
-                letterSpacing: '0.1em',
-                fontSize: '0.875rem'
-              }}>
-                ✓ Learned
-              </div>
-            ) : (
-              <HoldToUnlockButton
-                onUnlock={handleLearn}
-                disabled={!canLearn || unlockBusy}
-              />
-            )}
-            {unlockFeedback && (
-              <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'rgba(255,255,255,0.85)' }}>
-                {unlockFeedback}
-              </div>
-            )}
-
-            {/* Spacer */}
-            <div style={{ flex: 1 }} />
-          </div>
+            {/* Always visible — no scroll needed to reach unlock */}
+            <div
+              style={{
+                flexShrink: 0,
+                padding: '0.65rem 1rem 0.85rem',
+                borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+                background: 'linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.35) 100%)',
+              }}
+            >
+              {isNodeLearned ? (
+                <div
+                  style={{
+                    padding: '0.75rem',
+                    background: 'rgba(16, 185, 129, 0.2)',
+                    borderRadius: '0.5rem',
+                    border: '1px solid rgba(16, 185, 129, 0.5)',
+                    textAlign: 'center',
+                    color: '#10b981',
+                    fontWeight: 'bold',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.1em',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  ✓ Learned
+                </div>
+              ) : (
+                <HoldToUnlockButton onUnlock={handleLearn} disabled={!canLearn || unlockBusy} />
+              )}
+              {unlockFeedback && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'rgba(255,255,255,0.85)' }}>
+                  {unlockFeedback}
+                </div>
+              )}
+            </div>
+          </>
         ) : (
           <div style={{
             padding: '2rem',

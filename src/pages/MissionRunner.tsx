@@ -19,7 +19,13 @@ import type { BattlePassReward } from '../types/season1';
 import { REWARD_TYPE_LABELS } from '../components/admin/battlePassAdminRewardUtils';
 import type { HabitDuration } from '../types/assessmentGoals';
 import { getMissionTemplate } from '../utils/missionsService';
-import { claimMissionRewardChoices, completeMission, getPlayerMissions } from '../utils/missionsService';
+import {
+  claimMissionRewardChoices,
+  completeMission,
+  getPlayerMissions,
+  setPlayerMissionSequencePlayheadIndex,
+} from '../utils/missionsService';
+import { normalizeMissionNavigateTo } from '../utils/missionStepNavigate';
 import IslandRaidBattle from '../components/IslandRaidBattle';
 import {
   estimateDamageFromCpuMoves,
@@ -179,6 +185,16 @@ const MissionRunner: React.FC = () => {
         if (activeMission) {
           setPlayerMissionId(activeMission.id);
         }
+
+        const seqLen = missionData.sequence?.length ?? 0;
+        let resumeIndex = 0;
+        if (activeMission?.sequencePlayheadIndex != null && seqLen > 0) {
+          const ph = Number(activeMission.sequencePlayheadIndex);
+          if (Number.isFinite(ph)) {
+            resumeIndex = Math.max(0, Math.min(Math.floor(ph), seqLen - 1));
+          }
+        }
+        setCurrentStepIndex(resumeIndex);
 
         setLoading(false);
       } catch (error) {
@@ -505,14 +521,35 @@ const MissionRunner: React.FC = () => {
     if (isLastStep) {
       await handleComplete();
     } else {
-      setCurrentStepIndex(currentStepIndex + 1);
+      const nextIndex = currentStepIndex + 1;
+      if (playerMissionId) {
+        try {
+          await setPlayerMissionSequencePlayheadIndex(playerMissionId, nextIndex);
+        } catch (e) {
+          console.error('Failed to save mission step position', e);
+        }
+      }
+      setCurrentStepIndex(nextIndex);
+      const redirect =
+        (currentStep.type === 'STORY_SLIDE' || currentStep.type === 'VIDEO') &&
+        normalizeMissionNavigateTo(currentStep.navigateTo);
+      if (redirect) {
+        navigate(redirect);
+      }
     }
   };
 
-  const handleBack = () => {
-    if (currentStepIndex > 0) {
-      setCurrentStepIndex(currentStepIndex - 1);
+  const handleBack = async () => {
+    if (currentStepIndex <= 0) return;
+    const prevIndex = currentStepIndex - 1;
+    if (playerMissionId) {
+      try {
+        await setPlayerMissionSequencePlayheadIndex(playerMissionId, prevIndex);
+      } catch (e) {
+        console.error('Failed to save mission step position', e);
+      }
     }
+    setCurrentStepIndex(prevIndex);
   };
 
   const handleComplete = async () => {

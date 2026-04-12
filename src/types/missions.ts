@@ -175,6 +175,11 @@ export interface PlayerMission {
   };
   /** Dotted keys in Firestore: `sequenceStepCompletion.{stepId}` — merged at runtime */
   sequenceStepCompletion?: Record<string, { completedAt?: unknown; skillId?: string }>;
+  /**
+   * Saved step index (0-based) while a sequenced mission is active — used so leaving the runner
+   * (e.g. optional slide redirect) can resume on the correct step.
+   */
+  sequencePlayheadIndex?: number;
   /** For event-driven missions: auto-accepted when first event matches */
   autoAccepted?: boolean;
   /** Player must pick rewards (Battle Pass–style choice groups) before this is cleared. */
@@ -196,6 +201,8 @@ export type MissionSequenceStep =
       order: number;              // computed at save, but store for safety
       title?: string;             // optional per slide
       bodyText: string;           // caption text under image
+      /** After Continue, open this in-app route (allowlisted). Optional. */
+      navigateTo?: string;
       image: {
         storagePath?: string;     // gs:// path if uploaded
         url: string;              // public/download URL
@@ -209,6 +216,8 @@ export type MissionSequenceStep =
       type: "VIDEO";
       order: number;
       title?: string;
+      /** After Continue, open this in-app route (allowlisted). Optional. */
+      navigateTo?: string;
       video: {
         sourceType: "URL" | "UPLOAD";
         url: string;              // direct mp4 url OR storage download URL

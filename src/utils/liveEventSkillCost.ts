@@ -5,6 +5,7 @@
 
 import type { Move } from '../types/battle';
 import { getLiveEventPpCostReductionFromEquipped } from './artifactPerkEffects';
+import type { UniversalLawBoonEffects } from './universalLawBoons';
 
 export interface LiveEventSkillCostBreakdown {
   baseCost: number;
@@ -33,10 +34,15 @@ export function computeLiveEventParticipationSkillCost(
   move: Move,
   equippedArtifacts: Record<string, unknown> | null | undefined,
   equippableCatalogRaw: Record<string, unknown> | null | undefined,
-  reductionFromEffects: number
+  reductionFromEffects: number,
+  universalLawEffects?: UniversalLawBoonEffects | null
 ): LiveEventSkillCostBreakdown {
   const baseCost = Math.max(0, Math.floor(Number(move.cost) || 0));
-  const redArtifacts = getLiveEventPpCostReductionFromEquipped(equippedArtifacts ?? null, equippableCatalogRaw ?? null);
+  const redArtifacts = getLiveEventPpCostReductionFromEquipped(
+    equippedArtifacts ?? null,
+    equippableCatalogRaw ?? null,
+    universalLawEffects ?? null
+  );
   const redEffects = Math.max(0, Math.floor(reductionFromEffects || 0));
   const allowZero =
     baseCost === 0 || (move as Move & { liveEventAllowZeroCost?: boolean }).liveEventAllowZeroCost === true;

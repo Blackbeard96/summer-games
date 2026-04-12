@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from './liveEventSkillCost';
+import { getPlayerUniversalLawEffects } from './universalLawBoons';
 import { defaultEnergies } from './season1PlayerHydration';
 import { resolveSeason1SkillCost } from './season1SkillCost';
 import { getEquippedSkillsForBattle } from './battleSkillsService';
@@ -148,6 +149,7 @@ export async function validateSkillUsage(
   }
 ): Promise<{ valid: boolean; reason?: string; spendSummary?: string }> {
   try {
+    const lawFx = await getPlayerUniversalLawEffects(userId);
     const skills = await getAvailableSkillsForSession(sessionId, userId);
     const skill = skills.find(s => s.id === skillId);
     
@@ -168,6 +170,7 @@ export async function validateSkillUsage(
         {
           reductionFromEffects: season1?.reductionFromEffects ?? 0,
           awakenedFlow: season1?.awakenedFlow ?? false,
+          universalLawEffects: lawFx,
         }
       );
       if (!res.canUse) {
@@ -187,7 +190,8 @@ export async function validateSkillUsage(
       skill,
       equippedArtifacts ?? null,
       null,
-      season1?.reductionFromEffects ?? 0
+      season1?.reductionFromEffects ?? 0,
+      lawFx
     );
     if (participationPointsAvailable < breakdown.finalCost) {
       return {

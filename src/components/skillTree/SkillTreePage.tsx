@@ -176,8 +176,8 @@ export const SkillTreePage: React.FC<SkillTreePageProps> = ({
       gridTemplateColumns: '1fr minmax(350px, 400px)',
       gap: '1.5rem',
       height: '100%',
-      minHeight: '600px',
-      maxHeight: 'calc(100vh - 300px)',
+      minHeight: 0,
+      maxHeight: '100%',
       overflow: 'hidden'
     }}>
       {/* Left: Tree Canvas */}
@@ -217,7 +217,7 @@ export const SkillTreePage: React.FC<SkillTreePageProps> = ({
         {/* Tree Canvas */}
         <div style={{ 
           flex: 1, 
-          minHeight: '400px',
+          minHeight: 0,
           maxHeight: '100%',
           overflow: 'auto'
         }}>

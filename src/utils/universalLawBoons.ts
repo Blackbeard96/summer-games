@@ -469,3 +469,69 @@ export async function ensureUniversalLawProgressInitialized(userId: string): Pro
 export function getAllUniversalLawNodes(): UniversalLawBoonNode[] {
   return [...UNIVERSAL_LAW_BOON_NODES];
 }
+
+/**
+ * Human-readable lines for battle / arena UI (Skill Mastery, Battle Arena strip).
+ * Omits zeros; artifact perk strength stacks with equipped artifact perks in combat math.
+ */
+export function formatUniversalLawBoonBattleSummary(
+  effects: UniversalLawBoonEffects | null | undefined
+): string[] {
+  if (!effects) return [];
+  const lines: string[] = [];
+  const pct = (f: number) => Math.round(Math.max(0, f) * 100);
+  if (effects.artifactPerkMultiplierBonusFraction > 0) {
+    lines.push(
+      `+${pct(effects.artifactPerkMultiplierBonusFraction)}% stronger artifact perks (Damage/Manifest/Elemental boosts, shields, healing regen, Cost Reduction skill bonus, PP Economy, Status Defense, Live Event PP discount, freeze chance)`
+    );
+  }
+  if (effects.maxLoadoutSlotsBonus > 0) {
+    lines.push(`+${effects.maxLoadoutSlotsBonus} skill loadout slot(s) from Universal Laws`);
+  }
+  if (effects.manifestSkillBonusFraction > 0) {
+    lines.push(`+${pct(effects.manifestSkillBonusFraction)}% Manifest skill power (Universal Law)`);
+  }
+  if (effects.elementalSkillBonusFraction > 0) {
+    lines.push(`+${pct(effects.elementalSkillBonusFraction)}% Elemental skill power (Universal Law)`);
+  }
+  if (effects.rrCandySkillBonusFraction > 0) {
+    lines.push(`+${pct(effects.rrCandySkillBonusFraction)}% RR Candy / Cost Reduction damage effectiveness (Universal Law)`);
+  }
+  if (effects.artifactSkillCooldownReductionFraction > 0) {
+    lines.push(
+      `−${pct(effects.artifactSkillCooldownReductionFraction)}% cooldown on artifact-granted skills (Universal Law)`
+    );
+  }
+  if (effects.cooldownReductionGlobalFraction > 0) {
+    lines.push(`−${pct(effects.cooldownReductionGlobalFraction)}% global skill cooldowns (Universal Law)`);
+  }
+  if (effects.battleRewardPpMultiplierBonusFraction > 0) {
+    lines.push(`+${pct(effects.battleRewardPpMultiplierBonusFraction)}% PP rewards from battles (Universal Law)`);
+  }
+  if (effects.critChanceBonusFraction > 0 || effects.critDamageBonusFraction > 0) {
+    const parts: string[] = [];
+    if (effects.critChanceBonusFraction > 0) parts.push(`+${pct(effects.critChanceBonusFraction)}% crit chance`);
+    if (effects.critDamageBonusFraction > 0) parts.push(`+${pct(effects.critDamageBonusFraction)}% crit damage`);
+    lines.push(`${parts.join(', ')} (Universal Law)`);
+  }
+  if (effects.comboDamageBonusFraction > 0) {
+    lines.push(`+${pct(effects.comboDamageBonusFraction)}% combo damage (Universal Law)`);
+  }
+  if (effects.shieldOnComboRestore > 0) {
+    lines.push(`+${effects.shieldOnComboRestore} shield on combo milestones (Universal Law)`);
+  }
+  if (effects.firstSkillDamageBonusFraction > 0) {
+    lines.push(`+${pct(effects.firstSkillDamageBonusFraction)}% first skill each battle (Universal Law)`);
+  }
+  if (effects.everyNthSkillBonus) {
+    const { everyN, bonusFraction } = effects.everyNthSkillBonus;
+    lines.push(`Every ${everyN}th skill: +${pct(bonusFraction)}% damage (Universal Law)`);
+  }
+  if (effects.rareDropChanceBonusFraction > 0) {
+    lines.push(`+${pct(effects.rareDropChanceBonusFraction)}% rare drop chance (Universal Law)`);
+  }
+  if (effects.comboAltSourceBonusFraction > 0) {
+    lines.push(`+${pct(effects.comboAltSourceBonusFraction)}% combo from alt sources (Universal Law)`);
+  }
+  return lines;
+}

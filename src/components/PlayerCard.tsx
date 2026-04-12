@@ -329,6 +329,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
           perspective: 1200,
           width: 320,
           height: 480,
+          maxHeight: 'calc(100dvh - 9rem)',
           margin: '0 auto',
           cursor: 'pointer',
         }}
@@ -1073,17 +1074,19 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                   </button>
                 </div>
 
-                <div style={{
-                  background: '#fff',
-                  borderRadius: 12,
-                  padding: 16,
-                  boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
-                  width: '100%',
-                  maxHeight: 400,
-                  overflowY: 'auto',
-                  marginBottom: 16,
-                  flex: '1 1 auto',
-                }}>
+                <div
+                  style={{
+                    background: '#fff',
+                    borderRadius: 12,
+                    padding: 16,
+                    boxShadow: '0 1px 3px 0 rgba(0,0,0,0.07)',
+                    width: '100%',
+                    minHeight: 0,
+                    flex: '1 1 auto',
+                    overflowY: 'auto',
+                    marginBottom: 12,
+                  }}
+                >
                   {candyType === 'on-off' ? (
                     <div>
                       <div style={{

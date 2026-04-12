@@ -24,6 +24,37 @@ export function shieldOffMaxShieldRemoveFraction(masteryLevel: number): number {
   return shieldOffMaxShieldRemovePercent(masteryLevel) / 100;
 }
 
+/**
+ * Base for Shield OFF % removal: max(stat max, current shields, 1).
+ * If max shields are missing/0 on an enemy row, `floor(0 * pct)` would strip nothing; current shields still allow a strip.
+ */
+export function rrCandyShieldOffPercentDenominator(o: {
+  maxShieldStrength?: number;
+  shieldStrength?: number;
+}): number {
+  const mx = Math.max(0, Math.floor(Number(o.maxShieldStrength) || 0));
+  const cur = Math.max(0, Math.floor(Number(o.shieldStrength) || 0));
+  return Math.max(mx, cur, 1);
+}
+
+/** Effective max for RR Candy Shield ON when vault/ally rows disagree or shields exceed stored max. */
+export function rrCandyShieldOnEffectiveMax(maxShieldRaw: number, currentShieldRaw: number): number {
+  const cur = Math.max(0, Math.floor(Number(currentShieldRaw) || 0));
+  const maxStat = Math.max(0, Math.floor(Number(maxShieldRaw) || 0));
+  return Math.max(maxStat, cur, 1);
+}
+
+/**
+ * RR Candy Shield ON: restore up to 50% of effective max, without exceeding headroom.
+ */
+export function computeRrCandyShieldOnRestore(maxShieldRaw: number, currentShieldRaw: number): number {
+  const effectiveMax = rrCandyShieldOnEffectiveMax(maxShieldRaw, currentShieldRaw);
+  const cur = Math.max(0, Math.floor(Number(currentShieldRaw) || 0));
+  const headroom = Math.max(0, effectiveMax - cur);
+  const want = Math.floor(effectiveMax * 0.5);
+  return Math.min(want, headroom);
+}
+
 /** Build battle Move rows from Konfig tree nodes the player has learned (config-driven). */
 export function buildKonfigMovesFromLearnedNodes(
   nodes: RRCandyNodeDefinition[],

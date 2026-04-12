@@ -1,4 +1,10 @@
-import { shieldOffMaxShieldRemoveFraction, shieldOffMaxShieldRemovePercent } from '../rrCandyMoves';
+import {
+  computeRrCandyShieldOnRestore,
+  rrCandyShieldOffPercentDenominator,
+  rrCandyShieldOnEffectiveMax,
+  shieldOffMaxShieldRemoveFraction,
+  shieldOffMaxShieldRemovePercent,
+} from '../rrCandyMoves';
 
 describe('Shield OFF mastery scaling', () => {
   it('level 1 = 25%', () => {
@@ -21,5 +27,26 @@ describe('Shield OFF mastery scaling', () => {
     expect(shieldOffMaxShieldRemovePercent(-3)).toBe(25);
     expect(shieldOffMaxShieldRemovePercent(NaN)).toBe(25);
     expect(shieldOffMaxShieldRemovePercent(99)).toBe(50);
+  });
+});
+
+describe('rrCandyShieldOffPercentDenominator', () => {
+  it('uses max(stat max, current, 1) so missing max still strips shields', () => {
+    expect(rrCandyShieldOffPercentDenominator({ maxShieldStrength: 0, shieldStrength: 3000 })).toBe(3000);
+    expect(rrCandyShieldOffPercentDenominator({ maxShieldStrength: undefined, shieldStrength: 220 })).toBe(220);
+  });
+  it('prefers higher of max and current', () => {
+    expect(rrCandyShieldOffPercentDenominator({ maxShieldStrength: 5000, shieldStrength: 3000 })).toBe(5000);
+  });
+});
+
+describe('computeRrCandyShieldOnRestore / rrCandyShieldOnEffectiveMax', () => {
+  it('effective max is at least current shields when max stat lags', () => {
+    expect(rrCandyShieldOnEffectiveMax(100, 321)).toBe(321);
+  });
+  it('restore is up to half effective max without exceeding headroom', () => {
+    expect(computeRrCandyShieldOnRestore(1000, 0)).toBe(500);
+    expect(computeRrCandyShieldOnRestore(1000, 800)).toBe(100);
+    expect(computeRrCandyShieldOnRestore(100, 321)).toBe(0);
   });
 });

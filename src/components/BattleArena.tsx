@@ -44,6 +44,8 @@ interface BattleArenaProps {
   opponentEffects?: Array<{ type: string; duration: number }>; // Active status effects on opponent
   isTerraAwakened?: boolean; // Whether Terra is in awakened state
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
+  /** Universal Law Skill Tree — same lines as Skill Mastery / combat math */
+  universalLawBoonLines?: string[];
 }
 
 const BattleArena: React.FC<BattleArenaProps> = ({
@@ -65,7 +67,8 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   showSkipStunnedTurn = false,
   onSkipStunnedTurn,
   opponentEffects = [],
-  onArtifactUsed
+  onArtifactUsed,
+  universalLawBoonLines = [],
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -411,6 +414,34 @@ const BattleArena: React.FC<BattleArenaProps> = ({
         ⚔️ MST BATTLE ARENA ⚔️
       </div>
 
+      {universalLawBoonLines.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '56px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 4,
+            maxWidth: 'min(560px, 92vw)',
+            padding: '0.35rem 0.65rem',
+            borderRadius: '0.5rem',
+            background: 'rgba(15, 23, 42, 0.82)',
+            border: '1px solid rgba(234, 179, 8, 0.45)',
+            color: '#fef9c3',
+            fontSize: '0.68rem',
+            lineHeight: 1.35,
+            textAlign: 'center',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: '0.2rem', color: '#fde047' }}>Skill Tree · Universal Laws</div>
+          <ul style={{ margin: 0, paddingLeft: '1rem', textAlign: 'left' }}>
+            {universalLawBoonLines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Player Profile Picture */}
       <div

@@ -546,6 +546,7 @@ export async function completeMission(
     await updateDoc(playerMissionRef, {
       status: 'completed',
       completedAt: serverTimestamp(),
+      sequencePlayheadIndex: deleteField(),
       ...pendingPatch,
     });
     
@@ -764,6 +765,15 @@ export async function claimMissionRewardChoices(
 /**
  * Mark a mission sequence step complete (e.g. Level 2 Manifest builder finished).
  */
+/** Persist which sequence step the player should see when reopening the mission runner. */
+export async function setPlayerMissionSequencePlayheadIndex(
+  playerMissionId: string,
+  index: number
+): Promise<void> {
+  const ref = doc(db, 'playerMissions', playerMissionId);
+  await updateDoc(ref, { sequencePlayheadIndex: index });
+}
+
 export async function markMissionSequenceStepComplete(
   playerMissionId: string,
   stepId: string,
