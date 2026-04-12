@@ -871,6 +871,8 @@ service cloud.firestore {
         isAdmin() ||
         settingId == 'equippableArtifacts' ||
         settingId == 'marketplaceArtifacts' ||
+        // CPU definitions for mission / island raid battles (MissionRunner, IslandRaidBattle)
+        settingId == 'cpuOpponentMoves' ||
         // Flow / battle pass pointers (activeBattlePassSeasonId, energyTickCap) — clients need read for Home BP UI
         settingId == 'season1'
       );

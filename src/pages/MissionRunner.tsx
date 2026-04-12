@@ -42,6 +42,7 @@ import MissionLevel2ManifestStepPanel, {
 } from '../components/mission/MissionLevel2ManifestStepPanel';
 import { getLevel2ManifestState } from '../services/level2ManifestService';
 import { DEFAULT_MAX_ALLIED_PARTICIPANTS } from '../constants/coopBattle';
+import { stripUndefinedDeep } from '../utils/firestoreSanitize';
 
 /**
  * Mission Admin difficulty scales enemy health, shields, and attack damage from a single baseline (EASY = 1×).
@@ -607,6 +608,10 @@ const MissionRunner: React.FC = () => {
 
       const gameId = `mission-battle-${missionId}-${currentStep.id}-${Date.now()}`;
       const battleConfig = currentStep.battle;
+      if (!battleConfig) {
+        alert('This mission step is missing battle configuration. Please contact support.');
+        return;
+      }
       const difficultyMap: Record<string, 'easy' | 'normal' | 'hard' | 'nightmare'> = {
         'EASY': 'easy',
         'MEDIUM': 'normal',
@@ -780,9 +785,11 @@ const MissionRunner: React.FC = () => {
                     typeof source?.awakenAtHealthPercent === 'number'
                       ? Math.min(100, Math.max(1, source.awakenAtHealthPercent))
                       : 50,
-                  awakenedImage: source?.awakenedImage?.trim() || undefined,
-                  awakenedHealth: awakenedHealthScaled,
-                  awakenedShields: awakenedShieldsScaled,
+                  ...(source?.awakenedImage?.trim()
+                    ? { awakenedImage: source.awakenedImage.trim() }
+                    : {}),
+                  ...(awakenedHealthScaled != null ? { awakenedHealth: awakenedHealthScaled } : {}),
+                  ...(awakenedShieldsScaled != null ? { awakenedShields: awakenedShieldsScaled } : {}),
                   awakenedMoves: scaledAwakenedMoves,
                   ...awakenedEnemyTypeField,
                   ...(awakeningAnim.length ? { awakeningAnimation: awakeningAnim } : {}),
@@ -834,6 +841,18 @@ const MissionRunner: React.FC = () => {
         maxWaves = battleConfig.waves ?? 3;
       }
 
+      const rawRewards = battleConfig.rewards as { xp?: unknown; pp?: unknown; drops?: unknown } | undefined;
+      const missionRewards =
+        rawRewards && typeof rawRewards === 'object'
+          ? {
+              xp: Math.max(0, Math.floor(Number(rawRewards.xp)) || 0),
+              pp: Math.max(0, Math.floor(Number(rawRewards.pp)) || 0),
+              ...(Array.isArray(rawRewards.drops) && rawRewards.drops.length > 0
+                ? { drops: rawRewards.drops }
+                : {}),
+            }
+          : { xp: 0, pp: 0 };
+
       const battleRoomData: any = {
         id: gameId,
         gameId,
@@ -847,7 +866,7 @@ const MissionRunner: React.FC = () => {
         isMissionBattle: true,
         missionId,
         stepId: currentStep.id,
-        rewards: battleConfig.rewards,
+        rewards: missionRewards,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         roundNumber: 1,
@@ -887,13 +906,15 @@ const MissionRunner: React.FC = () => {
       }
 
       const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
-      await setDoc(battleRoomRef, battleRoomData);
+      const sanitized = stripUndefinedDeep(battleRoomData) as Record<string, unknown>;
+      await setDoc(battleRoomRef, sanitized);
 
       setBattleGameId(gameId);
       setShowBattle(true);
     } catch (error) {
       console.error('Error starting battle:', error);
-      alert('Failed to start battle');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`Failed to start battle: ${msg}`);
     }
   };
 

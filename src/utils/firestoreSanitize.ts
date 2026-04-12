@@ -11,7 +11,9 @@ export function stripUndefinedDeep(value: unknown): unknown {
   if (typeof value !== 'object') return value;
   if (value instanceof Date) return value;
   if (Array.isArray(value)) {
-    return value.map((item) => stripUndefinedDeep(item));
+    return value
+      .map((item) => stripUndefinedDeep(item))
+      .filter((item) => item !== undefined);
   }
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
