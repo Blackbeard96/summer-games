@@ -16,6 +16,7 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteField,
   query,
   where,
   serverTimestamp,
@@ -23,10 +24,13 @@ import {
   increment
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { getMissionTemplate } from './missionsService';
-import { grantChallengeRewards } from './challengeRewards';
+import { getMissionTemplate, parseMissionRewardsFromDoc } from './missionsService';
+import {
+  grantPackedBattlePassMissionRewards,
+  mergeBattleStepRewardsIntoFlat,
+  partitionMissionRewardEntries,
+} from './missionBattlePassRewards';
 import type { MissionTemplate, MissionTriggerType, PlayerMission } from '../types/missions';
-import type { ChallengeReward } from '../types/chapters';
 
 export interface MissionEventPayload {
   /** Optional deduplication - if same eventId processed twice, second is ignored */
@@ -107,7 +111,7 @@ async function getMissionsByTrigger(triggerType: string): Promise<MissionTemplat
         triggerType: data.triggerType,
         progressType: data.progressType || 'count',
         targetValue: data.targetValue ?? 1,
-        rewards: data.rewards || {},
+        rewards: parseMissionRewardsFromDoc(data.rewards),
         metadata: data.metadata || {},
         missionType: data.missionType,
         sourceArea: data.sourceArea,
@@ -149,20 +153,25 @@ function matchesPayload(
   return true;
 }
 
+type MissionEventTxnResult = {
+  updated: boolean;
+  completed: boolean;
+  playerMissionId?: string;
+};
+
 async function processMissionForEvent(
   playerId: string,
   mission: MissionTemplate,
   eventType: string,
   payload: MissionEventPayload | undefined
-): Promise<{ updated: boolean; completed: boolean }> {
+): Promise<MissionEventTxnResult> {
   const targetValue = mission.targetValue ?? 1;
   const progressType = mission.progressType || 'count';
   const incrementAmount = progressType === 'cumulative_value' && payload?.amount != null
     ? payload.amount
     : 1;
 
-  let shouldGrantRewards = false;
-  const result = await runTransaction(db, async (transaction) => {
+  const result = await runTransaction(db, async (transaction): Promise<MissionEventTxnResult> => {
     const playerMissionsRef = collection(db, 'playerMissions');
     const q = query(
       playerMissionsRef,
@@ -176,9 +185,9 @@ async function processMissionForEvent(
 
     if (snapshot.empty) {
       const fullMission = await getMissionTemplate(mission.id);
-      if (!fullMission) return { updated: false, completed: false };
+      if (!fullMission) return { updated: false, completed: false, playerMissionId: undefined };
 
-      if (!fullMission.triggerType) return { updated: false, completed: false };
+      if (!fullMission.triggerType) return { updated: false, completed: false, playerMissionId: undefined };
 
       const newRef = doc(collection(db, 'playerMissions'));
       playerMissionRef = newRef;
@@ -237,9 +246,13 @@ async function processMissionForEvent(
             progress: { main: targetValue }
           });
         }
-        return { updated: true, completed };
+        return {
+          updated: true,
+          completed,
+          playerMissionId: completed ? newRef.id : undefined
+        };
       }
-      return { updated: false, completed: false };
+      return { updated: false, completed: false, playerMissionId: undefined };
     }
 
     const currentProgress = playerMission.progress?.main ?? 0;
@@ -253,58 +266,47 @@ async function processMissionForEvent(
         : {})
     });
 
-    if (isComplete) {
-      shouldGrantRewards = true;
-    }
-
-    return { updated: true, completed: isComplete };
+    return {
+      updated: true,
+      completed: isComplete,
+      playerMissionId: isComplete ? playerMission.id : undefined
+    };
   });
 
-  if (shouldGrantRewards) {
-    const rewards = buildChallengeRewards(mission);
-    if (rewards.length > 0) {
-      grantMissionRewards(playerId, mission.id, rewards, mission.title).catch((err) =>
-        console.error('[MissionEventEngine] Failed to grant rewards:', err)
+  if (result.completed && result.playerMissionId) {
+    const fullMission = await getMissionTemplate(mission.id);
+    const missionForRewards = fullMission || mission;
+    const { fixedFlat, choiceGroups } = partitionMissionRewardEntries(missionForRewards);
+    const fixedFlatForGrant = mergeBattleStepRewardsIntoFlat(fixedFlat, missionForRewards);
+    const claimBase = `mission_evt_${mission.id}_${result.playerMissionId}`;
+
+    if (fixedFlatForGrant.length > 0) {
+      grantPackedBattlePassMissionRewards(playerId, claimBase, fixedFlatForGrant, missionForRewards.title).catch((err) =>
+        console.error('[MissionEventEngine] Failed to grant fixed rewards:', err)
       );
+    }
+
+    const pmRef = doc(db, 'playerMissions', result.playerMissionId);
+    if (choiceGroups.length > 0) {
+      updateDoc(pmRef, {
+        missionRewardChoicesPending: {
+          groups: choiceGroups.map((g) => ({
+            groupId: g.id,
+            pickCount: g.pickCount,
+            displayName: g.displayName,
+            description: g.description || '',
+            options: g.options,
+          })),
+        },
+      }).catch((err) =>
+        console.error('[MissionEventEngine] Failed to set pending mission reward choices:', err)
+      );
+    } else {
+      updateDoc(pmRef, { missionRewardChoicesPending: deleteField() }).catch(() => {});
     }
   }
 
   return result;
-}
-
-function buildChallengeRewards(mission: MissionTemplate): ChallengeReward[] {
-  const rewards: ChallengeReward[] = [];
-  const r = mission.rewards || {};
-
-  if (r.xp && r.xp > 0) {
-    rewards.push({ type: 'xp', value: r.xp, description: `${r.xp} XP` });
-  }
-  if (r.pp && r.pp > 0) {
-    rewards.push({ type: 'pp', value: r.pp, description: `${r.pp} PP` });
-  }
-  if (r.truthMetal && r.truthMetal > 0) {
-    rewards.push({ type: 'truthMetal', value: r.truthMetal, description: `${r.truthMetal} Truth Metal` });
-  }
-  if (r.artifactIds && r.artifactIds.length > 0) {
-    for (const aid of r.artifactIds) {
-      rewards.push({ type: 'artifact', value: aid, description: `Artifact: ${aid}` });
-    }
-  }
-
-  return rewards;
-}
-
-async function grantMissionRewards(
-  userId: string,
-  missionId: string,
-  rewards: ChallengeReward[],
-  missionTitle?: string
-): Promise<void> {
-  const challengeId = `mission_${missionId}`;
-  const result = await grantChallengeRewards(userId, challengeId, rewards, missionTitle);
-  if (!result.success && !result.alreadyClaimed) {
-    console.error('[MissionEventEngine] Failed to grant rewards:', result.error);
-  }
 }
 
 async function checkEventDedupe(playerId: string, eventId: string): Promise<boolean> {

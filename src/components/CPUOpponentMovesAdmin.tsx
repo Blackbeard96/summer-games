@@ -3,6 +3,15 @@ import { db, storage } from '../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
+import type { ElementType } from '../types/elementTypes';
+import { ALL_ELEMENT_TYPES, normalizeElementType } from '../types/elementTypes';
+import {
+  elementTypeEmoji,
+  elementTypeLabel,
+  formatEnemyElementPreview,
+} from '../utils/elementTypeUi';
+import type { MissionMediaSequenceStep } from '../types/missions';
+import MissionSequenceBuilder from './MissionSequenceBuilder';
 
 interface CPUOpponentMovesAdminProps {
   isOpen: boolean;
@@ -45,6 +54,8 @@ interface CPUOpponentMove {
     rivalName?: string; // For 'if_rival' condition - specific rival name to check
   };
   duration?: number; // How many turns the defensive effect lasts (for damage reduction)
+  /** Offensive element for type chart vs target (optional) */
+  elementalAffinity?: string;
 }
 
 export interface CPUOpponent {
@@ -56,7 +67,21 @@ export interface CPUOpponent {
   health?: number;
   /** Starting and max CPU shields used in battle engine */
   shields?: number;
+  /** Combat element for type advantage (null/omit = neutral) */
+  enemyType?: ElementType | null;
   moves: CPUOpponentMove[];
+  /** Second phase: enabled from admin; at low HP, swap to awakened stats, portrait, element, and moves. */
+  awakenedModeEnabled?: boolean;
+  /** Awaken when current HP / max HP ≤ this (default 50). */
+  awakenAtHealthPercent?: number;
+  awakenedImage?: string;
+  /** HP pool after awakening (new max and current). */
+  awakenedHealth?: number;
+  awakenedShields?: number;
+  awakenedEnemyType?: ElementType | null;
+  awakenedMoves?: CPUOpponentMove[];
+  /** Optional mission-style slides/videos when this CPU awakens in battle. */
+  awakeningAnimation?: MissionMediaSequenceStep[];
 }
 
 /** Exported for Mission Builder wave opponent selection. */
@@ -413,6 +438,7 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
   const [saveMessage, setSaveMessage] = useState<string>('');
   const [imageUploading, setImageUploading] = useState<boolean>(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const awakenedImageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -515,51 +541,61 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
     }
   };
 
-  const handleMoveEdit = (opponentId: string, moveId: string, field: string, value: any) => {
+  const handleMoveEdit = (
+    opponentId: string,
+    moveId: string,
+    field: string,
+    value: any,
+    listKey: 'moves' | 'awakenedMoves' = 'moves'
+  ) => {
     setOpponents(prev => {
       const updated = prev.map(opp => {
         if (opp.id === opponentId) {
-          return {
-            ...opp,
-            moves: opp.moves.map(move => {
-              if (move.id === moveId) {
-                if (field === 'damageRange') {
-                  return { ...move, damageRange: value, baseDamage: undefined };
-                } else if (field === 'healingRange') {
-                  return { ...move, healingRange: value };
-                } else if (field === 'damageRangeMin' || field === 'damageRangeMax') {
-                  const currentRange = move.damageRange || { min: 0, max: 0 };
-                  const newRange = { ...currentRange, [field === 'damageRangeMin' ? 'min' : 'max']: value };
-                  return { ...move, damageRange: newRange, baseDamage: undefined };
-                } else if (field === 'healingRangeMin' || field === 'healingRangeMax') {
-                  const currentRange = move.healingRange || { min: 0, max: 0 };
-                  const newRange = { ...currentRange, [field === 'healingRangeMin' ? 'min' : 'max']: value };
-                  return { ...move, healingRange: newRange };
-                } else if (field === 'damageReduction') {
-                  return { ...move, damageReduction: value };
-                } else if (field === 'counterMove') {
-                  return { ...move, counterMove: value };
-                } else if (field === 'statusEffect') {
-                  // Legacy support - convert to array
-                  return { ...move, statusEffect: value, statusEffects: value && value.type !== 'none' ? [value] : [] };
-                } else if (field === 'statusEffects') {
-                  return { ...move, statusEffects: value };
-                } else if (field.startsWith('statusEffect.')) {
-                  const statusField = field.replace('statusEffect.', '');
-                  const currentEffect = move.statusEffect || { type: 'none', duration: 0, successChance: 100 };
-                  const updatedEffect = { ...currentEffect, [statusField]: value };
-                  // Ensure successChance defaults to 100 if not set
-                  if (statusField === 'type' && value !== 'none' && updatedEffect.successChance === undefined) {
-                    updatedEffect.successChance = 100;
-                  }
-                  return { ...move, statusEffect: updatedEffect, statusEffects: updatedEffect.type !== 'none' ? [updatedEffect] : [] };
-                } else {
-                  return { ...move, [field]: value };
-                }
+          const sourceArr = listKey === 'moves' ? opp.moves : opp.awakenedMoves || [];
+          const newArr = sourceArr.map(move => {
+            if (move.id === moveId) {
+              if (field === 'damageRange') {
+                return { ...move, damageRange: value, baseDamage: undefined };
               }
-              return move;
-            })
-          };
+              if (field === 'healingRange') {
+                return { ...move, healingRange: value };
+              }
+              if (field === 'damageRangeMin' || field === 'damageRangeMax') {
+                const currentRange = move.damageRange || { min: 0, max: 0 };
+                const newRange = { ...currentRange, [field === 'damageRangeMin' ? 'min' : 'max']: value };
+                return { ...move, damageRange: newRange, baseDamage: undefined };
+              }
+              if (field === 'healingRangeMin' || field === 'healingRangeMax') {
+                const currentRange = move.healingRange || { min: 0, max: 0 };
+                const newRange = { ...currentRange, [field === 'healingRangeMin' ? 'min' : 'max']: value };
+                return { ...move, healingRange: newRange };
+              }
+              if (field === 'damageReduction') {
+                return { ...move, damageReduction: value };
+              }
+              if (field === 'counterMove') {
+                return { ...move, counterMove: value };
+              }
+              if (field === 'statusEffect') {
+                return { ...move, statusEffect: value, statusEffects: value && value.type !== 'none' ? [value] : [] };
+              }
+              if (field === 'statusEffects') {
+                return { ...move, statusEffects: value };
+              }
+              if (field.startsWith('statusEffect.')) {
+                const statusField = field.replace('statusEffect.', '');
+                const currentEffect = move.statusEffect || { type: 'none', duration: 0, successChance: 100 };
+                const updatedEffect = { ...currentEffect, [statusField]: value };
+                if (statusField === 'type' && value !== 'none' && updatedEffect.successChance === undefined) {
+                  updatedEffect.successChance = 100;
+                }
+                return { ...move, statusEffect: updatedEffect, statusEffects: updatedEffect.type !== 'none' ? [updatedEffect] : [] };
+              }
+              return { ...move, [field]: value };
+            }
+            return move;
+          });
+          return { ...opp, [listKey]: newArr };
         }
         return opp;
       });
@@ -567,7 +603,7 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
     });
   };
 
-  const handleAddMove = (opponentId: string) => {
+  const handleAddMove = (opponentId: string, listKey: 'moves' | 'awakenedMoves' = 'moves') => {
     setOpponents(prev => {
       return prev.map(opp => {
         if (opp.id === opponentId) {
@@ -577,18 +613,24 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
             baseDamage: 10,
             type: 'attack'
           };
-          return { ...opp, moves: [...opp.moves, newMove] };
+          if (listKey === 'moves') {
+            return { ...opp, moves: [...opp.moves, newMove] };
+          }
+          return { ...opp, awakenedMoves: [...(opp.awakenedMoves || []), newMove] };
         }
         return opp;
       });
     });
   };
 
-  const handleRemoveMove = (opponentId: string, moveId: string) => {
+  const handleRemoveMove = (opponentId: string, moveId: string, listKey: 'moves' | 'awakenedMoves' = 'moves') => {
     setOpponents(prev => {
       return prev.map(opp => {
         if (opp.id === opponentId) {
-          return { ...opp, moves: opp.moves.filter(m => m.id !== moveId) };
+          if (listKey === 'moves') {
+            return { ...opp, moves: opp.moves.filter(m => m.id !== moveId) };
+          }
+          return { ...opp, awakenedMoves: (opp.awakenedMoves || []).filter(m => m.id !== moveId) };
         }
         return opp;
       });
@@ -597,13 +639,19 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
 
   const handleOpponentEdit = (
     opponentId: string,
-    field: 'name' | 'image' | 'health' | 'shields',
-    value: string | number
+    field: 'name' | 'image' | 'health' | 'shields' | 'enemyType',
+    value: string | number | ElementType | null | ''
   ) => {
-    const normalizedValue =
-      typeof value === 'string'
-        ? (value.trim() === '' ? undefined : value)
-        : (Number.isFinite(value) ? value : undefined);
+    let normalizedValue: string | number | ElementType | null | undefined;
+    if (field === 'enemyType') {
+      if (value === '' || value == null) normalizedValue = null;
+      else normalizedValue = normalizeElementType(String(value));
+    } else {
+      normalizedValue =
+        typeof value === 'string'
+          ? (value.trim() === '' ? undefined : value)
+          : (Number.isFinite(value as number) ? (value as number) : undefined);
+    }
     setOpponents(prev => prev.map(opp =>
       opp.id === opponentId ? { ...opp, [field]: normalizedValue } : opp
     ));
@@ -630,6 +678,33 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
     if (selectedOpponent === opponentId) {
       const remaining = opponents.filter(o => o.id !== opponentId);
       setSelectedOpponent(remaining.length > 0 ? remaining[0].id : null);
+    }
+  };
+
+  const handleOpponentPatch = (opponentId: string, patch: Partial<CPUOpponent>) => {
+    setOpponents((prev) => prev.map((opp) => (opp.id === opponentId ? { ...opp, ...patch } : opp)));
+  };
+
+  const handleAwakenedImageUpload = async (opponentId: string, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file (PNG, JPEG, WebP, or GIF).');
+      return;
+    }
+    setImageUploading(true);
+    try {
+      const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const path = `cpu_opponents/${opponentId}_awakened_${Date.now()}_${sanitizedName}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file, {
+        contentType: file.type || 'image/png',
+      });
+      const downloadUrl = await getDownloadURL(storageRef);
+      handleOpponentPatch(opponentId, { awakenedImage: downloadUrl });
+    } catch (err) {
+      console.error('Awakened image upload failed:', err);
+      setTimeout(() => alert('Awakened image upload failed. Paste a URL instead.'), 0);
+    } finally {
+      setImageUploading(false);
     }
   };
 
@@ -675,39 +750,365 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
     return [];
   };
 
-  const addStatusEffect = (opponentId: string, moveId: string) => {
-    const currentEffects = getMoveEffects(selectedOpponentData?.moves.find(m => m.id === moveId) || { id: moveId, name: '', type: 'attack' } as CPUOpponentMove);
+  const getMoveFromOpponent = (
+    opponentId: string,
+    moveId: string,
+    listKey: 'moves' | 'awakenedMoves'
+  ): CPUOpponentMove | undefined => {
+    const opp = opponents.find((o) => o.id === opponentId);
+    if (!opp) return undefined;
+    const arr = listKey === 'moves' ? opp.moves : opp.awakenedMoves || [];
+    return arr.find((m) => m.id === moveId);
+  };
+
+  const addStatusEffect = (
+    opponentId: string,
+    moveId: string,
+    listKey: 'moves' | 'awakenedMoves' = 'moves'
+  ) => {
+    const move =
+      getMoveFromOpponent(opponentId, moveId, listKey) ||
+      ({ id: moveId, name: '', type: 'attack' } as CPUOpponentMove);
+    const currentEffects = getMoveEffects(move);
     const newEffect: StatusEffect = {
       type: 'burn',
       duration: 1,
-      successChance: 100
+      successChance: 100,
     };
-    handleMoveEdit(opponentId, moveId, 'statusEffects', [...currentEffects, newEffect]);
+    handleMoveEdit(opponentId, moveId, 'statusEffects', [...currentEffects, newEffect], listKey);
   };
 
-  const removeStatusEffect = (opponentId: string, moveId: string, effectIndex: number) => {
-    const move = selectedOpponentData?.moves.find(m => m.id === moveId);
+  const removeStatusEffect = (
+    opponentId: string,
+    moveId: string,
+    effectIndex: number,
+    listKey: 'moves' | 'awakenedMoves' = 'moves'
+  ) => {
+    const move = getMoveFromOpponent(opponentId, moveId, listKey);
     if (!move) return;
     const currentEffects = getMoveEffects(move);
     const newEffects = currentEffects.filter((_, index) => index !== effectIndex);
-    handleMoveEdit(opponentId, moveId, 'statusEffects', newEffects);
+    handleMoveEdit(opponentId, moveId, 'statusEffects', newEffects, listKey);
   };
 
-  const updateStatusEffect = (opponentId: string, moveId: string, effectIndex: number, field: keyof StatusEffect, value: any) => {
-    const move = selectedOpponentData?.moves.find(m => m.id === moveId);
+  const updateStatusEffect = (
+    opponentId: string,
+    moveId: string,
+    effectIndex: number,
+    field: keyof StatusEffect,
+    value: any,
+    listKey: 'moves' | 'awakenedMoves' = 'moves'
+  ) => {
+    const move = getMoveFromOpponent(opponentId, moveId, listKey);
     if (!move) return;
     const currentEffects = getMoveEffects(move);
     const newEffects = [...currentEffects];
     newEffects[effectIndex] = {
       ...newEffects[effectIndex],
-      [field]: value
+      [field]: value,
     };
-    handleMoveEdit(opponentId, moveId, 'statusEffects', newEffects);
+    handleMoveEdit(opponentId, moveId, 'statusEffects', newEffects, listKey);
   };
 
   if (!isOpen) return null;
 
   const selectedOpponentData = opponents.find(o => o.id === selectedOpponent);
+
+  const renderStatusEffectsEditor = (
+    opponentId: string,
+    move: CPUOpponentMove,
+    listKey: 'moves' | 'awakenedMoves'
+  ) => (
+    <div
+      style={{
+        marginTop: '0.75rem',
+        marginBottom: '1rem',
+        padding: '1rem',
+        background: listKey === 'awakenedMoves' ? '#fff7ed' : '#fef3c7',
+        borderRadius: '0.5rem',
+        border: `1px solid ${listKey === 'awakenedMoves' ? '#fdba74' : '#fbbf24'}`,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+        <h5 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>Status Effects</h5>
+        <button
+          type="button"
+          onClick={() => addStatusEffect(opponentId, move.id, listKey)}
+          style={{
+            padding: '0.25rem 0.75rem',
+            background: '#10b981',
+            border: 'none',
+            borderRadius: '0.25rem',
+            color: 'white',
+            fontSize: '0.75rem',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+          }}
+        >
+          + Add Effect
+        </button>
+      </div>
+
+      {getMoveEffects(move).length === 0 ? (
+        <div
+          style={{
+            color: '#92400e',
+            fontSize: '0.875rem',
+            fontStyle: 'italic',
+            textAlign: 'center',
+            padding: '1rem',
+          }}
+        >
+          No effects. Use the green Add Effect button.
+        </div>
+      ) : (
+        getMoveEffects(move).map((effect, effectIndex) => (
+          <div
+            key={effectIndex}
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              background: 'rgba(255,255,255,0.3)',
+              borderRadius: '0.5rem',
+              border: '1px solid rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>Effect {effectIndex + 1}</span>
+              <button
+                type="button"
+                onClick={() => removeStatusEffect(opponentId, move.id, effectIndex, listKey)}
+                style={{
+                  padding: '0.25rem 0.5rem',
+                  background: '#ef4444',
+                  border: 'none',
+                  borderRadius: '0.25rem',
+                  color: 'white',
+                  fontSize: '0.7rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Remove
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Effect Type
+                </label>
+                <select
+                  value={effect.type || 'none'}
+                  onChange={(e) => {
+                    const effectType = e.target.value;
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'type', effectType, listKey);
+                    if (effectType === 'none') {
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'intensity', undefined, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'damagePerTurn', undefined, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'ppLossPerTurn', undefined, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'ppStealPerTurn', undefined, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'healPerTurn', undefined, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'chance', undefined, listKey);
+                    }
+                    if (effectType !== 'none' && effect.successChance === undefined) {
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'successChance', 100, listKey);
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="burn">Burn (Damage over time)</option>
+                  <option value="stun">Stun (Skip turn)</option>
+                  <option value="bleed">Bleed (Lose PP each turn)</option>
+                  <option value="poison">Poison (Minor damage over time, stacks)</option>
+                  <option value="confuse">Confuse (50% wrong move/attack self)</option>
+                  <option value="drain">Drain (Steal PP and heal each turn)</option>
+                  <option value="cleanse">Cleanse (Removes all negative effects)</option>
+                  <option value="freeze">Freeze (Legacy)</option>
+                  <option value="reduce">Reduce (Reduce incoming damage)</option>
+                  <option value="summon">Summon (Construct ally)</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Duration (Turns)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={effect.duration || 0}
+                  onChange={(e) =>
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'duration', parseInt(e.target.value, 10) || 0, listKey)
+                  }
+                  disabled={effect.type === 'none'}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                    background: effect.type === 'none' ? '#f3f4f6' : 'white',
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Success Chance (%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={effect.successChance !== undefined ? effect.successChance : 100}
+                  onChange={(e) =>
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'successChance', parseInt(e.target.value, 10) || 100, listKey)
+                  }
+                  disabled={effect.type === 'none'}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                    background: effect.type === 'none' ? '#f3f4f6' : 'white',
+                  }}
+                />
+              </div>
+            </div>
+
+            {(effect.type === 'burn' || effect.type === 'poison') && (
+              <div style={{ marginBottom: '0.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Damage Per Turn
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={effect.damagePerTurn || effect.intensity || ''}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'damagePerTurn', value, listKey);
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'intensity', value, listKey);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                  }}
+                />
+              </div>
+            )}
+
+            {effect.type === 'bleed' && (
+              <div style={{ marginBottom: '0.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Health/PP Loss per turn
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={effect.ppLossPerTurn || effect.intensity || ''}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'ppLossPerTurn', value, listKey);
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'intensity', value, listKey);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                  }}
+                />
+              </div>
+            )}
+
+            {effect.type === 'confuse' && (
+              <div style={{ marginBottom: '0.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                  Confusion Chance (%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={effect.chance || effect.intensity || 50}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? 50 : parseInt(e.target.value, 10) || 50;
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'chance', value, listKey);
+                    updateStatusEffect(opponentId, move.id, effectIndex, 'intensity', value, listKey);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.875rem',
+                  }}
+                />
+              </div>
+            )}
+
+            {effect.type === 'drain' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                    PP Steal Per Turn
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={effect.ppStealPerTurn || effect.intensity || ''}
+                    onChange={(e) => {
+                      const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'ppStealPerTurn', value, listKey);
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'intensity', value, listKey);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.25rem',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                    Heal Per Turn (Health/Shield)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={effect.healPerTurn || ''}
+                    onChange={(e) => {
+                      const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0;
+                      updateStatusEffect(opponentId, move.id, effectIndex, 'healPerTurn', value, listKey);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.25rem',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
 
   return (
     <div style={{
@@ -786,10 +1187,22 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                       color: selectedOpponent === opp.id ? 'white' : '#374151',
                       borderRadius: '0.5rem',
                       cursor: 'pointer',
-                      fontWeight: selectedOpponent === opp.id ? 'bold' : 'normal'
+                      fontWeight: selectedOpponent === opp.id ? 'bold' : 'normal',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.5rem'
                     }}
                   >
-                    {opp.name}
+                    <span style={{ flex: 1, minWidth: 0 }}>{opp.name}</span>
+                    {opp.enemyType ? (
+                      <span
+                        title={elementTypeLabel(opp.enemyType)}
+                        style={{ fontSize: '1.1rem', flexShrink: 0 }}
+                      >
+                        {elementTypeEmoji(opp.enemyType)}
+                      </span>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -832,6 +1245,74 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                             }}
                           />
                         </div>
+                      </div>
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                          Enemy element type
+                        </label>
+                        <select
+                          value={selectedOpponentData.enemyType ?? ''}
+                          onChange={(e) =>
+                            handleOpponentEdit(
+                              selectedOpponentData.id,
+                              'enemyType',
+                              e.target.value === '' ? '' : (e.target.value as ElementType)
+                            )
+                          }
+                          style={{
+                            width: '100%',
+                            maxWidth: '280px',
+                            padding: '0.5rem',
+                            border: '1px solid #d1d5db',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          <option value="">Neutral (no type)</option>
+                          {ALL_ELEMENT_TYPES.map((t) => (
+                            <option key={t} value={t}>
+                              {elementTypeEmoji(t)} {elementTypeLabel(t)}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedOpponentData.enemyType ? (
+                          <div
+                            style={{
+                              marginTop: '0.6rem',
+                              padding: '0.6rem 0.75rem',
+                              background: 'white',
+                              borderRadius: '0.375rem',
+                              border: '1px solid #e2e8f0',
+                              fontSize: '0.8rem',
+                              color: '#334155',
+                              lineHeight: 1.45
+                            }}
+                          >
+                            {(() => {
+                              const p = formatEnemyElementPreview(selectedOpponentData.enemyType);
+                              return (
+                                <>
+                                  <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>
+                                    {elementTypeEmoji(selectedOpponentData.enemyType)}{' '}
+                                    {elementTypeLabel(selectedOpponentData.enemyType)}
+                                  </div>
+                                  <div>
+                                    <strong>Strong against</strong> {p.strongAgainst}
+                                  </div>
+                                  <div>
+                                    <strong>Weak against</strong> {p.weakAgainst}
+                                  </div>
+                                  <div>
+                                    <strong>Resists damage from</strong> {p.resistsDamageFrom}
+                                  </div>
+                                  <div>
+                                    <strong>Takes bonus damage from</strong> {p.takesBonusFrom}
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        ) : null}
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
                         <div>
@@ -944,6 +1425,391 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                         </div>
                       )}
                     </div>
+
+                    <div
+                      style={{
+                        marginBottom: '1.5rem',
+                        padding: '1rem',
+                        background: '#fffbeb',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #fcd34d',
+                      }}
+                    >
+                      <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '1rem' }}>Awakened mode (optional)</h4>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!selectedOpponentData.awakenedModeEnabled}
+                          onChange={(e) =>
+                            handleOpponentPatch(selectedOpponentData.id, {
+                              awakenedModeEnabled: e.target.checked,
+                              awakenedMoves:
+                                e.target.checked && (!selectedOpponentData.awakenedMoves || selectedOpponentData.awakenedMoves.length === 0)
+                                  ? [
+                                      {
+                                        id: `awaken-move-${Date.now()}`,
+                                        name: 'Awakened Strike',
+                                        baseDamage: 15,
+                                        type: 'attack' as const,
+                                      },
+                                    ]
+                                  : selectedOpponentData.awakenedMoves,
+                            })
+                          }
+                        />
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>This character can awaken in battle</span>
+                      </label>
+                      <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.8rem', color: '#92400e' }}>
+                        When HP falls to the threshold below, they swap to awakened portrait, stats, element (optional), and the
+                        awakened move list. Add at least one awakened move.
+                      </p>
+                      {selectedOpponentData.awakenedModeEnabled ? (
+                        <>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                            <div>
+                              <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                Awaken at HP % (≤)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={100}
+                                value={selectedOpponentData.awakenAtHealthPercent ?? 50}
+                                onChange={(e) =>
+                                  handleOpponentPatch(selectedOpponentData.id, {
+                                    awakenAtHealthPercent: Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 50)),
+                                  })
+                                }
+                                style={{
+                                  width: '100%',
+                                  padding: '0.5rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.875rem',
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                Awakened element (optional)
+                              </label>
+                              <select
+                                value={selectedOpponentData.awakenedEnemyType ?? ''}
+                                onChange={(e) =>
+                                  handleOpponentPatch(selectedOpponentData.id, {
+                                    awakenedEnemyType:
+                                      e.target.value === '' ? null : normalizeElementType(String(e.target.value)),
+                                  })
+                                }
+                                style={{
+                                  width: '100%',
+                                  padding: '0.5rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.875rem',
+                                }}
+                              >
+                                <option value="">Same as base</option>
+                                {ALL_ELEMENT_TYPES.map((t) => (
+                                  <option key={t} value={t}>
+                                    {elementTypeEmoji(t)} {elementTypeLabel(t)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                            <div>
+                              <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                Awakened health (new pool)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={selectedOpponentData.awakenedHealth ?? ''}
+                                onChange={(e) =>
+                                  handleOpponentPatch(selectedOpponentData.id, {
+                                    awakenedHealth: parseInt(e.target.value, 10) || undefined,
+                                  })
+                                }
+                                placeholder="e.g. 2000"
+                                style={{
+                                  width: '100%',
+                                  padding: '0.5rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.875rem',
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                                Awakened shields
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={selectedOpponentData.awakenedShields ?? ''}
+                                onChange={(e) =>
+                                  handleOpponentPatch(selectedOpponentData.id, {
+                                    awakenedShields: parseInt(e.target.value, 10) || 0,
+                                  })
+                                }
+                                placeholder="e.g. 500"
+                                style={{
+                                  width: '100%',
+                                  padding: '0.5rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '0.25rem',
+                                  fontSize: '0.875rem',
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div style={{ marginBottom: '0.75rem' }}>
+                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                              Awakened portrait
+                            </label>
+                            <input
+                              ref={awakenedImageInputRef}
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file && selectedOpponentData) handleAwakenedImageUpload(selectedOpponentData.id, file);
+                              }}
+                            />
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => awakenedImageInputRef.current?.click()}
+                                disabled={imageUploading}
+                                style={{
+                                  background: imageUploading ? '#9ca3af' : '#3b82f6',
+                                  color: 'white',
+                                  border: 'none',
+                                  padding: '0.5rem 0.75rem',
+                                  borderRadius: '0.375rem',
+                                  cursor: imageUploading ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.875rem',
+                                }}
+                              >
+                                Upload awakened image
+                              </button>
+                            </div>
+                            <input
+                              type="text"
+                              value={selectedOpponentData.awakenedImage || ''}
+                              onChange={(e) =>
+                                handleOpponentPatch(selectedOpponentData.id, { awakenedImage: e.target.value || undefined })
+                              }
+                              placeholder="/images/Boss-Awakened.png or https://..."
+                              style={{
+                                width: '100%',
+                                padding: '0.5rem',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.875rem',
+                              }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <strong style={{ fontSize: '0.9rem' }}>Awakened moves</strong>
+                            <button
+                              type="button"
+                              onClick={() => handleAddMove(selectedOpponentData.id, 'awakenedMoves')}
+                              style={{
+                                background: '#10b981',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.35rem 0.75rem',
+                                borderRadius: '0.375rem',
+                                cursor: 'pointer',
+                                fontSize: '0.875rem',
+                              }}
+                            >
+                              + Add awakened move
+                            </button>
+                          </div>
+                          {(selectedOpponentData.awakenedMoves || []).map((move, index) => (
+                            <div
+                              key={move.id}
+                              style={{
+                                border: '1px solid #e5e7eb',
+                                borderRadius: '0.5rem',
+                                padding: '0.75rem',
+                                marginBottom: '0.5rem',
+                                background: '#fff',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                <span style={{ fontWeight: 600 }}>Awakened move {index + 1}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveMove(selectedOpponentData.id, move.id, 'awakenedMoves')}
+                                  style={{
+                                    background: '#ef4444',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '0.2rem 0.5rem',
+                                    borderRadius: '0.25rem',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                  }}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                                <input
+                                  type="text"
+                                  value={move.name}
+                                  onChange={(e) =>
+                                    handleMoveEdit(selectedOpponentData.id, move.id, 'name', e.target.value, 'awakenedMoves')
+                                  }
+                                  placeholder="Move name"
+                                  style={{ padding: '0.35rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', fontSize: '0.875rem' }}
+                                />
+                                <select
+                                  value={move.type}
+                                  onChange={(e) =>
+                                    handleMoveEdit(selectedOpponentData.id, move.id, 'type', e.target.value, 'awakenedMoves')
+                                  }
+                                  style={{ padding: '0.35rem', borderRadius: '0.25rem', border: '1px solid #d1d5db', fontSize: '0.875rem' }}
+                                >
+                                  <option value="attack">Attack</option>
+                                  <option value="defense">Defense</option>
+                                  <option value="heal">Heal</option>
+                                </select>
+                              </div>
+                              {move.type === 'attack' && (
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                  <input
+                                    type="number"
+                                    placeholder="Min"
+                                    value={move.damageRange?.min ?? move.baseDamage ?? 0}
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value, 10) || 0;
+                                      if (move.damageRange) {
+                                        handleMoveEdit(selectedOpponentData.id, move.id, 'damageRangeMin', v, 'awakenedMoves');
+                                      } else {
+                                        handleMoveEdit(
+                                          selectedOpponentData.id,
+                                          move.id,
+                                          'damageRange',
+                                          { min: v, max: v },
+                                          'awakenedMoves'
+                                        );
+                                      }
+                                    }}
+                                    style={{ padding: '0.35rem', fontSize: '0.8rem' }}
+                                  />
+                                  <input
+                                    type="number"
+                                    placeholder="Max"
+                                    value={move.damageRange?.max ?? move.baseDamage ?? 0}
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value, 10) || 0;
+                                      if (move.damageRange) {
+                                        handleMoveEdit(selectedOpponentData.id, move.id, 'damageRangeMax', v, 'awakenedMoves');
+                                      } else {
+                                        handleMoveEdit(
+                                          selectedOpponentData.id,
+                                          move.id,
+                                          'damageRange',
+                                          { min: v, max: v },
+                                          'awakenedMoves'
+                                        );
+                                      }
+                                    }}
+                                    style={{ padding: '0.35rem', fontSize: '0.8rem' }}
+                                  />
+                                  <input
+                                    type="number"
+                                    placeholder="Base (no range)"
+                                    value={move.baseDamage || 0}
+                                    onChange={(e) =>
+                                      handleMoveEdit(
+                                        selectedOpponentData.id,
+                                        move.id,
+                                        'baseDamage',
+                                        parseInt(e.target.value, 10) || 0,
+                                        'awakenedMoves'
+                                      )
+                                    }
+                                    disabled={!!move.damageRange}
+                                    style={{ padding: '0.35rem', fontSize: '0.8rem' }}
+                                  />
+                                </div>
+                              )}
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <label
+                                  style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem', fontWeight: 500 }}
+                                >
+                                  Description
+                                </label>
+                                <textarea
+                                  value={move.description || ''}
+                                  onChange={(e) =>
+                                    handleMoveEdit(
+                                      selectedOpponentData.id,
+                                      move.id,
+                                      'description',
+                                      e.target.value,
+                                      'awakenedMoves'
+                                    )
+                                  }
+                                  rows={2}
+                                  placeholder="Optional move description"
+                                  style={{
+                                    width: '100%',
+                                    padding: '0.35rem',
+                                    border: '1px solid #d1d5db',
+                                    borderRadius: '0.25rem',
+                                    fontSize: '0.8rem',
+                                    resize: 'vertical',
+                                  }}
+                                />
+                              </div>
+                              {renderStatusEffectsEditor(selectedOpponentData.id, move, 'awakenedMoves')}
+                            </div>
+                          ))}
+                          <div
+                            style={{
+                              marginTop: '1rem',
+                              padding: '1rem',
+                              background: '#eef2ff',
+                              borderRadius: '0.5rem',
+                              border: '1px solid #c7d2fe',
+                            }}
+                          >
+                            <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.95rem', color: '#312e81' }}>
+                              Awakening animation (optional)
+                            </h4>
+                            <p style={{ margin: '0 0 0.75rem', fontSize: '0.8rem', color: '#4338ca', lineHeight: 1.45 }}>
+                              When this character awakens, players see this sequence full-screen (story slides and videos —
+                              same tools as missions), then the battle continues with awakened stats and moves.
+                            </p>
+                            <MissionSequenceBuilder
+                              variant="cpuAwakeningMedia"
+                              sequence={selectedOpponentData.awakeningAnimation ?? []}
+                              missionId={`cpu-awaken-${selectedOpponentData.id}`}
+                              onChange={(seq) => {
+                                const filtered = seq.filter(
+                                  (s): s is MissionMediaSequenceStep =>
+                                    s.type === 'STORY_SLIDE' || s.type === 'VIDEO'
+                                );
+                                handleOpponentPatch(selectedOpponentData.id, {
+                                  awakeningAnimation: filtered.length ? filtered : undefined,
+                                });
+                              }}
+                            />
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                       <h3 style={{ margin: 0 }}>{selectedOpponentData.name} Moves</h3>
                       <button
@@ -1423,269 +2289,7 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                           />
                         </div>
 
-                        {/* Status Effects Editor - Multiple Effects */}
-                        <div style={{ marginBottom: '1rem', padding: '1rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                            <h5 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>
-                              Status Effects
-                            </h5>
-                            <button
-                              onClick={() => addStatusEffect(selectedOpponentData.id, move.id)}
-                              style={{
-                                padding: '0.25rem 0.75rem',
-                                background: '#10b981',
-                                border: 'none',
-                                borderRadius: '0.25rem',
-                                color: 'white',
-                                fontSize: '0.75rem',
-                                cursor: 'pointer',
-                                fontWeight: 'bold'
-                              }}
-                            >
-                              + Add Effect
-                            </button>
-                          </div>
-                          
-                          {getMoveEffects(move).length === 0 ? (
-                            <div style={{ color: '#92400e', fontSize: '0.875rem', fontStyle: 'italic', textAlign: 'center', padding: '1rem' }}>
-                              No effects. Click "Add Effect" to add one.
-                            </div>
-                          ) : (
-                            getMoveEffects(move).map((effect, effectIndex) => (
-                              <div key={effectIndex} style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.3)', borderRadius: '0.5rem', border: '1px solid rgba(0,0,0,0.1)' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                  <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e' }}>
-                                    Effect {effectIndex + 1}
-                                  </span>
-                                  <button
-                                    onClick={() => removeStatusEffect(selectedOpponentData.id, move.id, effectIndex)}
-                                    style={{
-                                      padding: '0.25rem 0.5rem',
-                                      background: '#ef4444',
-                                      border: 'none',
-                                      borderRadius: '0.25rem',
-                                      color: 'white',
-                                      fontSize: '0.7rem',
-                                      cursor: 'pointer'
-                                    }}
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
-                                  <div>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Effect Type
-                                    </label>
-                                    <select
-                                      value={effect.type || 'none'}
-                                      onChange={(e) => {
-                                        const effectType = e.target.value;
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'type', effectType);
-                                        if (effectType === 'none') {
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'intensity', undefined);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'damagePerTurn', undefined);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'ppLossPerTurn', undefined);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'ppStealPerTurn', undefined);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'healPerTurn', undefined);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'chance', undefined);
-                                        }
-                                        if (effectType !== 'none' && effect.successChance === undefined) {
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'successChance', 100);
-                                        }
-                                      }}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem'
-                                      }}
-                                    >
-                                      <option value="none">None</option>
-                                      <option value="burn">Burn (Damage over time)</option>
-                                      <option value="stun">Stun (Skip turn)</option>
-                                      <option value="bleed">Bleed (Lose PP each turn)</option>
-                                      <option value="poison">Poison (Minor damage over time, stacks)</option>
-                                      <option value="confuse">Confuse (50% wrong move/attack self)</option>
-                                      <option value="drain">Drain (Steal PP and heal each turn)</option>
-                                      <option value="cleanse">Cleanse (Removes all negative effects)</option>
-                                      <option value="freeze">Freeze (Legacy)</option>
-                                      <option value="reduce">Reduce (Reduce incoming damage)</option>
-                                      <option value="summon">Summon (Construct ally)</option>
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Duration (Turns)
-                                    </label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={effect.duration || 0}
-                                      onChange={(e) => updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'duration', parseInt(e.target.value) || 0)}
-                                      disabled={effect.type === 'none'}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem',
-                                        background: effect.type === 'none' ? '#f3f4f6' : 'white'
-                                      }}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Success Chance (%)
-                                    </label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="100"
-                                      value={effect.successChance !== undefined ? effect.successChance : 100}
-                                      onChange={(e) => updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'successChance', parseInt(e.target.value) || 100)}
-                                      disabled={effect.type === 'none'}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem',
-                                        background: effect.type === 'none' ? '#f3f4f6' : 'white'
-                                      }}
-                                    />
-                                  </div>
-                                </div>
-
-                                {/* Effect-specific fields */}
-                                {(effect.type === 'burn' || effect.type === 'poison') && (
-                                  <div style={{ marginBottom: '0.5rem' }}>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Damage Per Turn
-                                    </label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={effect.damagePerTurn || effect.intensity || ''}
-                                      onChange={(e) => {
-                                        const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'damagePerTurn', value);
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'intensity', value);
-                                      }}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem'
-                                      }}
-                                    />
-                                  </div>
-                                )}
-
-                                {effect.type === 'bleed' && (
-                                  <div style={{ marginBottom: '0.5rem' }}>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Health/PP Loss per turn
-                                    </label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={effect.ppLossPerTurn || effect.intensity || ''}
-                                      onChange={(e) => {
-                                        const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'ppLossPerTurn', value);
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'intensity', value);
-                                      }}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem'
-                                      }}
-                                    />
-                                  </div>
-                                )}
-
-                                {effect.type === 'confuse' && (
-                                  <div style={{ marginBottom: '0.5rem' }}>
-                                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                      Confusion Chance (%)
-                                    </label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="100"
-                                      value={effect.chance || effect.intensity || 50}
-                                      onChange={(e) => {
-                                        const value = e.target.value === '' ? 50 : parseInt(e.target.value) || 50;
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'chance', value);
-                                        updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'intensity', value);
-                                      }}
-                                      style={{
-                                        width: '100%',
-                                        padding: '0.5rem',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.25rem',
-                                        fontSize: '0.875rem'
-                                      }}
-                                    />
-                                  </div>
-                                )}
-
-                                {effect.type === 'drain' && (
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.5rem' }}>
-                                    <div>
-                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                        PP Steal Per Turn
-                                      </label>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        value={effect.ppStealPerTurn || effect.intensity || ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'ppStealPerTurn', value);
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'intensity', value);
-                                        }}
-                                        style={{
-                                          width: '100%',
-                                          padding: '0.5rem',
-                                          border: '1px solid #d1d5db',
-                                          borderRadius: '0.25rem',
-                                          fontSize: '0.875rem'
-                                        }}
-                                      />
-                                    </div>
-                                    <div>
-                                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>
-                                        Heal Per Turn (Health/Shield)
-                                      </label>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        value={effect.healPerTurn || ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value === '' ? undefined : parseInt(e.target.value) || 0;
-                                          updateStatusEffect(selectedOpponentData.id, move.id, effectIndex, 'healPerTurn', value);
-                                        }}
-                                        style={{
-                                          width: '100%',
-                                          padding: '0.5rem',
-                                          border: '1px solid #d1d5db',
-                                          borderRadius: '0.25rem',
-                                          fontSize: '0.875rem'
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))
-                          )}
-                        </div>
+                        {renderStatusEffectsEditor(selectedOpponentData.id, move, 'moves')}
                       </div>
                     ))}
                   </>

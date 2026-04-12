@@ -17,6 +17,11 @@ import {
   computeLiveEventParticipationSkillCost,
   getSkillCostReductionFromBattleEffects,
 } from '../utils/liveEventSkillCost';
+import type { ElementType } from '../types/elementTypes';
+import { normalizeElementType } from '../types/elementTypes';
+import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
+import type { SkillAvailabilityResult } from '../utils/skillAvailability';
+import ElementalAdvantageGuide from './ElementalAdvantageGuide';
 
 interface Participant {
   id: string;
@@ -33,6 +38,10 @@ interface Participant {
   isPlayer?: boolean; // True if this is the current player
   /** Live Events: participation points available for skills */
   movesEarned?: number;
+  /** Defensive element (CPU / raid enemies) */
+  enemyType?: ElementType | null;
+  /** CPU awakened phase (Island Raid / missions) */
+  isAwakened?: boolean;
 }
 
 interface MultiplayerBattleArenaProps {
@@ -58,6 +67,9 @@ interface MultiplayerBattleArenaProps {
   allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
   currentWave?: number; // Current wave number (for multi-wave battles)
   maxWaves?: number; // Maximum number of waves (for multi-wave battles)
+  skillAvailabilityByMoveId?: Record<string, SkillAvailabilityResult>;
+  showSkipStunnedTurn?: boolean;
+  onSkipStunnedTurn?: () => void | Promise<void>;
 }
 
 const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
@@ -82,7 +94,10 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
   allowInvites = false,
   playerEffects = [],
   opponentEffects = [],
-  onArtifactUsed
+  onArtifactUsed,
+  skillAvailabilityByMoveId,
+  showSkipStunnedTurn = false,
+  onSkipStunnedTurn,
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -169,6 +184,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         'lightning': '#fbbf24',
         'light': '#fbbf24',
         'shadow': '#4b5563',
+        'dark': '#4b5563',
         'metal': '#6b7280'
       };
       return elementColors[move.elementalAffinity] || typeColors[move.type] || '#6b7280';
@@ -210,6 +226,10 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
 
   // Render participant card (for both allies and enemies)
   const renderParticipantCard = (participant: Participant, isAlly: boolean, index: number) => {
+    const enemyEl =
+      !isAlly && participant.enemyType
+        ? participant.enemyType
+        : null;
     const isSelected = selectedTarget === participant.id;
     const isCurrentPlayer = participant.isPlayer === true; // Explicitly check for true
     const isLightConstruct =
@@ -275,7 +295,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         }}
         style={{
           width: '100%',
-          minHeight: isLightConstruct ? '280px' : '140px',
+          minHeight: isLightConstruct ? '300px' : '188px',
           maxWidth: '100%',
           background: 'rgba(255, 255, 255, 1)', // White background for all cards for better visibility
           border: isSelected 
@@ -286,7 +306,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 ? '3px solid #fbbf24' 
                 : '2px solid #8B4513',
           borderRadius: '0.5rem',
-          padding: '0.6rem',
+          padding: '0.75rem',
           marginBottom: '0.5rem',
           cursor: canClick ? 'pointer' : (selectedMove && !isAlly ? 'not-allowed' : 'default'),
           transition: 'all 0.2s ease',
@@ -300,7 +320,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 : '0 2px 8px rgba(0, 0, 0, 0.1)',
           transform: canClick && !isAlly ? 'scale(1.05)' : 'scale(1)',
           boxSizing: 'border-box',
-          overflow: 'hidden',
+          overflow: 'visible',
           pointerEvents: 'auto', // Ensure clicks are not blocked
           zIndex: canClick ? 100 : (selectedMove && !isAlly ? 50 : 1), // Much higher z-index when clickable
           opacity: selectedMove && !isAlly && !canClick ? 0.7 : 1, // Dim if move selected but can't click
@@ -332,7 +352,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           }
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.5rem' }}>
           {/* Avatar */}
           <div style={{
             width: '45px',
@@ -345,7 +365,8 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: '1.3rem',
-            flexShrink: 0
+            flexShrink: 0,
+            position: 'relative'
           }}>
             {participant.avatar && (participant.avatar.startsWith('http') || participant.avatar.startsWith('/')) ? (
               <img 
@@ -375,6 +396,24 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 {participant.name[0]?.toUpperCase() || '?'}
               </div>
             )}
+            {enemyEl ? (
+              <span
+                title={elementTypeLabel(enemyEl)}
+                style={{
+                  position: 'absolute',
+                  right: -2,
+                  bottom: -2,
+                  fontSize: '0.85rem',
+                  lineHeight: 1,
+                  background: 'white',
+                  borderRadius: '50%',
+                  padding: '1px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                }}
+              >
+                {elementTypeEmoji(enemyEl)}
+              </span>
+            ) : null}
           </div>
           
           {/* Name and Level */}
@@ -397,6 +436,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 width: '100%'
               }}>
                 {formatOpponentName(participant.name || 'Unknown')}
+                {participant.isAwakened ? (
+                  <span style={{ fontWeight: 800, color: '#c026d3', marginLeft: '0.25rem' }}>(AWAKENED)</span>
+                ) : null}
               </span>
               {squadAbbreviations.get(participant.id) && (
                 <span style={{
@@ -416,6 +458,22 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   fontWeight: '600'
                 }}> (You)</span>
               )}
+              {enemyEl ? (
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    color: '#475569',
+                    background: '#f1f5f9',
+                    padding: '0.1rem 0.35rem',
+                    borderRadius: '0.25rem',
+                    border: '1px solid #cbd5e1'
+                  }}
+                  title={elementTypeLabel(enemyEl)}
+                >
+                  {elementTypeEmoji(enemyEl)} {elementTypeLabel(enemyEl)}
+                </span>
+              ) : null}
             </div>
             {(participant.level || participant.powerLevel !== null) && (
               <div style={{ fontSize: '0.75rem', color: '#6b7280', lineHeight: '1.2', display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
@@ -437,15 +495,20 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         </div>
 
         {/* Health/PP Bar */}
-        <div style={{ marginBottom: '0.2rem' }}>
-          <div style={{ fontSize: '0.65rem', marginBottom: '0.1rem', color: '#dc2626', lineHeight: '1.1' }}>
-            {participant.vaultHealth !== undefined ? 'HEALTH' : 'PP'}
+        <div style={{ marginBottom: '0.35rem' }}>
+          <div style={{ fontSize: '0.7rem', marginBottom: '0.15rem', color: '#dc2626', lineHeight: '1.2', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem' }}>
+            <span>{participant.vaultHealth !== undefined ? 'HEALTH' : 'PP'}</span>
+            {enemyEl ? (
+              <span style={{ color: '#64748b', fontWeight: 600 }} title={elementTypeLabel(enemyEl)}>
+                {elementTypeEmoji(enemyEl)}
+              </span>
+            ) : null}
           </div>
           <div style={{
             width: '100%',
-            height: '7px',
+            height: '10px',
             background: '#e5e7eb',
-            borderRadius: '3.5px',
+            borderRadius: '5px',
             overflow: 'hidden'
           }}>
             <div style={{
@@ -465,7 +528,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               transition: 'width 0.3s ease'
             }} />
           </div>
-          <div style={{ fontSize: '0.6rem', textAlign: 'right', marginTop: '0.1rem', color: '#6b7280', lineHeight: '1.1' }}>
+          <div style={{ fontSize: '0.7rem', textAlign: 'right', marginTop: '0.18rem', color: '#4b5563', lineHeight: '1.25', fontWeight: 600, whiteSpace: 'nowrap' }}>
             {participant.vaultHealth !== undefined 
               ? `${participant.vaultHealth}/${participant.maxVaultHealth || Math.floor((participant.maxPP || 1000) * 0.1)}`
               : `${participant.currentPP}/${participant.maxPP || 100}`}
@@ -473,29 +536,40 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         </div>
 
         {/* Shield Bar */}
-        <div>
-          <div style={{ fontSize: '0.65rem', marginBottom: '0.1rem', color: '#3b82f6', lineHeight: '1.1' }}>
+        <div style={{ paddingBottom: '0.1rem' }}>
+          <div style={{ fontSize: '0.7rem', marginBottom: '0.15rem', color: '#3b82f6', lineHeight: '1.2' }}>
             SHIELD
           </div>
           <div style={{
             width: '100%',
-            height: '7px',
+            height: '10px',
             background: '#e5e7eb',
-            borderRadius: '3.5px',
+            borderRadius: '5px',
             overflow: 'hidden'
           }}>
             <div style={{
               width: `${(() => {
-                const max = participant.maxShieldStrength || 100;
-                return Math.min(100, (participant.shieldStrength / max) * 100);
+                const max = Math.max(0, participant.maxShieldStrength || 100);
+                const cur = Math.max(
+                  0,
+                  max > 0 ? Math.min(max, participant.shieldStrength || 0) : participant.shieldStrength || 0
+                );
+                return max > 0 ? Math.min(100, (cur / max) * 100) : 0;
               })()}%`,
               height: '100%',
               background: 'linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)',
               transition: 'width 0.3s ease'
             }} />
           </div>
-          <div style={{ fontSize: '0.6rem', textAlign: 'right', marginTop: '0.1rem', color: '#6b7280', lineHeight: '1.1' }}>
-            {participant.shieldStrength}/{participant.maxShieldStrength || 100}
+          <div style={{ fontSize: '0.7rem', textAlign: 'right', marginTop: '0.18rem', color: '#4b5563', lineHeight: '1.25', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {(() => {
+              const max = Math.max(0, participant.maxShieldStrength || 100);
+              const cur = Math.max(
+                0,
+                max > 0 ? Math.min(max, participant.shieldStrength || 0) : participant.shieldStrength || 0
+              );
+              return `${cur}/${max || 100}`;
+            })()}
           </div>
         </div>
 
@@ -609,7 +683,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
       }}>
         {/* Left Side - Allies (up to 4) */}
         <div style={{
-          flex: '0 0 300px',
+          flex: '0 0 320px',
           display: 'flex',
           flexDirection: 'column',
           gap: '0.5rem',
@@ -632,7 +706,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           {/* Fill empty slots */}
           {Array.from({ length: Math.max(0, 4 - allies.length) }).map((_, index) => (
             <div key={`empty-ally-${index}`} style={{
-              minHeight: '120px',
+              minHeight: '188px',
               border: '2px dashed #d1d5db',
               borderRadius: '0.5rem',
               display: 'flex',
@@ -689,6 +763,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           gap: '1rem',
           minWidth: 0
         }}>
+          <ElementalAdvantageGuide />
           {/* Battle Log */}
           {!hideCenterPrompt && (
             <div style={{
@@ -744,7 +819,10 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   {[...battleLog].reverse().map((logEntry, revIndex) => {
                     const index = battleLog.length - 1 - revIndex;
                     // Check if this is a round separator
-                    const isRoundSeparator = logEntry.includes('━━━━') || logEntry.includes('ROUND') || logEntry.includes('Round') && logEntry.includes('Complete');
+                    const isRoundSeparator =
+                      logEntry.includes('━━━━') ||
+                      logEntry.includes('ROUND') ||
+                      (logEntry.includes('Round') && logEntry.includes('Complete'));
                     const isRoundHeader = logEntry.includes('ROUND') && !logEntry.includes('Complete');
                     const isRoundEnd = logEntry.includes('Round') && logEntry.includes('Complete');
                     const isNewest = revIndex === 0;
@@ -1016,7 +1094,9 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {availableMoves.map((move) => {
                   const isSelected = selectedMove?.id === move.id;
+                  const avail = skillAvailabilityByMoveId?.[move.id];
                   const onCooldown = (move.currentCooldown ?? 0) > 0;
+                  const blockedByRules = avail && !avail.canUse;
                   const moveColor = getMoveTypeColor(move);
                   const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
                   // Effective move level should match effective mastery level when artifacts boost it
@@ -1079,6 +1159,15 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                     (allies.find((a) => a.id === currentUser?.uid)?.movesEarned as number | undefined) ?? 0;
                   const cannotAffordLive =
                     !!liveLe && participationAvailable < liveLe.finalCost;
+                  const disabledMove = onCooldown || cannotAffordLive || blockedByRules;
+                  const disabledHint =
+                    avail && !avail.canUse
+                      ? avail.reasons.join(' · ')
+                      : onCooldown
+                        ? `Cooldown: ${move.currentCooldown} turn(s) remaining`
+                        : cannotAffordLive && liveLe
+                          ? `Need ${liveLe.finalCost - participationAvailable} more PP (cost ${liveLe.finalCost})`
+                          : undefined;
 
                   return (
                     <button
@@ -1086,18 +1175,14 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (onCooldown || cannotAffordLive) return;
+                        if (disabledMove) return;
                         console.log(`🎯 [MultiplayerBattleArena] Move selected: ${move.name} (${move.id})`);
                         onMoveSelect(move);
                         setShowMoveMenu(false);
                         console.log(`✅ [MultiplayerBattleArena] Move menu closed. Enemies should now be clickable.`);
                       }}
-                      disabled={onCooldown || cannotAffordLive}
-                      title={
-                        cannotAffordLive && liveLe
-                          ? `Need ${liveLe.finalCost} Participation Points to use this skill (have ${participationAvailable}, short by ${liveLe.finalCost - participationAvailable})`
-                          : undefined
-                      }
+                      disabled={disabledMove}
+                      title={disabledHint}
                       style={{
                         padding: '0.75rem',
                         background: isSelected 
@@ -1106,16 +1191,16 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                         color: isSelected ? 'white' : '#1f2937',
                         border: `2px solid ${isSelected ? moveColor : moveColor}`,
                         borderRadius: '0.5rem',
-                        cursor: onCooldown || cannotAffordLive ? 'not-allowed' : 'pointer',
+                        cursor: disabledMove ? 'not-allowed' : 'pointer',
                         fontSize: '0.875rem',
                         fontWeight: '500',
                         textAlign: 'left',
                         transition: 'all 0.2s ease',
                         position: 'relative',
-                        opacity: onCooldown || cannotAffordLive ? 0.6 : 1
+                        opacity: disabledMove ? 0.6 : 1
                       }}
                       onMouseEnter={(e) => {
-                        if (!isSelected && !onCooldown && !cannotAffordLive) {
+                        if (!isSelected && !disabledMove) {
                           e.currentTarget.style.background = getMoveBackgroundColor(move, true);
                           e.currentTarget.style.borderColor = moveColor;
                         }
@@ -1142,17 +1227,25 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                             }}>
                               {move.type.toUpperCase()}
                             </span>
-                            {move.category === 'elemental' && move.elementalAffinity && (
+                            {move.category === 'elemental' && move.elementalAffinity && (() => {
+                              const nel = normalizeElementType(move.elementalAffinity);
+                              return (
                               <span style={{ 
                                 background: '#6b7280', 
                                 color: 'white', 
                                 padding: '0.125rem 0.375rem', 
                                 borderRadius: '0.25rem',
-                                fontSize: '0.65rem'
-                              }}>
-                                {move.elementalAffinity.toUpperCase()}
+                                fontSize: '0.65rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.2rem'
+                              }}
+                              title={nel ? elementTypeLabel(nel) : move.elementalAffinity}
+                              >
+                                {nel ? `${elementTypeEmoji(nel)} ${elementTypeLabel(nel).toUpperCase()}` : move.elementalAffinity.toUpperCase()}
                               </span>
-                            )}
+                              );
+                            })()}
                             <span style={{ fontSize: '0.65rem' }}>
                               Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
                             </span>
@@ -1277,6 +1370,42 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   );
                 })}
               </div>
+              {showSkipStunnedTurn && onSkipStunnedTurn && (
+                <div
+                  style={{
+                    marginTop: '0.75rem',
+                    paddingTop: '0.75rem',
+                    borderTop: '1px solid #d1d5db',
+                    textAlign: 'center',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onSkipStunnedTurn();
+                      setShowMoveMenu(false);
+                      onMoveSelect(null);
+                      onTargetSelect('');
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.6rem 0.85rem',
+                      borderRadius: '0.5rem',
+                      border: '2px solid #64748b',
+                      background: 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)',
+                      color: 'white',
+                      fontWeight: 800,
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ⏭️ Skip turn (stunned / frozen)
+                  </button>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '0.35rem', lineHeight: 1.35 }}>
+                    You cannot use skills while stunned or frozen. This applies your turn-start effects and lets enemies act.
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1343,7 +1472,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
         {/* Right Side - Enemies (up to 4) */}
         <div 
           style={{
-            flex: '0 0 300px',
+            flex: '0 0 320px',
             display: 'flex',
             flexDirection: 'column',
             gap: '0.5rem',
@@ -1375,7 +1504,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
           {/* Fill empty slots */}
           {Array.from({ length: Math.max(0, 4 - enemies.length) }).map((_, index) => (
             <div key={`empty-enemy-${index}`} style={{
-              minHeight: '120px',
+              minHeight: '188px',
               border: '2px dashed #d1d5db',
               borderRadius: '0.5rem',
               display: 'flex',

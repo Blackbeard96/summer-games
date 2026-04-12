@@ -147,7 +147,7 @@ const NavBar = memo(() => {
   // Track which dropdown is open (by item path)
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // Track which dropdown child is showing a sub-menu (e.g. Battle Arena → Vault Mastery / Skills & Mastery)
+  // Track which dropdown child is showing a sub-menu (e.g. Battle Arena → Vault Mastery / Skills & Mastery / Vault Siege)
   const [openSubDropdown, setOpenSubDropdown] = useState<string | null>(null);
   const subDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [pendingAssessmentGoals, setPendingAssessmentGoals] = useState(0);

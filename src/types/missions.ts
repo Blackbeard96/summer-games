@@ -1,3 +1,6 @@
+import type { BattlePassReward, BattlePassTierRewardEntry } from './season1';
+import type { MissionBattleCoopConfig } from './coopBattle';
+
 /**
  * Mission System Types
  * 
@@ -110,12 +113,16 @@ export interface MissionTemplate {
   playerJourneyLink?: PlayerJourneyLink; // Link to Player Journey step
   gating?: MissionGating;
   rewards?: {
+    /** Battle Pass–style list: fixed rewards + optional choice groups (same shape as season tier rewards). */
+    entries?: BattlePassTierRewardEntry[];
     xp?: number;
     pp?: number;
     truthMetal?: number;
     artifactIds?: string[];
     items?: string[];
     moves?: string[];
+    /** Challenge-style ability unlock IDs (stored on user/student challengeAbilityGrants). */
+    abilities?: string[];
   };
   objectives?: {
     type: string;
@@ -124,6 +131,8 @@ export interface MissionTemplate {
   }[];
   sequence?: MissionSequenceStep[];  // Optional sequence of steps
   sequenceVersion?: number;           // Version counter for sequence edits
+  /** Lower numbers appear first in NPC hub Side Missions; omit for automatic order (oldest created first). */
+  hubDisplayOrder?: number;
   createdAt?: any;
   updatedAt?: any;
 
@@ -140,6 +149,19 @@ export interface MissionTemplate {
   metadata?: Record<string, unknown>;  // custom rules, e.g. { skillType: 'manifest', opponentId: 'cpu-master-guardian' }
 }
 
+/** Serialized choice group on player mission after completion (until player claims). */
+export interface MissionRewardChoicePendingGroup {
+  groupId: string;
+  pickCount: number;
+  displayName?: string;
+  description: string;
+  options: BattlePassReward[];
+}
+
+export interface MissionRewardChoicesPendingState {
+  groups: MissionRewardChoicePendingGroup[];
+}
+
 export interface PlayerMission {
   id: string;
   userId: string;
@@ -151,8 +173,12 @@ export interface PlayerMission {
   progress?: {
     [objectiveId: string]: number;  // objectiveId or 'main' for event-driven progress
   };
+  /** Dotted keys in Firestore: `sequenceStepCompletion.{stepId}` — merged at runtime */
+  sequenceStepCompletion?: Record<string, { completedAt?: unknown; skillId?: string }>;
   /** For event-driven missions: auto-accepted when first event matches */
   autoAccepted?: boolean;
+  /** Player must pick rewards (Battle Pass–style choice groups) before this is cleared. */
+  missionRewardChoicesPending?: MissionRewardChoicesPendingState;
 }
 
 export interface PlayerStoryProgress {
@@ -209,7 +235,11 @@ export type MissionSequenceStep =
         /** Per-wave config. opponentIds = CPU Opponents List ids; when set, used instead of enemySet for that wave. */
         waveConfigs?: {
           enemySet: ("ZOMBIE" | "APPRENTICE" | "SOVEREIGN" | "UNVEILED")[];
+          /** How many of each legacy type to spawn (default 1 per type in enemySet if omitted). */
+          enemyTypeCounts?: Partial<Record<'ZOMBIE' | 'APPRENTICE' | 'SOVEREIGN' | 'UNVEILED', number>>;
           opponentIds?: string[];  // IDs from CPU Opponent Moves Admin (e.g. 'cpu-easy-1', 'powered-zombie')
+          /** Spawn count per CPU opponent id (default 1 if id listed but omitted). */
+          opponentCounts?: Record<string, number>;
         }[];
         rewards: {
           xp: number;
@@ -217,7 +247,82 @@ export type MissionSequenceStep =
           drops?: Array<{ type: "ARTIFACT" | "STS_SHARD" | "ITEM"; refId?: string; qty?: number }>;
         };
         battleConfigRef?: string; // optional pointer to an existing config doc
+        /**
+         * Mid-battle join / NPC allies (optional). When `allowPlayerJoinMidBattle` is true, MissionRunner
+         * writes `joinableMidBattle` + `requireExplicitJoin` on `islandRaidBattleRooms` for this step.
+         */
+        coop?: MissionBattleCoopConfig;
       };
       bodyText?: string;          // optional briefing text
+    }
+  | {
+      id: string;
+      type: 'TRAINING_ASSIGNMENT';
+      order: number;
+      title?: string;
+      bodyText?: string;
+      training: {
+        /** Firestore `trainingQuizSets` document id */
+        quizSetId: string;
+        /** Player must score at least this percent on a completed solo attempt to unlock Next (0 = any completed attempt). */
+        minimumPassPercent: number;
+      };
+    }
+  | {
+      id: string;
+      type: 'REFLECTION';
+      order: number;
+      title?: string;
+      /** Shown above the reflection prompt */
+      bodyText?: string;
+      /** Main question / prompt for the player */
+      prompt: string;
+      textareaPlaceholder?: string;
+      /**
+       * Optional `assessments/{id}` link. When set, saves into Assessment Goals like the Set Goal flow:
+       * - `habits`: habit text, duration, Area of Consistency (+ optional extra reflection → evidence).
+       * - `story-goal`: goal text + optional evidence (+ optional extra reflection).
+       * - Other types: response text merged into goal evidence when a goal doc exists.
+       */
+      linkedAssessmentId?: string;
+      /** When true, Next is disabled until the player enters non-whitespace text (default true). */
+      requireResponse?: boolean;
+    }
+  | {
+      id: string;
+      type: 'LEVEL2_MANIFEST';
+      order: number;
+      title?: string;
+      /** Instructions shown above Sonido dialogue */
+      description?: string;
+      /** Mentor voice — Sonido / Meta State framing */
+      sonidoDialogue?: string;
+      /** If true, player must have unlocked the L2 builder (Flow first or prior unlock) before continuing. */
+      requireMetaStateFirst?: boolean;
+      /** When true, grant builder access when this step is shown (for guided rollout / testing). */
+      autoUnlockBuilderOnEntry?: boolean;
+      /** Require saving a Level 2 skill from the builder to complete the step. */
+      requireSkillCreation?: boolean;
+      /** Require active skill to match the one created in this mission (v1: any saved skill counts if only one). */
+      requireSkillEquip?: boolean;
     };
+
+/** Story slide + video steps only — used for battle pass season intro (same shape as mission sequence). */
+export type BattlePassIntroStep = Extract<
+  MissionSequenceStep,
+  { type: 'STORY_SLIDE' } | { type: 'VIDEO' }
+>;
+
+/** Same as {@link BattlePassIntroStep} — mission-style slides/videos for CPU awakening cutscenes. */
+export type MissionMediaSequenceStep = BattlePassIntroStep;
+
+/** Keep only slide/video steps from admin or Firestore JSON (ignores invalid entries). */
+export function filterCpuAwakeningAnimationSteps(raw: unknown): MissionMediaSequenceStep[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((s): s is MissionMediaSequenceStep => {
+    if (!s || typeof s !== 'object') return false;
+    const t = (s as { type?: string }).type;
+    return t === 'STORY_SLIDE' || t === 'VIDEO';
+  });
+}
 

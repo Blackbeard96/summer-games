@@ -4,6 +4,18 @@
  * `chapters` when snapshot listeners fire in different orders.
  */
 
+import { coerceCandyChoiceToString } from './rrCandyUtils';
+
+function preserveEp2CandyChoice(merged: any, a: any, b: any): any {
+  if (!merged || typeof merged !== 'object') return merged;
+  const pick =
+    coerceCandyChoiceToString(merged.candyChoice) ||
+    coerceCandyChoiceToString(a?.candyChoice) ||
+    coerceCandyChoiceToString(b?.candyChoice);
+  if (pick) merged.candyChoice = pick;
+  return merged;
+}
+
 export function isMissingOrEmptyChapters(chapters: unknown): boolean {
   if (chapters == null) return true;
   if (typeof chapters !== 'object') return true;
@@ -19,14 +31,14 @@ function mergeChallengeEntry(a: any, b: any): any {
   if (b == null) return a;
   const doneA = isChallengeDone(a);
   const doneB = isChallengeDone(b);
-  if (doneA && !doneB) return { ...b, ...a };
-  if (doneB && !doneA) return { ...a, ...b };
+  if (doneA && !doneB) return preserveEp2CandyChoice({ ...b, ...a }, a, b);
+  if (doneB && !doneA) return preserveEp2CandyChoice({ ...a, ...b }, a, b);
   const merged = { ...a, ...b };
   merged.isCompleted = doneA || doneB;
   if ((doneA || doneB) && (a?.status === 'approved' || b?.status === 'approved')) {
     merged.status = 'approved';
   }
-  return merged;
+  return preserveEp2CandyChoice(merged, a, b);
 }
 
 function mergeChapterEntry(a: any, b: any): any {

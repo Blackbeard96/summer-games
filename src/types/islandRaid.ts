@@ -1,5 +1,14 @@
 // Types for Island Raid Campaign Mode (PvE Co-op)
 
+import type { ElementType } from './elementTypes';
+import type {
+  CoopBattleMode,
+  CoopParticipantRecord,
+  MissionBattleCoopConfig,
+  NpcAllyBattleInstance,
+} from './coopBattle';
+import type { MissionMediaSequenceStep } from './missions';
+
 export interface IslandRaidTeam {
   id: string;
   name: string;
@@ -43,6 +52,21 @@ export interface IslandRaidEnemy {
   spawnTime: Date;
   waveNumber: number;
   image?: string; // Optional image path for the enemy
+  /** Combat element for type advantage (omit/null = neutral) */
+  enemyType?: ElementType | null;
+  /** When true, enemy can enter a second phase at low HP (see awakened* fields). */
+  awakenedModeEnabled?: boolean;
+  /** Trigger awakened phase when current HP / max HP is at or below this percent (default 50). */
+  awakenAtHealthPercent?: number;
+  awakenedImage?: string;
+  awakenedHealth?: number;
+  awakenedShields?: number;
+  awakenedEnemyType?: ElementType | null;
+  awakenedMoves?: any[];
+  /** Mission-style slides/videos when this CPU awakens (optional). */
+  awakeningAnimation?: MissionMediaSequenceStep[];
+  /** Runtime: phase-two active (synced in raid room when possible). */
+  isAwakened?: boolean;
 }
 
 export interface IslandArtifact {
@@ -120,6 +144,24 @@ export interface IslandRaidBattleRoom {
   difficulty?: 'easy' | 'normal' | 'hard' | 'nightmare';
   createdAt: Date;
   updatedAt: Date;
+
+  // --- Dynamic co-op / reinforcement (optional; see `src/types/coopBattle.ts`) ---
+  /** Any signed-in user may read while `active` (Firestore rules). */
+  joinableMidBattle?: boolean;
+  /** When true, do not auto-add the opening user to `players`; use Join CTA. */
+  requireExplicitJoin?: boolean;
+  hostPlayerId?: string;
+  participantCap?: number;
+  roundNumber?: number;
+  battleEventLog?: string[];
+  allyTurnOrderSnapshot?: string[];
+  participantRecords?: Record<string, CoopParticipantRecord>;
+  npcAllies?: NpcAllyBattleInstance[];
+  allowNpcAllies?: boolean;
+  maxNpcAllies?: number;
+  coopBattleMode?: CoopBattleMode;
+  /** Mission sequence battle step config echo (optional). */
+  missionCoop?: MissionBattleCoopConfig;
 }
 
 /** Admin-defined enemy template for one wave (count copies spawned). */
@@ -132,6 +174,7 @@ export interface IslandRaidLevelEnemyTemplate {
   level: number;
   damage: number;
   image?: string;
+  enemyType?: ElementType | null;
 }
 
 /** Admin-defined wave config (one wave's enemies). */

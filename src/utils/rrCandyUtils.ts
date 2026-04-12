@@ -6,7 +6,7 @@
  * RR Candy unlock is determined by checking:
  * - Firestore path: users/{uid}/chapters/2/challenges/ep2-its-all-a-game/
  * - Field: isCompleted === true OR status === 'approved'
- * - Field: candyChoice exists (values: 'on-off', 'up-down', or 'config')
+ * - Field: candyChoice exists (values: 'on-off', 'up-down', 'config', or synonyms like 'konfig')
  * 
  * This is the SINGLE SOURCE OF TRUTH used by:
  * - Profile page (Skill Tree Settings)
@@ -25,17 +25,28 @@
  * - Level and masteryLevel are updated atomically with PP deduction
  */
 
+/** Values stored in chapter candyChoice / normalized by getRRCandyStatus. */
+export type LegacyRRCandyType = 'on-off' | 'up-down' | 'config';
+
 export interface RRCandyStatus {
   unlocked: boolean;
-  candyType: 'on-off' | 'up-down' | 'config' | null;
+  candyType: LegacyRRCandyType | null;
   challengeData?: any;
 }
+
+/**
+ * IMPLEMENTATION NOTE (RR Candy skill trees v1):
+ * - Unlock detection: this file (Firestore users/{uid} + students/{uid} chapters / artifacts).
+ * - Learned RR tree nodes: players/{uid}/skill_state/main → rrCandySkillState (see rrCandyPlayerStateService).
+ * - Global tree definitions: system_config/rr_candy_trees_v1 (see rrCandyConfigService + defaultRRCandyTrees).
+ * - Admin: AdminPanel tab → pages/admin/RRCandyAdminPage.tsx
+ */
 
 /**
  * candyChoice / candyChoice fields are not always strings (objects, numbers, legacy shapes).
  * Never call .toLowerCase() on raw Firestore values.
  */
-function coerceCandyChoiceToString(raw: unknown): string | null {
+export function coerceCandyChoiceToString(raw: unknown): string | null {
   if (raw == null || raw === '') return null;
   if (typeof raw === 'string') {
     const t = raw.trim();
@@ -52,6 +63,53 @@ function coerceCandyChoiceToString(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Map stored labels onto legacy candy types. Konfig is stored as `config` in most flows;
+ * some docs use `konfig` or similar — normalize so `candyType === 'config'` checks work.
+ */
+export function normalizeLegacyRRCandyTypeInput(raw: string | null | undefined): LegacyRRCandyType | null {
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = String(raw).toLowerCase().replace(/_/g, '-').trim();
+  if (
+    n === 'konfig' ||
+    n === 'reality-configuration' ||
+    n === 'manifest-configuration' ||
+    n === 'configuration'
+  ) {
+    return 'config';
+  }
+  if (n === 'onoff') return 'on-off';
+  if (n === 'updown') return 'up-down';
+  if (n === 'on-off' || n === 'up-down' || n === 'config') return n;
+  return null;
+}
+
+/** When users vs students disagree, prefer config > up-down > on-off (split-brain repair). */
+export function pickStrongerRRCandyType(
+  a: LegacyRRCandyType | null,
+  b: LegacyRRCandyType | null
+): LegacyRRCandyType | null {
+  const rank: Record<LegacyRRCandyType, number> = { 'on-off': 1, 'up-down': 2, config: 3 };
+  if (!a) return b;
+  if (!b) return a;
+  return rank[a] >= rank[b] ? a : b;
+}
+
+function mergeExplicitCandyFromTwoDocs(
+  uExplicit: string | null,
+  sExplicit: string | null
+): LegacyRRCandyType | null {
+  return pickStrongerRRCandyType(
+    normalizeLegacyRRCandyTypeInput(uExplicit),
+    normalizeLegacyRRCandyTypeInput(sExplicit)
+  );
+}
+
+/** Raw unlock parts from one Firestore doc (users or students) — no default candy. */
+export function analyzeRRCandyDoc(userData: any) {
+  return computeRRCandyUnlockParts(userData);
 }
 
 /**
@@ -84,23 +142,31 @@ function findEp2ItsAllAGameChallenge(userData: any): { challenge: any; parentCha
   return { challenge: {}, parentChapter: {} };
 }
 
-/**
- * Get RR Candy unlock status from user data
- * This is the single source of truth for RR Candy unlock detection
- */
-export function getRRCandyStatus(userData: any): RRCandyStatus {
+/** Per-document unlock + explicit candy (no default to on-off). */
+function computeRRCandyUnlockParts(userData: any): {
+  isCompleted: boolean;
+  explicitCandyStr: string | null;
+  challenge: any;
+  challengeCompleted: boolean;
+  chapterCompleted: boolean;
+} {
   if (!userData) {
-    console.warn('getRRCandyStatus: No userData provided');
-    return { unlocked: false, candyType: null };
+    return {
+      isCompleted: false,
+      explicitCandyStr: null,
+      challenge: {},
+      challengeCompleted: false,
+      chapterCompleted: false,
+    };
   }
 
   const chapters = userData.chapters || {};
   const { challenge: foundChallenge, parentChapter: foundChapter } = findEp2ItsAllAGameChallenge(userData);
 
-  // Legacy path: chapter keyed as "2" only
-  const chapter2 = foundChapter && Object.keys(foundChapter).length > 0
-    ? foundChapter
-    : chapters[2] || chapters['2'] || {};
+  const chapter2 =
+    foundChapter && Object.keys(foundChapter).length > 0
+      ? foundChapter
+      : chapters[2] || chapters['2'] || {};
   const challenges = chapter2.challenges || {};
 
   let challenge =
@@ -122,13 +188,10 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
     }
   }
 
-  // Check if challenge is completed (matches Profile page logic exactly)
-  // Also check if chapter itself is marked as completed (fallback)
   const challengeCompleted = challenge?.isCompleted === true || challenge?.status === 'approved';
   const chapterCompleted = chapter2?.isCompleted === true;
   let isCompleted = challengeCompleted || chapterCompleted;
 
-  // Reward grants rr_candy artifact — treat as unlocked if present (progress may live only in students.artifacts)
   const artifacts = userData.artifacts || {};
   const hasRRCandyArtifact =
     artifacts.rr_candy === true ||
@@ -137,22 +200,57 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
   if (hasRRCandyArtifact) {
     isCompleted = true;
   }
-  
+
   const candyRaw =
     challenge?.candyChoice ||
+    artifacts.rr_candy_choice ||
+    artifacts.rrCandyChoice ||
+    artifacts.rr_candy_type ||
+    artifacts.rrCandyType ||
     artifacts.candy_choice ||
     artifacts.candyChoice ||
     userData.candyChoice;
-  let candyTypeStr = coerceCandyChoiceToString(candyRaw);
+  const explicitCandyStr = coerceCandyChoiceToString(candyRaw);
+
+  return {
+    isCompleted,
+    explicitCandyStr,
+    challenge,
+    challengeCompleted,
+    chapterCompleted,
+  };
+}
+
+function statusFromParts(
+  isCompleted: boolean,
+  explicitCandyStr: string | null,
+  challenge: any,
+  challengeCompleted: boolean,
+  chapterCompleted: boolean,
+  logPrefix: string
+): RRCandyStatus {
+  if (!isCompleted) {
+    console.log(`${logPrefix}: RR Candy NOT unlocked:`, {
+      challengeCompleted,
+      chapterCompleted,
+    });
+    return {
+      unlocked: false,
+      candyType: null,
+      challengeData: challenge,
+    };
+  }
+
+  let candyTypeStr = explicitCandyStr;
   if (isCompleted && !candyTypeStr) {
     console.warn(
-      'getRRCandyStatus: Challenge completed but candyChoice missing or non-string, defaulting to "on-off"',
-      { candyRaw }
+      `${logPrefix}: Challenge completed but candyChoice missing or non-string, defaulting to "on-off"`,
+      { explicitCandyStr }
     );
     candyTypeStr = 'on-off';
   }
 
-  console.log('getRRCandyStatus: Challenge check:', {
+  console.log(`${logPrefix}: Challenge check:`, {
     challengeId: 'ep2-its-all-a-game',
     hasChallenge: !!challenge && Object.keys(challenge).length > 0,
     challengeCompleted,
@@ -160,34 +258,90 @@ export function getRRCandyStatus(userData: any): RRCandyStatus {
     isCompleted,
     candyChoice: challenge?.candyChoice,
     candyTypeStr,
-    challengeKeys: Object.keys(challenges),
-    chapter2Keys: Object.keys(chapter2)
   });
 
-  if (isCompleted && candyTypeStr) {
-    // Normalize candy type to match expected format
-    const normalizedType = candyTypeStr.toLowerCase().replace(/_/g, '-') as 'on-off' | 'up-down' | 'config';
-    console.log('getRRCandyStatus: RR Candy UNLOCKED:', { candyType: normalizedType });
+  if (candyTypeStr) {
+    let normalizedType = normalizeLegacyRRCandyTypeInput(candyTypeStr);
+    if (!normalizedType) {
+      console.warn(`${logPrefix}: Unknown candy label "${candyTypeStr}", defaulting to on-off`);
+      normalizedType = 'on-off';
+    }
+    console.log(`${logPrefix}: RR Candy UNLOCKED:`, { candyType: normalizedType });
     return {
       unlocked: true,
       candyType: normalizedType,
-      challengeData: challenge
+      challengeData: challenge,
     };
   }
-
-  console.log('getRRCandyStatus: RR Candy NOT unlocked:', {
-    isCompleted,
-    hasCandyType: !!candyTypeStr,
-    candyTypeStr,
-    challengeCompleted,
-    chapterCompleted
-  });
 
   return {
     unlocked: false,
     candyType: null,
-    challengeData: challenge
+    challengeData: challenge,
   };
+}
+
+/**
+ * Get RR Candy unlock status from a single document (users or students).
+ * If completed but candyChoice is missing, defaults to on-off (legacy).
+ */
+export function getRRCandyStatus(userData: any): RRCandyStatus {
+  if (!userData) {
+    console.warn('getRRCandyStatus: No userData provided');
+    return { unlocked: false, candyType: null };
+  }
+  const p = computeRRCandyUnlockParts(userData);
+  return statusFromParts(
+    p.isCompleted,
+    p.explicitCandyStr,
+    p.challenge,
+    p.challengeCompleted,
+    p.chapterCompleted,
+    'getRRCandyStatus'
+  );
+}
+
+/**
+ * Merge users/{uid} + students/{uid} so candyChoice is not lost when one doc
+ * has completion flags and the other has the actual choice (common split-brain).
+ */
+export function getMergedRRCandyStatus(userData: any, studentData: any | null | undefined): RRCandyStatus {
+  const u = computeRRCandyUnlockParts(userData || {});
+  const s =
+    studentData && typeof studentData === 'object'
+      ? computeRRCandyUnlockParts(studentData)
+      : {
+          isCompleted: false,
+          explicitCandyStr: null,
+          challenge: {},
+          challengeCompleted: false,
+          chapterCompleted: false,
+        };
+
+  const unlocked = u.isCompleted || s.isCompleted;
+  const explicitCandyStr = mergeExplicitCandyFromTwoDocs(u.explicitCandyStr, s.explicitCandyStr);
+  const challenge =
+    u.challenge && Object.keys(u.challenge).length > 0
+      ? u.challenge
+      : s.challenge && Object.keys(s.challenge).length > 0
+        ? s.challenge
+        : u.challenge;
+
+  return statusFromParts(
+    unlocked,
+    explicitCandyStr,
+    challenge,
+    u.challengeCompleted || s.challengeCompleted,
+    u.chapterCompleted || s.chapterCompleted,
+    'getMergedRRCandyStatus'
+  );
+}
+
+/** True if skill_state indicates Vibration law boons were unlocked (intended to require Config RR Candy). */
+export function skillStateImpliesKonfigCandy(skillData: Record<string, unknown> | undefined): boolean {
+  const byLaw = skillData?.universalLawProgress as { unlockedByLaw?: { vibration?: unknown } } | undefined;
+  const vibration = byLaw?.unlockedByLaw?.vibration;
+  return Array.isArray(vibration) && vibration.length > 0;
 }
 
 /**
@@ -198,27 +352,36 @@ export async function getRRCandyStatusAsync(userId: string): Promise<RRCandyStat
   const { doc, getDoc } = await import('firebase/firestore');
 
   try {
+    const { migrateExistingKonfigOwners } = await import('../services/rrCandyPlayerStateService');
+    await migrateExistingKonfigOwners(userId);
+
     const userRef = doc(db, 'users', userId);
-    const userDoc = await getDoc(userRef);
+    const studentRef = doc(db, 'students', userId);
+    const [userDoc, studentDoc] = await Promise.all([getDoc(userRef), getDoc(studentRef)]);
+
     const userData = userDoc.exists() ? userDoc.data() : {};
+    const studentData = studentDoc.exists() ? studentDoc.data() : null;
 
-    let result = getRRCandyStatus(userData);
+    let result = getMergedRRCandyStatus(userData, studentData);
 
-    // Chapter / artifact progress is sometimes written only on students/{uid}
-    if (!result.unlocked) {
-      try {
-        const studentRef = doc(db, 'students', userId);
-        const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) {
-          const sResult = getRRCandyStatus(studentDoc.data());
-          if (sResult.unlocked) {
-            result = sResult;
-            console.log('getRRCandyStatusAsync: Unlocked from students doc');
-          }
-        }
-      } catch (e) {
-        console.warn('getRRCandyStatusAsync: students doc read skipped', e);
+    // Konfig skill_state is authoritative if chapter data wrongly defaulted to on-off
+    try {
+      const skillRef = doc(db, 'players', userId, 'skill_state', 'main');
+      const skillSnap = await getDoc(skillRef);
+      const skillData = skillSnap.data() as Record<string, unknown> | undefined;
+      const learned = skillData?.rrCandySkillState as { konfig?: { learnedNodeIds?: unknown } } | undefined;
+      const konfigIds = learned?.konfig?.learnedNodeIds;
+      const hasKonfigNodes = Array.isArray(konfigIds) && konfigIds.length > 0;
+      const hasVibration = skillStateImpliesKonfigCandy(skillData);
+      if (result.candyType === 'on-off' && (hasKonfigNodes || hasVibration)) {
+        result = { ...result, candyType: 'config' };
+        console.log('getRRCandyStatusAsync: Overriding on-off → config from skill_state', {
+          hasKonfigNodes,
+          hasVibration,
+        });
       }
+    } catch (e) {
+      console.warn('getRRCandyStatusAsync: skill_state read skipped', e);
     }
 
     console.log('getRRCandyStatusAsync: Result:', result);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -18,6 +18,9 @@ import PracticeModeBattle from '../components/PracticeModeBattle';
 import Mindforge from '../components/Mindforge';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import type { ElementType } from '../types/elementTypes';
+import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
+import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
 
 const Battle: React.FC = () => {
   const { currentUser } = useAuth();
@@ -72,6 +75,7 @@ const Battle: React.FC = () => {
   const getInitialTab = (): 'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle' => {
     const hash = window.location.hash.replace('#', '');
     if (hash === 'vault') return 'vault';
+    if (hash === 'siege') return 'battle';
     if (hash === 'moves' || hash === 'skills' || hash === 'skillMastery') {
       // Redirect old routes to moves tab (which will show Skill Mastery)
       if (hash === 'skills' || hash === 'skillMastery') {
@@ -89,6 +93,8 @@ const Battle: React.FC = () => {
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
   const [userElement, setUserElement] = useState<string>('fire'); // Default to fire, will be updated
   const [remainingOfflineMoves, setRemainingOfflineMoves] = useState<number>(0);
+  const [truthMetalShards, setTruthMetalShards] = useState<number>(0);
+  const battleErrorAlertedRef = useRef<string | null>(null);
 
   const handleBattleModeSelect = (mode: 'pvp' | 'offline' | 'practice' | 'mindforge') => {
     setSelectedBattleMode(mode);
@@ -179,6 +185,57 @@ const Battle: React.FC = () => {
       console.log('Battle: Refresh after modal close - remaining moves:', moves);
     }
   }, [showVaultSiegeModal, getRemainingOfflineMoves]);
+
+  /** Play → Battle Arena → Vault Siege: `#siege` opens the Vault Siege modal on the Battle tab. */
+  useEffect(() => {
+    if (!currentUser || loading) return;
+    const openSiegeFromHash = () => {
+      const h = window.location.hash.replace(/^#/, '');
+      if (h !== 'siege') return;
+      setActiveTab('battle');
+      setSelectedBattleMode('offline');
+      setShowVaultSiegeModal(true);
+    };
+    openSiegeFromHash();
+    window.addEventListener('hashchange', openSiegeFromHash);
+    return () => window.removeEventListener('hashchange', openSiegeFromHash);
+  }, [currentUser, loading]);
+
+  // Truth Metal — same source order as Profile (students, then users fallback)
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) {
+        setTruthMetalShards(0);
+        return;
+      }
+      try {
+        const [userSnap, studentSnap] = await Promise.all([
+          getDoc(doc(db, 'users', currentUser.uid)),
+          getDoc(doc(db, 'students', currentUser.uid)),
+        ]);
+        const uData = userSnap.exists() ? userSnap.data() : null;
+        const sData = studentSnap.exists() ? studentSnap.data() : null;
+        setTruthMetalShards(truthMetalBalanceForHud(sData?.truthMetal, uData?.truthMetal));
+      } catch {
+        setTruthMetalShards(0);
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), 8000);
+    return () => clearInterval(id);
+  }, [currentUser]);
+
+  // BattleContext errors (e.g. upgrade PP) — popup only, no inline banner
+  useEffect(() => {
+    if (!error) {
+      battleErrorAlertedRef.current = null;
+      return;
+    }
+    if (battleErrorAlertedRef.current === error) return;
+    battleErrorAlertedRef.current = error;
+    window.alert(`Battle Arena\n\n${error}`);
+    setError('');
+  }, [error, setError]);
 
   // Removed periodic refresh to prevent race conditions
 
@@ -369,57 +426,6 @@ const Battle: React.FC = () => {
         </button>
       </div>
 
-      {error && (
-        <div style={{ 
-          background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', 
-          border: '2px solid #f87171', 
-          color: '#dc2626',
-          padding: '1.5rem',
-          borderRadius: '0.75rem',
-          marginBottom: '1rem',
-          textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚠️</div>
-          <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-            Battle System Error
-          </div>
-          <div style={{ fontSize: '0.875rem', marginBottom: '1rem', opacity: 0.8 }}>
-            {error}
-          </div>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              background: '#dc2626',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '0.5rem',
-              fontSize: '0.875rem',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              marginRight: '0.5rem'
-            }}
-          >
-            🔄 Retry
-          </button>
-          <button
-            onClick={() => forceMigration(false)}
-            style={{
-              background: '#059669',
-              color: 'white',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              borderRadius: '0.5rem',
-              fontSize: '0.875rem',
-              fontWeight: 'bold',
-              cursor: 'pointer'
-            }}
-          >
-            🔧 Force Migration
-          </button>
-        </div>
-      )}
-
       {success && (
         <div style={{ 
           background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', 
@@ -475,25 +481,50 @@ const Battle: React.FC = () => {
           ))}
         </div>
         
-        {/* PP Display - Always Visible */}
-        {vault && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.75rem 1.5rem',
-            background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-            borderRadius: '0.5rem',
-            border: '2px solid #f59e0b',
-            marginRight: '1rem'
-          }}>
-            <span style={{ fontSize: '1.5rem' }}>⚡</span>
-            <div>
-              <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>
-                POWER POINTS
+        {/* PP + Truth Metal — visible on Battle Arena tabs */}
+        {currentUser && (
+          <div style={{ display: 'flex', alignItems: 'stretch', gap: '0.65rem', marginRight: '1rem', flexWrap: 'wrap' }}>
+            {vault ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.75rem 1.5rem',
+                  background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                  borderRadius: '0.5rem',
+                  border: '2px solid #f59e0b',
+                }}
+              >
+                <span style={{ fontSize: '1.5rem' }}>⚡</span>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>POWER POINTS</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#78350f' }}>
+                    {vault.currentPP?.toLocaleString() || 0} / {vault.capacity?.toLocaleString() || 0}
+                  </div>
+                </div>
               </div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#78350f' }}>
-                {vault.currentPP?.toLocaleString() || 0} / {vault.capacity?.toLocaleString() || 0}
+            ) : null}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.75rem 1.25rem',
+                background: 'linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)',
+                borderRadius: '0.5rem',
+                border: '2px solid #6366f1',
+              }}
+            >
+              <span style={{ fontSize: '1.35rem' }} aria-hidden>
+                💎
+              </span>
+              <div>
+                <div style={{ fontSize: '0.75rem', color: '#3730a3', fontWeight: '600' }}>TRUTH METAL</div>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#312e81' }}>
+                  {truthMetalShards.toLocaleString()}{' '}
+                  <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>shards</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1658,6 +1689,20 @@ const Battle: React.FC = () => {
                       }}>
                         {card.name}
                       </h3>
+                      {card.elementalAffinity ? (
+                        <div
+                          style={{
+                            fontSize: '0.85rem',
+                            color: '#475569',
+                            fontWeight: 600,
+                            marginTop: '0.25rem',
+                          }}
+                          title={elementTypeLabel(card.elementalAffinity as ElementType)}
+                        >
+                          {elementTypeEmoji(card.elementalAffinity as ElementType)}{' '}
+                          {elementTypeLabel(card.elementalAffinity as ElementType)}
+                        </div>
+                      ) : null}
                     </div>
 
                     {/* Status Badge */}

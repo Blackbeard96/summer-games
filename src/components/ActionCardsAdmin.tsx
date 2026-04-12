@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { ACTION_CARD_TEMPLATES, ActionCard } from '../types/battle';
+import type { ElementType } from '../types/elementTypes';
+import { ALL_ELEMENT_TYPES } from '../types/elementTypes';
+import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
 
 interface ActionCardsAdminProps {
   isOpen: boolean;
@@ -377,7 +380,14 @@ const ActionCardsAdmin: React.FC<ActionCardsAdminProps> = ({ isOpen, onClose }) 
                 Action Cards
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {actionCards.map((card) => (
+                {actionCards.map((card) => {
+                  const elRaw =
+                    cardEdits[card.name]?.elementalAffinity !== undefined
+                      ? cardEdits[card.name]!.elementalAffinity
+                      : card.elementalAffinity;
+                  const elShow =
+                    elRaw != null && String(elRaw).trim() !== '' ? (elRaw as ElementType) : null;
+                  return (
                   <button
                     key={card.name}
                     onClick={() => {
@@ -409,14 +419,20 @@ const ActionCardsAdmin: React.FC<ActionCardsAdminProps> = ({ isOpen, onClose }) 
                       }
                     }}
                   >
-                    <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                      {card.name}
+                    <div style={{ fontWeight: 'bold', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
+                      <span style={{ minWidth: 0 }}>{card.name}</span>
+                      {elShow ? (
+                        <span title={elementTypeLabel(elShow)} style={{ fontSize: '1rem', flexShrink: 0 }}>
+                          {elementTypeEmoji(elShow)}
+                        </span>
+                      ) : null}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
                       {card.type} • {card.rarity}
                     </div>
                   </button>
-                ))}
+                );
+                })}
               </div>
             </div>
 
@@ -529,6 +545,43 @@ const ActionCardsAdmin: React.FC<ActionCardsAdminProps> = ({ isOpen, onClose }) 
                           <option value="legendary">Legendary</option>
                         </select>
                       </div>
+                    </div>
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', color: '#94a3b8' }}>
+                        Element (attack cards: Freeze, Shield Breaker)
+                      </label>
+                      <select
+                        value={String(
+                          getCardDisplayValue(selectedCardData, 'elementalAffinity') ?? ''
+                        )}
+                        onChange={(e) =>
+                          handleCardEdit(
+                            selectedCardData.name,
+                            'elementalAffinity',
+                            e.target.value === '' ? null : (e.target.value as ElementType)
+                          )
+                        }
+                        style={{
+                          width: '100%',
+                          maxWidth: '320px',
+                          padding: '0.5rem',
+                          background: 'rgba(0, 0, 0, 0.5)',
+                          border: '1px solid rgba(139, 92, 246, 0.3)',
+                          borderRadius: '0.5rem',
+                          color: 'white',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        <option value="">Neutral (no type)</option>
+                        {ALL_ELEMENT_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {elementTypeEmoji(t)} {elementTypeLabel(t)}
+                          </option>
+                        ))}
+                      </select>
+                      <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.35rem', marginBottom: 0 }}>
+                        Applies to damaging action-card effects. In Vault Siege, compared to the target&apos;s chosen element.
+                      </p>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
                       <div>

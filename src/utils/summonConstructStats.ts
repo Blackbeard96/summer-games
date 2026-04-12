@@ -1,9 +1,11 @@
 /**
  * Summoned construct stats for Skills UI and battle spawn.
- * Power scales with the granting artifact's level (+10% per level above 1, up to level 10).
+ * Power scales with the granting artifact's level (+10% per level above 1, up to level 10)
+ * and with the skill's mastery level (+10% per mastery tier above 1, up to mastery 5).
  */
 
 export const SUMMON_ARTIFACT_MAX_LEVEL = 10;
+export const SUMMON_MASTERY_MAX_LEVEL = 5;
 
 /** L1 = ×1.0, L10 = ×1.9 (+10% per level after 1). */
 export function summonArtifactPowerMultiplier(artifactLevel: number): number {
@@ -12,6 +14,15 @@ export function summonArtifactPowerMultiplier(artifactLevel: number): number {
     Math.min(SUMMON_ARTIFACT_MAX_LEVEL, Math.floor(Number(artifactLevel) || 1))
   );
   return 1 + (L - 1) * 0.1;
+}
+
+/** M1 = ×1.0, M5 = ×1.4 (+10% per mastery step after 1). */
+export function summonMasteryPowerMultiplier(masteryLevel: number): number {
+  const M = Math.max(
+    1,
+    Math.min(SUMMON_MASTERY_MAX_LEVEL, Math.floor(Number(masteryLevel) || 1))
+  );
+  return 1 + (M - 1) * 0.1;
 }
 
 export interface SummonEffectLike {
@@ -31,6 +42,12 @@ export interface ResolvedConstructStats {
   maxHealth: number;
   maxShield: number;
   artifactLevelUsed: number;
+  /** Multiplier from artifact level only. */
+  artifactPowerMultiplier: number;
+  masteryLevelUsed: number;
+  /** Multiplier from skill mastery only. */
+  masteryPowerMultiplier: number;
+  /** Combined artifact × mastery multiplier vs base profile. */
   powerMultiplier: number;
 }
 
@@ -43,17 +60,21 @@ export function getFirstSummonEffectFromMove(move: {
 }
 
 /**
- * Resolve HP, shields, and attack damage from a summon status effect + artifact level.
+ * Resolve HP, shields, and attack damage from a summon status effect + artifact level + skill mastery.
  * Light constructs use the Stroke-of-Creation-style profile (100/50 base); others use 50/25 base.
  */
 export function resolveConstructStatsForSummonEffect(
   effect: SummonEffectLike,
-  artifactLevel: number
+  artifactLevel: number,
+  masteryLevel: number = 1
 ): ResolvedConstructStats {
-  const mult = summonArtifactPowerMultiplier(artifactLevel);
+  const artMult = summonArtifactPowerMultiplier(artifactLevel);
+  const mastMult = summonMasteryPowerMultiplier(masteryLevel);
+  const mult = artMult * mastMult;
   const elemental = String(effect.summonElementalType || 'fire').toLowerCase();
   const baseDamage = Math.max(1, Math.floor(Number(effect.summonDamage) || 100));
-  const durationTurns = Math.max(1, Math.floor(Number(effect.duration) || 2));
+  /** 0 = battle rule "until defeated"; legacy `effect.duration` is ignored for field persistence. */
+  const durationTurns = 0;
 
   const isLight = elemental === 'light';
   const baseHealth = isLight ? 100 : 50;
@@ -73,6 +94,10 @@ export function resolveConstructStatsForSummonEffect(
     1,
     Math.min(SUMMON_ARTIFACT_MAX_LEVEL, Math.floor(Number(artifactLevel) || 1))
   );
+  const M = Math.max(
+    1,
+    Math.min(SUMMON_MASTERY_MAX_LEVEL, Math.floor(Number(masteryLevel) || 1))
+  );
 
   return {
     displayName,
@@ -82,6 +107,9 @@ export function resolveConstructStatsForSummonEffect(
     maxHealth,
     maxShield,
     artifactLevelUsed: L,
+    artifactPowerMultiplier: artMult,
+    masteryLevelUsed: M,
+    masteryPowerMultiplier: mastMult,
     powerMultiplier: mult,
   };
 }

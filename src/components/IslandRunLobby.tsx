@@ -654,7 +654,14 @@ const IslandRunLobbyView: React.FC = () => {
         maxWaves,
         status: 'active',
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        /** Reinforcements: signed-in players not in the lobby roster can still join via invite link. */
+        joinableMidBattle: true,
+        requireExplicitJoin: false,
+        participantCap: 4,
+        hostPlayerId: currentUser.uid,
+        coopBattleMode: 'islandRaid',
+        roundNumber: 1,
       };
       if (levelId) battleRoomData.levelId = levelId;
       battleRoomData.difficulty = difficulty;

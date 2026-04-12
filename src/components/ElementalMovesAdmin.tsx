@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { MOVE_DAMAGE_VALUES, MOVE_TEMPLATES } from '../types/battle';
+import type { SkillEffectPayload } from '../types/skillEffects';
 import { db } from '../firebase';
 import { collection, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { invalidateMoveOverridesCache } from '../utils/moveOverrides';
+import { SkillEffectsConfigEditor } from './admin/SkillEffectsConfigEditor';
 
 interface ElementalMovesAdminProps {
   isOpen: boolean;
@@ -33,6 +35,7 @@ interface MoveEditData {
   description?: string;
   statusEffect?: StatusEffect; // Legacy support - single effect
   statusEffects?: StatusEffect[]; // New - multiple effects
+  skillEffects?: SkillEffectPayload[];
 }
 
 const ELEMENTAL_TYPES: Array<{ id: string; name: string; color: string }> = [
@@ -115,7 +118,10 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
         damage: override?.damage || moveData?.damage || 0,
         description: override?.description || moveTemplate.description || '',
         statusEffect: override?.statusEffect, // Legacy support
-        statusEffects: effects.length > 0 ? effects : undefined
+        statusEffects: effects.length > 0 ? effects : undefined,
+        skillEffects: Array.isArray((override as { skillEffects?: SkillEffectPayload[] })?.skillEffects)
+          ? (override as { skillEffects: SkillEffectPayload[] }).skillEffects
+          : undefined,
       });
     });
 
@@ -689,6 +695,11 @@ const ElementalMovesAdmin: React.FC<ElementalMovesAdminProps> = ({ isOpen, onClo
                               }}
                             />
                           </div>
+
+                          <SkillEffectsConfigEditor
+                            value={moveEdits[move.id]?.skillEffects ?? (move as MoveEditData).skillEffects ?? []}
+                            onChange={(next) => handleMoveEdit(move.id, 'skillEffects', next)}
+                          />
 
                           {/* Status Effects Editor - Multiple Effects */}
                           <div style={{ marginTop: '1rem', padding: '1rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>

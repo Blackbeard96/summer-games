@@ -26,6 +26,7 @@ export interface RewardGrantResult {
     pp: number;
     artifacts: string[];
     truthMetal: number;
+    abilities: string[];
   };
   error?: string;
 }
@@ -98,6 +99,8 @@ export async function grantChallengeRewards(
     const truthMetalReward = supportedRewards.find(r => r.type === 'truthMetal')?.value as number || 0;
     const artifactRewards = supportedRewards.filter(r => r.type === 'artifact');
     const artifactIds = artifactRewards.map(r => String(r.value));
+    const abilityRewards = supportedRewards.filter(r => r.type === 'ability');
+    const abilityIds = abilityRewards.map(r => String(r.value)).filter(Boolean);
     
     // Log unsupported reward types (for future implementation)
     const unsupportedRewards = rewards.filter(r => 
@@ -117,7 +120,8 @@ export async function grantChallengeRewards(
       xpReward,
       ppReward,
       truthMetalReward,
-      artifactIds
+      artifactIds,
+      abilityIds
     });
 
     // Validate reward payload
@@ -125,12 +129,18 @@ export async function grantChallengeRewards(
       throw new Error(`Invalid reward values: XP=${xpReward}, PP=${ppReward}, TruthMetal=${truthMetalReward}`);
     }
 
-    if (xpReward === 0 && ppReward === 0 && truthMetalReward === 0 && artifactIds.length === 0) {
+    if (
+      xpReward === 0 &&
+      ppReward === 0 &&
+      truthMetalReward === 0 &&
+      artifactIds.length === 0 &&
+      abilityIds.length === 0
+    ) {
       console.log(`🎁 grantChallengeRewards: No rewards to grant for challenge ${challengeId}`);
       return {
         success: true,
         alreadyClaimed: false,
-        rewardsGranted: { xp: 0, pp: 0, artifacts: [], truthMetal: 0 }
+        rewardsGranted: { xp: 0, pp: 0, artifacts: [], truthMetal: 0, abilities: [] }
       };
     }
 
@@ -146,7 +156,7 @@ export async function grantChallengeRewards(
           const claimData = claimDoc.data();
           if (claimData.claimed === true) {
             console.log(`🎁 grantChallengeRewards: Rewards already claimed for challenge ${challengeId}`);
-            const snapshot = claimData.rewardsSnapshot || { xp: 0, pp: 0, artifacts: [], truthMetal: 0 };
+            const snapshot = claimData.rewardsSnapshot || { xp: 0, pp: 0, artifacts: [], truthMetal: 0, abilities: [] };
             return {
               success: true,
               alreadyClaimed: true,
@@ -154,7 +164,8 @@ export async function grantChallengeRewards(
                 xp: snapshot.xp || 0,
                 pp: snapshot.pp || 0,
                 artifacts: snapshot.artifacts || [],
-                truthMetal: snapshot.truthMetal || 0
+                truthMetal: snapshot.truthMetal || 0,
+                abilities: snapshot.abilities || []
               }
             };
           }
@@ -286,6 +297,10 @@ export async function grantChallengeRewards(
           userUpdates.artifacts = updatedUserArtifacts;
           console.log(`🎁 grantChallengeRewards: Updating users collection with ${newUserArtifacts.length} new artifacts:`, newUserArtifacts.map(a => a.id || a));
         }
+
+        if (abilityIds.length > 0) {
+          userUpdates.challengeAbilityGrants = arrayUnion(...abilityIds);
+        }
         
         console.log(`🎁 grantChallengeRewards: Updating users document:`, {
           ppIncrement: ppReward,
@@ -313,6 +328,10 @@ export async function grantChallengeRewards(
           studentUpdates.artifacts = updatedStudentArtifacts;
           console.log(`🎁 grantChallengeRewards: Updating students collection with artifacts:`, Object.keys(updatedStudentArtifacts).filter(k => !k.endsWith('_purchase')));
         }
+
+        if (abilityIds.length > 0) {
+          studentUpdates.challengeAbilityGrants = arrayUnion(...abilityIds);
+        }
         
         console.log(`🎁 grantChallengeRewards: Updating students document:`, {
           ppIncrement: ppReward,
@@ -337,7 +356,8 @@ export async function grantChallengeRewards(
         xp: xpReward,
         pp: ppReward,
         artifacts: artifactIds,
-        truthMetal: truthMetalReward
+        truthMetal: truthMetalReward,
+        abilities: abilityIds
       };
 
       transaction.set(claimRef, {
@@ -354,7 +374,13 @@ export async function grantChallengeRewards(
       return {
         success: true,
         alreadyClaimed: false,
-        rewardsGranted: rewardsSnapshot
+        rewardsGranted: {
+          xp: rewardsSnapshot.xp,
+          pp: rewardsSnapshot.pp,
+          artifacts: rewardsSnapshot.artifacts,
+          truthMetal: rewardsSnapshot.truthMetal,
+          abilities: rewardsSnapshot.abilities
+        }
       };
     });
 
@@ -450,7 +476,7 @@ export async function grantChallengeRewards(
     return {
       success: false,
       alreadyClaimed: false,
-      rewardsGranted: { xp: 0, pp: 0, artifacts: [], truthMetal: 0 },
+      rewardsGranted: { xp: 0, pp: 0, artifacts: [], truthMetal: 0, abilities: [] },
       error: error.message || 'Unknown error'
     };
   }

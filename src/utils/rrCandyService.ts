@@ -5,9 +5,9 @@
  * Used by both Profile (Skill Tree Settings) and Skill Mastery.
  * 
  * DATA SOURCE:
- * - Firestore: battleMoves/{uid}/moves[]
- * - Filter: moves with id.startsWith('rr-candy-')
- * - If not found but unlocked, generates using getRRCandyMoves(candyType)
+ * - Firestore: battleMoves/{uid}/moves[] (persisted RR Candy moves)
+ * - Konfig: system_config/rr_candy_trees_v1 + players/{uid}/skill_state/main rrCandySkillState
+ * - On/Off: getRRCandyMoves('on-off') canonical ids
  * 
  * UPGRADE:
  * - Uses upgradeMove() from BattleContext
@@ -17,8 +17,10 @@
 import { doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Move } from '../types/battle';
-import { getRRCandyMoves } from './rrCandyMoves';
-import { getRRCandyStatus, getRRCandyStatusAsync } from './rrCandyUtils';
+import { getRRCandyConfig } from '../services/rrCandyConfigService';
+import { getPlayerRRCandyState } from '../services/rrCandyPlayerStateService';
+import { buildKonfigMovesFromLearnedNodes, getRRCandyMoves } from './rrCandyMoves';
+import { getRRCandyStatusAsync } from './rrCandyUtils';
 
 /**
  * Get RR Candy skills for a user
@@ -33,9 +35,53 @@ function inferRRCandyTypeFromMoveIds(rrMoves: Move[]): 'on-off' | 'up-down' | 'c
     const id = (m.id || '').toLowerCase();
     if (id.includes('on-off') || id.includes('on_off')) return 'on-off';
     if (id.includes('up-down') || id.includes('up_down')) return 'up-down';
+    if (id.includes('konfig')) return 'config';
     if (id.includes('config')) return 'config';
   }
   return null;
+}
+
+async function resolveKonfigRRCandySkills(userId: string, moves: Move[]): Promise<Move[]> {
+  const treeConfig = await getRRCandyConfig();
+  const konfigCandy = treeConfig.candies.find((c) => c.id === 'konfig');
+  if (!konfigCandy?.isActive) return [];
+
+  const { rrCandySkillState } = await getPlayerRRCandyState(userId);
+  const learned = new Set(rrCandySkillState.konfig?.learnedNodeIds || []);
+  const generated = buildKonfigMovesFromLearnedNodes(konfigCandy.nodes, learned);
+
+  const merged = generated.map((gen) => {
+    const existing = moves.find((m) => m.id === gen.id);
+    if (!existing) return gen;
+    return {
+      ...gen,
+      level: existing.level ?? gen.level,
+      masteryLevel: existing.masteryLevel ?? gen.masteryLevel,
+      cost: existing.cost ?? gen.cost,
+      cooldown: existing.cooldown ?? gen.cooldown,
+      currentCooldown: existing.currentCooldown ?? gen.currentCooldown,
+      debuffType: existing.debuffType,
+      debuffStrength: existing.debuffStrength,
+      shieldBoost: existing.shieldBoost,
+    } as Move;
+  });
+
+  const movesRef = doc(db, 'battleMoves', userId);
+  const nonRr = moves.filter((m) => !m.id?.startsWith('rr-candy-'));
+  const updatedMoves = [...nonRr, ...merged];
+
+  try {
+    const movesDoc = await getDoc(movesRef);
+    if (movesDoc.exists()) {
+      await updateDoc(movesRef, { moves: updatedMoves });
+    } else {
+      await setDoc(movesRef, { moves: updatedMoves });
+    }
+  } catch (e) {
+    console.error('rrCandyService: Konfig battleMoves sync failed', e);
+  }
+
+  return merged.map((move) => ({ ...move, unlocked: true }));
 }
 
 export async function getUserRRCandySkills(
@@ -55,8 +101,17 @@ export async function getUserRRCandySkills(
     const rrInPool = moves.filter((m: Move) => m.id?.startsWith('rr-candy-'));
     const hasAnyRrInMoves = rrInPool.length > 0;
 
-    // Check unlock status (users + students in getRRCandyStatusAsync)
+    // Check unlock status (users + students + skill_state override after migration)
     let rrCandyStatus = await getRRCandyStatusAsync(userId);
+
+    if (
+      rrCandyStatus.unlocked &&
+      rrCandyStatus.candyType === 'on-off' &&
+      rrInPool.some((m) => (m.id || '').toLowerCase().includes('konfig'))
+    ) {
+      rrCandyStatus = { ...rrCandyStatus, candyType: 'config' };
+      console.log('getUserRRCandySkills: Pool has Konfig move ids — using config candy type');
+    }
 
     // If chapter/artifact data failed to load but battleMoves already lists RR Candy ids, still serve skills
     if ((!rrCandyStatus.unlocked || !rrCandyStatus.candyType) && hasAnyRrInMoves) {
@@ -74,6 +129,10 @@ export async function getUserRRCandySkills(
 
     if (!rrCandyStatus.unlocked || !rrCandyStatus.candyType) {
       return [];
+    }
+
+    if (rrCandyStatus.candyType === 'config') {
+      return resolveKonfigRRCandySkills(userId, moves);
     }
 
     // Filter for RR Candy moves

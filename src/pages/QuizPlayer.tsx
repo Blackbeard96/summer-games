@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getQuizSet, getQuestions } from '../utils/trainingGroundsService';
 import { createAttempt, updateTrainingStats } from '../utils/trainingGroundsService';
@@ -11,6 +11,14 @@ const QuizPlayer: React.FC = () => {
   const { quizSetId } = useParams<{ quizSetId: string }>();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnMissionRaw = searchParams.get('returnMission');
+  const returnMission =
+    returnMissionRaw &&
+    returnMissionRaw.startsWith('/mission/') &&
+    !returnMissionRaw.includes('..')
+      ? returnMissionRaw
+      : null;
   
   const [quizSet, setQuizSet] = useState<TrainingQuizSet | null>(null);
   const [questions, setQuestions] = useState<TrainingQuestion[]>([]);
@@ -230,8 +238,8 @@ const QuizPlayer: React.FC = () => {
       };
       await updateTrainingStats(currentUser.uid, createdAttempt);
       
-      // Navigate to results
-      navigate(`/training-grounds/results/${attemptId}`);
+      const suffix = returnMission ? `?returnMission=${encodeURIComponent(returnMission)}` : '';
+      navigate(`/training-grounds/results/${attemptId}${suffix}`);
     } catch (error) {
       console.error('Error completing quiz:', error);
       alert('Failed to save quiz results. Please try again.');

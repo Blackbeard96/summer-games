@@ -19,6 +19,8 @@ export interface LiveEventMstMktModalProps {
   sessionPlayers?: SessionPlayer[];
   /** After a successful buy (e.g. refresh bag inventory from Firestore). */
   onPurchaseComplete?: () => void;
+  /** Account-wide Truth Metal shard count (users + students); informational in MST MKT. */
+  truthMetalShardsTotal?: number;
 }
 
 function itemDisabled(item: LiveEventMstRuntimeItem, player: SessionPlayer | null): string | null {
@@ -45,6 +47,7 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
   displayName,
   sessionPlayers = [],
   onPurchaseComplete,
+  truthMetalShardsTotal,
 }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [items, setItems] = useState<LiveEventMstRuntimeItem[]>([]);
@@ -183,9 +186,17 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
             color: '#fde68a',
             fontWeight: 700,
             fontSize: '0.95rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.35rem',
           }}
         >
-          Your session PP: {pp.toLocaleString()}
+          <span>Your session PP: {pp.toLocaleString()}</span>
+          {typeof truthMetalShardsTotal === 'number' ? (
+            <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#c4b5fd' }}>
+              💎 Truth Metal shards (account): {truthMetalShardsTotal.toLocaleString()}
+            </span>
+          ) : null}
         </div>
 
         {loading && (

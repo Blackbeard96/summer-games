@@ -238,28 +238,43 @@ export function selectOptimalCPUMove(
  * Select the best target for a CPU opponent
  * In multiplayer, this should prioritize the weakest enemy
  */
+type CpuTargetRow = {
+  id: string;
+  currentPP: number;
+  maxPP: number;
+  shieldStrength: number;
+  maxShieldStrength: number;
+  vaultHealth?: number;
+  maxVaultHealth?: number;
+  isSummon?: boolean;
+};
+
 export function selectOptimalCPUTarget(
-  allies: Array<{ id: string; currentPP: number; maxPP: number; shieldStrength: number; maxShieldStrength: number }>,
-  opponents: Array<{ id: string; currentPP: number; maxPP: number; shieldStrength: number; maxShieldStrength: number }>,
+  allies: CpuTargetRow[],
+  opponents: CpuTargetRow[],
   cpuId: string
 ): string | null {
-  // CPU should target enemies (opponents), not allies
+  // BattleEngine passes (opponents, allies, cpuId): second arg is the player/summon side to attack.
   if (opponents.length === 0) {
     return null;
   }
 
-  // Find the weakest enemy (lowest health percentage)
-  const enemyScores = opponents.map(opp => {
-    const healthPercent = (opp.currentPP / opp.maxPP) * 100;
-    const shieldPercent = (opp.shieldStrength / opp.maxShieldStrength) * 100;
-    
-    // Prioritize enemies with low health and low shields
-    const score = (100 - healthPercent) + (100 - shieldPercent) * 0.5;
-    
+  const enemyScores = opponents.map((opp) => {
+    const hp = opp.vaultHealth ?? opp.currentPP ?? 0;
+    const maxHp = Math.max(1, opp.maxVaultHealth ?? opp.maxPP ?? 1);
+    const healthPercent = (hp / maxHp) * 100;
+    const maxSh = Math.max(0, opp.maxShieldStrength ?? 0);
+    const shieldPercent = maxSh > 0 ? ((opp.shieldStrength ?? 0) / maxSh) * 100 : 0;
+
+    // Prioritize low health / low shields; summons get a bias so CPUs actually pressure constructs.
+    let score = (100 - healthPercent) + (100 - shieldPercent) * 0.5;
+    if (opp.isSummon) {
+      score += 52;
+    }
+
     return { id: opp.id, score, healthPercent, shieldPercent };
   });
 
-  // Sort by score (lowest health/shield = highest priority)
   enemyScores.sort((a, b) => b.score - a.score);
 
   return enemyScores[0]?.id || opponents[0]?.id || null;

@@ -1,6 +1,7 @@
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
+import type { SkillEffectPayload } from '../types/skillEffects';
 
 interface StatusEffect {
   type: 'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain' | 'cleanse' | 'freeze' | 'reduce' | 'summon' | 'none';
@@ -24,6 +25,8 @@ interface MoveOverrideData {
   description?: string;
   statusEffect?: StatusEffect; // Legacy support - single effect
   statusEffects?: StatusEffect[]; // New - multiple effects
+  /** MST Skill Effects Engine rows (optional). */
+  skillEffects?: SkillEffectPayload[];
 }
 
 interface MoveOverrides {
@@ -211,6 +214,20 @@ export const getMoveDescriptionSync = (moveName: string): string => {
   }
   
   return '';
+};
+
+/** Sync: standardized skill effects from admin move overrides (cache must be loaded). */
+export const getSkillEffectsSync = (moveName: string): SkillEffectPayload[] => {
+  if (!moveOverridesCache) return [];
+  const from = (key: string | null | undefined): SkillEffectPayload[] => {
+    if (!key) return [];
+    const row = moveOverridesCache![key];
+    const fx = row?.skillEffects;
+    return Array.isArray(fx) ? fx : [];
+  };
+  const direct = from(moveName);
+  if (direct.length) return direct;
+  return from(findOriginalTemplateName(moveName));
 };
 
 /**

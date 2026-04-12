@@ -40,6 +40,9 @@ const SkillAnimationLayer: React.FC<SkillAnimLayerProps> = ({
   const [reactionClass, setReactionClass] = useState('');
   const [shakeLevel, setShakeLevel] = useState<string | undefined>(undefined);
   const timersRef = useRef<number[]>([]);
+  /** Always invoke latest callback — effect deps intentionally omit onAnimationComplete to avoid timeline reset. */
+  const onCompleteRef = useRef(onAnimationComplete);
+  onCompleteRef.current = onAnimationComplete;
 
   const reducedMotion = useMemo(() => {
     try {
@@ -114,10 +117,11 @@ const SkillAnimationLayer: React.FC<SkillAnimLayerProps> = ({
       timersRef.current.push(id);
     });
 
+    const doneMs = Math.max(total, 380);
     const doneId = window.setTimeout(() => {
       onPhase?.({ event: 'onAnimationComplete', move, config, quality });
-      onAnimationComplete();
-    }, total);
+      onCompleteRef.current();
+    }, doneMs);
     timersRef.current.push(doneId);
 
     return () => {
@@ -131,8 +135,12 @@ const SkillAnimationLayer: React.FC<SkillAnimLayerProps> = ({
 
   const elementKey = config.profile.element || move.elementalAffinity || '';
   const manifestKey = config.profile.manifest || move.manifestType || '';
+  // Offensive attacks with damage must travel toward the enemy when the local player casts,
+  // even if data incorrectly sets targetType === 'self'.
+  const isDamagingAttack =
+    move.type === 'attack' && (move.damage == null || move.damage > 0);
   const selfDirected =
-    move.targetType === 'self' ||
+    (move.targetType === 'self' && !isDamagingAttack) ||
     ((move.shieldBoost || move.healing) && move.type !== 'attack');
   const dir = selfDirected ? 'to-player' : isPlayerMove ? 'to-enemy' : 'to-player';
   const impactSide = selfDirected

@@ -201,7 +201,8 @@ export function buildWaveEnemiesFromLevel(level: IslandRaidLevel, wave: number):
         position: { x: Math.random() * 100, y: Math.random() * 100 },
         spawnTime: new Date(),
         waveNumber: wave,
-        image: t.image
+        image: t.image,
+        ...(t.enemyType !== undefined ? { enemyType: t.enemyType } : {})
       });
       idx++;
     }

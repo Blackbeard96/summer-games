@@ -3,7 +3,8 @@
  *
  * SINGLE SOURCE OF TRUTH for battle-eligible skills.
  * - Unified 6-skill loadout: battle uses EQUIPPED skills only (manifest, elemental, RR Candy, artifact).
- * - getEquippedSkillsForBattle: returns only equipped skills for battle (max 6).
+ * - getEquippedSkillsForBattle: returns equipped skills for battle (up to max loadout slots) plus the
+ *   Level 2 Manifest meta move when the player has one saved (7th skill in Live Events).
  * - getUserUnlockedSkillsForBattle: returns all unlocked (for loadout UI / backward compat).
  *
  * Cooldowns are tracked in battle state, NOT in skill library.
@@ -23,6 +24,7 @@ import {
   getMaxLoadoutSlotsFromEffects,
   getPlayerUniversalLawEffects,
 } from './universalLawBoons';
+import { getActiveLevel2ManifestMove } from '../services/level2ManifestService';
 
 // Prevent console log spam; only emit a small number of Magical Paintbrush debug lines.
 let artifactPaintbrushDebugEmitted = false;
@@ -464,7 +466,11 @@ export function getArtifactSkillsFromEquipped(
       category: 'system',
       type: (raw.type as ArtifactSkillDefinition['type']) || 'attack',
       cost: typeof raw.cost === 'number' ? raw.cost : 0,
-      cooldown: typeof raw.cooldown === 'number' ? raw.cooldown : 0,
+      cooldown: isStrokeOfCreation
+        ? 2
+        : typeof raw.cooldown === 'number'
+          ? raw.cooldown
+          : 0,
       damage: typeof raw.damage === 'number' ? raw.damage : undefined,
       healing: typeof raw.healing === 'number' ? raw.healing : undefined,
       shieldBoost: typeof raw.shieldBoost === 'number' ? raw.shieldBoost : undefined,
@@ -653,15 +659,15 @@ export async function getUserUnlockedSkillsForBattle(
     if (rrCandyUnlocked && rrCandyType) {
       rrCandySkills = await getUserRRCandySkills(userId, allMoves);
       // Filter to only include skills for the user's candy type
-      rrCandySkills = rrCandySkills.filter(skill => {
-        // Extract candy type from skill ID (e.g., 'rr-candy-on-off-shields-off' -> 'on-off')
-        // Pattern matches: rr-candy-{candyType}-{rest}
-        // For 'on-off' type: matches 'on-off' before the next part (e.g., 'shields-off')
+      rrCandySkills = rrCandySkills.filter((skill) => {
+        const id = (skill.id || '').toLowerCase();
+        if (!id.startsWith('rr-candy-')) return false;
+        const userT = rrCandyType.toLowerCase().replace(/_/g, '-');
+        if (userT === 'config') return id.includes('konfig');
         const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
         const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
-        // Normalize for comparison
         const normalizedSkillType = skillCandyType?.toLowerCase().replace(/_/g, '-');
-        const normalizedUserType = rrCandyType.toLowerCase().replace(/_/g, '-');
+        const normalizedUserType = userT;
         return normalizedSkillType === normalizedUserType;
       });
     }
@@ -755,6 +761,17 @@ export async function getEquippedSkillsForBattle(
     const byId = new Map<string, Move>();
     unlocked.forEach(m => byId.set(m.id, m));
 
+    const appendLevel2Meta = async (base: Move[]): Promise<Move[]> => {
+      try {
+        const l2 = await getActiveLevel2ManifestMove(userId);
+        if (!l2) return base;
+        if (base.some((m) => m.id === l2.id)) return base;
+        return [...base, l2];
+      } catch {
+        return base;
+      }
+    };
+
     if (equippedIds.length > 0) {
       const result: Move[] = [];
       const cappedIds = equippedIds.slice(0, maxSlots);
@@ -765,7 +782,7 @@ export async function getEquippedSkillsForBattle(
       if (process.env.NODE_ENV === 'development') {
         console.log('🎯 getEquippedSkillsForBattle (equipped):', { count: result.length, ids: equippedIds });
       }
-      return result;
+      return appendLevel2Meta(result);
     }
 
     const fallback = unlocked.slice(0, maxSlots);
@@ -784,9 +801,9 @@ export async function getEquippedSkillsForBattle(
       if (process.env.NODE_ENV === 'development') {
         console.log('🎯 getEquippedSkillsForBattle (fallback, persisted):', { count: fallback.length, ids });
       }
-      return fallback;
+      return appendLevel2Meta(fallback);
     }
-    return [];
+    return appendLevel2Meta([]);
   } catch (error) {
     console.error('Error getEquippedSkillsForBattle:', error);
     return [];

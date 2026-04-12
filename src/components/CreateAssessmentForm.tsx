@@ -28,7 +28,11 @@ const AVAILABLE_ARTIFACTS = [
 interface CreateAssessmentFormProps {
   classId?: string; // Optional: for edit mode or single class selection
   classes?: Array<{ id: string; name: string }>; // Optional: for multi-class selection
+  /** Pre-check these classes when opening create (e.g. match Assessment Goals "Select Class" filter). */
+  defaultSelectedClassIds?: string[];
   onSave: (data: any, selectedClassIds?: string[]) => void; // Pass selected class IDs
+  /** Edit mode: duplicate this assessment’s template into other classes (new docs; no student goal data). */
+  onCopyToOtherClasses?: (data: any, targetClassIds: string[]) => void | Promise<void>;
   onCancel: () => void;
   initialData?: any; // Optional: assessment data for editing mode
 }
@@ -36,17 +40,32 @@ interface CreateAssessmentFormProps {
 const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   classId,
   classes,
+  defaultSelectedClassIds,
   onSave,
+  onCopyToOtherClasses,
   onCancel,
   initialData
 }) => {
   const isEditMode = !!initialData;
   const isMultiClassMode = !isEditMode && classes && classes.length > 0;
+  const showCopyToClasses =
+    isEditMode &&
+    !!classId &&
+    !!onCopyToOtherClasses &&
+    !!classes &&
+    classes.filter((c) => c.id !== classId).length > 0;
   
-  // State for multi-class selection
-  const [selectedClassIds, setSelectedClassIds] = useState<string[]>(
-    classId ? [classId] : []
-  );
+  // State for multi-class selection (default to admin's current class filter so new items show in the list)
+  const [selectedClassIds, setSelectedClassIds] = useState<string[]>(() => {
+    if (classId) return [classId];
+    if (defaultSelectedClassIds && defaultSelectedClassIds.length > 0) {
+      return defaultSelectedClassIds.filter((id) => classes?.some((c) => c.id === id));
+    }
+    return [];
+  });
+
+  const [copyTargetClassIds, setCopyTargetClassIds] = useState<string[]>([]);
+  const [copyInProgress, setCopyInProgress] = useState(false);
   
   // Initialize state from initialData if editing, otherwise use defaults
   const [title, setTitle] = useState(initialData?.title || '');
@@ -278,9 +297,23 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  const otherClassesForCopy =
+    classes?.filter((c) => classId && c.id !== classId) ?? [];
+
+  const handleCopyClassToggle = (targetId: string) => {
+    setCopyTargetClassIds((prev) =>
+      prev.includes(targetId) ? prev.filter((id) => id !== targetId) : [...prev, targetId]
+    );
+  };
+
+  const handleSelectAllCopyTargets = () => {
+    if (!classId || otherClassesForCopy.length === 0) return;
+    const allIds = otherClassesForCopy.map((c) => c.id);
+    const allSelected = allIds.every((id) => copyTargetClassIds.includes(id));
+    setCopyTargetClassIds(allSelected ? [] : allIds);
+  };
+
+  const serializeAssessmentPayload = (): any | null => {
     const assessmentData: any = {
       title,
       type,
@@ -294,15 +327,12 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       penaltyCap
     };
 
-    // Add Habits-specific config if type is habits
-    // Only include fields that have values (Firestore doesn't allow undefined)
     if (type === 'habits') {
       const habitsConfig: any = {
         defaultDuration,
         requireNotesOnCheckIn
       };
-      
-      // Only include numeric fields if they have values
+
       if (defaultRewardPP !== '') {
         habitsConfig.defaultRewardPP = Number(defaultRewardPP);
       }
@@ -315,21 +345,20 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       if (defaultConsequenceXP !== '') {
         habitsConfig.defaultConsequenceXP = Number(defaultConsequenceXP);
       }
-      
+
       assessmentData.habitsConfig = habitsConfig;
     }
 
-    // Add Story Goal-specific config if type is story-goal
     if (type === 'story-goal') {
       if (!storyStageId) {
         alert('Please select a Story Stage for the Story Goal');
-        return;
+        return null;
       }
-      
-      const selectedStage = HERO_JOURNEY_STAGES.find(s => s.id === storyStageId);
+
+      const selectedStage = HERO_JOURNEY_STAGES.find((s) => s.id === storyStageId);
       if (!selectedStage) {
         alert('Invalid story stage selected');
-        return;
+        return null;
       }
 
       const storyGoalConfig: any = {
@@ -337,7 +366,6 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
         stageLabel: selectedStage.label
       };
 
-      // Only include optional fields if they have values
       if (milestoneTitle.trim()) {
         storyGoalConfig.milestoneTitle = milestoneTitle.trim();
       }
@@ -348,7 +376,15 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       assessmentData.storyGoal = storyGoalConfig;
     }
 
-    // For multi-class mode, pass selected class IDs
+    return assessmentData;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const assessmentData = serializeAssessmentPayload();
+    if (!assessmentData) return;
+
     if (isMultiClassMode) {
       if (selectedClassIds.length === 0) {
         alert('Please select at least one class');
@@ -356,8 +392,27 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       }
       onSave(assessmentData, selectedClassIds);
     } else {
-      // Single class mode (edit or legacy single class)
       onSave(assessmentData, classId ? [classId] : undefined);
+    }
+  };
+
+  const handleCopyToOtherClassesClick = async () => {
+    if (!onCopyToOtherClasses || !classId) return;
+
+    const targets = copyTargetClassIds.filter((id) => id !== classId);
+    if (targets.length === 0) {
+      alert('Select at least one other class to copy this assessment configuration to.');
+      return;
+    }
+
+    const assessmentData = serializeAssessmentPayload();
+    if (!assessmentData) return;
+
+    setCopyInProgress(true);
+    try {
+      await Promise.resolve(onCopyToOtherClasses(assessmentData, targets));
+    } finally {
+      setCopyInProgress(false);
     }
   };
 
@@ -369,6 +424,10 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
         {/* Class Selection (Multi-select for create mode) */}
         {isMultiClassMode && (
           <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f0f9ff', borderRadius: '0.5rem', border: '2px solid #3b82f6' }}>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#1e3a8a' }}>
+              New assessments are created only for the classes you check below. The &quot;Select Class&quot; dropdown on the
+              previous screen only filters the list — it does not add the assessment unless that class is checked here.
+            </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e40af' }}>
                 Select Classes: <span style={{ color: '#ef4444' }}>*</span>
@@ -1125,6 +1184,108 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
           </div>
         </div>
           </>
+        )}
+
+        {showCopyToClasses && (
+          <div
+            style={{
+              marginBottom: '1.5rem',
+              padding: '1rem',
+              background: '#fffbeb',
+              borderRadius: '0.5rem',
+              border: '2px solid #f59e0b'
+            }}
+          >
+            <p style={{ margin: '0 0 0.5rem', fontWeight: 'bold', color: '#92400e' }}>
+              Copy to other classes
+            </p>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#78350f' }}>
+              Creates a new assessment in each selected class with this same configuration. Student goals and results are
+              not copied — each class starts fresh.
+            </p>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '0.5rem'
+              }}
+            >
+              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: '#92400e' }}>Target classes</span>
+              <button
+                type="button"
+                onClick={handleSelectAllCopyTargets}
+                style={{
+                  padding: '0.375rem 0.75rem',
+                  background: '#f59e0b',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: 500
+                }}
+              >
+                {otherClassesForCopy.length > 0 &&
+                otherClassesForCopy.every((c) => copyTargetClassIds.includes(c.id))
+                  ? 'Deselect all'
+                  : 'Select all'}
+              </button>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                maxHeight: '200px',
+                overflowY: 'auto',
+                marginBottom: '0.75rem'
+              }}
+            >
+              {otherClassesForCopy.map((classItem) => (
+                <label
+                  key={classItem.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.5rem',
+                    background: copyTargetClassIds.includes(classItem.id) ? '#fef3c7' : 'white',
+                    borderRadius: '0.375rem',
+                    cursor: 'pointer',
+                    border: copyTargetClassIds.includes(classItem.id) ? '2px solid #f59e0b' : '1px solid #d1d5db'
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={copyTargetClassIds.includes(classItem.id)}
+                    onChange={() => handleCopyClassToggle(classItem.id)}
+                    style={{ width: '1.25rem', height: '1.25rem', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontWeight: copyTargetClassIds.includes(classItem.id) ? '600' : '400' }}>
+                    {classItem.name}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={copyInProgress}
+              onClick={() => void handleCopyToOtherClassesClick()}
+              style={{
+                padding: '0.75rem 1.25rem',
+                background: copyInProgress ? '#9ca3af' : '#d97706',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: copyInProgress ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold',
+                fontSize: '0.9375rem'
+              }}
+            >
+              {copyInProgress ? 'Copying…' : 'Copy to selected classes'}
+            </button>
+          </div>
         )}
 
         {/* Actions */}

@@ -284,13 +284,19 @@ export async function setAssessmentGoal(
   };
   
   await setDoc(goalRef, goalData);
-  
-  // Increment numGoalsSet on assessment only if this is a new goal
+
   if (isNewGoal) {
     const assessmentRef = doc(db, 'assessments', assessmentId);
-    await updateDoc(assessmentRef, {
-      numGoalsSet: increment(1)
-    });
+    try {
+      await updateDoc(assessmentRef, {
+        numGoalsSet: increment(1)
+      });
+    } catch (e) {
+      console.warn(
+        'Goal saved but numGoalsSet could not be updated on the assessment (deploy latest Firestore rules if this persists).',
+        e
+      );
+    }
   }
 }
 
@@ -965,12 +971,18 @@ export async function createHabitSubmission(
   // verification will be set later when the habit is verified
   
   await setDoc(submissionRef, submissionData);
-  
-  // Increment numGoalsSet on assessment (reusing existing field)
+
   const assessmentRef = doc(db, 'assessments', assessmentId);
-  await updateDoc(assessmentRef, {
-    numGoalsSet: increment(1)
-  });
+  try {
+    await updateDoc(assessmentRef, {
+      numGoalsSet: increment(1)
+    });
+  } catch (e) {
+    console.warn(
+      'Habit submission saved but numGoalsSet could not be updated on the assessment (deploy latest Firestore rules if this persists).',
+      e
+    );
+  }
 }
 
 /**
@@ -1314,7 +1326,7 @@ export function mergeReflectionIntoEvidence(
 ): string {
   const trimmed = newEntry.trim();
   if (!trimmed) return (existing || '').trim();
-  const stamp = `\n\n--- Live Event (${sessionLabel}) — ${new Date().toLocaleString()} ---\n`;
+  const stamp = `\n\n--- ${sessionLabel} — ${new Date().toLocaleString()} ---\n`;
   const block = `${stamp}${trimmed}`;
   const base = (existing || '').trim();
   if (!base) return trimmed;
@@ -1412,6 +1424,174 @@ export async function submitLiveEventReflectionToAssessment(params: {
       return { ok: false, error: 'No goal document found. Set your goal under Assessment Goals first.' };
     }
     return { ok: false, error: msg || 'Failed to save reflection.' };
+  }
+}
+
+// =============================================================================
+// Mission sequence — reflection → Assessment Goals evidence (optional link)
+// =============================================================================
+
+export type AssessmentPickItem = { id: string; title: string; type: string; classId: string };
+
+/** For mission admin: label assessments that can be linked to a reflection step. */
+export async function listAssessmentsForMissionLinking(): Promise<AssessmentPickItem[]> {
+  const snapshot = await getDocs(collection(db, 'assessments'));
+  const rows: AssessmentPickItem[] = snapshot.docs.map((d) => {
+    const x = d.data();
+    return {
+      id: d.id,
+      title: typeof x.title === 'string' && x.title.trim() ? x.title : '(untitled)',
+      type: typeof x.type === 'string' ? x.type : '',
+      classId: typeof x.classId === 'string' ? x.classId : '',
+    };
+  });
+  rows.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+  return rows;
+}
+
+export async function saveMissionReflectionStandalone(
+  userId: string,
+  payload: {
+    missionId: string;
+    stepId: string;
+    text: string;
+    linkedAssessmentId?: string;
+  }
+): Promise<void> {
+  await addDoc(collection(db, 'users', userId, 'missionReflectionResponses'), {
+    missionId: payload.missionId,
+    stepId: payload.stepId,
+    text: payload.text,
+    linkedAssessmentId: payload.linkedAssessmentId ?? null,
+    submittedAt: serverTimestamp(),
+  });
+}
+
+/**
+ * Writes mission reflection into linked Assessment Goals evidence when possible
+ * (same evidence field as the Assessment Goals UI). Uses habit submissions for habits-type assessments.
+ * When `habitCommitment` / `storyCommitment` are passed (mission runner goal fields), creates or updates
+ * those records like Set Goal / Edit Goal. Optional `reflectionText` is merged into evidence afterward.
+ * On failure or missing goal when locked, stores under users/{uid}/missionReflectionResponses.
+ */
+export async function submitMissionReflectionForSequence(params: {
+  assessmentId: string;
+  studentId: string;
+  missionId: string;
+  stepId: string;
+  missionTitle?: string;
+  reflectionText: string;
+  habitCommitment?: { habitText: string; duration: HabitDuration; evidence: string | null };
+  storyCommitment?: { textGoal: string; evidence: string | null };
+}): Promise<{ stored: 'assessmentGoal' | 'habitSubmission' | 'standalone' }> {
+  const {
+    assessmentId,
+    studentId,
+    missionId,
+    stepId,
+    missionTitle,
+    reflectionText,
+    habitCommitment,
+    storyCommitment,
+  } = params;
+  const text = reflectionText.trim();
+  const midShort = missionId.length > 12 ? `${missionId.slice(0, 10)}…` : missionId;
+  const sessionLabel = `Mission${missionTitle ? ` · ${missionTitle}` : ''} · ${midShort} · step ${stepId}`;
+
+  const fallback = async (payloadText: string) => {
+    const t = payloadText.trim();
+    if (!t) return { stored: 'standalone' as const };
+    await saveMissionReflectionStandalone(studentId, {
+      missionId,
+      stepId,
+      text: t,
+      linkedAssessmentId: assessmentId,
+    });
+    return { stored: 'standalone' as const };
+  };
+
+  try {
+    const assessment = await getAssessment(assessmentId);
+    if (!assessment) {
+      return text ? fallback(text) : { stored: 'standalone' };
+    }
+
+    // Structured habit goal from mission (same fields as Assessment Goals → Habits).
+    // Locked assessments still accept mission-linked input so teachers see commitments on the dashboard.
+    if (assessment.type === 'habits' && habitCommitment) {
+      const ht = habitCommitment.habitText.trim();
+      if (ht.length < 3 || ht.length > 180) {
+        return text ? fallback(text) : { stored: 'standalone' };
+      }
+      let ev: string | null = habitCommitment.evidence?.trim() || null;
+      if (text) ev = mergeReflectionIntoEvidence(ev, text, sessionLabel);
+      const sub = await getHabitSubmission(assessmentId, studentId);
+      if (!sub) {
+        await createHabitSubmission(
+          assessmentId,
+          studentId,
+          assessment.classId,
+          ht,
+          habitCommitment.duration,
+          ev
+        );
+      } else {
+        await updateHabitSubmissionGoal(assessmentId, studentId, ht, habitCommitment.duration, ev);
+      }
+      return { stored: 'habitSubmission' };
+    }
+
+    // Structured story goal from mission (new docs may fail rules if assessment is locked; catch → fallback).
+    if (assessment.type === 'story-goal' && storyCommitment) {
+      const tg = storyCommitment.textGoal.trim();
+      if (tg.length < 3) {
+        return text ? fallback(text) : { stored: 'standalone' };
+      }
+      let ev: string | null = storyCommitment.evidence?.trim() || null;
+      if (text) ev = mergeReflectionIntoEvidence(ev, text, sessionLabel);
+      await setAssessmentGoal(assessmentId, studentId, undefined, assessment.classId, ev, tg);
+      return { stored: 'assessmentGoal' };
+    }
+
+    if (!text) {
+      return { stored: 'standalone' };
+    }
+
+    if (assessment.type === 'habits') {
+      const sub = await getHabitSubmission(assessmentId, studentId);
+      if (!sub) return fallback(text);
+      const merged = mergeReflectionIntoEvidence(sub.evidence ?? null, text, sessionLabel);
+      await updateHabitSubmission(assessmentId, studentId, { evidence: merged });
+      return { stored: 'habitSubmission' };
+    }
+
+    const goalId = generateGoalId(assessmentId, studentId);
+    const goalRef = doc(db, 'assessmentGoals', goalId);
+    const snap = await getDoc(goalRef);
+
+    if (!snap.exists()) {
+      if (assessment.isLocked) return fallback(text);
+      const merged = mergeReflectionIntoEvidence(null, text, sessionLabel);
+      await setDoc(goalRef, {
+        id: goalId,
+        assessmentId,
+        classId: assessment.classId,
+        studentId,
+        evidence: merged,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        locked: false,
+      });
+      return { stored: 'assessmentGoal' };
+    }
+
+    const goal = snap.data() as AssessmentGoal;
+    const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, text, sessionLabel);
+    await updateDoc(goalRef, { evidence: merged, updatedAt: Timestamp.now() });
+    return { stored: 'assessmentGoal' };
+  } catch (e) {
+    console.warn('submitMissionReflectionForSequence failed, using standalone storage', e);
+    return text ? fallback(text) : { stored: 'standalone' };
   }
 }
 

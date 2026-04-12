@@ -7,6 +7,11 @@ import { getPowerLevelBonusForRarity, normalizeArtifactRarity, type ArtifactRari
 import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
 import { buildMarketplaceAdminMap } from '../utils/marketplaceStoreMerge';
 import { mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
+import {
+  formatEquippableCatalogSlotLabel,
+  normalizeEquippableCatalogSlot,
+  type EquippableCatalogSlot,
+} from '../utils/equippableArtifactSlot';
 import type { ConsumableEffect, LiveEventMktListing, MarketplaceItemType } from '../types/consumableEffects';
 import {
   validateConsumableItemRow,
@@ -104,7 +109,7 @@ interface EquippableArtifactSkill {
 interface EquippableArtifact {
   id: string;
   name: string;
-  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket' | 'weapon';
+  slot: EquippableCatalogSlot;
   rarity?: ArtifactRarity;
   powerLevelBonus?: number;
   stats?: {
@@ -160,7 +165,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                 {
                   ...artifact,
                   id: typeof artifact?.id === 'string' && artifact.id.trim() ? artifact.id.trim() : key,
-                  slot: artifact?.slot || 'ring1',
+                  slot: normalizeEquippableCatalogSlot(artifact?.slot),
                   rarity,
                   powerLevelBonus:
                     typeof artifact?.powerLevelBonus === 'number'
@@ -335,7 +340,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     const artifact: EquippableArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
-      slot: (newArtifact as EquippableArtifact).slot || 'ring1',
+      slot: normalizeEquippableCatalogSlot((newArtifact as EquippableArtifact).slot),
       rarity,
       powerLevelBonus: getPowerLevelBonusForRarity(rarity),
       stats: (newArtifact as EquippableArtifact).stats || {},
@@ -457,7 +462,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
     const artifact: EquippableArtifact = {
       id: newArtifact.id as string,
       name: newArtifact.name as string,
-      slot: (newArtifact as EquippableArtifact).slot || 'ring1',
+      slot: normalizeEquippableCatalogSlot((newArtifact as EquippableArtifact).slot),
       rarity,
       powerLevelBonus: getPowerLevelBonusForRarity(rarity),
       stats: (newArtifact as EquippableArtifact).stats || {},
@@ -503,10 +508,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
   const SLOT_ICON_FOR_MKT: Record<EquippableArtifact['slot'], string> = {
     head: '👑',
     chest: '🦺',
-    ring1: '💍',
-    ring2: '💍',
-    ring3: '💍',
-    ring4: '💍',
+    ring: '💍',
     legs: '👖',
     shoes: '👟',
     jacket: '🧥',
@@ -1420,8 +1422,13 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Slot</label>
                   <select
-                    value={(newArtifact as EquippableArtifact).slot || 'ring1'}
-                    onChange={(e) => setNewArtifact({ ...newArtifact, slot: e.target.value as any })}
+                    value={normalizeEquippableCatalogSlot((newArtifact as EquippableArtifact).slot)}
+                    onChange={(e) =>
+                      setNewArtifact({
+                        ...newArtifact,
+                        slot: e.target.value as EquippableCatalogSlot,
+                      })
+                    }
                     style={{
                       width: '100%',
                       padding: '0.5rem',
@@ -1433,10 +1440,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                   >
                     <option value="head">Head</option>
                     <option value="chest">Chest</option>
-                    <option value="ring1">Ring 1</option>
-                    <option value="ring2">Ring 2</option>
-                    <option value="ring3">Ring 3</option>
-                    <option value="ring4">Ring 4</option>
+                    <option value="ring">Ring (any ring slot)</option>
                     <option value="legs">Legs</option>
                     <option value="shoes">Shoes</option>
                     <option value="jacket">Jacket</option>
@@ -2202,7 +2206,7 @@ const ArtifactsAdmin: React.FC<ArtifactsAdminProps> = ({ isOpen, onClose }) => {
                       <div>
                         <div style={{ fontWeight: 'bold', fontSize: '1.125rem' }}>{eq.name}</div>
                         <div style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                          Slot: {eq.slot} | Level: {eq.level || 1}
+                          Slot: {formatEquippableCatalogSlotLabel(eq.slot)} | Level: {eq.level || 1}
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#60a5fa', marginTop: '0.25rem', fontWeight: 600 }}>
                           {String(eq.rarity || 'common').charAt(0).toUpperCase() + String(eq.rarity || 'common').slice(1)} · +{eq.powerLevelBonus ?? getPowerLevelBonusForRarity(eq.rarity || 'common')} Power Level

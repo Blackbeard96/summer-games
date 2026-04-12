@@ -90,6 +90,17 @@ const AssessmentGoalsAdmin: React.FC = () => {
       bonusCap: assessmentData.bonusCap || 75,
     };
 
+    if (
+      assessmentData.minGoalScore !== undefined &&
+      assessmentData.minGoalScore !== null &&
+      assessmentData.minGoalScore !== ''
+    ) {
+      const n = Number(assessmentData.minGoalScore);
+      if (!Number.isNaN(n)) {
+        baseAssessment.minGoalScore = n;
+      }
+    }
+
     // Only set these fields on create, not update
     if (!isUpdate) {
       baseAssessment.classId = selectedClassId;
@@ -215,6 +226,48 @@ const AssessmentGoalsAdmin: React.FC = () => {
     } catch (error: any) {
       console.error('Error updating assessment:', error);
       alert(`Failed to update assessment: ${error.message}`);
+    }
+  };
+
+  const handleCopyAssessmentToClasses = async (assessmentData: any, targetClassIds: string[]) => {
+    if (!currentUser || !selectedAssessment) return;
+
+    const sourceClassId = selectedAssessment.classId;
+    const filtered = targetClassIds.filter((id) => id !== sourceClassId);
+    if (filtered.length === 0) {
+      alert('Select at least one other class (not the class this assessment already belongs to).');
+      return;
+    }
+
+    try {
+      const baseAssessment = buildAssessmentData(assessmentData, false);
+      const validation = validateAssessmentConfig({
+        ...baseAssessment,
+        classId: sourceClassId,
+        id: selectedAssessment.id,
+      } as Assessment);
+      if (!validation.valid) {
+        alert(`Validation errors:\n${validation.errors.join('\n')}`);
+        return;
+      }
+
+      await Promise.all(
+        filtered.map((classId) =>
+          createAssessment({ ...baseAssessment, classId } as Omit<Assessment, 'id'>)
+        )
+      );
+
+      alert(
+        `Created ${filtered.length} new assessment${filtered.length === 1 ? '' : 's'} in other class(es). Student goals were not copied — each class starts fresh.`
+      );
+
+      if (selectedClassId && filtered.includes(selectedClassId)) {
+        const updatedAssessments = await getAssessmentsByClass(selectedClassId);
+        setAssessments(updatedAssessments);
+      }
+    } catch (error: any) {
+      console.error('Error copying assessment:', error);
+      alert(`Failed to copy assessment: ${error.message}`);
     }
   };
 
@@ -408,10 +461,14 @@ const AssessmentGoalsAdmin: React.FC = () => {
                     <div>
                       <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{assessment.title}</h3>
                       <p style={{ margin: 0, color: '#6b7280' }}>
-                        {assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1)} • 
-                        Max Score: {assessment.maxScore} • 
-                        Status: {assessment.gradingStatus} • 
-                        {assessment.isLocked ? '🔒 Locked' : '🔓 Unlocked'}
+                        {[
+                          assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1),
+                          assessment.type !== 'habits' ? `Max Score: ${assessment.maxScore}` : null,
+                          `Status: ${assessment.gradingStatus}`,
+                          assessment.isLocked ? '🔒 Locked' : '🔓 Unlocked',
+                        ]
+                          .filter(Boolean)
+                          .join(' • ')}
                       </p>
                       <p style={{ margin: '0.5rem 0 0 0', color: '#6b7280', fontSize: '0.875rem' }}>
                         Goals Set: {assessment.numGoalsSet || 0} • 
@@ -521,6 +578,7 @@ const AssessmentGoalsAdmin: React.FC = () => {
       {viewMode === 'create' && (
         <CreateAssessmentForm
           classes={classes.map(c => ({ id: c.id, name: c.name }))}
+          defaultSelectedClassIds={selectedClassId ? [selectedClassId] : undefined}
           onSave={handleCreateAssessment}
           onCancel={() => setViewMode('list')}
         />
@@ -529,7 +587,9 @@ const AssessmentGoalsAdmin: React.FC = () => {
       {viewMode === 'edit' && selectedAssessment && (
         <CreateAssessmentForm
           classId={selectedClassId!}
+          classes={classes.map((c) => ({ id: c.id, name: c.name }))}
           onSave={handleUpdateAssessment}
+          onCopyToOtherClasses={handleCopyAssessmentToClasses}
           onCancel={() => {
             setViewMode('list');
             setSelectedAssessment(null);

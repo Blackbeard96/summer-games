@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   getMissionTemplates, 
@@ -15,9 +16,52 @@ import {
   getMissionStatus,
   getActiveStoryMissionForChapter,
   getProfileJourneyContent,
-  saveProfileJourneyText
+  saveProfileJourneyText,
+  sortMissionsForHubList
 } from '../utils/missionsService';
 import { MissionTemplate, PlayerMission, DeliveryChannel } from '../types/missions';
+import { getMissionRewardPreviewLines } from '../utils/missionRewardPreview';
+
+function MissionRewardsPreview({ mission }: { mission: MissionTemplate }) {
+  const lines = getMissionRewardPreviewLines(mission);
+  if (lines.length === 0) return null;
+  return (
+    <div
+      style={{
+        marginBottom: '0.85rem',
+        padding: '0.6rem 0.75rem',
+        borderRadius: '0.35rem',
+        background: 'rgba(0, 0, 0, 0.25)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: '0.7rem',
+          color: '#9ca3af',
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+        }}
+      >
+        Rewards
+      </div>
+      <ul
+        style={{
+          margin: '0.35rem 0 0',
+          paddingLeft: '1.1rem',
+          color: '#e5e7eb',
+          fontSize: '0.8rem',
+          lineHeight: 1.45,
+        }}
+      >
+        {lines.map((line, i) => (
+          <li key={i}>{line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 interface NPCMissionModalProps {
   isOpen: boolean;
@@ -35,6 +79,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   npcImage
 }) => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [sideMissions, setSideMissions] = useState<MissionTemplate[]>([]);
   const [storyMissions, setStoryMissions] = useState<MissionTemplate[]>([]);
   const [profileMissions, setProfileMissions] = useState<MissionTemplate[]>([]);
@@ -77,15 +122,26 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
           npc,
           deliveryChannel: 'HUB_NPC'
         });
-        setSideMissions(allMissionsData.filter(m => m.missionCategory === 'SIDE').slice(0, 3));
+        setSideMissions(
+          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SIDE'))
+        );
         const profileList = allMissionsData.filter(m => m.missionCategory === 'PROFILE');
         setProfileMissions(profileList);
-        if (progress) {
-          setStoryMissions(
-            allMissionsData.filter(
-              m => m.missionCategory === 'STORY' && m.story?.chapterId === progress.currentChapterId
-            )
-          );
+
+        // STORY: show every HUB_NPC story mission for this NPC — not only the chapter matching
+        // `playerStoryProgress.currentChapterId`. Custom chapter ids (e.g. Manifest_Level_2) would
+        // otherwise never appear while the player is still on chapter_1 in the main story tracker.
+        const hubStory = allMissionsData.filter((m) => m.missionCategory === 'STORY');
+        const curChapter = progress?.currentChapterId;
+        if (curChapter) {
+          const forCur = hubStory.filter((m) => m.story?.chapterId === curChapter);
+          const other = hubStory.filter((m) => m.story?.chapterId !== curChapter);
+          setStoryMissions([
+            ...sortMissionsForHubList(forCur),
+            ...sortMissionsForHubList(other),
+          ]);
+        } else {
+          setStoryMissions(sortMissionsForHubList(hubStory));
         }
 
         // Load existing journey stage content for Profile missions (pre-fill text areas)
@@ -266,10 +322,27 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                         marginBottom: '1rem'
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.35rem' }}>
                         <h4 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
                           {mission.title}
                         </h4>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                        {mission.story?.chapterId &&
+                          mission.story.chapterId !== currentChapterId && (
+                            <span
+                              style={{
+                                backgroundColor: 'rgba(156, 163, 175, 0.35)',
+                                color: '#e5e7eb',
+                                padding: '0.2rem 0.45rem',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.68rem',
+                                fontWeight: 700,
+                              }}
+                              title="Story arc chapter (may differ from your current Journey chapter)"
+                            >
+                              Arc: {mission.story.chapterId}
+                            </span>
+                          )}
                         {status === 'active' && (
                           <span style={{ 
                             backgroundColor: '#fbbf24', 
@@ -294,6 +367,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                             ✓ COMPLETED
                           </span>
                         )}
+                        </div>
                       </div>
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.9rem' }}>
                         {mission.description}
@@ -317,23 +391,66 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                         </button>
                       )}
                       {status === 'active' && (
-                        <button
-                          onClick={() => {
-                            // Navigate to Player Journey to track
-                            window.location.href = '/chapters';
-                          }}
-                          style={{
-                            backgroundColor: '#fbbf24',
-                            color: '#1f2937',
-                            border: 'none',
-                            padding: '0.5rem 1rem',
-                            borderRadius: '0.5rem',
-                            cursor: 'pointer',
-                            fontWeight: 'bold'
-                          }}
-                        >
-                          Track Mission
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+                              }}
+                              style={{
+                                backgroundColor: '#fbbf24',
+                                color: '#1f2937',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Continue mission →
+                            </button>
+                          ) : mission.playerJourneyLink ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate('/chapters');
+                              }}
+                              style={{
+                                backgroundColor: '#fbbf24',
+                                color: '#1f2937',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Open Player Journey
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate('/chapters');
+                              }}
+                              style={{
+                                backgroundColor: '#fbbf24',
+                                color: '#1f2937',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Track in Journey
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
@@ -375,6 +492,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                         )}
                       </div>
                       <p style={{ color: '#d1d5db', marginBottom: '0.75rem', fontSize: '0.9rem' }}>{mission.description}</p>
+                      <MissionRewardsPreview mission={mission} />
                       <div style={{ marginBottom: '1rem' }}>
                         <label style={{ display: 'block', color: '#9ca3af', fontSize: '0.85rem', marginBottom: '0.35rem', fontWeight: '600' }}>
                           Your reflection (appears on your Profile&apos;s Journey)
@@ -463,8 +581,9 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 <h3 style={{ color: '#3b82f6', marginBottom: '1rem', fontSize: '1.25rem' }}>
                   Side Missions
                 </h3>
-                {sideMissions.map((mission) => {
+                {sideMissions.map((mission, sideIndex) => {
                   const status = getMissionPlayerStatus(mission.id);
+                  const displayNum = sideIndex + 1;
                   
                   return (
                     <div
@@ -479,6 +598,9 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
                         <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                          <span style={{ color: '#93c5fd', fontWeight: 800, marginRight: '0.35rem' }}>
+                            {displayNum}.
+                          </span>
                           {mission.title}
                         </h4>
                         {status === 'active' && (
@@ -509,6 +631,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                       <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
                         {mission.description}
                       </p>
+                      <MissionRewardsPreview mission={mission} />
                       {status === 'available' && (
                         <button
                           onClick={() => handleAcceptMission(mission.id)}
@@ -527,6 +650,56 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                           {acceptingMissionId === mission.id ? 'Accepting...' : 'Accept Mission'}
                         </button>
                       )}
+                      {status === 'active' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+                              }}
+                              style={{
+                                backgroundColor: '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Continue mission →
+                            </button>
+                          ) : mission.playerJourneyLink ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate('/chapters');
+                              }}
+                              style={{
+                                backgroundColor: '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Open Player Journey
+                            </button>
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#9ca3af' }}>
+                              This mission has no playable steps yet. Check back later or contact an admin.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {status === 'completed' && (
+                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
+                      )}
                     </div>
                   );
                 })}
@@ -534,8 +707,15 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
             )}
 
             {storyMissions.length === 0 && sideMissions.length === 0 && profileMissions.length === 0 && (
-              <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>
-                Under Construction - Missions Coming Soon
+              <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', lineHeight: 1.55 }}>
+                <p style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', color: '#d1d5db' }}>
+                  No missions are available from {npcName} yet.
+                </p>
+                <p style={{ margin: 0, fontSize: '0.8rem' }}>
+                  In Mission Admin, set <strong style={{ color: '#e5e7eb' }}>NPC</strong> to {npcName},{' '}
+                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, SIDE, and
+                  Profile missions all appear here once assigned.
+                </p>
               </div>
             )}
           </>

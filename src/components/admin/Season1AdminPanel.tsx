@@ -8,8 +8,8 @@ import BattlePassSeasonAdmin from './BattlePassSeasonAdmin';
 const SETTINGS_PATH = 'adminSettings/season1';
 
 /**
- * Admin — Season 1 tuning (Firestore-backed).
- * Stores global defaults; students still use merged `season1` on their profile.
+ * Admin — Battle Pass definitions + Season 1 Flow / energy defaults.
+ * Battle passes: `seasons/{id}`. Flow caps: `adminSettings/season1`.
  */
 const Season1AdminPanel: React.FC = () => {
   const [energyTickCap, setEnergyTickCap] = useState(25);
@@ -55,13 +55,23 @@ const Season1AdminPanel: React.FC = () => {
     }
   };
 
-  if (loading) return <div style={{ padding: 24 }}>Loading Season 1 admin…</div>;
+  if (loading) return <div style={{ padding: 24 }}>Loading admin…</div>;
 
   return (
     <div style={{ background: '#f8fafc', borderRadius: 12, padding: '2rem', border: '1px solid #e5e7eb', maxWidth: 1280 }}>
-      <h2 style={{ marginTop: 0 }}>Season 1 — Flow &amp; Energy</h2>
+      <h2 style={{ marginTop: 0 }}>Battle Pass</h2>
+      <p style={{ color: '#64748b', lineHeight: 1.5, marginBottom: 8 }}>
+        Create and edit battle passes, set XP per level, and attach rewards (XP, PP, artifacts, items, action cards). Link each pass
+        to a game season for organization. Only one pass should be <strong>active</strong> at a time for players reading{' '}
+        <code>adminSettings/season1.activeBattlePassSeasonId</code>.
+      </p>
+
+      <BattlePassSeasonAdmin />
+
+      <hr style={{ margin: '2rem 0', borderColor: '#e2e8f0' }} />
+      <h3 style={{ marginTop: 0 }}>Flow &amp; Energy (Season 1)</h3>
       <p style={{ color: '#64748b', lineHeight: 1.5 }}>
-        Tune client-visible caps and test flags. Battle pass seasons should live in <code>seasons/&#123;id&#125;</code> (extend UI as needed).
+        Global caps and test flags for Flow State. Students still merge their own <code>season1</code> slice on their profile.
       </p>
       <label style={{ display: 'block', marginTop: 16 }}>
         <span style={{ fontWeight: 600 }}>Max energy per client tick</span>
@@ -90,11 +100,13 @@ const Season1AdminPanel: React.FC = () => {
           cursor: 'pointer',
         }}
       >
-        Save settings
+        Save flow &amp; energy settings
       </button>
+      <p style={{ marginTop: 10, fontSize: '0.85rem', color: '#64748b', maxWidth: 640, lineHeight: 1.5 }}>
+        Saves only <code>adminSettings/season1</code> (energy tick cap, Awakened Flow test). Battle pass tracks live in{' '}
+        <code>seasons/&#123;id&#125;</code> — use <strong>Save battle pass</strong> in the blue editor above.
+      </p>
       {status && <p style={{ marginTop: 12 }}>{status}</p>}
-
-      <BattlePassSeasonAdmin />
 
       <hr style={{ margin: '2rem 0', borderColor: '#e2e8f0' }} />
       <h3>Skill cards (seed catalog)</h3>

@@ -11,7 +11,10 @@ import LiveFeedCompact from './LiveFeedCompact';
 import DailyChallengesCompact from './DailyChallengesCompact';
 import BattlePassCompactCard from './BattlePassCompactCard';
 import BattlePass from './BattlePass';
+import BattlePassIntroExperienceModal from './BattlePassIntroExperienceModal';
 import LiveFeedPrivacySettings from './LiveFeedPrivacySettings';
+import type { BattlePassIntroStep } from '../types/missions';
+import { POWER_CARD_SET_TAB_EVENT, type PowerCardBroadcastTabId } from '../utils/earnPowerPointsHomeIntent';
 
 type TabId = 'live' | 'daily' | 'battlepass' | 'battle' | 'journey' | 'market';
 
@@ -19,6 +22,24 @@ interface PowerCardOverlayProps {
   battlePassTier: number;
   maxTier: number;
   battlePassXP: number;
+  /** Shown under "Battle Pass" title (e.g. deployed season name or Season 0) */
+  battlePassSeasonSubtitle?: string;
+  /** Progress bar fill (from `computeHomeBattlePassDisplay`) */
+  battlePassProgressPercent?: number;
+  battlePassXpInSegment: number;
+  battlePassXpSegmentSpan: number;
+  battlePassXpSegmentComplete: boolean;
+  /** True when admin deployed a pass — View Rewards opens /battle-pass; Season 1 CTA becomes "live" */
+  deployedBattlePassActive?: boolean;
+  /** From active season doc — hero video and/or intro slides */
+  battlePassIntroAvailable?: boolean;
+  battlePassIntroVideoUrl?: string;
+  battlePassIntroSequence?: BattlePassIntroStep[];
+  /** Flow / Season 1 copy (formerly the top-right home panel) */
+  battlePassFlowEyebrow?: string;
+  battlePassFlowTagline?: string;
+  battlePassFlowDescription?: string;
+  onEnergyMastery?: () => void;
   onBattlePassRefresh: () => void;
 }
 
@@ -26,10 +47,24 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
   battlePassTier,
   maxTier,
   battlePassXP,
-  onBattlePassRefresh
+  battlePassSeasonSubtitle,
+  battlePassProgressPercent,
+  battlePassXpInSegment,
+  battlePassXpSegmentSpan,
+  battlePassXpSegmentComplete,
+  deployedBattlePassActive,
+  battlePassIntroAvailable,
+  battlePassIntroVideoUrl,
+  battlePassIntroSequence,
+  battlePassFlowEyebrow,
+  battlePassFlowTagline,
+  battlePassFlowDescription,
+  onEnergyMastery,
+  onBattlePassRefresh,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('live');
   const [showBattlePassModal, setShowBattlePassModal] = useState(false);
+  const [showBattlePassIntroModal, setShowBattlePassIntroModal] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -49,6 +84,23 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  useEffect(() => {
+    const allowed: TabId[] = ['live', 'daily', 'battlepass', 'battle', 'journey', 'market'];
+    const onSetTab = (ev: Event) => {
+      const detail = (ev as CustomEvent<PowerCardBroadcastTabId>).detail;
+      if (detail && allowed.includes(detail as TabId)) {
+        setActiveTab(detail as TabId);
+        try {
+          localStorage.setItem('powerCardActiveTab', detail);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    window.addEventListener(POWER_CARD_SET_TAB_EVENT, onSetTab);
+    return () => window.removeEventListener(POWER_CARD_SET_TAB_EVENT, onSetTab);
   }, []);
 
   const handleTabChange = (tab: TabId, path?: string) => {
@@ -170,8 +222,31 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                     currentTier={battlePassTier}
                     maxTier={maxTier}
                     totalXP={battlePassXP}
-                    onViewRewards={() => setShowBattlePassModal(true)}
+                    seasonSubtitle={battlePassSeasonSubtitle}
+                    progressPercentOverride={battlePassProgressPercent}
+                    xpInSegment={battlePassXpInSegment}
+                    xpSegmentSpan={battlePassXpSegmentSpan}
+                    xpSegmentComplete={battlePassXpSegmentComplete}
+                    deployedSeasonActive={deployedBattlePassActive}
+                    seasonIntroAvailable={battlePassIntroAvailable}
+                    onWatchSeasonIntro={
+                      battlePassIntroAvailable ? () => setShowBattlePassIntroModal(true) : undefined
+                    }
+                    flowEyebrow={battlePassFlowEyebrow}
+                    flowTagline={battlePassFlowTagline}
+                    flowDescription={battlePassFlowDescription}
+                    onEnergyMastery={onEnergyMastery}
+                    onViewRewards={() => {
+                      if (deployedBattlePassActive) {
+                        navigate('/battle-pass');
+                        return;
+                      }
+                      setShowBattlePassModal(true);
+                    }}
                     onOpenSeason1Hub={() => navigate('/battle-pass')}
+                    onGoToSeasonBattlePass={
+                      deployedBattlePassActive ? () => navigate('/battle-pass') : undefined
+                    }
                   />
                 </div>
               )}
@@ -203,7 +278,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
         </div>
 
         {/* Battle Pass Modal */}
-        {showBattlePassModal && (
+        {showBattlePassModal && !deployedBattlePassActive && (
           <BattlePass
             isOpen={showBattlePassModal}
             onClose={() => {
@@ -213,6 +288,13 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
             season={0}
           />
         )}
+        <BattlePassIntroExperienceModal
+          open={showBattlePassIntroModal}
+          onClose={() => setShowBattlePassIntroModal(false)}
+          seasonTitle={battlePassSeasonSubtitle?.trim() || 'Battle Pass'}
+          heroVideoUrl={battlePassIntroVideoUrl}
+          introSteps={battlePassIntroSequence ?? []}
+        />
       </>
     );
   }
@@ -227,7 +309,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
           left: '50%',
           transform: 'translateX(-50%)',
           width: 'clamp(320px, 50vw, 720px)',
-          maxHeight: isCollapsed ? '60px' : '280px', // Reduced height to take up less space
+          maxHeight: isCollapsed ? '60px' : 'min(380px, 42vh)',
           background: 'rgba(31, 41, 55, 0.85)',
           backdropFilter: 'blur(20px)',
           border: '2px solid rgba(59, 130, 246, 0.4)',
@@ -355,8 +437,31 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                   currentTier={battlePassTier}
                   maxTier={maxTier}
                   totalXP={battlePassXP}
-                  onViewRewards={() => setShowBattlePassModal(true)}
+                  seasonSubtitle={battlePassSeasonSubtitle}
+                  progressPercentOverride={battlePassProgressPercent}
+                  xpInSegment={battlePassXpInSegment}
+                  xpSegmentSpan={battlePassXpSegmentSpan}
+                  xpSegmentComplete={battlePassXpSegmentComplete}
+                  deployedSeasonActive={deployedBattlePassActive}
+                  seasonIntroAvailable={battlePassIntroAvailable}
+                  onWatchSeasonIntro={
+                    battlePassIntroAvailable ? () => setShowBattlePassIntroModal(true) : undefined
+                  }
+                  flowEyebrow={battlePassFlowEyebrow}
+                  flowTagline={battlePassFlowTagline}
+                  flowDescription={battlePassFlowDescription}
+                  onEnergyMastery={onEnergyMastery}
+                  onViewRewards={() => {
+                    if (deployedBattlePassActive) {
+                      navigate('/battle-pass');
+                      return;
+                    }
+                    setShowBattlePassModal(true);
+                  }}
                   onOpenSeason1Hub={() => navigate('/battle-pass')}
+                  onGoToSeasonBattlePass={
+                    deployedBattlePassActive ? () => navigate('/battle-pass') : undefined
+                  }
                 />
               </div>
             )}
@@ -388,7 +493,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
       </div>
 
       {/* Battle Pass Modal */}
-      {showBattlePassModal && (
+      {showBattlePassModal && !deployedBattlePassActive && (
         <BattlePass
           isOpen={showBattlePassModal}
           onClose={() => {
@@ -398,6 +503,13 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
           season={0}
         />
       )}
+      <BattlePassIntroExperienceModal
+        open={showBattlePassIntroModal}
+        onClose={() => setShowBattlePassIntroModal(false)}
+        seasonTitle={battlePassSeasonSubtitle?.trim() || 'Battle Pass'}
+        heroVideoUrl={battlePassIntroVideoUrl}
+        introSteps={battlePassIntroSequence ?? []}
+      />
     </>
   );
 };

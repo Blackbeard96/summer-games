@@ -73,7 +73,8 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all',
               children: [
                 { label: 'Vault Mastery', path: '/battle#vault', icon: '🏦', visibility: 'all' },
-                { label: 'Skills & Mastery', path: '/battle#moves', icon: '⚔️', visibility: 'all' }
+                { label: 'Skills & Mastery', path: '/battle#moves', icon: '⚔️', visibility: 'all' },
+                { label: 'Vault Siege', path: '/battle#siege', icon: '🏰', visibility: 'all' }
               ]
             },
             {

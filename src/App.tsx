@@ -175,6 +175,7 @@ const InSessionBattleView = withRouteSplitting(() => import('./components/InSess
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
 const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
 const MissionRunner = withRouteSplitting(() => import('./pages/MissionRunner'));
+const Level2ManifestBuilderPage = withRouteSplitting(() => import('./pages/Level2ManifestBuilderPage'));
 const QuizPlayer = withRouteSplitting(() => import('./pages/QuizPlayer'));
 const QuizResults = withRouteSplitting(() => import('./pages/QuizResults'));
 const BattlePassSeasonPage = withRouteSplitting(() => import('./pages/BattlePassSeasonPage'));
@@ -566,6 +567,14 @@ const AppContent = () => {
                 <ProtectedAdminRoute />
               </RequireAdmin>
             } />
+            <Route
+              path="/admin/rr-candies"
+              element={
+                <RequireAdmin>
+                  <Navigate to="/admin?tab=rr-candies" replace />
+                </RequireAdmin>
+              }
+            />
             <Route path="/marketplace" element={
               <ProtectedRoute user={true}>
                 <Marketplace />
@@ -693,6 +702,11 @@ const AppContent = () => {
             <Route path="/mission/:missionId/play" element={
               <ProtectedRoute user={true}>
                 <MissionRunner />
+              </ProtectedRoute>
+            } />
+            <Route path="/level2-manifest-builder" element={
+              <ProtectedRoute user={true}>
+                <Level2ManifestBuilderPage />
               </ProtectedRoute>
             } />
             {/* Catch-all route for 404 */}

@@ -252,6 +252,33 @@ export async function getLastAttempt(userId: string, quizSetId: string): Promise
 }
 
 /**
+ * Mission sequences: true if the player has at least one completed attempt meeting the score rule.
+ * `minimumPassPercent <= 0` means any completed attempt counts.
+ */
+export async function userMetMissionTrainingRequirement(
+  userId: string,
+  quizSetId: string,
+  minimumPassPercent: number
+): Promise<{ met: boolean; bestPercent: number; completedCount: number }> {
+  const attempts = await getUserAttempts(userId, quizSetId);
+  const completed = attempts.filter(
+    (a) =>
+      a.completedAt != null &&
+      a.mode !== 'live' &&
+      !a.liveEventSourceSessionId
+  );
+  if (completed.length === 0) {
+    return { met: false, bestPercent: 0, completedCount: 0 };
+  }
+  const bestPercent = Math.max(...completed.map((a) => Number(a.percent) || 0));
+  if (!Number.isFinite(minimumPassPercent) || minimumPassPercent <= 0) {
+    return { met: true, bestPercent, completedCount: completed.length };
+  }
+  const met = completed.some((a) => (Number(a.percent) || 0) >= minimumPassPercent);
+  return { met, bestPercent, completedCount: completed.length };
+}
+
+/**
  * After a Live Event quiz finishes, each player calls this once so Training Grounds shows the same score/history
  * as a solo attempt. Does not grant solo PP/XP (live placement rewards are separate). Idempotent per session+quiz.
  */

@@ -10,6 +10,8 @@ import {
   BATTLE_CONSTANTS,
   MOVE_DAMAGE_VALUES
 } from '../types/battle';
+import { normalizeElementType } from '../types/elementTypes';
+import { attackElementFromActionCard, getElementMultiplier } from './elementAdvantages';
 
 export interface BattleCalculation {
   damage: number;
@@ -340,7 +342,12 @@ export class BattleEngine {
     switch (card.effect.type) {
       case 'shield_breach':
         if (target) {
-          shieldDamage = card.effect.strength;
+          const atkEl = attackElementFromActionCard(card);
+          const mult = getElementMultiplier(
+            atkEl,
+            normalizeElementType(target.elementalAffinity)
+          );
+          shieldDamage = Math.max(0, Math.floor(card.effect.strength * mult));
           debuffsApplied.push({
             id: `shield_break_${Date.now()}`,
             type: 'shield_break',
@@ -381,7 +388,12 @@ export class BattleEngine {
 
       case 'freeze':
         if (target) {
-          damage = card.effect.strength; // 20 damage
+          const atkEl = attackElementFromActionCard(card);
+          const mult = getElementMultiplier(
+            atkEl,
+            normalizeElementType(target.elementalAffinity)
+          );
+          damage = Math.max(0, Math.floor(card.effect.strength * mult));
           // Apply freeze status effect with chance
           const freezeChance = card.effect.chance || 85;
           if (Math.random() * 100 < freezeChance) {

@@ -18,6 +18,8 @@ import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
 import { formatOpponentName } from '../utils/opponentNameFormatter';
 import { statusEffectVisualClass } from '../skillAnimation/statusVisuals';
+import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
+import type { SkillAvailabilityResult } from '../utils/skillAvailability';
 import './skillAnimation/skillAnimation.css';
 
 interface BattleArenaProps {
@@ -27,6 +29,8 @@ interface BattleArenaProps {
   selectedMove: Move | null;
   selectedTarget: string | null;
   availableMoves: Move[];
+  /** When set (BattleEngine), buttons use shared validation (cooldown, PP, stun, shield break). */
+  skillAvailabilityByMoveId?: Record<string, SkillAvailabilityResult>;
   availableTargets: Array<{ id: string; name: string; avatar: string; currentPP: number; shieldStrength: number; maxPP?: number; maxShieldStrength?: number; level?: number }>;
   isPlayerTurn: boolean;
   isInSession?: boolean; // Hide RUN button in session mode
@@ -34,6 +38,9 @@ interface BattleArenaProps {
   customBackground?: string; // Custom background image for special modes like Mindforge
   hideCenterPrompt?: boolean; // Hide the center battle log prompt (for Mindforge mode)
   playerEffects?: Array<{ type: string; duration: number }>; // Active status effects on player
+  /** Stunned/frozen: show explicit pass so the player is not stuck behind greyed-out skills. */
+  showSkipStunnedTurn?: boolean;
+  onSkipStunnedTurn?: () => void | Promise<void>;
   opponentEffects?: Array<{ type: string; duration: number }>; // Active status effects on opponent
   isTerraAwakened?: boolean; // Whether Terra is in awakened state
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
@@ -48,12 +55,15 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   isInSession = false,
   isTerraAwakened = false,
   availableMoves,
+  skillAvailabilityByMoveId,
   availableTargets,
   isPlayerTurn,
   battleLog,
   customBackground,
   hideCenterPrompt = false,
   playerEffects = [],
+  showSkipStunnedTurn = false,
+  onSkipStunnedTurn,
   opponentEffects = [],
   onArtifactUsed
 }) => {
@@ -187,12 +197,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
     }
 
     const updateCooldownTimer = () => {
-      const cooldownEnd = new Date(vault.vaultHealthCooldown!);
-      cooldownEnd.setHours(cooldownEnd.getHours() + 4); // 4-hour cooldown
+      const cdStart = parseFirestoreDate(vault.vaultHealthCooldown);
+      if (!cdStart) {
+        setCooldownRemaining(null);
+        return;
+      }
+      const cooldownEnd = vaultHealthCooldownEnd(cdStart);
       const now = new Date();
       const remainingMs = cooldownEnd.getTime() - now.getTime();
       
-      if (remainingMs <= 0) {
+      if (remainingMs <= 0 || !Number.isFinite(remainingMs)) {
         setCooldownRemaining(null);
         return;
       }
@@ -676,7 +690,14 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             }}
           >
             {(() => {
-              const opponentImage = getOpponentImage(availableTargets[0]?.name || '', isTerraAwakened);
+              const t0 = availableTargets[0] as { name?: string; image?: string; photoURL?: string } | undefined;
+              const direct =
+                typeof t0?.image === 'string' && t0.image.trim()
+                  ? t0.image.trim()
+                  : typeof t0?.photoURL === 'string' && t0.photoURL.trim()
+                    ? t0.photoURL.trim()
+                    : null;
+              const opponentImage = direct || getOpponentImage(t0?.name || '', isTerraAwakened);
               // Adjust objectPosition based on opponent type
               const opponentName = availableTargets[0]?.name?.toLowerCase() || '';
               const isStandardMindforge = opponentName.includes('mindforge') && opponentName.includes('standard');
@@ -732,7 +753,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
             })()}
             <div 
               style={{
-                display: getOpponentImage(availableTargets[0]?.name || '', isTerraAwakened) ? 'none' : 'flex',
+                display: (() => {
+                  const t1 = availableTargets[0] as { name?: string; image?: string; photoURL?: string } | undefined;
+                  const d1 =
+                    typeof t1?.image === 'string' && t1.image.trim()
+                      ? t1.image.trim()
+                      : typeof t1?.photoURL === 'string' && t1.photoURL.trim()
+                        ? t1.photoURL.trim()
+                        : null;
+                  return d1 || getOpponentImage(t1?.name || '', isTerraAwakened) ? 'none' : 'flex';
+                })(),
                 alignItems: 'center',
                 justifyContent: 'center',
                 width: '100%',
@@ -941,6 +971,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {availableMoves.map((move, index) => {
               const onCooldown = (move.currentCooldown ?? 0) > 0;
+              const avail = skillAvailabilityByMoveId?.[move.id];
+              const disabledMove = avail != null ? !avail.canUse : onCooldown;
+              const disabledHint =
+                avail != null
+                  ? avail.canUse
+                    ? undefined
+                    : avail.reasons.join(' · ')
+                  : onCooldown
+                    ? `Cooldown: ${move.currentCooldown} turn(s) remaining`
+                    : undefined;
               // Calculate effective mastery level once for this move (includes ring bonuses)
               const effectiveMasteryLevel = move.category === 'elemental' && equippedArtifacts 
                 ? getEffectiveMasteryLevel(move, equippedArtifacts)
@@ -951,8 +991,9 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               return (
               <button
                 key={move.id}
-                onClick={() => !onCooldown && handleMoveClick(move)}
-                disabled={onCooldown}
+                onClick={() => !disabledMove && handleMoveClick(move)}
+                disabled={disabledMove}
+                title={disabledHint}
                 style={{
                   background: getMoveTypeColor(move),
                   color: 'white',
@@ -961,16 +1002,16 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                   padding: '0.5rem',
                   fontSize: '0.75rem',
                   fontWeight: 'bold',
-                  cursor: onCooldown ? 'not-allowed' : 'pointer',
+                  cursor: disabledMove ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   gap: '0.25rem',
                   transition: 'all 0.2s',
-                  opacity: onCooldown ? 0.6 : 1
+                  opacity: disabledMove ? 0.6 : 1
                 }}
                 onMouseEnter={(e) => {
-                  if (!onCooldown) {
+                  if (!disabledMove) {
                     e.currentTarget.style.transform = 'scale(1.05)';
                     e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
                   }
@@ -997,9 +1038,11 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                 <div style={{ fontSize: '0.625rem', opacity: 0.8 }}>
                   {move.type.toUpperCase()}
                 </div>
-                {onCooldown && (
-                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>
-                    ⏱️ {move.currentCooldown} turn{(move.currentCooldown ?? 0) !== 1 ? 's' : ''} left
+                {disabledMove && (
+                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', textAlign: 'center' }}>
+                    {avail != null && !avail.canUse
+                      ? avail.reasons.join(' · ')
+                      : `⏱️ ${move.currentCooldown} turn${(move.currentCooldown ?? 0) !== 1 ? 's' : ''} left`}
                   </div>
                 )}
                 {(() => {
@@ -1183,6 +1226,41 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               );
             })}
           </div>
+          {showSkipStunnedTurn && onSkipStunnedTurn && (
+            <div
+              style={{
+                marginTop: '0.65rem',
+                paddingTop: '0.65rem',
+                borderTop: '1px solid rgba(148, 163, 184, 0.6)',
+                textAlign: 'center',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  void onSkipStunnedTurn();
+                  onMoveSelect(null);
+                  setShowMoveMenu(false);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.55rem 0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '2px solid #64748b',
+                  background: 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)',
+                  color: 'white',
+                  fontWeight: 800,
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                }}
+              >
+                ⏭️ Skip turn (stunned / frozen)
+              </button>
+              <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.35rem' }}>
+                Applies start-of-turn effects and passes to enemies.
+              </div>
+            </div>
+          )}
         </div>
       )}
 

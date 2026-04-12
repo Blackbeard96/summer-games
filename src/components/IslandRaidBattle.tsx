@@ -6,6 +6,7 @@ import { doc, onSnapshot, updateDoc, setDoc, serverTimestamp, getDoc, arrayUnion
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { IslandRaidBattleRoom, IslandRaidEnemy, IslandRaidPlayer, IslandRaidLevel } from '../types/islandRaid';
+import type { Move } from '../types/battle';
 import { getIslandRaidLevel } from '../utils/islandRaidLevelsService';
 import { getLevelFromXP } from '../utils/leveling';
 import IslandRaidVictoryModal from './IslandRaidVictoryModal';
@@ -16,6 +17,39 @@ import { debug } from '../utils/debug';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { grantArtifactToPlayer } from '../utils/artifactCompensation';
+import { awardBattlePassXpFromIslandRaid } from '../utils/awardBattlePassXp';
+import CoopBattleRosterPanel from './coop/CoopBattleRosterPanel';
+import { transactionLeaveIslandRaidBattleRoom } from '../services/coopBattleRoomService';
+
+/** Copy CPU awaken profile from a room enemy row onto BattleEngine opponents[]. */
+function pickAwakenFieldsFromEnemy(enemy: Record<string, unknown>): Record<string, unknown> {
+  if (!enemy?.awakenedModeEnabled) return {};
+  const out: Record<string, unknown> = {
+    awakenedModeEnabled: true,
+    awakenAtHealthPercent:
+      typeof enemy.awakenAtHealthPercent === 'number'
+        ? Math.min(100, Math.max(1, enemy.awakenAtHealthPercent as number))
+        : 50,
+    awakenedMoves: Array.isArray(enemy.awakenedMoves) ? enemy.awakenedMoves : [],
+  };
+  if (typeof enemy.awakenedImage === 'string' && (enemy.awakenedImage as string).trim()) {
+    out.awakenedImage = (enemy.awakenedImage as string).trim();
+  }
+  if (enemy.awakenedHealth != null && Number.isFinite(Number(enemy.awakenedHealth))) {
+    out.awakenedHealth = Number(enemy.awakenedHealth);
+  }
+  if (enemy.awakenedShields != null && Number.isFinite(Number(enemy.awakenedShields))) {
+    out.awakenedShields = Number(enemy.awakenedShields);
+  }
+  if (Object.prototype.hasOwnProperty.call(enemy, 'awakenedEnemyType')) {
+    out.awakenedEnemyType = enemy.awakenedEnemyType;
+  }
+  if (Array.isArray((enemy as { awakeningAnimation?: unknown }).awakeningAnimation)) {
+    out.awakeningAnimation = (enemy as { awakeningAnimation: unknown[] }).awakeningAnimation;
+  }
+  if (enemy.isAwakened === true) out.isAwakened = true;
+  return out;
+}
 
 /** Artifact id -> name/image for granting level completion rewards. */
 const REWARD_ARTIFACT_INFO: Record<string, { name: string; image: string }> = {
@@ -43,9 +77,11 @@ interface IslandRaidBattleProps {
   gameId: string;
   lobbyId: string;
   onLeave: () => void;
+  /** When set, called after the player dismisses the victory modal for a mission battle (advances MissionRunner). */
+  onMissionVictoryDismiss?: () => void;
 }
 
-const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, onLeave }) => {
+const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, onLeave, onMissionVictoryDismiss }) => {
   const { currentUser } = useAuth();
   const { vault, moves } = useBattle();
   const navigate = useNavigate();
@@ -92,6 +128,51 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   const lastAppliedEnemiesRevisionRef = useRef<number>(0); // Track last applied enemiesRevision from Firestore
   const queuedSnapshotRef = useRef<any>(null); // Queue snapshot updates when isUpdatingEnemies is true
   const lastLoggedWaveRef = useRef<number>(0); // Track last wave we added "WAVE X BEGINS!" for (dedupe battle log)
+  const lastBattleEventLogLenRef = useRef(0);
+  const [needsExplicitJoin, setNeedsExplicitJoin] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !battleRoom?.players?.length) return;
+    if (battleRoom.players.includes(currentUser.uid)) {
+      setNeedsExplicitJoin(false);
+    }
+  }, [battleRoom?.players, currentUser]);
+
+  // Keep the local player's ally row in sync with BattleContext vault (Shield ON, heals, etc.) without
+  // waiting for the next islandRaidBattleRooms snapshot (which can race with getDoc vault reads).
+  useEffect(() => {
+    if (!vault || !currentUser?.uid) return;
+    setAllies((prev) => {
+      if (prev.length === 0) return prev;
+      const maxS = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+      let changed = false;
+      const next = prev.map((a: any) => {
+        if (a.id !== currentUser.uid || a.isSummon) return a;
+        const allyMax = Math.max(0, Math.floor(Number(a.maxShieldStrength) || 0));
+        const mergedMax = Math.max(maxS, allyMax);
+        // Do not overwrite shieldStrength from vault here — BattleEngine + handleAlliesUpdate are authoritative
+        // during combat; stale vault snapshots were raising shields after incoming damage.
+        const n = {
+          ...a,
+          maxShieldStrength: mergedMax > 0 ? mergedMax : allyMax,
+          vaultHealth: vault.vaultHealth ?? a.vaultHealth,
+          maxVaultHealth: vault.maxVaultHealth ?? a.maxVaultHealth,
+          currentPP: vault.currentPP ?? a.currentPP,
+          maxPP: vault.capacity ?? a.maxPP,
+        };
+        if (
+          (n.maxShieldStrength ?? 0) !== (a.maxShieldStrength ?? 0) ||
+          (n.vaultHealth ?? 0) !== (a.vaultHealth ?? 0) ||
+          (n.currentPP ?? 0) !== (a.currentPP ?? 0)
+        ) {
+          changed = true;
+        }
+        return n;
+      });
+      return changed ? next : prev;
+    });
+  }, [vault, currentUser?.uid]);
 
   // Join the battle room when component mounts
   useEffect(() => {
@@ -103,16 +184,27 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         const battleRoomDoc = await getDoc(battleRoomRef);
 
         if (battleRoomDoc.exists()) {
-          const data = battleRoomDoc.data();
-          const players = data.players || [];
+          const data = battleRoomDoc.data() as Record<string, unknown>;
+          const players = (data.players as string[]) || [];
+          const requireExplicit = data.requireExplicitJoin === true;
+          if (requireExplicit && !players.includes(currentUser.uid)) {
+            setNeedsExplicitJoin(true);
+            hasJoinedRef.current = true;
+            return;
+          }
 
-          // Fetch game document to get all players that should be in the battle
+          // Optional co-op roster on islandRaidGames (mission/solo battles often have no doc here — rules may deny get)
           const gameRef = doc(db, 'islandRaidGames', gameId);
-          const gameDoc = await getDoc(gameRef);
+          let gameDoc = null as Awaited<ReturnType<typeof getDoc>> | null;
+          try {
+            gameDoc = await getDoc(gameRef);
+          } catch (e) {
+            console.warn('IslandRaidBattle: islandRaidGames doc not readable (ok for mission/solo rooms):', e);
+          }
           
           let allPlayerIds = [...players];
-          if (gameDoc.exists()) {
-            const gameData = gameDoc.data();
+          if (gameDoc?.exists()) {
+            const gameData = gameDoc.data() as { players?: string[] };
             // Merge players from game document with existing battle room players
             if (gameData.players && Array.isArray(gameData.players)) {
               const gamePlayerIds = gameData.players;
@@ -141,13 +233,18 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
 
           hasJoinedRef.current = true;
         } else {
-          // Battle room doesn't exist - fetch game document to get all players
+          // Battle room doesn't exist - optional islandRaidGames roster
           const gameRef = doc(db, 'islandRaidGames', gameId);
-          const gameDoc = await getDoc(gameRef);
+          let gameDoc = null as Awaited<ReturnType<typeof getDoc>> | null;
+          try {
+            gameDoc = await getDoc(gameRef);
+          } catch (e) {
+            console.warn('IslandRaidBattle: islandRaidGames doc not readable (ok for mission/solo rooms):', e);
+          }
           
           let allPlayerIds = [currentUser.uid];
-          if (gameDoc.exists()) {
-            const gameData = gameDoc.data();
+          if (gameDoc?.exists()) {
+            const gameData = gameDoc.data() as { players?: string[] };
             // Use players from game document if available
             if (gameData.players && Array.isArray(gameData.players)) {
               const combinedPlayers = [...gameData.players, currentUser.uid];
@@ -158,7 +255,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           
           // Create battle room with all players from game document
           // Fetch difficulty from game document to determine maxWaves (reuse gameDoc from above)
-          const gameDifficulty = gameDoc.exists() ? (gameDoc.data().difficulty || 'normal') : 'normal';
+          const gameDifficulty = gameDoc?.exists()
+            ? ((gameDoc.data() as { difficulty?: string }).difficulty || 'normal')
+            : 'normal';
           const maxWaves = gameDifficulty === 'easy' ? 3 : 5;
           
           const initialEnemies = generateWaveEnemies(1, gameDifficulty as 'easy' | 'normal' | 'hard' | 'nightmare');
@@ -328,9 +427,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             const playersChanged = !battleRoom || 
               room.players.length !== battleRoom.players.length ||
               room.players.some((id: string, idx: number) => id !== battleRoom.players[idx]);
+            const npcLen = (r: IslandRaidBattleRoom | null) => (r as { npcAllies?: unknown[] })?.npcAllies?.length ?? 0;
+            const npcChanged = npcLen(room as IslandRaidBattleRoom) !== npcLen(battleRoom);
             const shouldUpdateBattleRoom = !battleRoom || 
               room.waveNumber !== battleRoom.waveNumber ||
               playersChanged ||
+              npcChanged ||
               room.status !== battleRoom.status;
             
             if (shouldUpdateBattleRoom) {
@@ -446,9 +548,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       ? Math.min(vaultData.vaultHealth, maxVaultHealth, currentPP)
                       : Math.min(currentPP, maxVaultHealth);
                     
-                    // Shield stats from vault
-                    shieldStrength = vaultData.shieldStrength || 0;
-                    maxShieldStrength = vaultData.maxShieldStrength || 100;
+                    // Shield stats from vault (clamp: Firestore can drift above max after upgrades/generator)
+                    maxShieldStrength = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 100));
+                    shieldStrength = Math.max(0, Math.floor(Number(vaultData.shieldStrength) || 0));
+                    if (maxShieldStrength > 0) {
+                      shieldStrength = Math.min(shieldStrength, maxShieldStrength);
+                    }
                   }
                   
                   return {
@@ -475,7 +580,56 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             const loadedPlayers = await Promise.all(playerPromises);
             const validPlayers = loadedPlayers.filter((p): p is any => p !== null);
             console.log('🏝️ IslandRaidBattle: Loaded players:', validPlayers.length, 'Player IDs in room:', playerIds, 'Valid players:', validPlayers.map(p => ({ name: p.name, id: p.id })));
-            setAllies(validPlayers);
+
+            const npcList = Array.isArray((data as { npcAllies?: unknown[] }).npcAllies)
+              ? ((data as { npcAllies: Array<Record<string, unknown>> }).npcAllies || [])
+              : [];
+            const npcRows = npcList.map((n) => ({
+              id: String(n.participantId),
+              name: String(n.displayName || 'Ally'),
+              currentPP: Number(n.currentPP) || 0,
+              maxPP: Number(n.maxPP) || 100,
+              shieldStrength: Number(n.shieldStrength) || 0,
+              maxShieldStrength: Number(n.maxShieldStrength) || 0,
+              level: Number(n.level) || 1,
+              photoURL: (n.avatarUrl as string) || null,
+              health: Number(n.currentPP) || 0,
+              maxHealth: Number(n.maxPP) || 100,
+              vaultHealth: Number(n.currentPP) || 0,
+              maxVaultHealth: Number(n.maxPP) || 100,
+              isAI: true,
+              controller: 'ai' as const,
+              battleMoves: (n.battleMoves as Move[] | undefined) || undefined,
+            }));
+            setAllies((prev) => {
+              const playerIdsSet = new Set(playerIds);
+              const keptSummons = prev.filter((a: any) => {
+                if (
+                  !a?.isSummon ||
+                  !a?.summonerId ||
+                  !playerIdsSet.has(a.summonerId) ||
+                  npcRows.some((n: any) => n.id === a.id) ||
+                  validPlayers.some((v: any) => v.id === a.id)
+                ) {
+                  return false;
+                }
+                const hp = a.vaultHealth !== undefined ? Number(a.vaultHealth) : Number(a.currentPP) || 0;
+                const sh = Number(a.shieldStrength) || 0;
+                if (hp <= 0 && sh <= 0) return false;
+                if (a.isDefeated === true) return false;
+                return true;
+              });
+              return [...validPlayers, ...npcRows, ...keptSummons];
+            });
+
+            const evs = Array.isArray((data as { battleEventLog?: string[] }).battleEventLog)
+              ? (data as { battleEventLog: string[] }).battleEventLog
+              : [];
+            if (evs.length > lastBattleEventLogLenRef.current) {
+              const newLines = evs.slice(lastBattleEventLogLenRef.current);
+              lastBattleEventLogLenRef.current = evs.length;
+              setBattleLog((prev) => [...prev, ...newLines.map((l) => (l.startsWith('[SYSTEM]') ? l : `📣 ${l}`))]);
+            }
 
             // Always sync enemy health/shield changes from Firestore to keep all players in sync
             // Skip if we're currently updating enemies (prevent circular updates)
@@ -566,9 +720,15 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   
                   // Use minimum (most damage) to ensure consistency
                   // This prevents stale Firestore data from overwriting correct local damage
-                  const mergedHealth = Math.min(firestoreHealth, localHealth);
-                  const mergedShield = Math.min(firestoreShield, localShield);
-                  
+                  let mergedHealth = Math.min(firestoreHealth, localHealth);
+                  let mergedShield = Math.min(firestoreShield, localShield);
+                  // Awakened phase only exists in client battle state; room.enemies stays at pre-awaken template.
+                  // Prefer local row so we do not snap HP/moves/portrait back on the next snapshot.
+                  if (existingOpp?.isAwakened) {
+                    mergedHealth = localHealth;
+                    mergedShield = localShield;
+                  }
+
                   // Log if we're using a different value (for debugging)
                   if (Math.abs(mergedHealth - firestoreHealth) > 0.1 || Math.abs(mergedShield - firestoreShield) > 0.1) {
                     console.log(`🔄 IslandRaidBattle: Listener merged ${enemy.name}:`, {
@@ -581,12 +741,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                       usingLocal: mergedHealth < firestoreHealth || mergedShield < firestoreShield
                     });
                   }
-                  
-                  return {
+
+                  const embeddedMoves =
+                    Array.isArray((enemy as any).moves) && (enemy as any).moves.length > 0
+                      ? (enemy as any).moves
+                      : existingOpp?.moves;
+
+                  const baseRow = {
                     id: enemy.id,
                     name: enemy.name,
-                    currentPP: existingOpp?.currentPP || 0,
-                    maxPP: existingOpp?.maxPP || 0,
+                    currentPP: mergedHealth,
+                    maxPP: enemy.maxHealth || 100,
                     shieldStrength: mergedShield, // Use merged value (most damage)
                     maxShieldStrength: enemy.maxShieldStrength || 0,
                     level: enemy.level || existingOpp?.level || 1,
@@ -596,8 +761,36 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     image: enemy.image || existingOpp?.image || undefined,
                     vaultHealth: mergedHealth, // Use merged value (most damage)
                     maxVaultHealth: enemy.maxHealth || 100,
-                    waveNumber: enemyWave // CRITICAL: Set waveNumber for filtering
+                    waveNumber: enemyWave, // CRITICAL: Set waveNumber for filtering
+                    moves: embeddedMoves,
+                    enemyType:
+                      Object.prototype.hasOwnProperty.call(enemy, 'enemyType')
+                        ? enemy.enemyType
+                        : existingOpp?.enemyType,
+                    ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
                   };
+
+                  if (existingOpp?.isAwakened) {
+                    return {
+                      ...baseRow,
+                      isAwakened: true,
+                      currentPP: mergedHealth,
+                      maxPP: existingOpp.maxPP ?? baseRow.maxPP,
+                      vaultHealth: mergedHealth,
+                      maxVaultHealth: existingOpp.maxVaultHealth ?? baseRow.maxVaultHealth,
+                      shieldStrength: mergedShield,
+                      maxShieldStrength: existingOpp.maxShieldStrength ?? baseRow.maxShieldStrength,
+                      moves: existingOpp.moves ?? baseRow.moves,
+                      image: existingOpp.image ?? baseRow.image,
+                      photoURL: (existingOpp as { photoURL?: string }).photoURL ?? (baseRow as { photoURL?: string }).photoURL,
+                      enemyType: existingOpp.enemyType ?? baseRow.enemyType,
+                      awakeningAnimation:
+                        (existingOpp as { awakeningAnimation?: unknown }).awakeningAnimation ??
+                        (baseRow as { awakeningAnimation?: unknown }).awakeningAnimation,
+                    };
+                  }
+
+                  return baseRow;
                 });
                 
                 console.log('🏝️ IslandRaidBattle: Synced opponents:', opponentsList.map(opp => ({
@@ -997,11 +1190,23 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     if (!currentUser || !battleRoom) return;
 
     try {
-      const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
-      await updateDoc(battleRoomRef, {
-        players: arrayRemove(currentUser.uid),
-        updatedAt: serverTimestamp()
-      });
+      if (battleRoom.joinableMidBattle === true) {
+        const r = await transactionLeaveIslandRaidBattleRoom({
+          db,
+          gameId,
+          uid: currentUser.uid,
+          displayName: currentUser.displayName || 'Player',
+        });
+        if (!r.ok) {
+          console.warn('IslandRaidBattle: transactional leave failed', r.code);
+        }
+      } else {
+        const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+        await updateDoc(battleRoomRef, {
+          players: arrayRemove(currentUser.uid),
+          updatedAt: serverTimestamp(),
+        });
+      }
       onLeave();
     } catch (error) {
       console.error('Error leaving battle room:', error);
@@ -1248,21 +1453,28 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       // Convert enemies to opponents format
       const newOpponentsList = newEnemies.map((enemy: IslandRaidEnemy) => {
         const enemyWaveNumber = (enemy as any).waveNumber !== undefined ? (enemy as any).waveNumber : nextWave;
+        const h = enemy.health ?? 0;
+        const mh = enemy.maxHealth ?? h;
         return {
           id: enemy.id,
           name: enemy.name,
-          currentPP: 0,
-          maxPP: 0,
+          currentPP: h,
+          maxPP: mh,
           shieldStrength: enemy.shieldStrength || 0,
           maxShieldStrength: enemy.maxShieldStrength || 0,
           level: enemy.level || 1,
-          health: enemy.health,
-          maxHealth: enemy.maxHealth,
+          health: h,
+          maxHealth: mh,
           type: enemy.type || 'zombie',
           image: enemy.image || undefined,
-          vaultHealth: enemy.health,
-          maxVaultHealth: enemy.maxHealth,
-          waveNumber: enemyWaveNumber
+          vaultHealth: h,
+          maxVaultHealth: mh,
+          waveNumber: enemyWaveNumber,
+          moves: Array.isArray((enemy as any).moves) ? (enemy as any).moves : [],
+          enemyType: Object.prototype.hasOwnProperty.call(enemy, 'enemyType')
+            ? enemy.enemyType
+            : undefined,
+          ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
         };
       });
       
@@ -1344,7 +1556,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   // Handle victory when all waves are complete
   useEffect(() => {
     if (!battleRoom || !opponents.length) return;
-    
+    if (battleRoom.status === 'victory' || battleRoom.status === 'defeated') return;
+
     // Check if all enemies in final wave are defeated
     const firestoreEnemies = battleRoom.enemies || [];
     const finalWave = battleRoom.maxWaves || 5;
@@ -1376,18 +1589,48 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       const completeRaid = async () => {
         try {
           const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
+          const roomSnap = await getDoc(battleRoomRef);
+          const roomData = roomSnap.data() as Record<string, unknown> | undefined;
+          if (!roomData) {
+            console.error('🏝️ Victory finalize: battle room doc missing', gameId);
+            return;
+          }
+
+          const fromPlayers = Array.isArray(roomData.players)
+            ? (roomData.players as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0)
+            : [];
+          const pr = roomData.participantRecords;
+          const fromParticipants =
+            pr && typeof pr === 'object' && !Array.isArray(pr)
+              ? Object.keys(pr as Record<string, unknown>).filter((k) => typeof k === 'string' && k.length > 0)
+              : [];
+          const hostRaw = roomData.hostPlayerId;
+          const hostId = typeof hostRaw === 'string' && hostRaw.trim() ? hostRaw.trim() : null;
+          const combinedIds = [...fromPlayers, ...fromParticipants, ...(hostId ? [hostId] : [])];
+          let players: string[] = [];
+          for (let i = 0; i < combinedIds.length; i++) {
+            const id = combinedIds[i];
+            if (players.indexOf(id) === -1) players.push(id);
+          }
+
           await updateDoc(battleRoomRef, {
             status: 'victory',
             updatedAt: serverTimestamp()
           });
-          setBattleLog(prev => [...prev, '🎉 All waves cleared! Island Raid complete!']);
-          
-          // Grant rewards to ALL players in the battle
-          const players = battleRoom.players || [];
-          console.log('🏝️ Granting rewards to all players:', players.length, players);
+          const isMissionBattle = !!roomData.isMissionBattle;
+          const missionRewards = roomData.rewards as
+            | { xp: number; pp: number; drops?: Array<{ type: string; refId?: string; qty?: number }> }
+            | undefined;
+          setBattleLog(prev => [
+            ...prev,
+            isMissionBattle ? '🎉 All waves cleared! Mission complete!' : '🎉 All waves cleared! Island Raid complete!',
+          ]);
 
-          const isMissionBattle = !!(battleRoom as any).isMissionBattle;
-          const missionRewards = (battleRoom as any).rewards as { xp: number; pp: number; drops?: Array<{ type: string; refId?: string; qty?: number }> } | undefined;
+          if (isMissionBattle && players.length === 0 && currentUser?.uid) {
+            players = [currentUser.uid];
+          }
+
+          console.log('🏝️ Granting rewards to all players:', players.length, players);
           
           // Determine rewards: mission battle uses room.rewards; level config uses level.rewards; else difficulty-based
           const difficultyKey = difficulty.toLowerCase();
@@ -1526,16 +1769,19 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   updates.artifacts = updatedArtifacts;
                   updates.islandRaidCompletions = { ...islandRaidCompletions, [difficultyKey]: { completed: true, completedAt: new Date(), firstCompletion: true } };
                 }
-                await updateDoc(studentRef, updates);
-                
-                const userRef = doc(db, 'users', playerId);
-                const userDoc = await getDoc(userRef);
-                if (userDoc.exists()) {
-                  await updateDoc(userRef, {
-                    powerPoints: increment(rewards.pp),
-                    xp: increment(rewards.xp),
-                    truthMetal: increment(rewards.truthMetal)
-                  });
+                if (!isMissionBattle) {
+                  await updateDoc(studentRef, updates);
+                  await awardBattlePassXpFromIslandRaid(playerId, rewards.xp);
+
+                  const userRef = doc(db, 'users', playerId);
+                  const userDoc = await getDoc(userRef);
+                  if (userDoc.exists()) {
+                    await updateDoc(userRef, {
+                      powerPoints: increment(rewards.pp),
+                      xp: increment(rewards.xp),
+                      truthMetal: increment(rewards.truthMetal)
+                    });
+                  }
                 }
                 console.log(`✅ Rewards granted to player ${playerId}:`, rewards);
               }
@@ -1874,13 +2120,33 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 });
               }
               
+              const bo = battleEngineUpdate.opp as Record<string, unknown>;
+              const awakenSync =
+                bo?.isAwakened === true
+                  ? {
+                      isAwakened: true,
+                      moves: Array.isArray(bo.moves) && (bo.moves as unknown[]).length ? bo.moves : currentEnemy.moves,
+                      image:
+                        typeof bo.image === 'string' && (bo.image as string).trim()
+                          ? (bo.image as string).trim()
+                          : currentEnemy.image,
+                      enemyType:
+                        Object.prototype.hasOwnProperty.call(bo, 'enemyType')
+                          ? bo.enemyType
+                          : currentEnemy.enemyType,
+                      maxHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
+                      maxShieldStrength:
+                        battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0,
+                    }
+                  : {};
               // Preserve all properties from current enemy, update health/shield with merged values
               return {
                 ...currentEnemy,
                 health: mergedHealth,
                 shieldStrength: mergedShield,
                 maxHealth: battleEngineUpdate.maxHealth || currentEnemy.maxHealth || 100,
-                maxShieldStrength: battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0
+                maxShieldStrength: battleEngineUpdate.maxShield || currentEnemy.maxShieldStrength || 0,
+                ...awakenSync,
               };
             });
             
@@ -1955,12 +2221,30 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   const update = battleEngineUpdates.get(enemy.id);
                   if (!update) return enemy;
                   
+                  const bo2 = update.opp as Record<string, unknown>;
+                  const awakenSync2 =
+                    bo2?.isAwakened === true
+                      ? {
+                          isAwakened: true,
+                          moves: Array.isArray(bo2.moves) && (bo2.moves as unknown[]).length ? bo2.moves : enemy.moves,
+                          image:
+                            typeof bo2.image === 'string' && (bo2.image as string).trim()
+                              ? (bo2.image as string).trim()
+                              : enemy.image,
+                          enemyType: Object.prototype.hasOwnProperty.call(bo2, 'enemyType')
+                            ? bo2.enemyType
+                            : enemy.enemyType,
+                          maxHealth: update.maxHealth || enemy.maxHealth || 100,
+                          maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0,
+                        }
+                      : {};
                   return {
                     ...enemy,
                     health: Math.min(update.health, Number(enemy.health || 100)),
                     shieldStrength: Math.min(update.shield, Number(enemy.shieldStrength || 0)),
                     maxHealth: update.maxHealth || enemy.maxHealth || 100,
-                    maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0
+                    maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0,
+                    ...awakenSync2,
                   };
                 });
                 
@@ -2003,7 +2287,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               maxShieldStrength: updatedOpp.maxShieldStrength !== undefined ? updatedOpp.maxShieldStrength : opp.maxShieldStrength,
               // Also update health and maxHealth for compatibility
               health: updatedOpp.vaultHealth !== undefined ? updatedOpp.vaultHealth : (updatedOpp.health !== undefined ? updatedOpp.health : opp.health),
-              maxHealth: updatedOpp.maxVaultHealth !== undefined ? updatedOpp.maxVaultHealth : (updatedOpp.maxHealth !== undefined ? updatedOpp.maxHealth : opp.maxHealth)
+              maxHealth: updatedOpp.maxVaultHealth !== undefined ? updatedOpp.maxVaultHealth : (updatedOpp.maxHealth !== undefined ? updatedOpp.maxHealth : opp.maxHealth),
+              ...(updatedOpp.isAwakened === true
+                ? {
+                    isAwakened: true,
+                    moves:
+                      Array.isArray(updatedOpp.moves) && updatedOpp.moves.length ? updatedOpp.moves : opp.moves,
+                    image: updatedOpp.image ?? opp.image,
+                    enemyType:
+                      updatedOpp.enemyType !== undefined ? updatedOpp.enemyType : opp.enemyType,
+                  }
+                : {}),
             };
             console.log(`🔄 Updated local opponent ${opp.name} (${opp.id}): vaultHealth ${opp.vaultHealth} → ${newOpp.vaultHealth}, shield ${opp.shieldStrength} → ${newOpp.shieldStrength}`);
             
@@ -2079,6 +2373,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     try {
       // Update each player's vault health and shields in Firestore
       const updatePromises = updatedAllies.map(async (ally) => {
+        if (ally.isSummon) return;
         if (ally.vaultHealth !== undefined || ally.shieldStrength !== undefined) {
           try {
             const vaultRef = doc(db, 'vaults', ally.id);
@@ -2092,7 +2387,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 updates.vaultHealth = ally.vaultHealth;
               }
               if (ally.shieldStrength !== undefined) {
-                updates.shieldStrength = ally.shieldStrength;
+                const cap = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 0));
+                const raw = Math.floor(Number(ally.shieldStrength) || 0);
+                updates.shieldStrength = cap > 0 ? Math.min(cap, Math.max(0, raw)) : Math.max(0, raw);
               }
               
               if (Object.keys(updates).length > 0) {
@@ -2163,8 +2460,10 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '1.5rem' }}>
-            {(battleRoom as any)?.challengeId === 'ep2-its-all-a-game' || (battleRoom as any)?.isChapter2Battle 
-              ? 'Chapter 2-4' 
+            {(battleRoom as any)?.isMissionBattle
+              ? '📜 Mission'
+              : (battleRoom as any)?.challengeId === 'ep2-its-all-a-game' || (battleRoom as any)?.isChapter2Battle
+              ? 'Chapter 2-4'
               : '🏝️ Island Raid'}
           </h2>
           <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>
@@ -2172,7 +2471,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           </div>
         </div>
         <button
-          onClick={handleLeave}
+          onClick={() => setLeaveConfirmOpen(true)}
           style={{
             background: 'rgba(255,255,255,0.2)',
             color: 'white',
@@ -2180,26 +2479,108 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             borderRadius: '0.5rem',
             padding: '0.5rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
           }}
         >
           Leave Battle
         </button>
       </div>
 
-      {/* Battle Engine */}
-      <BattleEngine
-        onBattleEnd={handleBattleEnd}
-        opponents={opponents}
-        allies={allies}
-        isMultiplayer={true}
-        onOpponentsUpdate={handleOpponentsUpdate}
-        onAlliesUpdate={handleAlliesUpdate}
-        onBattleLogUpdate={setBattleLog}
-        initialBattleLog={battleLog}
+      {leaveConfirmOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2000,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            style={{
+              maxWidth: '420px',
+              width: '100%',
+              background: 'white',
+              borderRadius: '0.75rem',
+              padding: '1.25rem',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            }}
+          >
+            <h3 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Leave this battle?</h3>
+            <p style={{ margin: '0 0 1rem', color: '#475569', fontSize: '0.95rem' }}>
+              You may receive reduced or no rewards if you have not contributed enough. Co-op hosts can rejoin only if
+              the battle is still joinable.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setLeaveConfirmOpen(false)}
+                style={{ padding: '0.5rem 1rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', background: 'white' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLeaveConfirmOpen(false);
+                  void handleLeave();
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: 'none',
+                  background: '#b91c1c',
+                  color: 'white',
+                  fontWeight: 600,
+                }}
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <CoopBattleRosterPanel
         gameId={gameId}
-        candyChoice={(battleRoom as any)?.candyChoice}
+        battleRoom={battleRoom}
+        currentUserId={currentUser?.uid}
+        displayName={currentUser?.displayName || 'Player'}
+        needsExplicitJoin={needsExplicitJoin}
+        onJoined={() => setNeedsExplicitJoin(false)}
       />
+
+      {(() => {
+        const inRoster =
+          !!currentUser?.uid && Array.isArray(battleRoom?.players) && battleRoom!.players.includes(currentUser.uid);
+        const mustWaitExplicit = battleRoom?.requireExplicitJoin === true && !inRoster;
+        if (mustWaitExplicit) {
+          return (
+            <div style={{ padding: '3rem 1.5rem', textAlign: 'center', color: '#334155', fontSize: '1rem' }}>
+              Join the battle above to enter combat. You will not take turns until you are on the roster.
+            </div>
+          );
+        }
+        return (
+          <BattleEngine
+            onBattleEnd={handleBattleEnd}
+            opponents={opponents}
+            allies={allies}
+            isMultiplayer={true}
+            onOpponentsUpdate={handleOpponentsUpdate}
+            onAlliesUpdate={handleAlliesUpdate}
+            onBattleLogUpdate={setBattleLog}
+            initialBattleLog={battleLog}
+            gameId={gameId}
+            candyChoice={(battleRoom as any)?.candyChoice}
+          />
+        );
+      })()}
       
       {/* Victory Modal */}
       {showVictoryModal && victoryRewards && (
@@ -2207,11 +2588,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           isOpen={showVictoryModal}
           onClose={() => {
             setShowVictoryModal(false);
-            onLeave(); // Return to lobby after closing modal
+            const missionBattle = !!(battleRoom as { isMissionBattle?: boolean } | null)?.isMissionBattle;
+            if (missionBattle && onMissionVictoryDismiss) {
+              onMissionVictoryDismiss();
+            } else {
+              onLeave();
+            }
           }}
           waveNumber={waveNumber}
           difficulty={difficulty}
           rewards={victoryRewards}
+          customTitle={(battleRoom as { isMissionBattle?: boolean } | null)?.isMissionBattle ? '✅ MISSION COMPLETE!' : undefined}
         />
       )}
 

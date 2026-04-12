@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getLevelFromXP } from '../utils/leveling';
-import BattlePass from '../components/BattlePass';
 import Season0IntroModal from '../components/Season0IntroModal';
 import { useJourneyStatus } from '../hooks/useJourneyStatus';
 import NPCMissionModal from '../components/NPCMissionModal';
 import NpcHotspots from '../components/NpcHotspots';
 import PowerCardOverlay from '../components/PowerCardOverlay';
+import { fetchActiveBattlePassSeason } from '../utils/activeBattlePassClient';
+import { computeHomeBattlePassDisplay, type HomeBattlePassDisplay } from '../utils/homeBattlePassDisplay';
+import { season0CompactSegment } from '../utils/battlePassTierMath';
+import {
+  fetchHubNpcMissionAttentionMap,
+  DEFAULT_HUB_NPC_MISSION_ATTENTION,
+  type HubNpcMissionAttentionMap,
+} from '../utils/missionsService';
+import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal';
+import { consumeHomeHubMissionsHighlight } from '../utils/earnPowerPointsHomeIntent';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -44,51 +53,138 @@ const Home: React.FC = () => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Season 1: Flow State hub — battle pass + energy (see docs/SEASON1_IMPLEMENTATION.md)
   const [userLevel, setUserLevel] = useState(1);
-  const [showBattlePass, setShowBattlePass] = useState(false);
   const [showSeason0Intro, setShowSeason0Intro] = useState(false);
   const [showVideoReplay, setShowVideoReplay] = useState(false);
-  const [battlePassXP, setBattlePassXP] = useState(0);
-  const [battlePassTier, setBattlePassTier] = useState(0);
+  const [bpDisplay, setBpDisplay] = useState<HomeBattlePassDisplay>(() => {
+    const seg = season0CompactSegment(0, season0Tiers.length, 0);
+    return {
+      deployedActive: false,
+      seasonSubtitle: 'Season 0 Battle Pass',
+      battlePassTier: 0,
+      maxTier: season0Tiers.length,
+      battlePassXP: 0,
+      progressPercentOverride: seg.progressPercent,
+      battlePassXpInSegment: seg.xpInSegment,
+      battlePassXpSegmentSpan: seg.xpSegmentSpan,
+      battlePassXpSegmentComplete: seg.isComplete,
+      battlePassIntroAvailable: false,
+    };
+  });
   const [selectedNPC, setSelectedNPC] = useState<'sonido' | 'zeke' | 'luz' | 'kon' | null>(null);
-  
+  const [npcMissionAttention, setNpcMissionAttention] = useState<HubNpcMissionAttentionMap>(
+    DEFAULT_HUB_NPC_MISSION_ATTENTION
+  );
+  const [showWaysToEarnPp, setShowWaysToEarnPp] = useState(false);
+  const [highlightHomeHubMissions, setHighlightHomeHubMissions] = useState(false);
+
   // Use shared journey status hook
   const journeyStatus = useJourneyStatus(currentUser?.uid || null);
 
-  // Fetch user level, Battle Pass progress, and check if Season 0 intro should be shown
+  useEffect(() => {
+    if (!currentUser) {
+      setNpcMissionAttention(DEFAULT_HUB_NPC_MISSION_ATTENTION);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const map = await fetchHubNpcMissionAttentionMap(currentUser.uid);
+        if (!cancelled) setNpcMissionAttention(map);
+      } catch (e) {
+        console.error('Error loading hub NPC mission indicators:', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
+  const refreshNpcMissionAttention = () => {
+    if (!currentUser) return;
+    fetchHubNpcMissionAttentionMap(currentUser.uid)
+      .then(setNpcMissionAttention)
+      .catch((e) => console.error('Error refreshing hub NPC mission indicators:', e));
+  };
+
+  const closeNpcModal = () => {
+    setSelectedNPC(null);
+    refreshNpcMissionAttention();
+  };
+
+  useEffect(() => {
+    if (!consumeHomeHubMissionsHighlight()) return;
+    setHighlightHomeHubMissions(true);
+    const t = window.setTimeout(() => setHighlightHomeHubMissions(false), 5000);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    const replay = () => {
+      setHighlightHomeHubMissions(false);
+      window.requestAnimationFrame(() => {
+        setHighlightHomeHubMissions(true);
+        window.setTimeout(() => setHighlightHomeHubMissions(false), 5000);
+      });
+    };
+    window.addEventListener('xiotein:replayHomeHubHighlight', replay);
+    return () => window.removeEventListener('xiotein:replayHomeHubHighlight', replay);
+  }, []);
+
+  useEffect(() => {
+    if (searchParams.get('earnPP') !== '1') return;
+    setShowWaysToEarnPp(true);
+    try {
+      localStorage.setItem('powerCardActiveTab', 'daily');
+    } catch {
+      /* ignore */
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('earnPP');
+        return next;
+      },
+      { replace: true }
+    );
+  }, [searchParams, setSearchParams]);
+
+  // Fetch user level, active deployed battle pass (seasons/), Season 0 claim doc, intro flags
   useEffect(() => {
     const fetchUserData = async () => {
       if (!currentUser) return;
-      
+
       try {
-        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
+        const [userDoc, activeSeason] = await Promise.all([
+          getDoc(doc(db, 'students', currentUser.uid)),
+          fetchActiveBattlePassSeason(),
+        ]);
+
         if (userDoc.exists()) {
           const userData = userDoc.data();
           const calculatedLevel = getLevelFromXP(userData.xp || 0);
           setUserLevel(calculatedLevel);
-          
-          // Only show intro if user has NOT seen it (explicitly check for false or undefined)
-          // Once season0IntroSeen is true, it will never show again
+
           if (userData.season0IntroSeen !== true) {
             setShowSeason0Intro(true);
           }
-          
-          // Check if video has been auto-played (for showing replay button)
-          // Video replay button will always be available after first login
-          
-          // Fetch Battle Pass progress - use player's actual XP
-          const playerXP = userData.xp || 0;
-          setBattlePassXP(playerXP);
-          setBattlePassTier(calculateTier(playerXP));
+
+          const disp = computeHomeBattlePassDisplay(
+            userData as Record<string, unknown>,
+            activeSeason,
+            season0Tiers.length,
+            calculateTier
+          );
+          setBpDisplay(disp);
         } else {
-          // New user - show intro
           setShowSeason0Intro(true);
-          setBattlePassXP(0);
-          setBattlePassTier(0);
+          setBpDisplay(
+            computeHomeBattlePassDisplay(undefined, activeSeason, season0Tiers.length, calculateTier)
+          );
         }
-        
-        // Also ensure Battle Pass document exists for claim tracking
+
         const battlePassRef = doc(db, 'battlePass', `${currentUser.uid}_season0`);
         const battlePassDoc = await getDoc(battlePassRef);
         if (!battlePassDoc.exists()) {
@@ -96,11 +192,11 @@ const Home: React.FC = () => {
           const initialData = {
             userId: currentUser.uid,
             season: 0,
-            totalXP: playerXP, // Use player's actual XP
+            totalXP: playerXP,
             currentTier: calculateTier(playerXP),
             claimedTiers: [],
             isPremium: false,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
           };
           await setDoc(battlePassRef, initialData);
         }
@@ -117,18 +213,23 @@ const Home: React.FC = () => {
 
 
   const handleBattlePassRefresh = async () => {
-    if (currentUser) {
-      try {
-        const userDoc = await getDoc(doc(db, 'students', currentUser.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          const playerXP = userData.xp || 0;
-          setBattlePassXP(playerXP);
-          setBattlePassTier(calculateTier(playerXP));
-        }
-      } catch (error) {
-        console.error('Error refreshing Battle Pass progress:', error);
-      }
+    if (!currentUser) return;
+    try {
+      const [userDoc, activeSeason] = await Promise.all([
+        getDoc(doc(db, 'students', currentUser.uid)),
+        fetchActiveBattlePassSeason(),
+      ]);
+      const userData = userDoc.exists() ? userDoc.data() : undefined;
+      setBpDisplay(
+        computeHomeBattlePassDisplay(
+          userData as Record<string, unknown> | undefined,
+          activeSeason,
+          season0Tiers.length,
+          calculateTier
+        )
+      );
+    } catch (error) {
+      console.error('Error refreshing Battle Pass progress:', error);
     }
   };
 
@@ -146,73 +247,26 @@ const Home: React.FC = () => {
         overflow: 'hidden'
       }}>
         {/* Background Container - for NPC hotspots positioning */}
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 1
-        }}>
-          {/* NPC Hotspots - positioned absolutely over background */}
-          <NpcHotspots onNpcClick={setSelectedNPC} />
-        </div>
-
-        {/* Season 1 — prominent Flow / Battle Pass (MST Season 1 expansion) */}
         <div
+          id="home-hub-missions"
           style={{
-            position: 'fixed',
-            top: '5.5rem',
-            right: '1rem',
-            zIndex: 12,
-            width: 'min(320px, 92vw)',
-            background: 'linear-gradient(160deg, rgba(15,23,42,0.92) 0%, rgba(49,46,129,0.9) 100%)',
-            border: '1px solid rgba(129,140,248,0.45)',
-            borderRadius: '0.75rem',
-            padding: '0.85rem 1rem',
-            color: '#e0e7ff',
-            boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1,
+            transition: 'box-shadow 0.35s ease',
+            boxShadow: highlightHomeHubMissions
+              ? 'inset 0 0 0 5px rgba(251, 191, 36, 0.95), inset 0 0 80px 20px rgba(251, 191, 36, 0.2)'
+              : 'none',
           }}
         >
-          <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.85 }}>Season 1 — Flow State</div>
-          <div style={{ fontWeight: 800, fontSize: '1rem', marginTop: 4 }}>Become a conduit.</div>
-          <p style={{ fontSize: '0.72rem', lineHeight: 1.4, margin: '0.4rem 0 0.65rem', opacity: 0.9 }}>
-            Redirect energy with intention, purpose, and focus — the way Kon teaches. Survive the Unveiled.
-          </p>
-          <button
-            type="button"
-            onClick={() => navigate('/battle-pass')}
-            style={{
-              width: '100%',
-              marginBottom: 8,
-              padding: '0.55rem 0.75rem',
-              borderRadius: 8,
-              border: 'none',
-              fontWeight: 800,
-              cursor: 'pointer',
-              background: 'linear-gradient(90deg,#6366f1,#a855f7)',
-              color: '#fff',
-            }}
-          >
-            Battle Pass
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/energy-mastery')}
-            style={{
-              width: '100%',
-              padding: '0.45rem 0.75rem',
-              borderRadius: 8,
-              border: '1px solid rgba(165,180,252,0.5)',
-              fontWeight: 600,
-              cursor: 'pointer',
-              background: 'rgba(255,255,255,0.06)',
-              color: '#e0e7ff',
-              fontSize: '0.8rem',
-            }}
-          >
-            Energy Mastery
-          </button>
+          {/* NPC Hotspots - positioned absolutely over background */}
+          <NpcHotspots
+            onNpcClick={setSelectedNPC}
+            npcMissionAttention={npcMissionAttention}
+          />
         </div>
 
         {/* Fixed Header - Top Center */}
@@ -273,9 +327,22 @@ const Home: React.FC = () => {
 
         {/* Power Card Overlay - fixed at bottom */}
         <PowerCardOverlay
-          battlePassTier={battlePassTier}
-          maxTier={season0Tiers.length}
-          battlePassXP={battlePassXP}
+          battlePassTier={bpDisplay.battlePassTier}
+          maxTier={bpDisplay.maxTier}
+          battlePassXP={bpDisplay.battlePassXP}
+          battlePassSeasonSubtitle={bpDisplay.seasonSubtitle}
+          battlePassProgressPercent={bpDisplay.progressPercentOverride}
+          battlePassXpInSegment={bpDisplay.battlePassXpInSegment}
+          battlePassXpSegmentSpan={bpDisplay.battlePassXpSegmentSpan}
+          battlePassXpSegmentComplete={bpDisplay.battlePassXpSegmentComplete}
+          deployedBattlePassActive={bpDisplay.deployedActive}
+          battlePassIntroAvailable={bpDisplay.battlePassIntroAvailable}
+          battlePassIntroVideoUrl={bpDisplay.battlePassIntroVideoUrl}
+          battlePassIntroSequence={bpDisplay.battlePassIntroSequence}
+          battlePassFlowEyebrow={bpDisplay.deployedActive ? 'Live battle pass' : 'Season 1 — Flow State'}
+          battlePassFlowTagline="Become a conduit."
+          battlePassFlowDescription="Redirect energy with intention, purpose, and focus — the way Kon teaches. Survive the Unveiled."
+          onEnergyMastery={() => navigate('/energy-mastery')}
           onBattlePassRefresh={handleBattlePassRefresh}
         />
 
@@ -283,7 +350,7 @@ const Home: React.FC = () => {
         {selectedNPC === 'sonido' && (
           <NPCMissionModal
             isOpen={true}
-            onClose={() => setSelectedNPC(null)}
+            onClose={closeNpcModal}
             npc="sonido"
             npcName="Sonido"
           />
@@ -291,7 +358,7 @@ const Home: React.FC = () => {
         {selectedNPC === 'zeke' && (
           <NPCMissionModal
             isOpen={true}
-            onClose={() => setSelectedNPC(null)}
+            onClose={closeNpcModal}
             npc="zeke"
             npcName="Zeke"
           />
@@ -299,7 +366,7 @@ const Home: React.FC = () => {
         {selectedNPC === 'luz' && (
           <NPCMissionModal
             isOpen={true}
-            onClose={() => setSelectedNPC(null)}
+            onClose={closeNpcModal}
             npc="luz"
             npcName="Luz"
           />
@@ -307,7 +374,7 @@ const Home: React.FC = () => {
         {selectedNPC === 'kon' && (
           <NPCMissionModal
             isOpen={true}
-            onClose={() => setSelectedNPC(null)}
+            onClose={closeNpcModal}
             npc="kon"
             npcName="Kon"
           />
@@ -326,6 +393,8 @@ const Home: React.FC = () => {
           onClose={() => setShowVideoReplay(false)}
           autoPlayVideo={false}
         />
+
+        <WaysToEarnPowerPointsModal open={showWaysToEarnPp} onClose={() => setShowWaysToEarnPp(false)} />
       </div>
     </>
   );

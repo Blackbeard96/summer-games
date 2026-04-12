@@ -15,6 +15,7 @@ import {
   awardPowerXpForElimination,
   computeSessionEndPowerXp,
 } from './liveEventPowerStatsService';
+import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -510,6 +511,7 @@ export async function trackParticipation(
 
     let streakLogLine: string | null = null;
     let nextConsecutive = 0;
+    let flowEnteredThisCall = false;
 
     await runTransaction(db, async (transaction) => {
       const statsDoc = await transaction.get(statsRef);
@@ -572,6 +574,12 @@ export async function trackParticipation(
         });
       }
     });
+
+    if (flowEnteredThisCall) {
+      void unlockLevel2BuilderFromLiveFlow(playerId).catch((e) => {
+        debugError('inSessionStats', 'Level 2 manifest unlock after Flow State failed', e);
+      });
+    }
 
     return true;
   } catch (error) {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Move, MOVE_UPGRADE_TEMPLATES, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { 
   calculateDamageRange, 
@@ -12,12 +12,17 @@ import { useAuth } from '../context/AuthContext';
 import { getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
 import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { getRRCandyMoves, getRRCandyDisplayName } from '../utils/rrCandyMoves';
+import { getRRCandyMoves, getRRCandyDisplayName, shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
+import { truthMetalBalanceForHud, truthMetalTotalAcrossDocs } from '../utils/truthMetalPlayerBalance';
 import { getRRCandyStatus, getRRCandyStatusAsync } from '../utils/rrCandyUtils';
 import { getUserRRCandySkills, checkRRCandyUnlock } from '../utils/rrCandyService';
 import { getPlayerSkillState } from '../utils/skillStateService';
 import { equipSkill, unequipSkill } from '../utils/skillEquipService';
 import { enrichEquippedArtifactsFromCatalog, getArtifactSkillsFromEquipped } from '../utils/battleSkillsService';
+import { getActiveLevel2ManifestMove } from '../services/level2ManifestService';
+import { payLevel2ManifestRespecCost } from '../services/level2ManifestRespecService';
+import { LEVEL2_MANIFEST_RESPEC_PP, LEVEL2_MANIFEST_RESPEC_TRUTH_METAL } from '../constants/level2ManifestRespec';
+import { useBattle } from '../context/BattleContext';
 import {
   effectiveSkillCooldownTurns,
   getElementalAccessElementFromStudent,
@@ -77,6 +82,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   elementalProgress,
 }) => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { vault, refreshVaultData } = useBattle();
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [overridesLoaded, setOverridesLoaded] = useState(false);
   const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
@@ -85,6 +92,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   /** students.artifacts map — used to resolve Legendary skills (players cannot read adminSettings). */
   const [studentOwnedArtifacts, setStudentOwnedArtifacts] = useState<Record<string, any>>({});
   const [truthMetal, setTruthMetal] = useState<number>(0);
+  /** Sum of `students` + `users` Truth Metal (for spend eligibility). */
+  const [truthMetalTotal, setTruthMetalTotal] = useState<number>(0);
+  const [level2RespecBusy, setLevel2RespecBusy] = useState(false);
   const [userManifest, setUserManifest] = useState<string | null>(null);
   const [equippedSkillIds, setEquippedSkillIds] = useState<string[]>([]);
   const [loadoutBusy, setLoadoutBusy] = useState(false);
@@ -94,6 +104,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [equippableCatalogRaw, setEquippableCatalogRaw] = useState<Record<string, unknown> | null>(null);
   const [universalLawEffects, setUniversalLawEffects] = useState<UniversalLawBoonEffects | null>(null);
   const [maxLoadoutSlots, setMaxLoadoutSlots] = useState<number>(MAX_EQUIPPED_SKILLS);
+  /** Level 2 Manifest custom skill — seventh battle slot for Live Events (not in skill_state equip list). */
+  const [level2ManifestMove, setLevel2ManifestMove] = useState<Move | null>(null);
 
   // Load user's manifest type from both students and users collections
   useEffect(() => {
@@ -183,19 +195,22 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     const loadTruthMetal = async () => {
       if (!currentUser) {
         setTruthMetal(0);
+        setTruthMetalTotal(0);
         return;
       }
       
       try {
         const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          setTruthMetal(userData.truthMetal || 0);
-        }
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const [userDoc, studentDoc] = await Promise.all([getDoc(userRef), getDoc(studentRef)]);
+        const uData = userDoc.exists() ? userDoc.data() : null;
+        const sData = studentDoc.exists() ? studentDoc.data() : null;
+        setTruthMetal(truthMetalBalanceForHud(sData?.truthMetal, uData?.truthMetal));
+        setTruthMetalTotal(truthMetalTotalAcrossDocs(sData?.truthMetal, uData?.truthMetal));
       } catch (error) {
         console.error('MovesDisplay: Error loading Truth Metal:', error);
         setTruthMetal(0);
+        setTruthMetalTotal(0);
       }
     };
     
@@ -280,6 +295,25 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     loadEquipped();
   }, [currentUser, location.pathname]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!currentUser) {
+        if (!cancelled) setLevel2ManifestMove(null);
+        return;
+      }
+      try {
+        const m = await getActiveLevel2ManifestMove(currentUser.uid);
+        if (!cancelled) setLevel2ManifestMove(m);
+      } catch {
+        if (!cancelled) setLevel2ManifestMove(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, location.pathname]);
+
   // Ensure RR Candy moves are loaded when component mounts
   // This ensures they appear in Skills & Mastery even if they weren't loaded initially
   // State to track RR Candy unlock status and skills
@@ -304,10 +338,12 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
         const rrSkills = await getUserRRCandySkills(currentUser.uid, moves);
 
         if (rrSkills.length > 0) {
+          const ids = rrSkills.map((m) => (m.id || '').toLowerCase());
           const inferredType =
             unlockStatus.candyType ||
-            (rrSkills.some((m) => (m.id || '').toLowerCase().includes('up-down')) ? 'up-down' : null) ||
-            (rrSkills.some((m) => (m.id || '').toLowerCase().includes('config')) ? 'config' : null) ||
+            (ids.some((id) => id.includes('up-down') || id.includes('up_down')) ? 'up-down' : null) ||
+            (ids.some((id) => id.includes('konfig')) ? 'config' : null) ||
+            (ids.some((id) => id.includes('config')) ? 'config' : null) ||
             'on-off';
           setRRCandyStatus({ unlocked: true, candyType: inferredType });
         } else {
@@ -422,8 +458,15 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       filteredNames: filtered.map(m => ({ name: m.name, manifestType: m.manifestType, unlocked: m.unlocked }))
     });
     
-    return filtered;
-  }, [moves, userManifest]);
+    const l2 = level2ManifestMove;
+    if (!l2) return filtered;
+    if (filtered.some((m) => m.id === l2.id)) return filtered;
+    if (userManifest) {
+      const mtl = (l2.manifestType || '').toLowerCase();
+      if (mtl !== userManifest.toLowerCase()) return filtered;
+    }
+    return [...filtered, l2];
+  }, [moves, userManifest, level2ManifestMove]);
   
   // Saved secondary element (Artifacts → Elemental Access). Shown in section header.
   const elementalAccessSecondary = useMemo(
@@ -687,7 +730,10 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     // This ensures moves appear in Skill Mastery even if move.unlocked is false
     const isRRCandyMove = move.id?.startsWith('rr-candy-') || move.id?.includes('rr-candy');
     const isManifestMove = move.category === 'manifest';
-    
+    const isLevel2Manifest =
+      move.effectKey === 'level2_manifest' ||
+      (typeof move.id === 'string' && move.id.startsWith('l2-manifest::'));
+
     // For manifest moves, always allow upgrading (they're shown regardless of unlock status)
     // For RR Candy moves, allow if globally unlocked
     // For other moves, require unlocked status
@@ -705,8 +751,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     
     // Check if move can be upgraded (up to level 10)
     // Manifest moves can always be upgraded if they're shown (they match the user's manifest)
-    const canUpgrade = move.masteryLevel < 10 && effectiveUnlocked;
-    const canAscend = move.masteryLevel === 5 && effectiveUnlocked;
+    const canUpgrade = move.masteryLevel < 10 && effectiveUnlocked && !isLevel2Manifest;
+    const canAscend = move.masteryLevel === 5 && effectiveUnlocked && !isLevel2Manifest;
     
     // Calculate exponential upgrade cost based on current level
     // RR Candy moves: 1000 PP for Level 1 → Level 2
@@ -921,7 +967,13 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             textAlign: 'center',
             marginBottom: '0.75rem'
           }}>
-            {(move.id === 'rr-candy-on-off-shields-off' ? 'Remove 25% of opponent\'s shields. Can be leveled up for higher impact.' : move.id === 'rr-candy-on-off-shields-on' ? 'Restore 50% of your maximum shields.' : move.id?.startsWith('rr-candy-') ? (move.description || '') : (getMoveDataWithOverrides(move.name).description || move.description))}
+            {(move.id === 'rr-candy-on-off-shields-off'
+              ? `Remove ${shieldOffMaxShieldRemovePercent(effectiveMasteryLevel)}% of the opponent's maximum shields (up to 50% at high mastery). Each mastery level increases this amount.`
+              : move.id === 'rr-candy-on-off-shields-on'
+                ? 'Restore 50% of your maximum shields.'
+                : move.id?.startsWith('rr-candy-')
+                  ? (move.description || '')
+                  : (getMoveDataWithOverrides(move.name).description || move.description))}
           </p>
 
           {/* Power Type Information */}
@@ -971,7 +1023,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           const se = getFirstSummonEffectFromMove(move);
           if (!se) return null;
           const artLv = move.artifactGrant?.artifactLevel ?? 1;
-          const c = resolveConstructStatsForSummonEffect(se, artLv);
+          const mastLv = move.masteryLevel ?? 1;
+          const c = resolveConstructStatsForSummonEffect(se, artLv, mastLv);
           const elemLabel = c.elementalType.charAt(0).toUpperCase() + c.elementalType.slice(1);
           return (
             <div
@@ -990,10 +1043,16 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 <div><strong>Name:</strong> {c.displayName}</div>
                 <div><strong>HP / Shields:</strong> {c.maxHealth} / {c.maxShield}</div>
                 <div><strong>Attack damage:</strong> {c.attackDamage} ({elemLabel}, each time the construct acts)</div>
-                <div><strong>Stays on field:</strong> {c.durationTurns} turn{c.durationTurns !== 1 ? 's' : ''}</div>
+                <div>
+                  <strong>Stays on field:</strong>{' '}
+                  {c.durationTurns > 0
+                    ? `${c.durationTurns} turn${c.durationTurns !== 1 ? 's' : ''}`
+                    : 'until defeated (while it has HP)'}
+                </div>
                 <div style={{ marginTop: '0.45rem', color: '#6366f1', fontSize: '0.72rem' }}>
-                  Power scales with your <strong>artifact level</strong> (L{c.artifactLevelUsed} → ×{c.powerMultiplier.toFixed(1)} vs level 1).
-                  Mastery level affects the skill card, not these construct stats.
+                  Construct stats scale with <strong>artifact level</strong> (L{c.artifactLevelUsed} → ×
+                  {c.artifactPowerMultiplier.toFixed(1)}) and <strong>mastery</strong> (M{c.masteryLevelUsed} → ×
+                  {c.masteryPowerMultiplier.toFixed(1)}). Combined vs base profile: <strong>×{c.powerMultiplier.toFixed(2)}</strong>.
                 </div>
               </div>
             </div>
@@ -1439,7 +1498,22 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 {/* Legacy buff/debuff display */}
                 {move.debuffType && (
                   <div style={{ marginBottom: '0.5rem' }}>
-                    • <strong>Debuff:</strong> {move.debuffType} ({move.debuffStrength || 0} strength, {move.duration || 1} turns)
+                    {move.id === 'rr-candy-on-off-shields-off' ? (
+                      <>
+                        • <strong>Debuff:</strong> {move.debuffType} — strips{' '}
+                        <strong>{shieldOffMaxShieldRemovePercent(effectiveMasteryLevel)}%</strong> of target max shields (
+                        {(() => {
+                          const d = move.duration ?? 1;
+                          return `${d} turn${d === 1 ? '' : 's'}`;
+                        })()}
+                        )
+                      </>
+                    ) : (
+                      <>
+                        • <strong>Debuff:</strong> {move.debuffType} ({move.debuffStrength || 0} strength,{' '}
+                        {move.duration || 1} turns)
+                      </>
+                    )}
                   </div>
                 )}
                 {move.buffType && (
@@ -1845,24 +1919,15 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               })()}
               {(() => {
                 // Special handling for RR Candy skills - show shield removal/boost preview
-                if (isRRCandyMove && move.debuffType === 'shield_break' && move.debuffStrength) {
-                  const nextLevel = move.masteryLevel + 1;
-                  let minBoost: number, maxBoost: number;
-                  
-                  switch (nextLevel) {
-                    case 2: minBoost = 2.0; maxBoost = 2.3; break;
-                    case 3: minBoost = 1.25; maxBoost = 1.5; break;
-                    case 4: minBoost = 1.3; maxBoost = 1.6; break;
-                    case 5: minBoost = 2.0; maxBoost = 2.5; break;
-                    default: minBoost = 1.0; maxBoost = 1.0;
-                  }
-                  
-                  const currentShieldRemoval = move.debuffStrength;
-                  const nextMinRemoval = Math.floor(currentShieldRemoval * minBoost);
-                  const nextMaxRemoval = Math.floor(currentShieldRemoval * maxBoost);
-                  
+                if (isRRCandyMove && move.id === 'rr-candy-on-off-shields-off') {
+                  const nextMl = Math.min(10, move.masteryLevel + 1);
+                  const curPct = shieldOffMaxShieldRemovePercent(move.masteryLevel);
+                  const nextPct = shieldOffMaxShieldRemovePercent(nextMl);
                   return (
-                    <div>Shield Removal: {currentShieldRemoval}% → {nextMinRemoval}% - {nextMaxRemoval}%</div>
+                    <div>
+                      Max-shield removal: {curPct}% → {nextPct}%
+                      {nextMl >= 10 ? ' (capped)' : ''}
+                    </div>
                   );
                 }
                 
@@ -2028,8 +2093,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           </button>
         )}
 
-        {/* Equip / Unequip for loadout (max 6) */}
-        {effectiveUnlocked && (
+        {/* Equip / Unequip for loadout (max 6) — Level 2 Meta uses a separate Live Event slot */}
+        {effectiveUnlocked && !isLevel2Manifest && (
           <div style={{ marginTop: '0.5rem' }}>
             {equippedSkillIds.includes(move.id) ? (
               <button
@@ -2102,7 +2167,21 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             )}
           </div>
         )}
-        
+        {isLevel2Manifest ? (
+          <p
+            style={{
+              marginTop: '0.65rem',
+              marginBottom: 0,
+              fontSize: '0.78rem',
+              lineHeight: 1.45,
+              color: '#64748b',
+            }}
+          >
+            <strong>7th skill (Live Events):</strong> auto-equipped with your six-slot loadout in Live Event
+            battles. Re-save from the Level 2 Manifest builder to change it.
+          </p>
+        ) : null}
+
       </div>
     );
   };
@@ -2361,9 +2440,15 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       }}>
         <span style={{ fontWeight: '600' }}>
           Loadout: {equippedSkillIds.length}/{maxLoadoutSlots} equipped
+          {level2ManifestMove ? (
+            <span style={{ display: 'block', marginTop: '0.25rem', fontWeight: 500, fontSize: '0.8rem' }}>
+              + Level 2 Meta for Live Events (7th skill)
+            </span>
+          ) : null}
         </span>
         <span style={{ fontSize: '0.875rem', opacity: 0.95 }}>
-          Only equipped skills appear in battle. Equip or unequip below.
+          Equipped skills below are used in most battles; Live Events also add your Level 2 Manifest skill when you
+          have one saved.
         </span>
       </div>
 
@@ -2526,6 +2611,121 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             );
           })}
         </div>
+        {level2ManifestMove ? (
+          <div style={{ marginTop: '0.75rem' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#6366f1', marginBottom: '0.35rem' }}>
+              Slot 7 · Live Event Level 2 Meta
+            </div>
+            <div
+              style={{
+                flex: '1 1 200px',
+                maxWidth: '280px',
+                padding: '0.5rem 0.75rem',
+                background: '#eef2ff',
+                border: '2px solid #6366f1',
+                borderRadius: '0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+              }}
+            >
+              <span style={{ fontSize: '1.25rem' }}>🛰️</span>
+              <span
+                style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: '#1f2937',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {level2ManifestMove.name.replace(/\s*·\s*L2 Meta\s*$/i, '')}
+              </span>
+            </div>
+            <div style={{ marginTop: '0.65rem', maxWidth: '320px' }}>
+              <button
+                type="button"
+                disabled={
+                  level2RespecBusy ||
+                  !currentUser ||
+                  !vault ||
+                  vault.currentPP < LEVEL2_MANIFEST_RESPEC_PP ||
+                  truthMetalTotal < LEVEL2_MANIFEST_RESPEC_TRUTH_METAL
+                }
+                onClick={async () => {
+                  if (!currentUser) return;
+                  const confirmed = window.confirm(
+                    `Edit your Level 2 Manifest again (respec)?\n\nCost: ${LEVEL2_MANIFEST_RESPEC_PP.toLocaleString()} PP and ${LEVEL2_MANIFEST_RESPEC_TRUTH_METAL} Truth Metal Shards.\n\nYou will go to the Level 2 Manifest builder to change your Meta skill.`
+                  );
+                  if (!confirmed) return;
+                  setLevel2RespecBusy(true);
+                  try {
+                    const paid = await payLevel2ManifestRespecCost(currentUser.uid);
+                    if (!paid.ok) {
+                      alert(paid.message);
+                      return;
+                    }
+                    await refreshVaultData();
+                    try {
+                      const userRef = doc(db, 'users', currentUser.uid);
+                      const studentRef = doc(db, 'students', currentUser.uid);
+                      const [userDoc, studentDoc] = await Promise.all([getDoc(userRef), getDoc(studentRef)]);
+                      const uData = userDoc.exists() ? userDoc.data() : null;
+                      const sData = studentDoc.exists() ? studentDoc.data() : null;
+                      setTruthMetal(truthMetalBalanceForHud(sData?.truthMetal, uData?.truthMetal));
+                      setTruthMetalTotal(truthMetalTotalAcrossDocs(sData?.truthMetal, uData?.truthMetal));
+                    } catch (e) {
+                      console.warn('MovesDisplay: refresh Truth Metal after respec pay failed', e);
+                    }
+                    navigate('/level2-manifest-builder');
+                  } finally {
+                    setLevel2RespecBusy(false);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.55rem 0.85rem',
+                  borderRadius: '0.5rem',
+                  border: 'none',
+                  cursor:
+                    level2RespecBusy ||
+                    !vault ||
+                    vault.currentPP < LEVEL2_MANIFEST_RESPEC_PP ||
+                    truthMetalTotal < LEVEL2_MANIFEST_RESPEC_TRUTH_METAL
+                      ? 'not-allowed'
+                      : 'pointer',
+                  fontWeight: 700,
+                  fontSize: '0.8rem',
+                  background:
+                    !vault ||
+                    vault.currentPP < LEVEL2_MANIFEST_RESPEC_PP ||
+                    truthMetalTotal < LEVEL2_MANIFEST_RESPEC_TRUTH_METAL
+                      ? '#cbd5e1'
+                      : 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+                  color: 'white',
+                  opacity: level2RespecBusy ? 0.85 : 1,
+                }}
+              >
+                {level2RespecBusy ? 'Processing…' : 'Edit Level 2 Manifest (respec)'}
+              </button>
+              <div style={{ marginTop: '0.35rem', fontSize: '0.7rem', color: '#64748b', lineHeight: 1.4 }}>
+                Cost: {LEVEL2_MANIFEST_RESPEC_PP.toLocaleString()} PP + {LEVEL2_MANIFEST_RESPEC_TRUTH_METAL} Truth Metal
+                Shards
+                {!vault ? (
+                  <span style={{ display: 'block', marginTop: '0.25rem', color: '#b45309' }}>Vault not loaded yet.</span>
+                ) : vault.currentPP < LEVEL2_MANIFEST_RESPEC_PP ||
+                  truthMetalTotal < LEVEL2_MANIFEST_RESPEC_TRUTH_METAL ? (
+                  <span style={{ display: 'block', marginTop: '0.25rem', color: '#b45309' }}>
+                    {vault.currentPP < LEVEL2_MANIFEST_RESPEC_PP
+                      ? `Need ${LEVEL2_MANIFEST_RESPEC_PP.toLocaleString()} vault PP (you have ${vault.currentPP.toLocaleString()}).`
+                      : `Need ${LEVEL2_MANIFEST_RESPEC_TRUTH_METAL} Truth Metal Shards total (you have ${truthMetalTotal}).`}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Move Availability Summary */}

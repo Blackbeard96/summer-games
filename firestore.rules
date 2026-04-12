@@ -29,6 +29,11 @@ service cloud.firestore {
       );
     }
 
+    // Teachers / admins listing assessment goals, results, habits by assessmentId (queries must not depend only on resource.studentId).
+    function isAssessmentDashboardStaff() {
+      return isLiveEventStaff() || isAdmin() || isAppAdminUser();
+    }
+
     // Session host (teacher) — not in classrooms.students; must read quizSession/stats for hosting.
     function isInSessionRoomHost(sessionId) {
       return request.auth != null &&
@@ -70,6 +75,12 @@ service cloud.firestore {
         // Prevent deletion to maintain idempotency records
         allow delete: if isAdmin();
       }
+
+      // Mission sequence reflections (when not merged into assessmentGoals) — self only
+      match /missionReflectionResponses/{docId} {
+        allow read, create: if request.auth != null && request.auth.uid == userId;
+        allow update, delete: if request.auth != null && request.auth.uid == userId;
+      }
     }
     
     // Users collection - allow scorekeepers to read all users
@@ -106,6 +117,11 @@ service cloud.firestore {
         (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.role == 'scorekeeper' ||
          (get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles != null && 
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
+    }
+
+    // Per-student settings (e.g. Live Feed privacy — liveFeedPrivacy.ts)
+    match /students/{userId}/settings/{settingsDocId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
     // Per-student daily challenge progress (not covered by students/{userId} alone — subcollections need their own rule)
@@ -319,24 +335,30 @@ service cloud.firestore {
         (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
       );
-      // Only admins can create/update assessments
+      // Admins manage assessments (create / full update / delete)
       allow write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
          request.auth.token.email.matches('.*@compscihigh\\.org$'));
+      // Enrolled students may bump goal counters only (habit submissions + set goal call increment numGoalsSet).
+      // Without this, mission reflections and goal setup fail after writing habitSubmissions / assessmentGoals.
+      allow update: if request.auth != null &&
+        exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students &&
+        request.resource.data.classId == resource.data.classId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['numGoalsSet']);
     }
     
     // Assessment Goals collection - students can create/update their own goals if assessment is not locked
     match /assessmentGoals/{goalId} {
-      // Students can read their own goal
-      allow read: if request.auth != null && (
-        // Admin access
+      allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        // Student can read their own goal (goalId format: ${assessmentId}_${studentId})
         request.auth.uid == resource.data.studentId
       );
+      allow list: if isAssessmentDashboardStaff();
+      allow list: if request.auth != null && resource.data.studentId == request.auth.uid;
       // Create: admins/staff OR enrolled student when assessment is not locked
       allow create: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
@@ -378,15 +400,14 @@ service cloud.firestore {
     
     // Assessment Results collection - students can read their own results, admins can manage all
     match /assessmentResults/{resultId} {
-      // Students can read their own result
-      allow read: if request.auth != null && (
-        // Admin access
+      allow get: if request.auth != null && (
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        // Student can read their own result (resultId format: ${assessmentId}_${studentId})
         request.auth.uid == resource.data.studentId
       );
+      allow list: if isAssessmentDashboardStaff();
+      allow list: if request.auth != null && resource.data.studentId == request.auth.uid;
       // Only admins can create/update results
       allow write: if request.auth != null && 
         (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
@@ -396,12 +417,16 @@ service cloud.firestore {
 
     // Habit submissions (habits-type assessments) — was missing; fell through to deny-all.
     match /habitSubmissions/{submissionId} {
-      allow read: if request.auth != null && (
+      allow get: if request.auth != null && (
         isLiveEventStaff() ||
+        isAdmin() || isAppAdminUser() ||
         resource.data.studentId == request.auth.uid ||
         (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
       );
+      // Teachers run queries by assessmentId only — list must allow staff/admin without resource-only constraints.
+      allow list: if isAssessmentDashboardStaff();
+      allow list: if request.auth != null && resource.data.studentId == request.auth.uid;
       allow create, update: if request.auth != null && (
         isLiveEventStaff() ||
         (request.resource.data.studentId == request.auth.uid &&
@@ -845,8 +870,16 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         isAdmin() ||
         settingId == 'equippableArtifacts' ||
-        settingId == 'marketplaceArtifacts'
+        settingId == 'marketplaceArtifacts' ||
+        // Flow / battle pass pointers (activeBattlePassSeasonId, energyTickCap) — clients need read for Home BP UI
+        settingId == 'season1'
       );
+      allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
+    }
+
+    // RR Candy skill trees + other global config (e.g. rr_candy_trees_v1)
+    match /system_config/{docId} {
+      allow read: if request.auth != null;
       allow write: if request.auth != null && (isAdmin() || isAppAdminUser());
     }
 
@@ -963,9 +996,21 @@ service cloud.firestore {
     }
 
     match /playerMissions/{playerMissionId} {
-      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Single-doc reads (MissionRunner, status checks).
+      allow get: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() || isAppAdminUser()
+      );
+      // Queries: students use where('userId','==', auth.uid). Admins query by missionId only for bulk reset —
+      // that list must be allowed without tying list permission to resource (see Firestore "secure queries").
+      allow list: if request.auth != null && (isAdmin() || isAppAdminUser());
+      allow list: if request.auth != null && resource.data.userId == request.auth.uid;
       allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow delete: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() || isAppAdminUser()
+      );
     }
 
     match /playerStoryProgress/{userId} {
@@ -974,9 +1019,14 @@ service cloud.firestore {
 
     // Island Raid co-op / chapter battles (Timu Island, Squad Up, Island Raid lobby flow)
     match /islandRaidGames/{gameId} {
+      // Allow get when the doc is missing (MissionRunner / solo rooms use the same gameId only under islandRaidBattleRooms).
+      // Without this, exists() is false but rules still evaluate and deny reads on non-existent docs.
       allow read: if request.auth != null && (
-        request.auth.uid == resource.data.hostId ||
-        (resource.data.players is list && request.auth.uid in resource.data.players)
+        !exists(/databases/$(database)/documents/islandRaidGames/$(gameId)) ||
+        (
+          request.auth.uid == resource.data.hostId ||
+          (resource.data.players is list && request.auth.uid in resource.data.players)
+        )
       );
       allow create: if request.auth != null && (
         request.auth.uid == request.resource.data.hostId ||
@@ -999,7 +1049,13 @@ service cloud.firestore {
           )
         );
       }
-      allow read: if canAccessIslandRaidBattleRoomData();
+      /** Mid-battle join / reinforcement rooms (Missions + Island Raids): allow roster read before join. */
+      function islandRaidBattleRoomJoinableRead() {
+        return request.auth != null &&
+          resource.data.joinableMidBattle == true &&
+          (resource.data.status == 'active' || resource.data.status == 'wave_complete');
+      }
+      allow read: if canAccessIslandRaidBattleRoomData() || islandRaidBattleRoomJoinableRead();
       allow create: if request.auth != null &&
         request.resource.data.players is list &&
         request.auth.uid in request.resource.data.players;

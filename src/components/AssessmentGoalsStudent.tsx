@@ -255,8 +255,14 @@ const AssessmentGoalsStudent: React.FC = () => {
                 <div>
                   <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{assessment.title}</h3>
                   <p style={{ margin: 0, color: '#6b7280' }}>
-                    {assessment.type === 'story-goal' ? 'Story Goal' : assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1)} • 
-                    Max Score: {assessment.maxScore}
+                    {[
+                      assessment.type === 'story-goal'
+                        ? 'Story Goal'
+                        : assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1),
+                      assessment.type !== 'habits' ? `Max Score: ${assessment.maxScore}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' • ')}
                   </p>
                   {/* Story Goal Information */}
                   {assessment.type === 'story-goal' && assessment.storyGoal && (

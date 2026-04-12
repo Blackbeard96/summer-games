@@ -107,6 +107,13 @@ export interface SkillUpgrade {
 export interface PlayerSkillState {
   unlockedNodeIds: string[]; // Array of unlocked node IDs from skill tree (legacy)
   learnedNodeIds?: string[]; // Array of learned Universal Law node IDs (new system)
+  /** RR Candy per-candy skill trees: learned nodeIds (e.g. konfig_node_01). */
+  rrCandySkillState?: Record<string, { learnedNodeIds: string[] }>;
+  /** One-time data migrations (e.g. Konfig starter nodes v1). */
+  migrations?: {
+    rrCandyStarterNodesV1?: boolean;
+    [key: string]: boolean | undefined;
+  };
   universalLawProgress?: {
     unlockedNodeIds: string[];
     unlockedByLaw: Record<'divine_oneness' | 'vibration' | 'attraction' | 'rhythm', string[]>;

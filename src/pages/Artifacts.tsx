@@ -20,6 +20,7 @@ import {
   ELEMENTAL_ACCESS_ELEMENT_OPTIONS,
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
+import { isRingCatalogSlot, normalizeEquippableCatalogSlot } from '../utils/equippableArtifactSlot';
 
 // Artifact price definitions for refund calculations
 /** Ownership: catalog key may be magical-paintbrush while student has magical_paintbrush_purchase. */
@@ -117,7 +118,19 @@ interface ArtifactSkillInfo {
 interface Artifact {
   id: string;
   name: string;
-  slot: 'head' | 'chest' | 'ring1' | 'ring2' | 'ring3' | 'ring4' | 'legs' | 'shoes' | 'jacket' | 'weapon';
+  /** Catalog slot (`ring` = any ring slot); when equipped, this is the physical slot key (e.g. ring2). */
+  slot:
+    | 'head'
+    | 'chest'
+    | 'ring'
+    | 'ring1'
+    | 'ring2'
+    | 'ring3'
+    | 'ring4'
+    | 'legs'
+    | 'shoes'
+    | 'jacket'
+    | 'weapon';
   stats?: {
     [key: string]: number;
   };
@@ -298,7 +311,7 @@ const Artifacts: React.FC = () => {
               const blazeRing: Artifact = {
                 id: 'blaze-ring',
                 name: purchaseData?.name || 'Blaze Ring',
-                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                slot: 'ring', // Catalog: equippable to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Blaze Ring.png',
                 stats: {},
@@ -327,7 +340,7 @@ const Artifacts: React.FC = () => {
               const terraRing: Artifact = {
                 id: 'terra-ring',
                 name: purchaseData?.name || 'Terra Ring',
-                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                slot: 'ring', // Catalog: equippable to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Terra Ring.png',
                 stats: {},
@@ -356,7 +369,7 @@ const Artifacts: React.FC = () => {
               const aquaRing: Artifact = {
                 id: 'aqua-ring',
                 name: purchaseData?.name || 'Aqua Ring',
-                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                slot: 'ring', // Catalog: equippable to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Aqua Ring.png',
                 stats: {},
@@ -385,7 +398,7 @@ const Artifacts: React.FC = () => {
               const airRing: Artifact = {
                 id: 'air-ring',
                 name: purchaseData?.name || 'Air Ring',
-                slot: 'ring1', // Default slot, but can be equipped to any ring slot
+                slot: 'ring', // Catalog: equippable to any ring slot
                 level: 1,
                 image: purchaseData?.image || '/images/Air Ring.png',
                 stats: {},
@@ -414,7 +427,9 @@ const Artifacts: React.FC = () => {
                 );
                 if (isEquipped) continue;
                 const purchaseData = studentData.artifacts?.[`${eqId}_purchase`] as Record<string, unknown> | undefined;
-                const slot = (purchaseData?.slot || art.slot || 'ring1') as Artifact['slot'];
+                const slot = normalizeEquippableCatalogSlot(
+                  purchaseData?.slot ?? art.slot
+                ) as Artifact['slot'];
                 const name = (purchaseData?.name || art.name || eqId) as string;
                 const image = (purchaseData?.image ?? art.image ?? '') as string;
                 const level = typeof (purchaseData?.level ?? art.level) === 'number' ? (purchaseData?.level ?? art.level) as number : 1;
@@ -735,7 +750,7 @@ const Artifacts: React.FC = () => {
             const blazeRing: Artifact = {
               id: 'blaze-ring',
               name: purchaseData?.name || 'Blaze Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Blaze Ring.png',
               stats: {},
@@ -763,7 +778,7 @@ const Artifacts: React.FC = () => {
             const terraRing: Artifact = {
               id: 'terra-ring',
               name: purchaseData?.name || 'Terra Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Terra Ring.png',
               stats: {},
@@ -791,7 +806,7 @@ const Artifacts: React.FC = () => {
             const aquaRing: Artifact = {
               id: 'aqua-ring',
               name: purchaseData?.name || 'Aqua Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Aqua Ring.png',
               stats: {},
@@ -819,7 +834,7 @@ const Artifacts: React.FC = () => {
             const airRing: Artifact = {
               id: 'air-ring',
               name: purchaseData?.name || 'Air Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Air Ring.png',
               stats: {},
@@ -848,7 +863,9 @@ const Artifacts: React.FC = () => {
               );
               if (isEquipped) continue;
               const purchaseData = refreshedStudentData.artifacts?.[`${eqId}_purchase`] as Record<string, unknown> | undefined;
-              const slot = (purchaseData?.slot || art.slot || 'ring1') as Artifact['slot'];
+              const slot = normalizeEquippableCatalogSlot(
+                purchaseData?.slot ?? art.slot
+              ) as Artifact['slot'];
               const name = (purchaseData?.name || art.name || eqId) as string;
               const image = (purchaseData?.image ?? art.image ?? '') as string;
               const level = typeof (purchaseData?.level ?? art.level) === 'number' ? (purchaseData?.level ?? art.level) as number : 1;
@@ -1038,7 +1055,7 @@ const Artifacts: React.FC = () => {
             const blazeRing: Artifact = {
               id: 'blaze-ring',
               name: purchaseData?.name || 'Blaze Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Blaze Ring.png',
               stats: {},
@@ -1065,7 +1082,7 @@ const Artifacts: React.FC = () => {
             const terraRing: Artifact = {
               id: 'terra-ring',
               name: purchaseData?.name || 'Terra Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Terra Ring.png',
               stats: {},
@@ -1092,7 +1109,7 @@ const Artifacts: React.FC = () => {
             const aquaRing: Artifact = {
               id: 'aqua-ring',
               name: purchaseData?.name || 'Aqua Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Aqua Ring.png',
               stats: {},
@@ -1119,7 +1136,7 @@ const Artifacts: React.FC = () => {
             const airRing: Artifact = {
               id: 'air-ring',
               name: purchaseData?.name || 'Air Ring',
-              slot: 'ring1',
+              slot: 'ring',
               level: 1,
               image: purchaseData?.image || '/images/Air Ring.png',
               stats: {},
@@ -1887,13 +1904,19 @@ const Artifacts: React.FC = () => {
                 gap: '1rem'
               }}>
                 {availableArtifacts.map((artifact) => {
-                  // Determine which slots this artifact can be equipped to
-                  // Ring artifacts (like Blaze Ring, Terra Ring, Aqua Ring, Air Ring) can be equipped to any ring slot
-                  const compatibleSlots = (artifact.id === 'blaze-ring' || artifact.id === 'terra-ring' || artifact.id === 'aqua-ring' || artifact.id === 'air-ring' || artifact.slot?.startsWith('ring'))
-                    ? ['ring1', 'ring2', 'ring3', 'ring4'] as const
-                    : artifact.slot 
-                    ? [artifact.slot] as const
-                    : [];
+                  // Ring-type catalog items equip to any of the four ring slots; other items use their slot key.
+                  let compatibleSlots: (keyof EquippedArtifacts)[] = [];
+                  if (
+                    artifact.id === 'blaze-ring' ||
+                    artifact.id === 'terra-ring' ||
+                    artifact.id === 'aqua-ring' ||
+                    artifact.id === 'air-ring' ||
+                    isRingCatalogSlot(artifact.slot)
+                  ) {
+                    compatibleSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
+                  } else if (artifact.slot && !isRingCatalogSlot(artifact.slot)) {
+                    compatibleSlots = [artifact.slot as keyof EquippedArtifacts];
+                  }
                   
                   const isEquipped = Object.values(equippedArtifacts).some(
                     eq => eq && eq.id === artifact.id

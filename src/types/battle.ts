@@ -1,6 +1,8 @@
 // Battle System Types for Nine Knowings MST
 
 import type { Season1SkillCost } from './season1';
+import type { ElementType } from './elementTypes';
+import type { ReactiveEffect, SkillEffectInstance, SkillEffectPayload } from './skillEffects';
 
 export interface Vault {
   id: string;
@@ -42,12 +44,14 @@ export interface Move {
   description: string;
   category: 'manifest' | 'elemental' | 'system';
   type: 'attack' | 'defense' | 'utility' | 'support' | 'control' | 'mobility' | 'stealth' | 'reveal' | 'cleanse';
-  elementalAffinity?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  elementalAffinity?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'dark' | 'metal';
   manifestType?: 'reading' | 'writing' | 'drawing' | 'athletics' | 'singing' | 'gaming' | 'observation' | 'empathy' | 'creating' | 'cooking';
   level: number; // 1-4 for elemental moves, 1-5 for others
   cost: number; // Vault PP cost (non–live-event); in Live Events this is Participation Point (movesEarned) base cost
   /** When true, Live Event final skill cost may be 0 (otherwise minimum 1 PP when base cost is positive) */
   liveEventAllowZeroCost?: boolean;
+  /** When true, Live Event UI deducts cost from session `powerPoints` instead of participation/movesEarned. */
+  useSessionPowerPoints?: boolean;
   damage?: number;
   ppSteal?: number; // PP stolen from target
   healing?: number;
@@ -73,6 +77,16 @@ export interface Move {
   };
   /** Season 1: optional participation + energy payment rules (Live Events / Flow). */
   season1Cost?: Season1SkillCost;
+  /** RR Candy / Konfig tree: optional battle hook (engine can branch on this later). */
+  effectKey?: string;
+  rrCandyNodeId?: string;
+  rrCandySkillId?: string;
+  /**
+   * MST Skill Effects Engine payloads (optional). Merged with `adminSettings/moveOverrides` in
+   * `resolveSkillAction` when overrides cache is warm. Legacy `healing` / `shieldBoost` are skipped
+   * when a payload of the same category is present to avoid double application.
+   */
+  skillEffects?: SkillEffectPayload[];
 }
 
 export interface ActionCard {
@@ -81,6 +95,8 @@ export interface ActionCard {
   description: string;
   type: 'attack' | 'defense' | 'utility';
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  /** For attack cards with damaging effects (Freeze, Shield Breaker); omit/null = neutral */
+  elementalAffinity?: ElementType | null;
   truthMetalCost: number;
   uses: number;
   maxUses: number;
@@ -207,6 +223,14 @@ export interface BattleParticipant {
   buffs: Buff[];
   debuffs: Debuff[];
   isReady: boolean;
+  /** Engine: temporary shield pool (optional; vault shield may still be authoritative elsewhere). */
+  shieldPoints?: number;
+  /** Engine: standardized timed / passive instances */
+  skillEffectInstances?: SkillEffectInstance[];
+  reactiveEffects?: ReactiveEffect[];
+  isHidden?: boolean;
+  /** Last action for copy_last_move style effects */
+  lastBattleAction?: { moveId: string; moveName?: string; turn: number };
 }
 
 export interface BattleMove {
@@ -1308,6 +1332,7 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
     description: 'Breach through enemy shields with devastating force',
     type: 'attack',
     rarity: 'common',
+    elementalAffinity: 'metal',
     truthMetalCost: 100,
     uses: 3,
     maxUses: 3,
@@ -1380,6 +1405,7 @@ export const ACTION_CARD_TEMPLATES: Omit<ActionCard, 'id' | 'unlocked'>[] = [
     description: 'Damages target and has a high chance to freeze them for ONE (1) TURN',
     type: 'attack',
     rarity: 'legendary',
+    elementalAffinity: 'water',
     truthMetalCost: 0, // Unlocked via Battle Pass
     uses: 1,
     maxUses: 1,

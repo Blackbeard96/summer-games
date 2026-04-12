@@ -38,7 +38,7 @@ export interface Skill {
   priority?: number; // Turn priority modifier (-2 to +2, default 0)
   category?: 'manifest' | 'elemental' | 'system'; // Legacy category for compatibility
   type?: 'attack' | 'defense' | 'utility' | 'support' | 'control' | 'mobility' | 'stealth' | 'reveal' | 'cleanse'; // Legacy type
-  elementalAffinity?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
+  elementalAffinity?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'dark' | 'metal';
   manifestType?: 'reading' | 'writing' | 'drawing' | 'athletics' | 'singing' | 'gaming' | 'observation' | 'empathy' | 'creating' | 'cooking';
 }
 

@@ -10,6 +10,7 @@ import { computeLiveEventParticipationSkillCost } from './liveEventSkillCost';
 import { defaultEnergies } from './season1PlayerHydration';
 import { resolveSeason1SkillCost } from './season1SkillCost';
 import { getEquippedSkillsForBattle } from './battleSkillsService';
+import { shouldEnforceTurnSkillCooldownsInLiveSession } from './battleModeSkillRules';
 import { debug, debugError } from './inSessionDebug';
 
 export interface SessionLoadout {
@@ -172,7 +173,11 @@ export async function validateSkillUsage(
       if (!res.canUse) {
         return { valid: false, reason: res.reason };
       }
-      if (skill.currentCooldown && skill.currentCooldown > 0) {
+      if (
+        shouldEnforceTurnSkillCooldownsInLiveSession() &&
+        skill.currentCooldown &&
+        skill.currentCooldown > 0
+      ) {
         return { valid: false, reason: `Skill is on cooldown (${skill.currentCooldown} turns remaining)` };
       }
       return { valid: true, spendSummary: res.spendSummary };
@@ -191,8 +196,11 @@ export async function validateSkillUsage(
       };
     }
     
-    // Check cooldown (if provided)
-    if (skill.currentCooldown && skill.currentCooldown > 0) {
+    if (
+      shouldEnforceTurnSkillCooldownsInLiveSession() &&
+      skill.currentCooldown &&
+      skill.currentCooldown > 0
+    ) {
       return { valid: false, reason: `Skill is on cooldown (${skill.currentCooldown} turns remaining)` };
     }
     

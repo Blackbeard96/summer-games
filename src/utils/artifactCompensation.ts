@@ -16,6 +16,7 @@ import { mergeEquippableCatalogLayers, CATALOG_NEST_KEYS } from './battleSkillsS
 import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
 import { mergeMarketplaceStoreItems } from './marketplaceStoreMerge';
 import { DEFAULT_EQUIPPABLE_ARTIFACTS_CATALOG } from '../data/defaultEquippableArtifactsCatalog';
+import { isRingCatalogSlot, normalizeEquippableCatalogSlot } from './equippableArtifactSlot';
 
 const SKIP_CATALOG_KEYS = new Set<string>([...CATALOG_NEST_KEYS, 'lastUpdated', 'updatedBy']);
 
@@ -55,15 +56,18 @@ const ARTIFACT_LOOKUP: Record<string, { name: string; description: string; icon:
 const SLOT_ICONS: Record<string, string> = {
   head: '👑',
   chest: '🦺',
-  ring1: '💍',
-  ring2: '💍',
-  ring3: '💍',
-  ring4: '💍',
+  ring: '💍',
   legs: '👖',
   shoes: '👟',
   jacket: '🧥',
-  weapon: '⚔️'
+  weapon: '⚔️',
 };
+
+function emojiForEquippableSlot(slot: string | undefined): string {
+  const s = String(slot || '');
+  if (isRingCatalogSlot(s)) return '💍';
+  return SLOT_ICONS[s] || '🎁';
+}
 
 // Normalize artifact IDs
 function normalizeArtifactId(artifactId: string): string {
@@ -110,8 +114,8 @@ export async function getArtifactDetails(artifactId: string): Promise<{
   const mergedEquippable = mergeEquippableCatalogLayers(eqRaw);
   const art = mergedEquippable[artifactId] || mergedEquippable[normalizedId];
   if (art && typeof art === 'object') {
-    const slot = (art as Record<string, unknown>).slot || 'ring1';
-    const icon = SLOT_ICONS[String(slot)] || '🎁';
+    const slot = (art as Record<string, unknown>).slot;
+    const icon = emojiForEquippableSlot(String(slot || 'ring'));
     const grantId =
       typeof (art as { id?: string }).id === 'string' && (art as { id: string }).id.trim()
         ? (art as { id: string }).id.trim()
@@ -144,8 +148,8 @@ export async function getArtifactDetails(artifactId: string): Promise<{
       const mergedEq = mergeEquippableCatalogLayers(rawEq);
       const artEq = mergedEq[eqLink] || mergedEq[normalizeArtifactId(eqLink)];
       if (artEq && typeof artEq === 'object') {
-        const slot = (artEq as Record<string, unknown>).slot || 'ring1';
-        const icon = mRow.icon || SLOT_ICONS[String(slot)] || '🎁';
+        const slot = (artEq as Record<string, unknown>).slot;
+        const icon = mRow.icon || emojiForEquippableSlot(String(slot || 'ring'));
         return {
           id: eqLink,
           name: mRow.name || (artEq as { name?: string }).name || eqLink,
@@ -256,7 +260,7 @@ export async function grantArtifactToPlayer(
       };
       // For equippable artifacts, include full definition so Artifacts page can show and equip
       if (artifactDetails.isEquippable && artifactDetails.fullDefinition) {
-        purchasePayload.slot = artifactDetails.fullDefinition.slot ?? 'ring1';
+        purchasePayload.slot = normalizeEquippableCatalogSlot(artifactDetails.fullDefinition.slot);
         purchasePayload.powerLevelBonus = artifactDetails.fullDefinition.powerLevelBonus;
         purchasePayload.perks = artifactDetails.fullDefinition.perks;
         purchasePayload.artifactSkill = artifactDetails.fullDefinition.artifactSkill;
@@ -284,7 +288,7 @@ export async function grantArtifactToPlayer(
           grantedAt: new Date()
         };
         if (artifactDetails.isEquippable && artifactDetails.fullDefinition) {
-          userArtifact.slot = artifactDetails.fullDefinition.slot ?? 'ring1';
+          userArtifact.slot = normalizeEquippableCatalogSlot(artifactDetails.fullDefinition.slot);
           userArtifact.powerLevelBonus = artifactDetails.fullDefinition.powerLevelBonus;
           userArtifact.perks = artifactDetails.fullDefinition.perks;
           userArtifact.artifactSkill = artifactDetails.fullDefinition.artifactSkill;
@@ -470,12 +474,13 @@ export async function getAvailableArtifactsAsync(): Promise<ArtifactOption[]> {
           : key;
       if (!id || alreadyListed(id)) continue;
       markSeen(id);
-      const slot = (a.slot as string) || 'ring1';
+      const slotRaw = typeof a.slot === 'string' ? a.slot : '';
+      const slot = normalizeEquippableCatalogSlot(slotRaw || undefined);
       all.push({
         id: normalizeArtifactId(id),
         name: (a.name as string) || id,
         description: (a.description as string) || '',
-        icon: SLOT_ICONS[slot] || '🎁',
+        icon: emojiForEquippableSlot(slotRaw || 'ring'),
         image: (a.image as string) || '',
         category: 'equippable',
         rarity: ((a.rarity as string) || 'common').toLowerCase(),

@@ -52,8 +52,15 @@ import {
 } from '../utils/artifactPerkEffects';
 import { buildInitialActionCardsFromAdmin, mergeUserActionCardsWithAdmin } from '../utils/actionCardAdminMerge';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
-import { getRRCandyMoves, hasRRCandyUnlocked } from '../utils/rrCandyMoves';
-import { getRRCandyStatus } from '../utils/rrCandyUtils';
+import { normalizeElementType } from '../types/elementTypes';
+import {
+  attackElementFromActionCard,
+  elementEffectivenessBattleLogLine,
+  getElementMultiplier,
+} from '../utils/elementAdvantages';
+import { getRRCandyStatusAsync } from '../utils/rrCandyUtils';
+import { getUserRRCandySkills } from '../utils/rrCandyService';
+import { shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
 import { getArtifactSkillMovesForStudentData } from '../utils/battleSkillsService';
 import { 
   calculateDaysAway, 
@@ -62,6 +69,11 @@ import {
   getCurrentUTCDayStart
 } from '../utils/generatorEarnings';
 import VaultUpgradeModal, { VaultUpgradeData } from '../components/VaultUpgradeModal';
+import {
+  normalizeVaultShieldFields,
+  parseFirestoreDate,
+  vaultHealthCooldownEnd,
+} from '../utils/vaultDisplayNormalize';
 
 /** Pattern Break and Strategy Matrix are always 1-turn cooldown; normalize when loading from Firestore. */
 function normalizeManifestMoveCooldowns(moves: Move[]): Move[] {
@@ -846,31 +858,40 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           }
           
-          // Use unified RR Candy status check (single source of truth)
-          const rrCandyStatus = getRRCandyStatus(userData);
-          
-          if (rrCandyStatus.unlocked && rrCandyStatus.candyType) {
-            const candyType = rrCandyStatus.candyType;
-            const rrCandyMoves = getRRCandyMoves(candyType);
-            
+          // RR Candy: merge users + students + skill_state (same as Skill Mastery)
+          const rrCandyStatus = currentUser?.uid
+            ? await getRRCandyStatusAsync(currentUser.uid)
+            : { unlocked: false, candyType: null };
+
+          if (rrCandyStatus.unlocked && rrCandyStatus.candyType && currentUser?.uid) {
+            const rrCandyMoves = await getUserRRCandySkills(currentUser.uid, finalMoves);
+            const canonicalById = new Map(rrCandyMoves.map((rm) => [rm.id, rm]));
             const existingMoveIds = new Set(finalMoves.map((m: Move) => m.id));
-            
-            // Only add moves that don't already exist
-            const newRRCandyMoves = rrCandyMoves.filter(move => !existingMoveIds.has(move.id));
-            
+            const newRRCandyMoves = rrCandyMoves.filter((move) => !existingMoveIds.has(move.id));
+
             if (newRRCandyMoves.length > 0) {
               const updatedMovesWithCandy = [...finalMoves, ...newRRCandyMoves];
               await updateDoc(movesRef, { moves: updatedMovesWithCandy });
               setMoves(updatedMovesWithCandy);
-              console.log('BattleContext: Added RR Candy moves:', newRRCandyMoves.map(m => m.name));
+              console.log('BattleContext: Added RR Candy moves:', newRRCandyMoves.map((m) => m.name));
             } else {
-              // Ensure RR Candy moves are unlocked and have canonical names (Shield OFF / Shield ON)
               const updatedMovesWithUnlocked = finalMoves.map((move: Move) => {
-                const canonical = rrCandyMoves.find(rm => rm.id === move.id);
+                const canonical = canonicalById.get(move.id);
                 if (canonical) {
-                  const needsUpdate = !move.unlocked || move.name !== canonical.name || move.description !== canonical.description;
+                  const needsUpdate =
+                    !move.unlocked ||
+                    move.name !== canonical.name ||
+                    move.description !== canonical.description;
                   if (needsUpdate) {
-                    return { ...move, unlocked: true, name: canonical.name, description: canonical.description };
+                    return {
+                      ...move,
+                      unlocked: true,
+                      name: canonical.name,
+                      description: canonical.description,
+                      effectKey: canonical.effectKey ?? move.effectKey,
+                      rrCandyNodeId: canonical.rrCandyNodeId ?? move.rrCandyNodeId,
+                      rrCandySkillId: canonical.rrCandySkillId ?? move.rrCandySkillId,
+                    };
                   }
                 }
                 return move;
@@ -879,9 +900,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               const hasUnlockOrNameUpdates = updatedMovesWithUnlocked.some((move: Move, index: number) => {
                 const originalMove = finalMoves[index];
                 if (!originalMove) return false;
-                return move.unlocked !== originalMove.unlocked ||
+                return (
+                  move.unlocked !== originalMove.unlocked ||
                   move.name !== originalMove.name ||
-                  move.description !== originalMove.description;
+                  move.description !== originalMove.description
+                );
               });
 
               if (hasUnlockOrNameUpdates) {
@@ -1144,7 +1167,25 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const unsubscribeVault = onSnapshot(vaultRef, (vaultDoc) => {
       try {
         if (vaultDoc.exists()) {
-          setVault(vaultDoc.data() as Vault);
+          const raw = vaultDoc.data() as Vault;
+          let next = normalizeVaultShieldFields(raw);
+          setVault((prev) => {
+            const incomingMax = Math.max(0, Math.floor(Number(next.maxShieldStrength) || 0));
+            const prevMax = prev ? Math.max(0, Math.floor(Number(prev.maxShieldStrength) || 0)) : 0;
+            // Firestore can briefly echo a lower maxShieldStrength than the client already computed
+            // (race / partial index). Keep the higher cap so battle UI and clamps stay consistent.
+            const mergedMax = Math.max(prevMax, incomingMax);
+            let shield = Math.max(0, Math.floor(Number(next.shieldStrength) || 0));
+            if (mergedMax > 0) {
+              if (shield > mergedMax) {
+                updateDoc(vaultRef, { shieldStrength: mergedMax }).catch((e) =>
+                  console.warn('BattleContext: clamp shieldStrength in Firestore failed', e)
+                );
+                shield = mergedMax;
+              }
+            }
+            return { ...next, maxShieldStrength: mergedMax, shieldStrength: shield };
+          });
         }
       } catch (error) {
         if (isFirestoreInternalError(error)) {
@@ -1287,54 +1328,45 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [currentUser]);
 
-  // Listen for battle lobbies - simplified to avoid index requirements
+  // Battle lobbies: poll with getDocs — onSnapshot on `where('status','in',...)` triggers Firestore
+  // watch-stream INTERNAL ASSERTION (ca9 / ve:-1) under React Strict Mode and listener churn.
   useEffect(() => {
     if (!currentUser) return;
 
-    console.log('BattleContext: Setting up battle lobbies listener');
-    
     const lobbiesQuery = query(
       collection(db, 'battleLobbies'),
       where('status', 'in', ['waiting', 'starting'])
     );
-    
-    // Helper function to check if error is a Firestore internal assertion error
-    const isFirestoreInternalError = (error: any): boolean => {
-      if (!error) return false;
-      const errorString = String(error);
-      const errorMessage = error?.message || '';
-      return errorString.includes('INTERNAL ASSERTION FAILED') || 
-             errorMessage.includes('INTERNAL ASSERTION FAILED') ||
-             errorString.includes('ID: ca9') ||
-             errorString.includes('ID: b815');
-    };
-    
-    const unsubscribeLobbies = onSnapshot(lobbiesQuery, (snapshot) => {
+
+    let cancelled = false;
+
+    const refreshBattleLobbies = async () => {
       try {
+        const snapshot = await getDocs(lobbiesQuery);
+        if (cancelled) return;
         const lobbies: BattleLobby[] = [];
-        snapshot.forEach((doc) => {
-          const lobbyData = { id: doc.id, ...doc.data() } as BattleLobby;
+        snapshot.forEach((d) => {
+          const lobbyData = { id: d.id, ...d.data() } as BattleLobby;
           logger.battle.debug('Found battle lobby:', lobbyData);
           lobbies.push(lobbyData);
         });
         logger.battle.debug('Setting battle lobbies:', lobbies);
         setBattleLobbies(lobbies);
       } catch (error) {
-        if (isFirestoreInternalError(error)) {
-          console.warn('BattleContext: Firestore internal assertion error in lobbies listener callback - ignoring');
-          return;
-        }
-        logger.battle.error('Error processing battle lobbies snapshot:', error);
+        if (cancelled) return;
+        logger.battle.error('Error fetching battle lobbies:', error);
       }
-    }, (error) => {
-      if (isFirestoreInternalError(error)) {
-        console.warn('BattleContext: Firestore internal assertion error in lobbies listener - ignoring');
-        return;
-      }
-      logger.battle.error('Error listening to battle lobbies:', error);
-    });
+    };
 
-    return () => unsubscribeLobbies();
+    void refreshBattleLobbies();
+    const intervalId = window.setInterval(() => {
+      void refreshBattleLobbies();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, [currentUser]);
 
   // Listen for offline moves - simplified to avoid index requirements
@@ -1522,6 +1554,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (updates.overshield !== undefined) {
         updates.overshield = Math.min(1, Math.max(0, updates.overshield));
       }
+      // Never persist shields above max (prevents UI / battle desync from growing past cap)
+      if (updates.shieldStrength !== undefined) {
+        const cap = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+        if (cap > 0) {
+          updates.shieldStrength = Math.min(cap, Math.max(0, Math.floor(Number(updates.shieldStrength) || 0)));
+        } else {
+          updates.shieldStrength = Math.max(0, Math.floor(Number(updates.shieldStrength) || 0));
+        }
+      }
       
       const vaultRef = doc(db, 'vaults', currentUser.uid);
       await updateDoc(vaultRef, updates);
@@ -1531,6 +1572,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const studentRef = doc(db, 'students', currentUser.uid);
         await updateDoc(studentRef, { powerPoints: updates.currentPP });
       }
+      await refreshVaultData();
     } catch (err) {
       console.error('Error updating vault:', err);
       setError('Failed to update vault');
@@ -1562,8 +1604,24 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return vaultData; // No cooldown active and health is correct
     }
     
-    const cooldownEndTime = new Date(vaultData.vaultHealthCooldown);
-    cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
+    const cooldownStart = parseFirestoreDate(vaultData.vaultHealthCooldown);
+    if (!cooldownStart) {
+      const maxPP0 = vaultData.capacity || 1000;
+      const maxVaultHealth0 = Math.floor(maxPP0 * 0.1);
+      const resetHealth = Math.min(
+        vaultData.vaultHealth !== undefined && vaultData.vaultHealth !== null
+          ? vaultData.vaultHealth
+          : maxVaultHealth0,
+        maxVaultHealth0,
+        vaultData.currentPP
+      );
+      return {
+        ...vaultData,
+        vaultHealth: resetHealth,
+        vaultHealthCooldown: undefined,
+      };
+    }
+    const cooldownEndTime = vaultHealthCooldownEnd(cooldownStart);
     const now = new Date();
     
     // If cooldown has expired, reset vault health to min of PP and max
@@ -2285,6 +2343,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
           console.log(`✅ Updated vault health to ${correctVaultHealth}/${maxVaultHealth} (capped at current PP: ${playerPP})`);
         }
+
+        processedVault = normalizeVaultShieldFields(processedVault);
+        const capSh = Math.max(0, Math.floor(Number(processedVault.maxShieldStrength) || 0));
+        const shNow = Math.max(0, Math.floor(Number(processedVault.shieldStrength) || 0));
+        if (capSh > 0 && shNow > capSh) {
+          await updateDoc(vaultRef, { shieldStrength: capSh });
+          processedVault = { ...processedVault, shieldStrength: capSh };
+        }
         
         setVault(processedVault);
         console.log('Vault data refreshed:', processedVault);
@@ -2913,14 +2979,16 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let requiredShards = 0;
       if (isRRCandyMove) {
         requiredShards = nextLevel - 1; // Level 2 needs 1, Level 3 needs 2, etc.
-        
-        // Fetch user's Truth Metal from users collection
+
+        // Truth Metal may live on `users` and/or `students` (Artifacts path uses students).
         const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
+        const studentTmRef = doc(db, 'students', currentUser.uid);
+        const [userDoc, studentTmDoc] = await Promise.all([getDoc(userRef), getDoc(studentTmRef)]);
         const userData = userDoc.exists() ? userDoc.data() : {};
-        const currentTruthMetal = userData.truthMetal || 0;
-        
-        if (currentTruthMetal < requiredShards) {
+        const studentTmData = studentTmDoc.exists() ? studentTmDoc.data() : {};
+        const tmUserPre = Math.floor(Number(userData.truthMetal) || 0);
+        const tmStudentPre = Math.floor(Number(studentTmData.truthMetal) || 0);
+        if (tmUserPre + tmStudentPre < requiredShards) {
           setError(`Not enough Truth Metal Shards. Need ${requiredShards} shards to upgrade to Level ${nextLevel}.`);
           return;
         }
@@ -3016,10 +3084,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             delete updatedMove.ppSteal;
           }
           
-          // Apply boost to debuffStrength - use current value as base
-          if (m.debuffStrength && m.debuffStrength > 0) {
+          // Apply boost to debuffStrength - use current value as base (Shield OFF uses fixed % per mastery)
+          if (moveId !== 'rr-candy-on-off-shields-off' && m.debuffStrength && m.debuffStrength > 0) {
             updatedMove.debuffStrength = Math.floor(m.debuffStrength * damageBoostMultiplier);
-          } else {
+          } else if (moveId !== 'rr-candy-on-off-shields-off') {
             delete updatedMove.debuffStrength;
           }
           
@@ -3036,6 +3104,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               delete updatedMove[key];
             }
           });
+
+          if (moveId === 'rr-candy-on-off-shields-off') {
+            updatedMove.debuffStrength = shieldOffMaxShieldRemovePercent(newLevel);
+          }
           
           console.log(`Upgrading ${m.name} from level ${m.masteryLevel} to ${newLevel}:`, {
             oldDamage: m.damage,
@@ -3097,16 +3169,28 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // For RR Candy moves, deduct Truth Metal Shards
       if (isRRCandyMove && requiredShards > 0) {
         const userRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userRef);
+        const studentRef = doc(db, 'students', currentUser.uid);
+        const [userDoc, studentDoc] = await Promise.all([getDoc(userRef), getDoc(studentRef)]);
         const userData = userDoc.exists() ? userDoc.data() : {};
-        const currentTruthMetal = userData.truthMetal || 0;
-        const newTruthMetal = currentTruthMetal - requiredShards;
-        
-        await updateDoc(userRef, {
-          truthMetal: newTruthMetal
-        });
-        
-        console.log(`Deducted ${requiredShards} Truth Metal Shards for RR Candy upgrade. Remaining: ${newTruthMetal}`);
+        const studentData = studentDoc.exists() ? studentDoc.data() : {};
+        let tmUser = Math.floor(Number(userData.truthMetal) || 0);
+        let tmStudent = Math.floor(Number(studentData.truthMetal) || 0);
+        let remaining = requiredShards;
+        if (tmUser >= remaining) {
+          tmUser -= remaining;
+          remaining = 0;
+        } else {
+          remaining -= tmUser;
+          tmUser = 0;
+          tmStudent = Math.max(0, tmStudent - remaining);
+        }
+        await Promise.all([
+          updateDoc(userRef, { truthMetal: tmUser }),
+          updateDoc(studentRef, { truthMetal: tmStudent }),
+        ]);
+        console.log(
+          `Deducted ${requiredShards} Truth Metal Shards for RR Candy upgrade. users=${tmUser} students=${tmStudent}`
+        );
       }
       
       // Force a refresh of moves data to ensure UI is in sync
@@ -3145,7 +3229,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const newHealing = updatedMoves.find(m => m.id === moveId)?.healing || 0;
         boostedProperties.push(`Healing: ${oldHealing} → ${newHealing}`);
       }
-      if (move.debuffStrength && move.debuffStrength > 0) {
+      if (moveId === 'rr-candy-on-off-shields-off') {
+        boostedProperties.push(
+          `Shield OFF: ${shieldOffMaxShieldRemovePercent(move.masteryLevel)}% → ${shieldOffMaxShieldRemovePercent(newLevel)}% of target max shields`
+        );
+      } else if (move.debuffStrength && move.debuffStrength > 0) {
         const oldDebuff = move.debuffStrength;
         const newDebuff = updatedMoves.find(m => m.id === moveId)?.debuffStrength || 0;
         boostedProperties.push(`Debuff: ${oldDebuff} → ${newDebuff}`);
@@ -3218,7 +3306,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               shieldBoost: originalShieldBoost > 0 ? originalShieldBoost : m.shieldBoost,
               healing: originalHealing > 0 ? originalHealing : m.healing,
               ppSteal: originalPpSteal > 0 ? originalPpSteal : m.ppSteal,
-              debuffStrength: originalDebuffStrength > 0 ? originalDebuffStrength : m.debuffStrength,
+              debuffStrength:
+                moveId === 'rr-candy-on-off-shields-off'
+                  ? shieldOffMaxShieldRemovePercent(1)
+                  : originalDebuffStrength > 0
+                    ? originalDebuffStrength
+                    : m.debuffStrength,
               buffStrength: originalBuffStrength > 0 ? originalBuffStrength : m.buffStrength
             } 
           : m
@@ -4000,11 +4093,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       // Check if target vault is on cooldown
       if (targetVaultData.vaultHealthCooldown) {
-        const cooldownEndTime = new Date(targetVaultData.vaultHealthCooldown);
-        cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
+        const cdStart = parseFirestoreDate(targetVaultData.vaultHealthCooldown);
+        const cooldownEndTime = cdStart ? vaultHealthCooldownEnd(cdStart) : null;
         const now = new Date();
         
-        if (now < cooldownEndTime) {
+        if (cooldownEndTime && now < cooldownEndTime) {
           const remainingHours = Math.floor((cooldownEndTime.getTime() - now.getTime()) / (1000 * 60 * 60));
           const remainingMinutes = Math.ceil(((cooldownEndTime.getTime() - now.getTime()) % (1000 * 60 * 60)) / (1000 * 60));
           return { 
@@ -4018,6 +4111,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const targetStudentRef = doc(db, 'students', targetUserId);
       const targetStudentDoc = await getDoc(targetStudentRef);
       const targetStudentPP = targetStudentDoc.exists() ? (targetStudentDoc.data().powerPoints || 0) : 0;
+      const targetStudentRaw = targetStudentDoc.exists()
+        ? (targetStudentDoc.data() as Record<string, unknown>)
+        : null;
+      const rawChosen = targetStudentRaw?.chosen_element;
+      const rawElAff = targetStudentRaw?.elementalAffinity;
+      const vaultSiegeDefenderElement = normalizeElementType(
+        rawChosen != null && String(rawChosen).trim() !== ''
+          ? String(rawChosen)
+          : rawElAff != null && String(rawElAff).trim() !== ''
+            ? String(rawElAff)
+            : null
+      );
       
       // Initialize vault health if not set (migration for existing vaults)
       if (targetVaultData.vaultHealth === undefined) {
@@ -4398,12 +4503,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         
         // Process action card
         switch (selectedCard.effect.type) {
-          case 'shield_breach':
-            const cardShieldDamage = selectedCard.effect.strength;
-            shieldDamage += cardShieldDamage; // Add to existing shield damage
+          case 'shield_breach': {
+            let cardShieldDamage = selectedCard.effect.strength;
+            const atkEl = attackElementFromActionCard(selectedCard);
+            const mult = getElementMultiplier(atkEl, vaultSiegeDefenderElement);
+            cardShieldDamage = Math.max(0, Math.floor(cardShieldDamage * mult));
+            shieldDamage += cardShieldDamage;
+            const eff = elementEffectivenessBattleLogLine(mult);
             console.log(`Action card ${selectedCard.name} shield damage: ${cardShieldDamage}, total shield damage: ${shieldDamage}`);
             message += ` • Used ${selectedCard.name} to breach shields (+${cardShieldDamage} shield damage)`;
+            if (eff) message += ` — ${eff}`;
             break;
+          }
           case 'shield_restore':
             // Restore attacker's shield strength
             const shieldRestoreAmount = selectedCard.effect.strength;
@@ -4434,7 +4545,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             message += ` • Used ${selectedCard.name} to damage vault health`;
             break;
           case 'freeze': {
-            const str = selectedCard.effect.strength;
+            let str = selectedCard.effect.strength;
+            const atkEl = attackElementFromActionCard(selectedCard);
+            const mult = getElementMultiplier(atkEl, vaultSiegeDefenderElement);
+            str = Math.max(0, Math.floor(str * mult));
+            const eff = elementEffectivenessBattleLogLine(mult);
             let cardShieldDmg = 0;
             let cardVaultDmg = 0;
             if (targetVaultData.shieldStrength > 0) {
@@ -4455,6 +4570,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else {
               message += ` • Used ${selectedCard.name} — damage dealt; freeze did not apply`;
             }
+            if (eff) message += ` — ${eff}`;
             break;
           }
           default:

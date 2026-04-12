@@ -121,13 +121,14 @@
   animation: mstProjectile var(--mst-proj-dur, 0.6s) ease-in forwards;
 }
 
+/* Stronger horizontal travel toward opponent column (allies left / enemies right in arena UI) */
 .mst-skill-projectile[data-dir='to-enemy'] {
-  --mst-proj-dx: calc(-50% + 28vw);
+  --mst-proj-dx: calc(-50% + 34vw);
   --mst-proj-dy: -50%;
 }
 
 .mst-skill-projectile[data-dir='to-player'] {
-  --mst-proj-dx: calc(-50% - 28vw);
+  --mst-proj-dx: calc(-50% - 34vw);
   --mst-proj-dy: -50%;
 }
 

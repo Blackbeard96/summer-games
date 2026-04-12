@@ -39,6 +39,7 @@ import {
   createSessionLoadout,
   type SessionLoadout
 } from '../utils/inSessionSkillsService';
+import { shouldEnforceTurnSkillCooldownsInLiveSession } from '../utils/battleModeSkillRules';
 import { 
   submitAction,
   subscribeToActions,
@@ -94,6 +95,7 @@ import LiveEventReflectionPanel from './LiveEventReflectionPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
+import LiveEventEconomyHud from './liveEvent/LiveEventEconomyHud';
 import './liveEvent/flowState.css';
 import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
 import { parseClassFlowSprint } from '../utils/liveEventSprintService';
@@ -103,6 +105,7 @@ import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillC
 import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
 import PlayerBuildInspectModal from './PlayerBuildInspectModal';
 import { finitePowerLevel } from '../utils/playerBuildInspect';
+import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
 
 /** Pause after each question’s timer ends before the next question (Battle / Team BR). */
 const BR_INTER_QUESTION_GAP_MS_OPTIONS: { label: string; value: number }[] = [
@@ -206,6 +209,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [roomSessionStatus, setRoomSessionStatus] = useState<string | undefined>(undefined);
   const [showMstMktModal, setShowMstMktModal] = useState(false);
   const [mstMktToggleLoading, setMstMktToggleLoading] = useState(false);
+  /** Sum of Truth Metal on `users` + `students` (same currency as Battle / Artifacts). */
+  const [truthMetalShardsTotal, setTruthMetalShardsTotal] = useState(0);
+  const [liveEventFloatToasts, setLiveEventFloatToasts] = useState<Array<{ id: string; text: string }>>([]);
+  const prevMeResourcesRef = useRef<{
+    seeded: boolean;
+    pp: number;
+    shield: number;
+    streak: number;
+    flow: boolean;
+  }>({ seeded: false, pp: 0, shield: 0, streak: 0, flow: false });
 
   // Log initial state
   console.log('[InSessionBattle] Component initialized with permissions:', {
@@ -232,6 +245,29 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   useEffect(() => {
     hasShownSummaryForEndedRef.current = false;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setTruthMetalShardsTotal(0);
+      return;
+    }
+    const loadTm = async () => {
+      try {
+        const [u, s] = await Promise.all([
+          getDoc(doc(db, 'users', currentUser.uid)),
+          getDoc(doc(db, 'students', currentUser.uid)),
+        ]);
+        const uData = u.exists() ? u.data() : null;
+        const sData = s.exists() ? s.data() : null;
+        setTruthMetalShardsTotal(truthMetalBalanceForHud(sData?.truthMetal, uData?.truthMetal));
+      } catch {
+        setTruthMetalShardsTotal(0);
+      }
+    };
+    void loadTm();
+    const id = setInterval(() => void loadTm(), 12000);
+    return () => clearInterval(id);
+  }, [currentUser?.uid]);
 
   /**
    * When status becomes `ended`, show the Live Event summary for everyone (including host).
@@ -375,6 +411,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           const supplementalRRCandy = equippedHasRRCandy
             ? []
             : moves.filter((m: any) => m.unlocked && m.id?.includes('rr-candy'));
+          // Level 2 Meta skill is appended inside getEquippedSkillsForBattle (7th manifest-style slot).
           const merged = [...equipped, ...supplementalRRCandy].filter(
             (m: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === m.id) === idx
           );
@@ -1506,6 +1543,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               ? Math.floor((min + max) / 2)
               : 0;
         const constructMoveId = `construct-skill::${summon.id}::${m?.id || idx}`;
+        const constructAffinity =
+          (typeof m?.elementalAffinity === 'string' && m.elementalAffinity) ||
+          summon.summonElementalType ||
+          undefined;
         out.push({
           id: constructMoveId,
           name: `${summon.name}: ${m?.name || 'Construct Attack'}`,
@@ -1519,7 +1560,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           currentCooldown: 0,
           unlocked: true,
           masteryLevel: 1,
-          targetType: 'single'
+          targetType: 'single',
+          ...(constructAffinity ? { elementalAffinity: constructAffinity } : {}),
         });
       });
     });
@@ -1904,6 +1946,48 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
     flowNonceSyncRef.current = { sessionId, uid: currentUser.uid, nonce };
   }, [sessionId, currentUser?.uid, sessionPlayers]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPlayer || currentPlayer.userId !== currentUser.uid) return;
+    const ref = prevMeResourcesRef.current;
+    const pp = currentPlayer.powerPoints ?? 0;
+    const shield = currentPlayer.shield ?? 0;
+    const streak = currentPlayer.successStreak ?? 0;
+    const flow = currentPlayer.flowStateActive === true;
+
+    const pending: Array<{ id: string; text: string }> = [];
+    const push = (text: string) => {
+      pending.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, text });
+    };
+
+    if (ref.seeded) {
+      if (pp !== ref.pp) {
+        const d = pp - ref.pp;
+        if (d !== 0) push(d > 0 ? `+${d} PP` : `${d} PP`);
+      }
+      if (shield !== ref.shield) {
+        const d = shield - ref.shield;
+        if (d !== 0) push(d > 0 ? `+${d} Shield` : `${d} Shield`);
+      }
+      if (streak !== ref.streak) {
+        const d = streak - ref.streak;
+        if (d > 0) push(d === 1 ? '+1 Streak' : `+${d} Streak`);
+        else if (d < 0) push('Streak reset');
+      }
+      if (flow && !ref.flow) push('Flow State Activated');
+      if (!flow && ref.flow) push('Flow State ended');
+    }
+
+    prevMeResourcesRef.current = { seeded: true, pp, shield, streak, flow };
+
+    if (pending.length === 0) return;
+    setLiveEventFloatToasts((prev) => [...prev, ...pending].slice(-16));
+    pending.forEach((t) => {
+      window.setTimeout(() => {
+        setLiveEventFloatToasts((prev) => prev.filter((x) => x.id !== t.id));
+      }, 2800);
+    });
+  }, [currentUser?.uid, currentPlayer]);
 
   /** Battle / Team BR: eliminated players and eliminator names for the center column */
   const battleRoyaleEliminations = useMemo(() => {
@@ -2801,6 +2885,56 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         visible={flowActivationVisible}
         displayName={currentUser?.displayName || currentPlayer?.displayName || 'You'}
       />
+      {sessionId && currentUser?.uid && currentPlayer ? (
+        <LiveEventEconomyHud
+          sessionId={sessionId}
+          currentUserId={currentUser.uid}
+          battleLogTail={battleLog}
+          flowStateActive={currentPlayer.flowStateActive}
+          successStreak={currentPlayer.successStreak}
+          sessionPp={currentPlayer.powerPoints}
+        />
+      ) : null}
+      {liveEventFloatToasts.length > 0 ? (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 260,
+            right: 16,
+            zIndex: 60,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            alignItems: 'flex-end',
+            pointerEvents: 'none',
+            maxWidth: 220,
+          }}
+        >
+          {liveEventFloatToasts.map((t) => (
+            <div
+              key={t.id}
+              style={{
+                background: 'linear-gradient(135deg, rgba(14,165,233,0.95), rgba(99,102,241,0.92))',
+                color: '#f8fafc',
+                padding: '0.45rem 0.75rem',
+                borderRadius: '0.5rem',
+                fontWeight: 800,
+                fontSize: '0.82rem',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                animation: 'liveEventToastIn 0.35s ease-out',
+              }}
+            >
+              {t.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <style>{`
+        @keyframes liveEventToastIn {
+          from { opacity: 0; transform: translateY(12px) scale(0.96); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
       <LiveEventDebugOverlay
         sessionId={sessionId}
         classId={classId}
@@ -3002,6 +3136,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           >
             <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
               🛒 <strong>MST MKT</strong> is open — spend Participation PP on consumables configured in Artifacts Admin.
+              {currentUser ? (
+                <span style={{ display: 'block', marginTop: '0.35rem', fontWeight: 600, opacity: 0.95 }}>
+                  💎 Your Truth Metal: <strong>{truthMetalShardsTotal.toLocaleString()}</strong> shards (vault / upgrades)
+                </span>
+              ) : null}
             </span>
             <button
               type="button"
@@ -4634,7 +4773,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   ? 'Host must open MST MKT'
                   : showSessionSummary
                     ? 'Session ended'
-                    : 'Spend Participation PP on survival items'
+                    : `Spend Participation PP on survival items · Truth Metal shards: ${truthMetalShardsTotal.toLocaleString()}`
               }
             >
               🛒 MST MKT
@@ -4774,6 +4913,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           currentUserId={currentUser.uid}
           displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
           sessionPlayers={sessionPlayers as ServiceSessionPlayer[]}
+          truthMetalShardsTotal={truthMetalShardsTotal}
           onPurchaseComplete={() => {
             void refreshInventory();
           }}
@@ -5059,10 +5199,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 {/* Filter available moves - unlocked and not on cooldown */}
                 {(() => {
                   const sourceMoves = (equippedBattleSkills.length > 0 ? equippedBattleSkills : moves);
-                  const baseAvailable = sourceMoves.filter(move =>
-                    move.unlocked &&
-                    (move.currentCooldown === 0 || move.currentCooldown === undefined)
-                  );
+                  const baseAvailable = sourceMoves.filter((move) => {
+                    if (!move.unlocked) return false;
+                    if (!shouldEnforceTurnSkillCooldownsInLiveSession()) return true;
+                    return (move.currentCooldown === 0 || move.currentCooldown === undefined);
+                  });
                   const availableMoves = [...baseAvailable, ...constructSkillMoves];
 
                   const ppLive = (m: BattleMove) =>
@@ -5070,7 +5211,16 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   const participationMe = currentPlayer?.movesEarned ?? 0;
 
                   const constructMoves = availableMoves.filter(move => move.id?.startsWith('construct-skill::'));
-                  const manifestMoves = availableMoves.filter(move => move.category === 'manifest');
+                  const level2ManifestMoves = availableMoves.filter(
+                    (move) =>
+                      move.effectKey === 'level2_manifest' || move.id?.startsWith('l2-manifest::')
+                  );
+                  const manifestMoves = availableMoves.filter(
+                    (move) =>
+                      move.category === 'manifest' &&
+                      move.effectKey !== 'level2_manifest' &&
+                      !move.id?.startsWith('l2-manifest::')
+                  );
                   const elementalMoves = availableMoves.filter(move => move.category === 'elemental');
                   const rrCandyMoves = availableMoves.filter(move => move.id?.includes('rr-candy'));
                   const artifactMoves = availableMoves.filter(
@@ -5079,7 +5229,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       !move.id?.includes('rr-candy') &&
                       !move.id?.startsWith('construct-skill::')
                   );
-                  const manifestAndArtifactMoves = [...manifestMoves, ...artifactMoves];
+                  const manifestAndArtifactMoves = [
+                    ...level2ManifestMoves,
+                    ...manifestMoves,
+                    ...artifactMoves,
+                  ];
                   
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -5126,7 +5280,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
                               const le = ppLive(move as BattleMove);
                               const isConstructSkill = move.id?.startsWith('construct-skill::');
-                              const canAffordSkill = isConstructSkill || participationMe >= le.finalCost;
+                              const isLevel2ManifestSkill =
+                                move.effectKey === 'level2_manifest' ||
+                                (move as { useSessionPowerPoints?: boolean }).useSessionPowerPoints === true;
+                              const sessionPpAvail = currentPlayer?.powerPoints ?? 0;
+                              const canAffordSkill =
+                                isConstructSkill || isLevel2ManifestSkill
+                                  ? sessionPpAvail >= le.finalCost
+                                  : participationMe >= le.finalCost;
                               
                               return (
                                 <button
@@ -5152,7 +5313,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   disabled={!canAffordSkill}
                                   title={
                                     !canAffordSkill
-                                      ? `Need ${le.finalCost} Participation Points to use this skill (have ${participationMe}, short by ${Math.max(0, le.finalCost - participationMe)})`
+                                      ? isLevel2ManifestSkill
+                                        ? `Need ${le.finalCost} session PP (have ${sessionPpAvail})`
+                                        : `Need ${le.finalCost} Participation Points to use this skill (have ${participationMe}, short by ${Math.max(0, le.finalCost - participationMe)})`
                                       : `Base ${le.baseCost} · Reduction ${le.reductionFromArtifacts + le.reductionFromEffects} · Final ${le.finalCost} PP`
                                   }
                                   style={{
@@ -5181,8 +5344,23 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                 >
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
                                     <div style={{ flex: 1 }}>
-                                      <div style={{ fontWeight: 'bold', marginBottom: '0.125rem' }}>
+                                      <div style={{ fontWeight: 'bold', marginBottom: '0.125rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                                         {move.name}
+                                        {isLevel2ManifestSkill ? (
+                                          <span
+                                            style={{
+                                              fontSize: '0.58rem',
+                                              fontWeight: 900,
+                                              letterSpacing: '0.04em',
+                                              background: 'rgba(56, 189, 248, 0.35)',
+                                              border: '1px solid rgba(125, 211, 252, 0.8)',
+                                              padding: '0.1rem 0.35rem',
+                                              borderRadius: '0.25rem',
+                                            }}
+                                          >
+                                            META · LIVE EVENT
+                                          </span>
+                                        ) : null}
                                       </div>
                                       <div style={{ fontSize: '0.7rem', opacity: 0.9, display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                         <span style={{ 

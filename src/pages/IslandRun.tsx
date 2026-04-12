@@ -7,7 +7,6 @@ import {
   getDocs,
   query,
   where,
-  onSnapshot,
   addDoc,
   serverTimestamp,
   getDoc,
@@ -16,7 +15,7 @@ import {
   type DocumentData,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { IslandRunLobby, IslandRunTeam } from '../types/islandRun';
+import { IslandRunLobby } from '../types/islandRun';
 import { getLevelFromXP } from '../utils/leveling';
 import { cleanupExpiredRaidLobbiesClient } from '../utils/raidLobbyService';
 
@@ -59,11 +58,11 @@ const IslandRun: React.FC = () => {
     setLoading(true);
 
     // Run cleanup on mount (mark empty/inactive lobbies as expired)
-    cleanupExpiredRaidLobbiesClient().catch(err => 
+    cleanupExpiredRaidLobbiesClient().catch(err =>
       console.error('Error cleaning up expired lobbies:', err)
     );
 
-    const buildLobbyListFromSnapshot = (snapshot: { forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void }) => {
+    const buildLobbyListFromSnapshot = (snapshot: QuerySnapshot<DocumentData>) => {
       const now = Timestamp.now();
       const tenMinutesAgo = Timestamp.fromMillis(now.toMillis() - 10 * 60 * 1000);
       const lobbyList: IslandRunLobby[] = [];
@@ -90,55 +89,43 @@ const IslandRun: React.FC = () => {
       return lobbyList;
     };
 
-    // Listen for active lobbies (exclude expired)
+    // Poll with getDocs only — onSnapshot on this query triggers Firestore SDK
+    // INTERNAL ASSERTION (ca9 / ve:-1) in watch streams (React Strict Mode + rapid teardown).
     const lobbiesRef = collection(db, 'islandRunLobbies');
     const q = query(lobbiesRef, where('status', 'in', ['waiting', 'starting']));
 
-    const finishWithError = async (message: string, err: unknown) => {
-      console.error('Island Raid lobbies:', message, err);
-      setLoadError(message);
-      setLoading(false);
+    let cancelled = false;
+
+    const refreshLobbies = async () => {
       try {
         const snap = await getDocs(q);
+        if (cancelled) return;
         setLobbies(buildLobbyListFromSnapshot(snap));
-      } catch (fallbackErr) {
-        console.error('Island Raid lobbies fallback fetch failed:', fallbackErr);
+        setLoadError(null);
+        setLoading(false);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        console.error('Island Raid lobbies fetch failed:', error);
+        const code = (error as { code?: string })?.code;
+        setLoadError(
+          code === 'permission-denied'
+            ? 'Could not load lobbies (permission denied). Deploy Firestore rules for islandRunLobbies.'
+            : 'Could not load lobbies. Check your connection and try again.'
+        );
+        setLoading(false);
         setLobbies([]);
       }
     };
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setLobbies(buildLobbyListFromSnapshot(snapshot));
-        setLoadError(null);
-        setLoading(false);
-      },
-      async (error) => {
-        const msg = error?.message || String(error);
-        const isFirefoxInternal =
-          msg.includes('INTERNAL ASSERTION FAILED') || msg.includes('Unexpected state');
+    void refreshLobbies();
 
-        if (isFirefoxInternal) {
-          await finishWithError('Live updates unavailable in this browser; showing a one-time list.', error);
-          return;
-        }
-
-        if ((error as { code?: string })?.code === 'permission-denied') {
-          await finishWithError(
-            'Could not load lobbies (permission denied). Ask an admin to deploy Firestore rules for islandRunLobbies.',
-            error
-          );
-          return;
-        }
-
-        await finishWithError('Could not load lobbies. Check your connection and try again.', error);
-      }
-    );
+    const pollInterval = setInterval(() => {
+      void refreshLobbies();
+    }, 5000);
 
     // Run cleanup periodically (every 2 minutes)
     const cleanupInterval = setInterval(() => {
-      cleanupExpiredRaidLobbiesClient().catch(err => 
+      cleanupExpiredRaidLobbiesClient().catch(err =>
         console.error('Error cleaning up expired lobbies:', err)
       );
     }, 2 * 60 * 1000); // 2 minutes
@@ -149,7 +136,8 @@ const IslandRun: React.FC = () => {
     }, 1000);
 
     return () => {
-      unsubscribe();
+      cancelled = true;
+      clearInterval(pollInterval);
       clearInterval(cleanupInterval);
       clearInterval(timerInterval);
     };

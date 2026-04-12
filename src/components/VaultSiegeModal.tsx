@@ -10,6 +10,9 @@ import { calculateDamageRange, formatDamageRange } from '../utils/damageCalculat
 import { getEffectiveMasteryLevel } from '../utils/artifactUtils';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { loadVaultSiegePlayerList } from '../utils/vaultSiegeTargets';
+import type { ElementType } from '../types/elementTypes';
+import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
+import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
 
 interface VaultSiegeModalProps {
   isOpen: boolean;
@@ -332,8 +335,11 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
             const vaultDoc = await getDoc(doc(db, 'vaults', player.uid));
             if (vaultDoc.exists()) {
               const vaultData = vaultDoc.data();
-              player.shieldStrength = vaultData.shieldStrength || 0;
-              player.maxShieldStrength = vaultData.maxShieldStrength || 50;
+              const maxS = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 50));
+              let sh = Math.max(0, Math.floor(Number(vaultData.shieldStrength) || 0));
+              if (maxS > 0) sh = Math.min(sh, maxS);
+              player.shieldStrength = sh;
+              player.maxShieldStrength = maxS;
               player.overshield = vaultData.overshield || 0;
               player.capacity = vaultData.capacity || 1000;
               // Max vault health is always 10% of max PP (capacity is the max PP)
@@ -348,10 +354,10 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
               
               // Check if player is on cooldown (vault health is 0 and cooldown is active)
               if (vaultData.vaultHealthCooldown) {
-                const cooldownEndTime = new Date(vaultData.vaultHealthCooldown);
-                cooldownEndTime.setHours(cooldownEndTime.getHours() + 4); // 4-hour cooldown
+                const cdStart = parseFirestoreDate(vaultData.vaultHealthCooldown);
+                const cooldownEndTime = cdStart ? vaultHealthCooldownEnd(cdStart) : null;
                 const now = new Date();
-                if (now < cooldownEndTime) {
+                if (cooldownEndTime && now < cooldownEndTime) {
                   // Player is on cooldown - mark them but don't exclude (we'll show them as unavailable)
                   (player as any).onCooldown = true;
                   (player as any).cooldownEndTime = cooldownEndTime;
@@ -2271,6 +2277,21 @@ const VaultSiegeModal = ({ isOpen, onClose, battleId, onAttackComplete }: VaultS
                     }}>
                       {card.name}
                     </div>
+                    {card.elementalAffinity ? (
+                      <div
+                        style={{
+                          fontSize: '0.78rem',
+                          color: 'rgba(255,255,255,0.95)',
+                          marginBottom: '0.35rem',
+                          fontWeight: 600,
+                          textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                        }}
+                        title={elementTypeLabel(card.elementalAffinity as ElementType)}
+                      >
+                        {elementTypeEmoji(card.elementalAffinity as ElementType)}{' '}
+                        {elementTypeLabel(card.elementalAffinity as ElementType)}
+                      </div>
+                    ) : null}
                     <div style={{ 
                       color: 'rgba(255,255,255,0.9)',
                       fontSize: '0.875rem',

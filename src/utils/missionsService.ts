@@ -12,6 +12,7 @@ import {
   getDocs, 
   setDoc, 
   updateDoc, 
+  deleteField,
   query, 
   where, 
   serverTimestamp,
@@ -25,6 +26,12 @@ import { grantChallengeRewards } from './challengeRewards';
 import { CHAPTERS } from '../types/chapters';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { getLevelFromXP } from '../utils/leveling';
+import { parseMissionRewardEntriesFromFirestore } from './seasonFirestoreService';
+import {
+  grantPackedBattlePassMissionRewards,
+  mergeBattleStepRewardsIntoFlat,
+  partitionMissionRewardEntries,
+} from './missionBattlePassRewards';
 import { 
   MissionTemplate, 
   PlayerMission, 
@@ -35,6 +42,62 @@ import {
   MissionSource,
   ProfileJourneyStageId
 } from '../types/missions';
+
+export function parseMissionRewardsFromDoc(raw: unknown): MissionTemplate['rewards'] {
+  if (!raw || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  const entries = parseMissionRewardEntriesFromFirestore(r.entries);
+  const base = { ...(r as Record<string, unknown>) } as NonNullable<MissionTemplate['rewards']>;
+  if (entries.length > 0) {
+    return { ...base, entries };
+  }
+  const { entries: _removed, ...rest } = base as NonNullable<MissionTemplate['rewards']> & {
+    entries?: unknown;
+  };
+  return rest;
+}
+
+function timestampToMs(ts: unknown): number | null {
+  const t = ts as { toMillis?: () => number; seconds?: number; nanoseconds?: number } | undefined;
+  if (!t) return null;
+  if (typeof t.toMillis === 'function') return t.toMillis();
+  if (typeof t.seconds === 'number') return t.seconds * 1000 + (typeof t.nanoseconds === 'number' ? t.nanoseconds / 1e6 : 0);
+  return null;
+}
+
+/** Milliseconds from Firestore Timestamp or legacy fields (for stable default ordering). */
+export function missionCreatedAtMs(m: MissionTemplate): number {
+  return timestampToMs(m.createdAt) ?? 0;
+}
+
+/**
+ * Oldest-first sort key: createdAt, else updatedAt, else 0.
+ * Avoids title-based tie-breaking (e.g. "Silence…" before "The Noise" when dates were missing/equal).
+ */
+export function missionChronologicalSortMs(m: MissionTemplate): number {
+  return timestampToMs(m.createdAt) ?? timestampToMs(m.updatedAt) ?? 0;
+}
+
+/**
+ * Sort missions for NPC hub lists: explicit hubDisplayOrder first (lower first), then oldest-first by
+ * created time (later-created missions get higher display numbers 2, 3, …), then stable id order.
+ */
+export function sortMissionsForHubList(missions: MissionTemplate[]): MissionTemplate[] {
+  return [...missions].sort((a, b) => {
+    const orderA =
+      typeof a.hubDisplayOrder === 'number' && Number.isFinite(a.hubDisplayOrder)
+        ? a.hubDisplayOrder
+        : Number.MAX_SAFE_INTEGER;
+    const orderB =
+      typeof b.hubDisplayOrder === 'number' && Number.isFinite(b.hubDisplayOrder)
+        ? b.hubDisplayOrder
+        : Number.MAX_SAFE_INTEGER;
+    if (orderA !== orderB) return orderA - orderB;
+    const t = missionChronologicalSortMs(a) - missionChronologicalSortMs(b);
+    if (t !== 0) return t;
+    return a.id.localeCompare(b.id);
+  });
+}
 
 /**
  * Get mission template by ID
@@ -60,9 +123,16 @@ export async function getMissionTemplate(missionId: string): Promise<MissionTemp
       deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
       story: data.story || undefined,
       profile: data.profile || undefined,
+      playerJourneyLink: data.playerJourneyLink || undefined,
       gating: data.gating || undefined,
-      rewards: data.rewards || {},
+      rewards: parseMissionRewardsFromDoc(data.rewards),
       objectives: data.objectives || [],
+      sequence: Array.isArray(data.sequence) ? data.sequence : undefined,
+      sequenceVersion: typeof data.sequenceVersion === 'number' ? data.sequenceVersion : undefined,
+      hubDisplayOrder:
+        typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
+          ? data.hubDisplayOrder
+          : undefined,
       createdAt: data.createdAt,
       updatedAt: data.updatedAt
     } as MissionTemplate;
@@ -112,9 +182,16 @@ export async function getMissionTemplates(filters?: {
         deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
         story: data.story || undefined,
         profile: data.profile || undefined,
+        playerJourneyLink: data.playerJourneyLink || undefined,
         gating: data.gating || undefined,
-        rewards: data.rewards || {},
+        rewards: parseMissionRewardsFromDoc(data.rewards),
         objectives: data.objectives || [],
+        sequence: Array.isArray(data.sequence) ? data.sequence : undefined,
+        sequenceVersion: typeof data.sequenceVersion === 'number' ? data.sequenceVersion : undefined,
+        hubDisplayOrder:
+          typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
+            ? data.hubDisplayOrder
+            : undefined,
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       };
@@ -433,7 +510,7 @@ export async function acceptMission(
 export async function completeMission(
   userId: string,
   playerMissionId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; pendingRewardChoices?: boolean }> {
   try {
     const playerMissionRef = doc(db, 'playerMissions', playerMissionId);
     const playerMissionDoc = await getDoc(playerMissionRef);
@@ -447,13 +524,29 @@ export async function completeMission(
       return { success: false, error: 'Mission already completed' };
     }
     
-    // Get mission template for rewards
     const mission = await getMissionTemplate(playerMission.missionId);
-    
-    // Update player mission status
+    const { fixedFlat, choiceGroups } = partitionMissionRewardEntries(mission);
+    const fixedFlatForGrant = mergeBattleStepRewardsIntoFlat(fixedFlat, mission);
+
+    const pendingPatch =
+      choiceGroups.length > 0
+        ? {
+            missionRewardChoicesPending: {
+              groups: choiceGroups.map((g) => ({
+                groupId: g.id,
+                pickCount: g.pickCount,
+                displayName: g.displayName,
+                description: g.description || '',
+                options: g.options,
+              })),
+            },
+          }
+        : { missionRewardChoicesPending: deleteField() };
+
     await updateDoc(playerMissionRef, {
       status: 'completed',
-      completedAt: serverTimestamp()
+      completedAt: serverTimestamp(),
+      ...pendingPatch,
     });
     
     // Check if mission is linked to Player Journey step
@@ -507,34 +600,16 @@ export async function completeMission(
       }
     }
     
-    // Award mission rewards if mission template exists
-    // IMPORTANT: If journey step was just completed above, we may have already granted some rewards
-    // For MVP, we'll grant mission rewards separately. In production, you might want to merge rewards
-    if (mission?.rewards) {
-      const userRef = doc(db, 'students', userId);
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        const updates: any = {};
-        
-        if (mission.rewards.xp) {
-          updates.xp = (userDoc.data().xp || 0) + mission.rewards.xp;
-        }
-        
-        if (mission.rewards.pp) {
-          // Update vault PP if available
-          const vaultRef = doc(db, 'vaults', userId);
-          const vaultDoc = await getDoc(vaultRef);
-          if (vaultDoc.exists()) {
-            await updateDoc(vaultRef, {
-              powerPoints: (vaultDoc.data().powerPoints || 0) + mission.rewards.pp
-            });
-          }
-        }
-        
-        if (Object.keys(updates).length > 0) {
-          await updateDoc(userRef, updates);
-        }
+    if (fixedFlatForGrant.length > 0 && mission) {
+      const claimId = `mission_complete_${playerMissionId}`;
+      const { grantOk } = await grantPackedBattlePassMissionRewards(
+        userId,
+        claimId,
+        fixedFlatForGrant,
+        mission.title
+      );
+      if (!grantOk) {
+        console.error('Error granting mission fixed rewards (mission_complete)');
       }
     }
     
@@ -604,10 +679,112 @@ export async function completeMission(
       // Don't fail the mission complete if live feed logging fails
     }
     
-    return { success: true };
+    return {
+      success: true,
+      pendingRewardChoices: choiceGroups.length > 0,
+    };
   } catch (error) {
     console.error('Error completing mission:', error);
     return { success: false, error: 'Failed to complete mission' };
+  }
+}
+
+/**
+ * Claim Battle Pass–style mission reward choices after completion.
+ * @param picksByGroupId maps choice group id → selected option reward ids (length must equal each group's pickCount).
+ */
+export async function claimMissionRewardChoices(
+  userId: string,
+  playerMissionId: string,
+  picksByGroupId: Record<string, string[]>
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const playerMissionRef = doc(db, 'playerMissions', playerMissionId);
+    const snap = await getDoc(playerMissionRef);
+    if (!snap.exists()) {
+      return { success: false, error: 'Mission record not found' };
+    }
+    const data = snap.data() as PlayerMission;
+    const pending = data.missionRewardChoicesPending;
+    if (!pending?.groups?.length) {
+      return { success: false, error: 'No pending reward choices for this mission.' };
+    }
+
+    for (const g of pending.groups) {
+      const picks = picksByGroupId[g.groupId];
+      if (!Array.isArray(picks) || picks.length !== g.pickCount) {
+        return {
+          success: false,
+          error: `Choose exactly ${g.pickCount} reward(s) for "${g.displayName || 'each choice group'}".`,
+        };
+      }
+      const optIds = new Set(g.options.map((o) => o.id));
+      const uniq = new Set(picks);
+      if (uniq.size !== picks.length) {
+        return { success: false, error: 'Each pick must be a different option.' };
+      }
+      for (const pid of picks) {
+        if (!optIds.has(pid)) {
+          return { success: false, error: 'Invalid reward selection.' };
+        }
+      }
+    }
+
+    for (const g of pending.groups) {
+      const picks = picksByGroupId[g.groupId];
+      const rewards = picks
+        .map((pid) => g.options.find((o) => o.id === pid))
+        .filter((x): x is NonNullable<typeof x> => x != null);
+      const claimId = `mission_choice_${playerMissionId}_${g.groupId}`;
+      const { grantOk } = await grantPackedBattlePassMissionRewards(
+        userId,
+        claimId,
+        rewards,
+        'Mission reward choice'
+      );
+      if (!grantOk) {
+        return {
+          success: false,
+          error: 'Could not grant rewards. You may have already claimed them; refresh and try again.',
+        };
+      }
+    }
+
+    await updateDoc(playerMissionRef, {
+      missionRewardChoicesPending: deleteField(),
+    });
+
+    return { success: true };
+  } catch (e) {
+    console.error('claimMissionRewardChoices', e);
+    return { success: false, error: 'Failed to claim rewards.' };
+  }
+}
+
+/**
+ * Mark a mission sequence step complete (e.g. Level 2 Manifest builder finished).
+ */
+export async function markMissionSequenceStepComplete(
+  playerMissionId: string,
+  stepId: string,
+  extras?: { skillId?: string }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const ref = doc(db, 'playerMissions', playerMissionId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      return { success: false, error: 'Player mission not found.' };
+    }
+    await updateDoc(ref, {
+      [`sequenceStepCompletion.${stepId}`]: {
+        completedAt: serverTimestamp(),
+        ...(extras?.skillId ? { skillId: extras.skillId } : {}),
+      },
+    });
+    return { success: true };
+  } catch (e) {
+    console.error('markMissionSequenceStepComplete', e);
+    return { success: false, error: 'Failed to save step progress.' };
   }
 }
 
@@ -668,6 +845,67 @@ export async function checkChapterCompletion(
   }
 }
 
+const HUB_SPOTLIGHT_NPCS = ['sonido', 'zeke', 'luz', 'kon'] as const;
+export type HubSpotlightNpcId = (typeof HUB_SPOTLIGHT_NPCS)[number];
+
+export type HubNpcMissionAttentionMap = Record<HubSpotlightNpcId, boolean>;
+
+export const DEFAULT_HUB_NPC_MISSION_ATTENTION: HubNpcMissionAttentionMap = {
+  sonido: false,
+  zeke: false,
+  luz: false,
+  kon: false,
+};
+
+async function hubMissionNeedsPlayerAttention(
+  userId: string,
+  mission: MissionTemplate,
+  playerMissions: PlayerMission[]
+): Promise<boolean> {
+  const pm = playerMissions.find((p) => p.missionId === mission.id);
+  if (pm) {
+    const pendingGroups = pm.missionRewardChoicesPending?.groups;
+    if (Array.isArray(pendingGroups) && pendingGroups.length > 0) return true;
+    if (pm.status === 'completed') return false;
+    if (pm.status === 'locked') return false;
+    return true;
+  }
+  const [prerequisitesMet, gatingCheck] = await Promise.all([
+    checkPrerequisites(userId, mission),
+    checkGating(userId, mission),
+  ]);
+  return prerequisitesMet && gatingCheck.met;
+}
+
+/** True when this NPC has at least one HUB_NPC mission the player can start, is working on, or must claim rewards for. */
+export async function fetchHubNpcMissionAttentionMap(
+  userId: string
+): Promise<HubNpcMissionAttentionMap> {
+  const playerMissions = await getPlayerMissions(userId);
+  const lists = await Promise.all(
+    HUB_SPOTLIGHT_NPCS.map((npc) =>
+      getMissionTemplates({ npc, deliveryChannel: 'HUB_NPC' })
+    )
+  );
+  const flags = await Promise.all(
+    lists.map(async (templates) => {
+      if (templates.length === 0) return false;
+      const perMission = await Promise.all(
+        templates.map((m) =>
+          hubMissionNeedsPlayerAttention(userId, m, playerMissions)
+        )
+      );
+      return perMission.some(Boolean);
+    })
+  );
+  return {
+    sonido: flags[0],
+    zeke: flags[1],
+    luz: flags[2],
+    kon: flags[3],
+  };
+}
+
 /**
  * Get mission status for a player
  */
@@ -698,5 +936,28 @@ export async function getMissionStatus(
     console.error('Error getting mission status:', error);
     return 'locked';
   }
+}
+
+/**
+ * Admin: delete every `playerMissions` document for this mission template so all players can accept and run it again.
+ * Does not modify Player Journey chapter progress or `users/{uid}/missionReflectionResponses`.
+ */
+export async function deleteAllPlayerMissionDocsForMissionTemplate(
+  missionId: string
+): Promise<{ deletedCount: number }> {
+  const playerMissionsRef = collection(db, 'playerMissions');
+  const q = query(playerMissionsRef, where('missionId', '==', missionId));
+  const snapshot = await getDocs(q);
+  const docs = snapshot.docs;
+  const CHUNK = 400;
+  let deletedCount = 0;
+  for (let i = 0; i < docs.length; i += CHUNK) {
+    const chunk = docs.slice(i, i + CHUNK);
+    const batch = writeBatch(db);
+    chunk.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    deletedCount += chunk.length;
+  }
+  return { deletedCount };
 }
 

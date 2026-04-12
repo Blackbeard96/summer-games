@@ -28,6 +28,17 @@ import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
 import { getEquippedSkillsForBattle, enrichEquippedArtifactsFromCatalog } from '../utils/battleSkillsService';
+import { getBattleSkillRuntimePolicy } from '../utils/battleModeSkillRules';
+import {
+  decrementCooldownsForCombatant,
+  getRemainingCooldown,
+  setSkillOnCooldown,
+  type SkillCooldownsByCombatant,
+} from '../utils/battleCooldownState';
+import {
+  getSkillAvailability,
+  type SkillAvailabilityResult,
+} from '../utils/skillAvailability';
 import {
   applyPpEconomyToPPGain,
   effectiveSkillCooldownTurns,
@@ -55,6 +66,20 @@ import {
   validateSpacesModeTarget,
   initializeSpacesModeBattle
 } from '../utils/spacesModeBattle';
+import { mapCpuMovesToBattleEngineFormat } from '../utils/cpuOpponentMovesService';
+import { shieldOffMaxShieldRemoveFraction, shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
+import type { ElementType } from '../types/elementTypes';
+import { normalizeElementType } from '../types/elementTypes';
+import {
+  attackElementFromCpuStrike,
+  attackElementFromMove,
+  attackElementFromSummonAffinity,
+  elementEffectivenessBattleLogLine,
+  getElementMultiplier,
+} from '../utils/elementAdvantages';
+import CpuAwakeningSequenceModal from './CpuAwakeningSequenceModal';
+import { filterCpuAwakeningAnimationSteps } from '../types/missions';
+import type { MissionMediaSequenceStep } from '../types/missions';
 
 interface Opponent {
   id: string;
@@ -77,10 +102,172 @@ interface Opponent {
   controller?: 'human' | 'ai'; // Controller type: 'human' for human players, 'ai' for AI-controlled allies/opponents
   // Summoned construct (assists the summoner like Kon's clone)
   isSummon?: boolean;
-  summonDuration?: number; // Turns remaining before the construct fades
+  /** @deprecated No longer decremented; constructs persist until HP/shields reach 0. */
+  summonDuration?: number;
   summonDamage?: number;
   summonElementalType?: 'fire' | 'water' | 'air' | 'earth' | 'lightning' | 'light' | 'shadow' | 'metal';
   summonerId?: string; // Ally id who summoned this construct
+  /** Defensive combat element for type chart (omit/null = neutral) */
+  enemyType?: ElementType | null;
+  /** Embedded CPU moves (Island Raid / missions); may be swapped on awaken. */
+  moves?: unknown[];
+  /** Admin-configurable second phase for CPU opponents */
+  awakenedModeEnabled?: boolean;
+  awakenAtHealthPercent?: number;
+  awakenedImage?: string;
+  awakenedHealth?: number;
+  awakenedShields?: number;
+  awakenedEnemyType?: ElementType | null;
+  awakenedMoves?: unknown[];
+  isAwakened?: boolean;
+  /** Mission-style slides/videos when this CPU awakens (optional). */
+  awakeningAnimation?: MissionMediaSequenceStep[];
+}
+
+/** When CPU HP drops to threshold, swap to awakened stats, portrait, element, and move list. */
+function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
+  if (!isCpu) return opp;
+  const o = opp as Opponent;
+  if (!o.awakenedModeEnabled || o.isAwakened) return opp;
+  const hp = (o.vaultHealth ?? o.currentPP) ?? 0;
+  const maxHp = (o.maxVaultHealth ?? o.maxPP) || 1;
+  const threshold = Math.min(100, Math.max(1, o.awakenAtHealthPercent ?? 50));
+  if (hp > 0) {
+    const pct = maxHp > 0 ? (hp / maxHp) * 100 : 100;
+    if (pct > threshold) return opp;
+  }
+  // hp <= 0: still enter awakened second phase (lethal hit while awaken is configured), instead of staying dead
+  const ahConfigured = o.awakenedHealth != null && Number.isFinite(o.awakenedHealth) && Number(o.awakenedHealth) > 0;
+  const ah = ahConfigured ? Math.floor(Number(o.awakenedHealth)) : Math.max(1, Math.floor(hp));
+  const ashConfigured = o.awakenedShields != null && Number.isFinite(o.awakenedShields) && Number(o.awakenedShields) >= 0;
+  /** When awakened HP is explicitly set but shields are not, refill shields to the pre-awaken cap instead of keeping damaged current. */
+  let ash: number;
+  if (ashConfigured) {
+    ash = Math.floor(Number(o.awakenedShields));
+  } else if (ahConfigured) {
+    const priorMax = Math.max(
+      Math.floor(Number(o.maxShieldStrength) || 0),
+      Math.floor(Number(o.shieldStrength) || 0)
+    );
+    ash = Math.max(0, priorMax);
+  } else {
+    ash = Math.max(0, Math.floor(o.shieldStrength ?? 0));
+  }
+  const maxShieldOut = ashConfigured ? ash : ahConfigured ? Math.max(ash, Math.floor(Number(o.maxShieldStrength) || 0)) : ash;
+  const raw = Array.isArray(o.awakenedMoves) ? o.awakenedMoves : [];
+  const mapped = raw.length > 0 ? mapCpuMovesToBattleEngineFormat(raw as any[]) : [];
+  const movesOut = (mapped.length > 0 ? mapped : o.moves) as unknown[] | undefined;
+  const img =
+    typeof o.awakenedImage === 'string' && o.awakenedImage.trim() ? o.awakenedImage.trim() : o.image;
+  const next: Opponent = {
+    ...o,
+    isAwakened: true,
+    currentPP: ah,
+    maxPP: ah,
+    vaultHealth: ah,
+    maxVaultHealth: ah,
+    shieldStrength: ash,
+    maxShieldStrength: maxShieldOut,
+    ...(movesOut && movesOut.length ? { moves: movesOut } : {}),
+    ...(img ? { image: img, photoURL: img } : {}),
+  };
+  if (Object.prototype.hasOwnProperty.call(o, 'awakenedEnemyType')) {
+    next.enemyType = o.awakenedEnemyType ?? null;
+  }
+  return next;
+}
+
+/** Multi-line battle log when a CPU crosses into awakened phase (Island Raid / missions). */
+function buildCpuAwakenedAnnouncementLines(rawName: string): string[] {
+  const name = formatOpponentName(rawName);
+  return [
+    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    `⚡ AWAKENED — ${name}`,
+    'Power surges through them! Stats, shields, and their move set have transformed.',
+    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+  ];
+}
+
+/** Human allies for turn / "single player + AI" logic. Summons are never human (avoids treating constructs as a second human in Island Raid). */
+function countHumanAlliesForTurnRules(allies: Opponent[], currentUserId: string | undefined): number {
+  return allies.filter((ally) => {
+    if (currentUserId && ally.id === currentUserId) return true;
+    if (ally.isSummon) return false;
+    if (ally.isAI === true || ally.controller === 'ai') return false;
+    return true;
+  }).length;
+}
+
+/** Self-targeted / defensive / summon skills do not require an enemy target id. */
+function moveNeedsSelfTargetFallback(move: Move | null | undefined): boolean {
+  if (!move) return false;
+  const hasSummon =
+    Array.isArray((move as { statusEffects?: Array<{ type?: string }> }).statusEffects) &&
+    (move as { statusEffects?: Array<{ type?: string }> }).statusEffects!.some((e) => e?.type === 'summon');
+  return !!(move.shieldBoost || move.healing || move.targetType === 'self' || hasSummon);
+}
+
+function isStrokeOfCreationLikeMove(move: Move | null | undefined): boolean {
+  if (!move) return false;
+  const name = (move.name || '').toLowerCase();
+  const id = String(move.id || '').toLowerCase();
+  const aid = move.artifactGrant ? String(move.artifactGrant.artifactId || '').toLowerCase() : '';
+  return (
+    name.includes('stroke of creation') ||
+    name.includes('stroke of animation') ||
+    aid.includes('magic-brush') ||
+    aid.includes('magical-paintbrush') ||
+    id.includes('magic-brush') ||
+    id.includes('magical-paintbrush')
+  );
+}
+
+/** Island / mission battles: summon can resolve from animation even if vault context is still loading. */
+function allowsIslandSummonWithoutVault(
+  move: Move | null | undefined,
+  gameId: string | undefined,
+  isInSession: boolean
+): boolean {
+  if (!move || !gameId || isInSession) return false;
+  const hasSummonFx =
+    isStrokeOfCreationLikeMove(move) ||
+    (Array.isArray((move as { statusEffects?: Array<{ type?: string }> }).statusEffects) &&
+      (move as { statusEffects: Array<{ type?: string }> }).statusEffects.some((e) => e?.type === 'summon'));
+  return hasSummonFx;
+}
+
+/** Summon rows for turn-order execution (mirrors handleAnimationComplete Stroke / statusEffects handling). */
+function collectSummonEffectsForTurnOrderMove(playerMove: Move): Array<Record<string, unknown>> {
+  const raw = (playerMove as { statusEffects?: unknown[] }).statusEffects;
+  if (Array.isArray(raw)) {
+    const fromMove = raw.filter(
+      (e): e is Record<string, unknown> =>
+        !!e && typeof e === 'object' && String((e as { type?: string }).type) === 'summon'
+    );
+    if (fromMove.length > 0) return fromMove;
+  }
+  if (isStrokeOfCreationLikeMove(playerMove)) {
+    const from = getFirstSummonEffectFromMove(playerMove);
+    if (from) return [from as Record<string, unknown>];
+    return [
+      {
+        type: 'summon' as const,
+        duration: 2,
+        summonElementalType: 'light',
+        summonDamage: 100,
+      },
+    ];
+  }
+  return [];
+}
+
+/** RR Candy Shield ON: never use a negative headroom when current shields exceed max (drift). */
+function computeRrCandyShieldOnRestore(maxShieldRaw: number, currentShieldRaw: number): number {
+  const maxS = Math.max(1, Math.floor(Number(maxShieldRaw) || 100));
+  const cur = Math.max(0, Math.min(maxS, Math.floor(Number(currentShieldRaw) || 0)));
+  const headroom = Math.max(0, maxS - cur);
+  const want = Math.floor(maxS * 0.5);
+  return Math.min(want, headroom);
 }
 
 interface BattleEngineProps {
@@ -198,7 +385,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const [universalLawEffects, setUniversalLawEffects] = useState<UniversalLawBoonEffects | null>(null);
   const [battleSkills, setBattleSkills] = useState<Move[]>([]); // Canonical battle skills (all unlocked)
   const [userElement, setUserElement] = useState<string | undefined>(undefined); // User's elemental affinity
-  const [skillCooldowns, setSkillCooldowns] = useState<Map<string, number>>(new Map()); // Track cooldowns in battle state
+  /** Per-combatant skill turn cooldowns for this battle (persists across waves; cleared on victory/defeat only). */
+  const [combatCooldowns, setCombatCooldowns] = useState<SkillCooldownsByCombatant>({});
+  const combatCooldownsRef = useRef<SkillCooldownsByCombatant>({});
+  useEffect(() => {
+    combatCooldownsRef.current = combatCooldowns;
+  }, [combatCooldowns]);
+
+  /** Last `battleState.turnCount` we applied the player’s skill CD tick (avoids ticking on phase-only updates, e.g. Live Events). */
+  const lastSkillCooldownTickTurnRef = useRef<number | null>(null);
   
   // Use initialBattleLog if provided (for Mindforge), otherwise use default
   const defaultLog = mindforgeMode 
@@ -364,7 +559,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             opponent.maxVaultHealth !== undefined
               ? opponent.maxVaultHealth
               : Math.floor((opponent.maxPP || 1000) * 0.1),
-          isPlayer: false
+          isPlayer: false,
+          enemyType: opponent.enemyType
         }
       ]
     };
@@ -379,6 +575,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const playerId = currentUser.uid;
       const hasPlayerRow = prev.some(a => a.id === playerId);
 
+      const maxS = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+      const capShield = maxS > 0 ? Math.min(maxS, Math.max(0, Math.floor(Number(vault.shieldStrength) || 0))) : Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
       const playerRow: Opponent = {
         id: playerId,
         name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Player',
@@ -386,7 +584,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         image: userPhotoURL || undefined,
         currentPP: vault.currentPP,
         maxPP: vault.capacity,
-        shieldStrength: vault.shieldStrength,
+        shieldStrength: capShield,
         maxShieldStrength: vault.maxShieldStrength,
         level: userLevel,
         vaultHealth: vault.vaultHealth,
@@ -426,10 +624,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   // Refs for latest allies/opponents so timeouts can read current state (e.g. summon execution)
   const alliesRef = useRef<Opponent[]>(allies);
   const opponentsRef = useRef<Opponent[]>(opponents);
+  const vaultRef = useRef(vault);
   useEffect(() => {
     alliesRef.current = allies;
     opponentsRef.current = opponents;
   }, [allies, opponents]);
+  useEffect(() => {
+    vaultRef.current = vault;
+  }, [vault]);
+
+  /** Latest CPU turn runner (not stable across renders) for stunned skip-turn. */
+  const executeOpponentTurnRef = useRef<
+    ((currentLog: string[], currentOpponent: Opponent, damageMultiplier?: number) => Promise<void>) | null
+  >(null);
   
   // Update wave state from props
   useEffect(() => {
@@ -501,7 +708,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (opp.vaultHealth === undefined && !isPvP) {
       return true;
     }
-    
+
+    // Island Raid / mission wave enemies (vaultHealth + enemy_* ids) and scripted awaken bosses
+    if (opp.awakenedModeEnabled) return true;
+    const oid = String(opp.id || '');
+    if (opp.vaultHealth !== undefined && (oid.startsWith('enemy_') || oid.startsWith('enemy-w'))) {
+      return true;
+    }
+
     return false;
   }, [isPvP]);
 
@@ -555,6 +769,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   useEffect(() => {
     terraAwakenedTriggeredRef.current = false;
   }, [propOpponent?.id]);
+
+  const [cpuAwakeningMedia, setCpuAwakeningMedia] = useState<{
+    steps: MissionMediaSequenceStep[];
+    title: string;
+  } | null>(null);
+  const resumeCpuTurnAfterAwakeningRef = useRef<{
+    newLog: string[];
+    opponent: Opponent;
+    mult: number;
+  } | null>(null);
 
   // Apply status effects at the start of a turn
   const applyTurnEffects = useCallback(async (target: 'player' | 'opponent', log: string[]) => {
@@ -987,6 +1211,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     [equippedArtifacts, equippableCatalogRaw, universalLawEffects]
   );
 
+  const skillRuntimePolicy = useMemo(
+    () => getBattleSkillRuntimePolicy({ isInSession, mindforgeMode, isPvP }),
+    [isInSession, mindforgeMode, isPvP]
+  );
+
   // Load CPU opponent moves from Firestore with real-time listener
   useEffect(() => {
         const cpuMovesRef = doc(db, 'adminSettings', 'cpuOpponentMoves');
@@ -1033,37 +1262,50 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Resolve admin-configured CPU health/shields by opponent id/name.
-  const getConfiguredCPUStats = useCallback((opp: Opponent): { health?: number; shields?: number } | null => {
-    if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return null;
-    const oppId = (opp.id || '').toLowerCase();
-    const oppName = (opp.name || '').toLowerCase().trim();
-    const normalizedName = oppName.replace(/\s*\d+\s*$/, '').trim();
-    const normalizedIdFromName = normalizedName.replace(/\s+/g, '-');
+  // Resolve admin-configured CPU health/shields/enemyType by opponent id/name.
+  const getConfiguredCPUStats = useCallback(
+    (opp: Opponent): { health?: number; shields?: number; enemyType?: ElementType | null } | null => {
+      if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return null;
+      const oppId = (opp.id || '').toLowerCase();
+      const oppName = (opp.name || '').toLowerCase().trim();
+      const normalizedName = oppName.replace(/\s*\d+\s*$/, '').trim();
+      const normalizedIdFromName = normalizedName.replace(/\s+/g, '-');
 
-    const config = cpuOpponentMoves.find((cfg: any) => {
-      const cfgId = (cfg?.id || '').toLowerCase();
-      const cfgName = (cfg?.name || '').toLowerCase().trim();
-      return (
-        cfgId === oppId ||
-        cfgName === oppName ||
-        cfgName === normalizedName ||
-        cfgId === normalizedIdFromName
-      );
-    });
-    if (!config) return null;
+      const config = cpuOpponentMoves.find((cfg: any) => {
+        const cfgId = (cfg?.id || '').toLowerCase();
+        const cfgName = (cfg?.name || '').toLowerCase().trim();
+        return (
+          cfgId === oppId ||
+          cfgName === oppName ||
+          cfgName === normalizedName ||
+          cfgId === normalizedIdFromName
+        );
+      });
+      if (!config) return null;
 
-    const health = Number(config.health);
-    const shields = Number(config.shields);
-    return {
-      health: Number.isFinite(health) && health > 0 ? health : undefined,
-      shields: Number.isFinite(shields) && shields >= 0 ? shields : undefined
-    };
-  }, [cpuOpponentMoves]);
+      const health = Number(config.health);
+      const shields = Number(config.shields);
+
+      const out: { health?: number; shields?: number; enemyType?: ElementType | null } = {};
+      if (Number.isFinite(health) && health > 0) out.health = health;
+      if (Number.isFinite(shields) && shields >= 0) out.shields = shields;
+      if (Object.prototype.hasOwnProperty.call(config, 'enemyType')) {
+        out.enemyType = normalizeElementType(
+          config.enemyType == null ? null : String(config.enemyType)
+        );
+      }
+
+      if (out.health === undefined && out.shields === undefined && out.enemyType === undefined) return null;
+      return out;
+    },
+    [cpuOpponentMoves]
+  );
 
   // Apply admin-configured CPU health/shields once per opponent at battle start.
   useEffect(() => {
     if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) return;
+    // Mission battles embed scaled stats + moves from Firestore in the battle room — do not overwrite.
+    if (typeof gameId === 'string' && gameId.startsWith('mission-battle-')) return;
 
     if (isMultiplayer) {
       setOpponents(prev => {
@@ -1072,16 +1314,29 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           const key = `multi:${opp.id}`;
           if (cpuStatsAppliedRef.current.has(key)) return opp;
           const cfg = getConfiguredCPUStats(opp);
-          if (!cfg || (cfg.health === undefined && cfg.shields === undefined)) return opp;
+          if (
+            !cfg ||
+            (cfg.health === undefined && cfg.shields === undefined && cfg.enemyType === undefined)
+          )
+            return opp;
 
           cpuStatsAppliedRef.current.add(key);
           changed = true;
           return {
             ...opp,
-            currentPP: cfg.health ?? opp.currentPP,
-            maxPP: cfg.health ?? opp.maxPP,
-            shieldStrength: cfg.shields ?? opp.shieldStrength,
-            maxShieldStrength: cfg.shields ?? opp.maxShieldStrength
+            ...(cfg.health !== undefined
+              ? {
+                  currentPP: cfg.health,
+                  maxPP: cfg.health,
+                }
+              : {}),
+            ...(cfg.shields !== undefined
+              ? {
+                  shieldStrength: cfg.shields,
+                  maxShieldStrength: cfg.shields,
+                }
+              : {}),
+            ...(cfg.enemyType !== undefined ? { enemyType: cfg.enemyType } : {}),
           };
         });
 
@@ -1097,18 +1352,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const key = `single:${prev.id}`;
       if (cpuStatsAppliedRef.current.has(key)) return prev;
       const cfg = getConfiguredCPUStats(prev);
-      if (!cfg || (cfg.health === undefined && cfg.shields === undefined)) return prev;
+      if (
+        !cfg ||
+        (cfg.health === undefined && cfg.shields === undefined && cfg.enemyType === undefined)
+      )
+        return prev;
 
       cpuStatsAppliedRef.current.add(key);
       return {
         ...prev,
-        currentPP: cfg.health ?? prev.currentPP,
-        maxPP: cfg.health ?? prev.maxPP,
-        shieldStrength: cfg.shields ?? prev.shieldStrength,
-        maxShieldStrength: cfg.shields ?? prev.maxShieldStrength
+        ...(cfg.health !== undefined
+          ? { currentPP: cfg.health, maxPP: cfg.health }
+          : {}),
+        ...(cfg.shields !== undefined
+          ? { shieldStrength: cfg.shields, maxShieldStrength: cfg.shields }
+          : {}),
+        ...(cfg.enemyType !== undefined ? { enemyType: cfg.enemyType } : {}),
       };
     });
-  }, [cpuOpponentMoves, getConfiguredCPUStats, isMultiplayer, onOpponentsUpdate]);
+  }, [cpuOpponentMoves, getConfiguredCPUStats, isMultiplayer, onOpponentsUpdate, gameId]);
 
   // Update parent component with battle log changes (for Mindforge mode, In Session, and multiplayer)
   useEffect(() => {
@@ -1253,6 +1515,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           maxShieldStrength: enemy.maxShieldStrength || 100,
           level: enemy.level || 1,
           image: enemy.image,
+          moves: Array.isArray(enemy.moves) ? enemy.moves : [],
           isDefeated: false
         }));
         
@@ -1436,18 +1699,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const newAlliesCount = propAllies.length;
       
       console.log('BattleEngine: Updating allies from props:', newAlliesCount, propAllies.map(a => a.name));
-      // Live Event: never wipe summons that exist in local state but not yet in props (timing / id sync).
-      if (isInSession) {
-        setAllies(prev => {
-          const propIds = new Set(propAllies.map(a => a.id));
-          const carryOverSummons = prev.filter(
-            a => a.isSummon && a.summonerId && !propIds.has(a.id)
-          );
-          return carryOverSummons.length > 0 ? [...propAllies, ...carryOverSummons] : propAllies;
-        });
-      } else {
-        setAllies(propAllies);
-      }
+      // Never wipe summons that exist locally but are not yet on the roster payload (Island Raid / missions / live).
+      setAllies(prev => {
+        const propIds = new Set(propAllies.map(a => a.id));
+        const carryOverSummons = prev.filter(
+          a => a.isSummon && a.summonerId && !propIds.has(a.id)
+        );
+        return carryOverSummons.length > 0 ? [...propAllies, ...carryOverSummons] : propAllies;
+      });
       
       // If a new player joined (allies count increased), reset to selection phase
       // This ensures the new player can select moves and existing players can still select/change moves
@@ -1821,37 +2080,55 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     loadBattleSkills();
   }, [currentUser, moves]); // Reload when moves array changes (from BattleContext listener)
 
-  // Decrement skill cooldowns each turn
+  // Decrement skill cooldowns once per combat turn advance (canonical: tick when `turnCount` increases while owner may act).
   useEffect(() => {
-    // Only decrement cooldowns when it's the player's turn (after opponent turn completes)
-    if (battleState.isPlayerTurn && battleState.phase === 'selection') {
-      setSkillCooldowns(prev => {
-        const updated = new Map(prev);
-        let hasChanges = false;
-        
-        updated.forEach((cooldown, skillId) => {
-          if (cooldown > 0) {
-            updated.set(skillId, cooldown - 1);
-            hasChanges = true;
-            if (cooldown - 1 === 0) {
-              console.log(`⏱️ [BattleEngine] Cooldown expired for skill ${skillId}`);
-            }
-          }
-        });
-        
-        // Remove cooldowns that reached 0
-        if (hasChanges) {
-          updated.forEach((cooldown, skillId) => {
-            if (cooldown === 0) {
-              updated.delete(skillId);
-            }
-          });
-        }
-        
-        return hasChanges ? updated : prev;
-      });
+    if (!skillRuntimePolicy.applyTurnSkillCooldownTicks) return;
+    if (!battleState.isPlayerTurn || battleState.phase !== 'selection') return;
+
+    const t = battleState.turnCount;
+    if (lastSkillCooldownTickTurnRef.current === null) {
+      lastSkillCooldownTickTurnRef.current = t;
+      return;
     }
-  }, [battleState.isPlayerTurn, battleState.phase, battleState.turnCount]);
+    if (lastSkillCooldownTickTurnRef.current >= t) return;
+
+    lastSkillCooldownTickTurnRef.current = t;
+
+    // Single canonical tick for the local player when a new combat turn begins after opponent / round advance.
+    if (!currentUser?.uid) return;
+    setCombatCooldowns((prev) => {
+      const next = decrementCooldownsForCombatant(currentUser.uid, prev);
+      if (next !== prev) {
+        const before = prev[currentUser?.uid || ''];
+        const after = next[currentUser?.uid || ''];
+        console.log('⏱️ [BattleEngine] Player cooldown tick', {
+          turnCount: t,
+          actorId: currentUser.uid,
+          before: before ? { ...before } : {},
+          after: after ? { ...after } : {},
+        });
+      }
+      return next;
+    });
+  }, [
+    battleState.turnCount,
+    battleState.isPlayerTurn,
+    battleState.phase,
+    skillRuntimePolicy.applyTurnSkillCooldownTicks,
+    currentUser?.uid,
+  ]);
+
+  // Mirror cooldown map onto battleState for debugging / future sync (authoritative state is `combatCooldowns`).
+  useEffect(() => {
+    setBattleState((prev) => ({ ...prev, cooldowns: combatCooldowns }));
+  }, [combatCooldowns]);
+
+  // Clear per-battle cooldown map when the fight ends (same instance may host another flow). Waves do NOT clear.
+  useEffect(() => {
+    if (battleState.phase !== 'victory' && battleState.phase !== 'defeat') return;
+    setCombatCooldowns({});
+    lastSkillCooldownTickTurnRef.current = null;
+  }, [battleState.phase]);
 
   // Healing Boost: restore vault health (or PP) once at the start of each player turn
   useEffect(() => {
@@ -1964,6 +2241,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ? m.baseDamage
           : (min !== undefined && max !== undefined ? Math.floor((min + max) / 2) : 0);
         const constructMoveId = `construct-skill::${summon.id}::${m?.id || idx}`;
+        const constructAffinity =
+          (typeof m?.elementalAffinity === 'string' && m.elementalAffinity) ||
+          summon.summonElementalType ||
+          undefined;
         constructMoves.push({
           id: constructMoveId,
           name: `${summon.name}: ${m?.name || 'Construct Attack'}`,
@@ -1977,7 +2258,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           currentCooldown: 0,
           unlocked: true,
           masteryLevel: 1,
-          targetType: 'single'
+          targetType: 'single',
+          ...(constructAffinity ? { elementalAffinity: constructAffinity as Move['elementalAffinity'] } : {}),
         } as Move);
       });
     });
@@ -1987,10 +2269,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   // Available moves: own unlocked skills + active construct skills.
   const availableMoves = useMemo(() => {
+    const uid = currentUser?.uid || '';
     const playerSkills = (battleSkills.length > 0 ? battleSkills : moves.filter(m => m.unlocked))
       .filter(skill => skill.unlocked)
       .map(skill => {
-        const currentCooldown = skillCooldowns.get(skill.id) || 0;
+        const currentCooldown = uid ? getRemainingCooldown(uid, skill.id, combatCooldowns) : 0;
         return { ...skill, currentCooldown };
       });
 
@@ -2004,7 +2287,89 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     return merged;
-  }, [battleSkills, moves, skillCooldowns, constructSkillMoves, turnActionsUsed, isConstructSkillId]);
+  }, [battleSkills, moves, combatCooldowns, constructSkillMoves, turnActionsUsed, isConstructSkillId, currentUser?.uid]);
+
+  /** Per-move availability for arena UI (matches pre-execution validation in `handleAnimationComplete`). */
+  const skillAvailabilityByMoveId = useMemo(() => {
+    if (!currentUser?.uid) return {} as Record<string, SkillAvailabilityResult>;
+    const selfAlly = allies.find((a) => a.id === currentUser.uid);
+    const movesEarned = (selfAlly as { movesEarned?: number } | undefined)?.movesEarned;
+    const isStunned = playerEffects.some((e) => e.type === 'stun' && e.duration > 0);
+    const hasShieldBreak = playerEffects.some(
+      (e) => (e as { type: string }).type === 'shield_break' && (e.duration ?? 0) > 0
+    );
+    const ctxBase = {
+      policy: skillRuntimePolicy,
+      battleModeLabel: isInSession ? 'live' : mindforgeMode ? 'mindforge' : isPvP ? 'pvp' : isMultiplayer ? 'multiplayer' : 'solo',
+      waveNumber: currentWaveIndex,
+      turnOwnerId: currentUser.uid,
+      participationPointsAvailable: typeof movesEarned === 'number' ? movesEarned : undefined,
+      isActorStunned: isStunned,
+      hasShieldBreak,
+    };
+    const out: Record<string, SkillAvailabilityResult> = {};
+    for (const m of availableMoves) {
+      const liveBreakdown =
+        isInSession && !isConstructSkillId(m.id)
+          ? computeLiveEventParticipationSkillCost(
+              m,
+              equippedArtifacts as Record<string, unknown> | null,
+              equippableCatalogRaw,
+              getSkillCostReductionFromBattleEffects(playerEffects as never)
+            )
+          : null;
+      out[m.id] = getSkillAvailability({
+        actor: { id: currentUser.uid },
+        skill: m,
+        battleContext: { ...ctxBase, liveEventFinalCost: liveBreakdown?.finalCost },
+        currentState: { cooldowns: combatCooldowns },
+      });
+    }
+    return out;
+  }, [
+    availableMoves,
+    combatCooldowns,
+    currentUser?.uid,
+    allies,
+    playerEffects,
+    skillRuntimePolicy,
+    isInSession,
+    mindforgeMode,
+    isPvP,
+    isMultiplayer,
+    currentWaveIndex,
+    equippedArtifacts,
+    equippableCatalogRaw,
+    isConstructSkillId,
+  ]);
+
+  const showSkipStunnedTurn = useMemo(() => {
+    if (showSpacesBattleLayout) return false;
+    if (!battleState.isPlayerTurn || battleState.phase !== 'selection' || battleState.isAnimating) return false;
+    const immobilized = playerEffects.some(
+      (e) => (e.type === 'stun' || e.type === 'freeze') && (e.duration ?? 0) > 0
+    );
+    if (!immobilized) return false;
+    const isIslandRaid = !!gameId && !isInSession;
+    const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
+    const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    if (isPvP && battleRoom) return false;
+    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) return false;
+    return true;
+  }, [
+    showSpacesBattleLayout,
+    battleState.isPlayerTurn,
+    battleState.phase,
+    battleState.isAnimating,
+    playerEffects,
+    gameId,
+    isInSession,
+    isPvP,
+    battleRoom,
+    isMultiplayer,
+    allies,
+    currentUser?.uid,
+  ]);
   
   // Create availableTargets from current opponent state - this will update when opponent changes
   // For single player mode, use single opponent. For multiplayer, use opponents array.
@@ -2189,16 +2554,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const playerHasMove = currentUser && participantMoves.has(currentUser.uid);
     if (!playerHasMove) return;
 
-    // CRITICAL: Wait for cpuOpponentMoves to load before selecting moves
-    // This ensures we use Firestore moves instead of fallback moves
-    if (cpuOpponentMoves === null) {
-      console.log(`⏳ Waiting for cpuOpponentMoves to load before selecting moves for CPU opponents...`);
-      return; // Don't select moves yet - wait for Firestore data to load
-    }
-
-    if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) {
-      console.warn(`⚠️ cpuOpponentMoves is not loaded or empty. Available: ${cpuOpponentMoves ? 'empty array' : 'null'}. Will wait for data to load.`);
-      return; // Wait for data to load
+    // Wait for Firestore CPU catalog when any opponent still needs it (mission rooms embed moves on each enemy).
+    const isMissionBattleRoom = typeof gameId === 'string' && gameId.startsWith('mission-battle-');
+    const needsCpuCatalog =
+      !isMissionBattleRoom ||
+      opponents.some((o) => !Array.isArray((o as { moves?: unknown }).moves) || !(o as { moves?: unknown[] }).moves?.length);
+    if (needsCpuCatalog) {
+      if (cpuOpponentMoves === null) {
+        console.log(`⏳ Waiting for cpuOpponentMoves to load before selecting moves for CPU opponents...`);
+        return;
+      }
+      if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) {
+        console.warn(
+          `⚠️ cpuOpponentMoves is not loaded or empty. Available: ${cpuOpponentMoves ? 'empty array' : 'null'}. Will wait for data to load.`
+        );
+        return;
+      }
     }
 
     // Select moves for CPU opponents that haven't selected yet
@@ -2207,24 +2578,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
       // Get CPU opponent moves from Firestore or default
       let opponentMoves: any[] = [];
-      
-      // Define these variables in outer scope so they're available for error logging
-        const opponentId = opponent.id || opponent.name?.toLowerCase().replace(/\s+/g, '-');
-        const opponentName = opponent.name?.toLowerCase() || '';
-      // CRITICAL: Use getBaseOpponentName to consistently extract base name (strips trailing numbers)
-      // This ensures "Unpowered Zombie 1", "Unpowered Zombie 2", "Unpowered Zombie 3" all map to "Unpowered Zombie"
+      const embedded = (opponent as { moves?: unknown }).moves;
+      if (Array.isArray(embedded) && embedded.length > 0) {
+        opponentMoves = mapCpuMovesToBattleEngineFormat(embedded as any[]);
+      }
+
+      const opponentId = opponent.id || opponent.name?.toLowerCase().replace(/\s+/g, '-');
+      const opponentName = opponent.name?.toLowerCase() || '';
       const baseOpponentName = getBaseOpponentName(opponent.name || '');
       const normalizedOpponentName = baseOpponentName.toLowerCase().trim();
-      
-      // CRITICAL: cpuOpponentMoves should be loaded at this point
-      if (!Array.isArray(cpuOpponentMoves) || cpuOpponentMoves.length === 0) {
-        console.warn(`⚠️ cpuOpponentMoves is not an array or is empty for ${opponent.name}.`);
-        console.warn(`⚠️ cpuOpponentMoves is not an array for ${opponent.name}. Type:`, typeof cpuOpponentMoves);
-      } else if (cpuOpponentMoves.length === 0) {
-        console.warn(`⚠️ cpuOpponentMoves array is empty for ${opponent.name}. Will use fallback moves.`);
-      }
-      
-      if (cpuOpponentMoves && Array.isArray(cpuOpponentMoves) && cpuOpponentMoves.length > 0) {
+
+      if (opponentMoves.length === 0 && cpuOpponentMoves && Array.isArray(cpuOpponentMoves) && cpuOpponentMoves.length > 0) {
         
         console.log(`🔍 Looking for moves for ${opponent.name} (ID: ${opponentId}, Name: ${opponentName})`);
         console.log(`🔍 Available opponents in Firestore:`, cpuOpponentMoves.map((opp: any) => ({ 
@@ -2874,7 +3238,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       
       // Regular AI ally move selection (for other AI allies if any)
-      const availableMoves = moves || [];
+      const allyMoves = (participant as { battleMoves?: Move[] }).battleMoves;
+      const availableMoves =
+        Array.isArray(allyMoves) && allyMoves.length > 0 ? allyMoves : moves || [];
       // Prefer supportive/defensive moves for AI allies, or basic attack
       const supportiveMove = availableMoves.find(m => m.shieldBoost || m.healing);
       const basicMove = availableMoves.find(m => m.damage && !m.shieldBoost && !m.healing) || availableMoves[0];
@@ -2974,7 +3340,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // For single-player with AI allies (like Ch2-5), don't wait for turn order - execute immediately
-    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+    const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
     const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
     
     // If single-player with AI, skip turn order calculation - moves execute immediately
@@ -3128,6 +3494,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Small delay before starting round (reduced for better responsiveness)
     await new Promise(resolve => setTimeout(resolve, 100));
+
+    /** Running totals so multiple CPU hits in one round don't read stale `vault` from the React closure. */
+    const playerAllyRow = alliesRef.current.find((a) => a.id === currentUser?.uid);
+    const vaultMaxShield = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+    const allyMaxShield = Math.max(0, Math.floor(Number(playerAllyRow?.maxShieldStrength) || 0));
+    const mergedMaxShield = Math.max(vaultMaxShield, allyMaxShield);
+    const maxShieldPlayer = Math.max(1, mergedMaxShield > 0 ? mergedMaxShield : 100);
+    const maxVHPlayer = Math.floor((vault.capacity || 1000) * 0.1);
+    const clampPlayerShield = (s: number) => Math.max(0, Math.min(maxShieldPlayer, s));
+    let runningPlayerShield = clampPlayerShield(
+      Math.floor(Number(playerAllyRow?.shieldStrength ?? vault.shieldStrength) || 0)
+    );
+    let runningPlayerVaultHealth = Math.max(
+      0,
+      Math.floor(
+        Number(
+          playerAllyRow?.vaultHealth !== undefined && playerAllyRow?.vaultHealth !== null
+            ? playerAllyRow.vaultHealth
+            : vault.vaultHealth !== undefined && vault.vaultHealth !== null
+              ? vault.vaultHealth
+              : maxVHPlayer
+        )
+      )
+    );
     
     // Execute each move in turn order
     for (let i = 0; i < turnOrderResults.length; i++) {
@@ -3152,14 +3542,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const isAlly = allies.some(ally => ally.id === participant.id);
       const isPlayerMove = isAlly; // All allies are players (including invited players)
       const targetId = moveData.targetId;
-      
+
+      const playerMoveHasSummonEffect =
+        isPlayerMove &&
+        Array.isArray(moveData.move.statusEffects) &&
+        moveData.move.statusEffects.some((e) => e?.type === 'summon');
+
       // Find target - validate targetId exists in current opponents/allies
-      const isSelfDirectedMove = isPlayerMove && (moveData.move.shieldBoost || moveData.move.healing || moveData.move.targetType === 'self');
+      const isSelfDirectedMove =
+        isPlayerMove &&
+        (moveData.move.shieldBoost ||
+          moveData.move.healing ||
+          moveData.move.targetType === 'self' ||
+          playerMoveHasSummonEffect);
       const isTargetingSelf = targetId === 'self' || targetId === currentUser?.uid || targetId === participant.id;
 
       let target: Opponent | undefined;
       if (isPlayerMove) {
-        if (isSelfDirectedMove && isTargetingSelf) {
+        // Summon skills must resolve on the actor even if UI left targetId on an enemy (missions / turn order).
+        if ((isSelfDirectedMove && isTargetingSelf) || playerMoveHasSummonEffect) {
           // Self-directed move (Shield ON, heals, etc.) — target is the actor (player) who used it
           target = allies.find(ally => ally.id === participant.id) ?? (participant as Opponent);
           console.log(`🎯 [BattleEngine] Self-directed move: ${participant.name} targets self (${target.id})`);
@@ -3311,8 +3712,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       const isSummonMove = (participant as Opponent).isSummon && moveData.move.id?.startsWith?.('summon_attack_');
       if (isSummonMove && target) {
         const summon = participant as Opponent;
-        const summonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
+        const baseSummonDmg = moveData.move.damage ?? summon.summonDamage ?? 100;
         const elem = summon.summonElementalType || 'fire';
+        const atkEl = attackElementFromSummonAffinity(elem);
+        const elemMult = getElementMultiplier(atkEl, target.enemyType ?? null);
+        const summonDmg = Math.max(0, Math.floor(baseSummonDmg * elemMult));
+        const elemLine = elementEffectivenessBattleLogLine(elemMult);
         const targetId = target.id;
         const targetName = target.name || 'Unknown';
         const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
@@ -3343,17 +3748,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
           return updated;
         });
-        const newDuration = Math.max(0, (summon.summonDuration ?? 1) - 1);
-        setAllies(prev => {
-          const next = newDuration <= 0 ? prev.filter(a => a.id !== participant.id) : prev.map(a => a.id === participant.id ? { ...a, summonDuration: newDuration } : a);
-          if (onAlliesUpdate) onAlliesUpdate(next);
-          return next;
-        });
-        const summonLog = newDuration <= 0
-          ? `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage and then faded!`
-          : `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage!`;
+        // Summon lifetime is tracked by round ticks + HP (not decremented each attack)
+        const summonLog = `⚡ ${summon.name} struck ${targetName} for ${summonDmg} ${elem} damage!`;
         setBattleState(prev => {
-          const newLog = [...prev.battleLog, summonLog];
+          const newLog = [...prev.battleLog, summonLog, ...(elemLine ? [elemLine] : [])];
           if (onBattleLogUpdate) onBattleLogUpdate(newLog);
           return { ...prev, battleLog: newLog };
         });
@@ -3372,6 +3770,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.log(`🎮 Executing player move for ${playerName} (${participant.id}): ${playerMove.name} on target ${targetId}`);
         
         // Calculate damage using proper damage calculation system
+        let elementMatchLog: string | null = null;
         let totalDamage = 0;
         if (playerMove.damage && playerMove.damage > 0) {
           // Use the move's actual damage property if it exists (from upgrades)
@@ -3404,6 +3803,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           console.log(`🎯 Player move damage calculation: ${playerMove.name}, baseDamage: ${baseDamage}, level: ${playerMove.level}, mastery: ${effectiveMasteryLevel}, finalDamage: ${totalDamage}`);
         } else {
           console.warn(`⚠️ Player move ${playerMove.name} has no damage (damage: ${playerMove.damage})`);
+        }
+
+        if (
+          playerMove.type === 'attack' &&
+          totalDamage > 0 &&
+          target &&
+          !(isSelfDirectedMove && isTargetingSelf)
+        ) {
+          const atkEl = attackElementFromMove(playerMove);
+          const mult = getElementMultiplier(atkEl, target.enemyType ?? null);
+          totalDamage = Math.max(0, Math.floor(totalDamage * mult));
+          elementMatchLog = elementEffectivenessBattleLogLine(mult);
         }
         
         // Apply damage to target (skip for self-directed moves — they apply to actor's vault)
@@ -3459,19 +3870,31 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               const currentShield = current.shieldStrength ?? 0;
               const newTargetShieldFromPrev = Math.max(0, currentShield - targetShieldDamage);
               const newTargetHealthFromPrev = Math.max(0, currentHealth - targetHealthDamage);
-              const updatedOpponent = { ...current, shieldStrength: newTargetShieldFromPrev };
+              let computed = { ...current, shieldStrength: newTargetShieldFromPrev };
               if (current.vaultHealth !== undefined) {
-                updatedOpponent.vaultHealth = newTargetHealthFromPrev;
-                updatedOpponent.maxVaultHealth = current.maxVaultHealth ?? targetMaxHealth;
-                if (checkIsCPUOpponent(current)) updatedOpponent.currentPP = newTargetHealthFromPrev;
+                computed.vaultHealth = newTargetHealthFromPrev;
+                computed.maxVaultHealth = current.maxVaultHealth ?? targetMaxHealth;
+                if (checkIsCPUOpponent(current)) computed.currentPP = newTargetHealthFromPrev;
               } else {
-                updatedOpponent.currentPP = newTargetHealthFromPrev;
+                computed.currentPP = newTargetHealthFromPrev;
               }
-              const finalHealth = updatedOpponent.vaultHealth !== undefined ? updatedOpponent.vaultHealth : updatedOpponent.currentPP;
-              const finalShield = updatedOpponent.shieldStrength;
-              updatedOpponent.isDefeated = (finalHealth ?? 0) <= 0 && (finalShield ?? 0) <= 0;
-              if (updatedOpponent.isDefeated) {
-                (updatedOpponent as any).defeatedAt = new Date();
+              const wasAwakenedBefore = !!current.isAwakened;
+              computed = maybeApplyCpuAwakenedPhase(computed, checkIsCPUOpponent(current));
+              if (!wasAwakenedBefore && computed.isAwakened) {
+                const awakenLines = buildCpuAwakenedAnnouncementLines(computed.name);
+                queueMicrotask(() => {
+                  setBattleState((prev) => {
+                    const newLog = [...prev.battleLog, ...awakenLines];
+                    if (onBattleLogUpdate) onBattleLogUpdate(newLog);
+                    return { ...prev, battleLog: newLog };
+                  });
+                });
+              }
+              const finalHealth = computed.vaultHealth !== undefined ? computed.vaultHealth : computed.currentPP;
+              const finalShield = computed.shieldStrength;
+              computed.isDefeated = (finalHealth ?? 0) <= 0 && (finalShield ?? 0) <= 0;
+              if (computed.isDefeated) {
+                (computed as any).defeatedAt = new Date();
                 const wasAlreadyDefeated = current.isDefeated === true;
                 console.log(`💀 [BattleEngine] Enemy ${targetName} (${targetId}) is now defeated - health=${finalHealth}, shield=${finalShield}`);
                 if (!wasAlreadyDefeated && currentUser) {
@@ -3480,11 +3903,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                   );
                 }
               } else {
-                updatedOpponent.isDefeated = false;
-                (updatedOpponent as any).defeatedAt = undefined;
+                computed.isDefeated = false;
+                (computed as any).defeatedAt = undefined;
               }
-              console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${currentHealth} → ${newTargetHealthFromPrev}, shield ${currentShield} → ${newTargetShieldFromPrev}, isDefeated=${updatedOpponent.isDefeated}`);
-              const updated = prev.map(opp => opp.id === targetId ? updatedOpponent : opp);
+              console.log(`📝 [Player Move] Updated opponent ${targetName} (${targetId}): health ${currentHealth} → ${newTargetHealthFromPrev}, shield ${currentShield} → ${newTargetShieldFromPrev}, isDefeated=${computed.isDefeated}`);
+              const updated = prev.map(opp => opp.id === targetId ? computed : opp);
               
               console.log(`✅ [BattleEngine] Opponents updated. Target ${targetName} health: ${currentHealth} → ${newTargetHealthFromPrev}`);
               
@@ -3501,10 +3924,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                   setTimeout(() => {
                     console.log(`📤 [BattleEngine] Direct call to onOpponentsUpdate (player move) with ${updated.length} opponents after damage to ${targetName}`, {
                       updatedOpponent: {
-                        id: updatedOpponent.id,
-                        name: updatedOpponent.name,
-                        vaultHealth: updatedOpponent.vaultHealth,
-                        shieldStrength: updatedOpponent.shieldStrength
+                        id: computed.id,
+                        name: computed.name,
+                        vaultHealth: computed.vaultHealth,
+                        shieldStrength: computed.shieldStrength
                       },
                       allOpponents: updated.map(opp => ({
                         id: opp.id,
@@ -3576,7 +3999,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           // Update battle log (callback will be called via useEffect to avoid React error)
           setBattleState(prev => ({
             ...prev,
-            battleLog: [...prev.battleLog, logMessage]
+            battleLog: elementMatchLog
+              ? [...prev.battleLog, logMessage, elementMatchLog]
+              : [...prev.battleLog, logMessage]
           }));
         } else {
           // Non-damage move (heal, shield boost, etc.)
@@ -3618,20 +4043,122 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               const maxShields = vault.maxShieldStrength || 100;
               let shieldAmount = 0;
               if (playerMove.id === 'rr-candy-on-off-shields-on') {
-                shieldAmount = Math.floor(maxShields * 0.5);
+                shieldAmount = computeRrCandyShieldOnRestore(maxShields, vault.shieldStrength || 0);
               } else if (playerMove.shieldBoost && playerMove.shieldBoost > 0) {
                 const effectiveMasteryLevel = getEffectiveMasteryLevel(playerMove, equippedArtifacts);
                 const shieldRange = calculateShieldBoostRange(playerMove.shieldBoost, playerMove.level, effectiveMasteryLevel);
                 const shieldResult = rollDamage(shieldRange, participant.level || 1, playerMove.level, effectiveMasteryLevel);
                 shieldAmount = shieldResult.damage;
               }
-              const newShield = Math.min(maxShields, (vault.shieldStrength || 0) + shieldAmount);
+              const curClamped = Math.max(0, Math.min(maxShields, Math.floor(vault.shieldStrength || 0)));
+              const newShield = Math.min(maxShields, curClamped + shieldAmount);
               if (shieldAmount > 0) {
                 updateVault({ shieldStrength: newShield }).then(() => refreshVaultData()).catch(err =>
                   console.error('Failed to apply self-directed shield boost to vault:', err)
                 );
               }
             }
+          }
+        }
+
+        // Turn-order path: spawn construct (Stroke / artifact summon). Animation path does this in handleAnimationComplete.
+        const summonFxList = collectSummonEffectsForTurnOrderMove(playerMove);
+        if (summonFxList.length > 0 && currentUser?.uid && participant.id === currentUser.uid) {
+          for (const rawEffect of summonFxList) {
+            const statusEffect = rawEffect as {
+              type?: string;
+              duration?: number;
+              summonDamage?: number;
+              summonElementalType?: string;
+              summonName?: string;
+            };
+            if (statusEffect.type !== 'summon') continue;
+            const summonEffectSource =
+              getFirstSummonEffectFromMove({ ...playerMove, statusEffects: [statusEffect] } as Move) ||
+              ({
+                type: 'summon' as const,
+                duration: statusEffect.duration || 2,
+                summonDamage: statusEffect.summonDamage ?? 100,
+                summonElementalType: statusEffect.summonElementalType || 'fire',
+                summonName: statusEffect.summonName,
+              } as const);
+            const artifactLevelForSummon = playerMove.artifactGrant?.artifactLevel ?? 1;
+            const masteryLevelForSummon = playerMove.masteryLevel ?? 1;
+            const stats = resolveConstructStatsForSummonEffect(
+              summonEffectSource,
+              artifactLevelForSummon,
+              masteryLevelForSummon
+            );
+            const summonElementalType = stats.elementalType as NonNullable<Opponent['summonElementalType']>;
+            const summonName = stats.displayName;
+            const constructId = `summon_${currentUser.uid}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+            const isLightConstruct =
+              summonElementalType === 'light' ||
+              summonName === 'Construct of Light' ||
+              summonName === 'Light Construct';
+            const newConstruct: Opponent = {
+              id: constructId,
+              name: summonName,
+              currentPP: stats.maxHealth,
+              maxPP: stats.maxHealth,
+              vaultHealth: stats.maxHealth,
+              maxVaultHealth: stats.maxHealth,
+              shieldStrength: stats.maxShield,
+              maxShieldStrength: stats.maxShield,
+              level: 1,
+              isAI: true,
+              controller: 'ai',
+              isSummon: true,
+              summonDamage: stats.attackDamage,
+              summonElementalType,
+              summonerId: currentUser.uid,
+              ...(isLightConstruct && { image: '/images/Light_Construct.png', photoURL: '/images/Light_Construct.png' }),
+            };
+            let summonSpawned = false;
+            setAllies((prev) => {
+              // If animation path already spawned this construct, don't duplicate (missions can run both paths).
+              if (
+                prev.some(
+                  (a) =>
+                    a.isSummon &&
+                    a.summonerId === currentUser.uid &&
+                    (a.name === summonName ||
+                      (isLightConstruct &&
+                        (a.name === 'Light Construct' || a.name === 'Construct of Light')))
+                )
+              ) {
+                return prev;
+              }
+              summonSpawned = true;
+              const next = [...prev, newConstruct];
+              if (onAlliesUpdate) {
+                onAlliesUpdate(next);
+              }
+              return next;
+            });
+            if (summonSpawned) {
+              const summonLogLine = `✨ You summoned ${summonName} to assist you until it is defeated! (artifact level ${stats.artifactLevelUsed} · ${stats.attackDamage} atk · ${stats.maxHealth} HP · ${stats.maxShield} shields)`;
+              setBattleState((prev) => {
+                const newLog = [...prev.battleLog, summonLogLine];
+                if (onBattleLogUpdate) {
+                  onBattleLogUpdate(newLog);
+                }
+                return { ...prev, battleLog: newLog };
+              });
+            }
+          }
+        }
+
+        // Local player only: apply turn-order skill cooldown after this client's move resolved.
+        if (isCurrentPlayer && skillRuntimePolicy.applyTurnSkillCooldownOnUse && currentUser?.uid) {
+          const effCdTurnOrder = getBattleSkillCooldownTurns(playerMove);
+          if (effCdTurnOrder > 0) {
+            setCombatCooldowns((prev) =>
+              setSkillOnCooldown(currentUser.uid, playerMove.id, effCdTurnOrder, prev)
+            );
+            console.log(
+              `⏱️ [BattleEngine] Turn order: set cooldown for ${playerMove.name} (${playerMove.id}): ${effCdTurnOrder} turns`
+            );
           }
         }
       } else {
@@ -3664,23 +4191,50 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           totalDamage = cpuMove.damage;
           console.log(`⚔️ ${cpuOpponent.name} move damage: ${totalDamage}`);
         }
+
+        let cpuElementMatchLog: string | null = null;
+        const cpuMoveKind = (cpuMove as any).type || 'attack';
+        if (cpuMoveKind === 'attack' && totalDamage > 0 && target) {
+          const atkEl = attackElementFromCpuStrike(cpuMove as any, cpuOpponent.enemyType ?? null);
+          const defEl =
+            target.enemyType ??
+            (target.id === currentUser?.uid ? normalizeElementType(userElement) : null);
+          const mult = getElementMultiplier(atkEl, defEl);
+          totalDamage = Math.max(0, Math.floor(totalDamage * mult));
+          cpuElementMatchLog = elementEffectivenessBattleLogLine(mult);
+        }
         
         // Apply damage to target
         if (totalDamage > 0 && target) {
-          // For Island Raid enemies, use vaultHealth instead of currentPP
-          const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
-          const targetMaxHealth = target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
-          
-          const targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
-          const remainingDamage = totalDamage - targetShieldDamage;
-          const targetHealthDamage = Math.min(remainingDamage, targetHealth);
-          
-          // Update target stats
-          const newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
-          const newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
-          
-          // Store target ID for use in closures
           const targetId = target.id;
+          let summonDestroyed = false;
+          const isLocalPlayer = !!currentUser?.uid && targetId === currentUser.uid;
+          const targetMaxHealth =
+            target.maxVaultHealth !== undefined ? target.maxVaultHealth : (target.maxPP || 100);
+
+          let targetShieldDamage: number;
+          let targetHealthDamage: number;
+          let newTargetShield: number;
+          let newTargetHealth: number;
+
+          if (isLocalPlayer) {
+            const curS = runningPlayerShield;
+            const curH = runningPlayerVaultHealth;
+            targetShieldDamage = Math.min(totalDamage, curS);
+            const remainingDamage = totalDamage - targetShieldDamage;
+            targetHealthDamage = Math.min(remainingDamage, curH);
+            runningPlayerShield = clampPlayerShield(Math.max(0, curS - targetShieldDamage));
+            runningPlayerVaultHealth = Math.max(0, curH - targetHealthDamage);
+            newTargetShield = runningPlayerShield;
+            newTargetHealth = runningPlayerVaultHealth;
+          } else {
+            const targetHealth = target.vaultHealth !== undefined ? target.vaultHealth : (target.currentPP || 0);
+            targetShieldDamage = Math.min(totalDamage, target.shieldStrength || 0);
+            const remainingDamage = totalDamage - targetShieldDamage;
+            targetHealthDamage = Math.min(remainingDamage, targetHealth);
+            newTargetShield = Math.max(0, (target.shieldStrength || 0) - targetShieldDamage);
+            newTargetHealth = Math.max(0, targetHealth - targetHealthDamage);
+          }
           
           // Update opponents array if target is an opponent
           if (targetId && opponents.some(opp => opp.id === targetId)) {
@@ -3689,6 +4243,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             setOpponents(prev => {
               const updated = prev.map(opp => {
                 if (opp.id === targetId) {
+                  const prevHealthForLog =
+                    opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.currentPP || 0);
                   // For Ice Golems and other CPU opponents, use currentPP as health
                   // For Island Raid enemies, use vaultHealth
                   const updatedOpponent = {
@@ -3732,7 +4288,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                     updatedOpponent.defeatedAt = undefined;
                   }
                   
-                  console.log(`📝 [CPU Move] Updated opponent ${opp.name} (${opp.id}): health ${targetHealth} → ${newTargetHealth}, shield ${opp.shieldStrength} → ${newTargetShield}`);
+                  console.log(`📝 [CPU Move] Updated opponent ${opp.name} (${opp.id}): health ${prevHealthForLog} → ${newTargetHealth}, shield ${opp.shieldStrength} → ${newTargetShield}`);
                   return updatedOpponent;
                 }
                 return opp;
@@ -3742,37 +4298,36 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             });
           }
           
-          // Update allies array if target is an ally (player)
+          // Update allies array if target is an ally (player or summon)
           if (targetId && allies.some(ally => ally.id === targetId)) {
-            setAllies(prev => prev.map(ally => {
-              if (ally.id === targetId) {
+            summonDestroyed = !!target.isSummon && newTargetHealth <= 0 && newTargetShield <= 0;
+            setAllies((prev) => {
+              const updated = prev.map((ally) => {
+                if (ally.id !== targetId) return ally;
                 return {
                   ...ally,
                   shieldStrength: newTargetShield,
                   maxShieldStrength: ally.maxShieldStrength || 100,
-                  currentPP: ally.vaultHealth !== undefined ? newTargetHealth : newTargetHealth, // Keep currentPP for compatibility
-                  vaultHealth: ally.vaultHealth !== undefined ? newTargetHealth : undefined, // Update vaultHealth if it exists
-                  maxVaultHealth: ally.maxVaultHealth !== undefined ? targetMaxHealth : undefined
+                  currentPP: ally.vaultHealth !== undefined ? newTargetHealth : newTargetHealth,
+                  vaultHealth: ally.vaultHealth !== undefined ? newTargetHealth : undefined,
+                  maxVaultHealth: ally.maxVaultHealth !== undefined ? targetMaxHealth : undefined,
                 };
-              }
-              return ally;
-            }));
+              });
+              const next = summonDestroyed ? updated.filter((a) => a.id !== targetId) : updated;
+              if (onAlliesUpdate) onAlliesUpdate(next);
+              return next;
+            });
             
             // If targeting the player, also update vault in Firestore
             if (targetId === currentUser?.uid) {
-              const newShieldStrength = Math.max(0, vault.shieldStrength - targetShieldDamage);
-              // Max vault health is always 10% of max PP (capacity is the max PP)
-              const maxPP = vault.capacity || 1000;
-              const maxVaultHealth = Math.floor(maxPP * 0.1);
-              const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
-              const newVaultHealth = Math.max(0, currentVaultHealth - targetHealthDamage);
-              
               try {
                 await updateVault({
-                  shieldStrength: newShieldStrength,
-                  vaultHealth: newVaultHealth
+                  shieldStrength: newTargetShield,
+                  vaultHealth: newTargetHealth,
                 });
-                console.log(`💥 Updated player vault: Health ${currentVaultHealth} → ${newVaultHealth}, Shield ${vault.shieldStrength} → ${newShieldStrength}`);
+                console.log(
+                  `💥 Updated player vault: Health → ${newTargetHealth}, Shield → ${newTargetShield} (running totals)`
+                );
               } catch (error) {
                 console.error('Failed to update vault after CPU attack:', error);
               }
@@ -3812,12 +4367,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           } else {
             logMessage = `⚔️ ${formattedOpponentName} used skill ${moveName} on ${formattedTargetName}!`;
           }
+          if (summonDestroyed) {
+            logMessage = `${logMessage}\n💀 ${formattedTargetName} was destroyed!`;
+          }
           
           console.log(`📝 [CPU Move] Adding to battle log: ${logMessage}`);
           
           // Update battle log immediately using functional state update
           setBattleState(prev => {
-            const updatedLog = [...prev.battleLog, logMessage];
+            const updatedLog = [
+              ...prev.battleLog,
+              logMessage,
+              ...(cpuElementMatchLog ? [cpuElementMatchLog] : []),
+            ];
             console.log(`📝 Battle log updated. New length: ${updatedLog.length}, Last entry: ${updatedLog[updatedLog.length - 1]}`);
             // Notify parent component of battle log update immediately (for Island Raid)
             if (onBattleLogUpdate) {
@@ -3897,7 +4459,26 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       selectedTarget: null
       // Keep the battle log - don't reset it
     }));
-  }, [vault, participantMoves, currentUser, opponents, allies, updateVault, battleState.turnCount, onIceGolemDefeated, isMultiplayer, equippedArtifacts, onOpponentsUpdate, onBattleLogUpdate]);
+  }, [
+    vault,
+    participantMoves,
+    currentUser,
+    opponents,
+    allies,
+    updateVault,
+    battleState.turnCount,
+    onIceGolemDefeated,
+    isMultiplayer,
+    equippedArtifacts,
+    onOpponentsUpdate,
+    onBattleLogUpdate,
+    getBattleSkillCooldownTurns,
+    skillRuntimePolicy.applyTurnSkillCooldownOnUse,
+    refreshVaultData,
+    universalLawEffects,
+    equippableCatalogRaw,
+    userElement,
+  ]);
 
   // CRITICAL FIX: Ensure isPlayerTurn is true during selection phase in multiplayer
   // This allows ALL players (including invited players) to select moves
@@ -3921,7 +4502,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // If we're in execution phase but turn order hasn't been calculated yet, reset to selection
       // This can happen when a player joins mid-battle
       // EXCEPT: For single-player with AI allies, In-Session mode, and Island Raid mode - they execute immediately
-      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = humanPlayers === 1 && allies.length > 1;
       const isIslandRaid = !!gameId && !isInSession; // Use consistent detection logic
       
@@ -3953,10 +4534,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Don't reset - allow execution to proceed
       }
       
-      // Validate selected target still exists in opponents/allies
+      // Validate selected target still exists in opponents/allies (self / 'self' is always valid)
       if (battleState.selectedTarget) {
-        const isValidTarget = opponents.some(opp => opp.id === battleState.selectedTarget) || 
-                              allies.some(ally => ally.id === battleState.selectedTarget);
+        const isSelfPick =
+          battleState.selectedTarget === 'self' ||
+          (!!currentUser?.uid && battleState.selectedTarget === currentUser.uid);
+        const isValidTarget =
+          isSelfPick ||
+          opponents.some((opp) => opp.id === battleState.selectedTarget) ||
+          allies.some((ally) => ally.id === battleState.selectedTarget);
         if (!isValidTarget) {
           console.warn('BattleEngine: Selected target no longer exists, clearing selection', {
             selectedTarget: battleState.selectedTarget,
@@ -3971,7 +4557,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
     }
-  }, [isMultiplayer, battleState.phase, battleState.isPlayerTurn, battleState.turnOrder, battleState.selectedTarget, currentUser, allies, opponents]);
+  }, [isMultiplayer, battleState.phase, battleState.isPlayerTurn, battleState.turnOrder, battleState.selectedTarget, currentUser, allies, opponents, gameId, isInSession]);
 
   const executePlayerMove = useCallback(async () => {
     // Detect Island Raid mode once at the start (has gameId but not isInSession)
@@ -3993,12 +4579,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       cooldown: battleState.selectedMove?.cooldown,
       phase: battleState.phase
     });
-    if (!battleState.selectedMove || !battleState.selectedTarget || !vault) return;
+    if (!battleState.selectedMove || !battleState.selectedTarget) return;
+    if (!vault && !allowsIslandSummonWithoutVault(battleState.selectedMove, gameId, isInSession)) return;
 
     const move = battleState.selectedMove;
     
     // Check if this is single-player with AI allies (like Chapter 2-5)
-    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+    const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
     
     // In true multiplayer, wait for all participants to select moves before executing
@@ -4035,7 +4622,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       isAnimating: true,
       battleLog: castLine ? [...prev.battleLog, castLine] : prev.battleLog,
     }));
-  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession, allies, currentUser]);
+  }, [battleState.selectedMove, battleState.selectedTarget, vault, isMultiplayer, isInSession, gameId, allies, currentUser]);
+
+  const dismissSkillAnimationOverlay = useCallback((logLine?: string) => {
+    setBattleState((prev) => ({
+      ...prev,
+      currentAnimation: null,
+      isAnimating: false,
+      ...(logLine ? { battleLog: [...prev.battleLog, logLine] } : {}),
+    }));
+  }, []);
 
   const handleAnimationComplete = async () => {
     // ALWAYS log animation complete (critical for debugging)
@@ -4052,16 +4648,53 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       timestamp: new Date().toISOString()
     });
     
-    if (!battleState.selectedMove || !battleState.selectedTarget || !vault) {
+    if (!battleState.selectedMove) {
       console.warn('⚠️ [BattleEngine] Animation complete but missing requirements:', {
         hasSelectedMove: !!battleState.selectedMove,
         hasSelectedTarget: !!battleState.selectedTarget,
         hasVault: !!vault
       });
+      dismissSkillAnimationOverlay(
+        '⚠️ Move could not resolve after the skill animation. Return to selection and try again.'
+      );
+      return;
+    }
+    if (!vault && !allowsIslandSummonWithoutVault(battleState.selectedMove, gameId, isInSession)) {
+      console.warn('⚠️ [BattleEngine] Animation complete but vault not ready:', {
+        hasSelectedMove: !!battleState.selectedMove,
+        hasVault: !!vault,
+      });
+      dismissSkillAnimationOverlay(
+        '⚠️ Move could not resolve after the skill animation. Return to selection and try again.'
+      );
       return;
     }
 
+    // Island Raid can briefly outrun BattleContext vault hydration; ref catches up on the next tick.
+    if (!vault && allowsIslandSummonWithoutVault(battleState.selectedMove, gameId, isInSession)) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const vaultForAnimation = vault ?? vaultRef.current;
+    if (!vaultForAnimation) {
+      dismissSkillAnimationOverlay(
+        '⚠️ Still syncing your vault — wait a moment and try the skill again.'
+      );
+      return;
+    }
+    const vExec = vaultForAnimation;
+
     const moveForTarget = battleState.selectedMove;
+    if (!moveNeedsSelfTargetFallback(moveForTarget) && !battleState.selectedTarget) {
+      console.warn('⚠️ [BattleEngine] Animation complete but missing target for offensive move:', {
+        hasSelectedMove: !!battleState.selectedMove,
+        hasSelectedTarget: !!battleState.selectedTarget,
+        moveId: moveForTarget?.id,
+      });
+      dismissSkillAnimationOverlay(
+        '⚠️ Move could not resolve after the skill animation. Return to selection and try again.'
+      );
+      return;
+    }
     const hasSummonEffect = Array.isArray(moveForTarget?.statusEffects) && moveForTarget.statusEffects.some((e) => e?.type === 'summon');
     const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing || moveForTarget?.targetType === 'self' || hasSummonEffect);
 
@@ -4079,8 +4712,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     if (isDefensiveMove) {
       // Defensive moves (Pebbleguard, Strategy Matrix, heals) always affect the player who used them
       const selfName = currentUser?.displayName ?? 'Player';
+      const selfId = currentUser?.uid ?? 'self';
       targetOpponent = {
-        id: currentUser!.uid,
+        id: selfId,
         name: selfName,
         currentPP: 0,
         maxPP: 100,
@@ -4095,22 +4729,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           targetId: battleState.selectedTarget,
           availableOpponentIds: opponents.map(opp => ({ id: opp.id, name: opp.name }))
         });
+        dismissSkillAnimationOverlay('⚠️ Target not found — move cancelled. Select a valid enemy.');
         return;
       }
       targetOpponent = found;
       console.log(`✅ [handleAnimationComplete] Target found: ${targetOpponent.name} (${targetOpponent.id})`);
     } else {
       // Single player mode - check if target matches opponent
-      if (opponent.id !== battleState.selectedTarget && battleState.selectedTarget !== 'self') {
+      const selfPick =
+        battleState.selectedTarget === 'self' ||
+        (!!currentUser?.uid && battleState.selectedTarget === currentUser.uid);
+      if (opponent.id !== battleState.selectedTarget && !selfPick) {
         console.error('❌ [handleAnimationComplete] Target mismatch in single player mode:', {
           targetId: battleState.selectedTarget,
           opponentId: opponent.id
         });
+        dismissSkillAnimationOverlay('⚠️ Target mismatch — move cancelled.');
         return;
       }
       targetOpponent = opponent;
       console.log(`✅ [handleAnimationComplete] Target found (single player): ${targetOpponent.name}`);
     }
+
+    // Remove VFX overlay immediately — the rest of this handler may await Firestore/network for seconds.
+    dismissSkillAnimationOverlay();
 
     // Apply turn effects for player (before move execution)
     const playerEffectResult = await applyTurnEffects('player', battleState.battleLog);
@@ -4118,7 +4760,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       // Player is stunned or defeated, skip their turn
       // Check if defeat occurred (skipTurn will be true if health reached 0)
       if (battleState.phase === 'defeat') {
-        // Defeat already handled in applyTurnEffects
+        dismissSkillAnimationOverlay();
         return;
       }
       
@@ -4142,7 +4784,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // Double-check vault health after effects (in case it was updated)
     // The defeat check in applyTurnEffects should have caught it, but verify here too
     if (battleState.phase === 'defeat') {
-      // Defeat already handled in applyTurnEffects
+      dismissSkillAnimationOverlay();
       return;
     }
 
@@ -4173,11 +4815,57 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       } catch (error) {
         console.error('❌ Failed to validate move availability:', error);
+        dismissSkillAnimationOverlay('⚠️ Could not validate moves — try again.');
         return;
       }
     }
 
     const move = battleState.selectedMove;
+
+    const selfAllyForAvail = allies.find((a) => a.id === currentUser?.uid);
+    const movesEarnedAvail = (selfAllyForAvail as { movesEarned?: number } | undefined)?.movesEarned;
+    const liveBreakdownAvail =
+      isInSession && currentUser && !isConstructSkillId(move.id)
+        ? computeLiveEventParticipationSkillCost(
+            move,
+            equippedArtifacts as Record<string, unknown> | null,
+            equippableCatalogRaw,
+            getSkillCostReductionFromBattleEffects(playerEffects as never)
+          )
+        : null;
+    const isStunnedAvail = playerEffects.some((e) => e.type === 'stun' && e.duration > 0);
+    const hasShieldBreakAvail = playerEffects.some(
+      (e) => (e as { type: string }).type === 'shield_break' && (e.duration ?? 0) > 0
+    );
+    const preUseAvailability = getSkillAvailability({
+      actor: { id: currentUser!.uid },
+      skill: move,
+      battleContext: {
+        policy: skillRuntimePolicy,
+        battleModeLabel: isInSession ? 'live' : mindforgeMode ? 'mindforge' : isPvP ? 'pvp' : isMultiplayer ? 'multiplayer' : 'solo',
+        waveNumber: currentWaveIndex,
+        turnOwnerId: currentUser?.uid,
+        participationPointsAvailable: typeof movesEarnedAvail === 'number' ? movesEarnedAvail : undefined,
+        liveEventFinalCost: liveBreakdownAvail?.finalCost,
+        isActorStunned: isStunnedAvail,
+        hasShieldBreak: hasShieldBreakAvail,
+      },
+      currentState: { cooldowns: combatCooldowns },
+    });
+    if (!preUseAvailability.canUse) {
+      const line = `❌ Cannot use ${move.name}: ${preUseAvailability.reasons.join(' · ')}`;
+      setBattleState((prev) => ({
+        ...prev,
+        battleLog: [...prev.battleLog, line],
+        phase: 'selection',
+        selectedMove: null,
+        selectedTarget: null,
+        currentAnimation: null,
+        isAnimating: false,
+      }));
+      onBattleLogUpdate?.([...battleState.battleLog, line]);
+      return;
+    }
 
     // Live Events: afford participation cost before heavy execution (server still authoritative)
     if (
@@ -4300,6 +4988,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Calculate move effects using new damage range system
     let damage = 0;
+    let elementMatchLog: string | null = null;
     let ppStolen = 0;
     let shieldDamage = 0;
     let playerShieldBoost = 0;
@@ -4315,10 +5004,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // This ensures these moves work correctly and don't get overwritten by normal damage logic
     if (move.id === 'rr-candy-on-off-shields-on') {
       // Shield ON - Restore 50% of max shields
-      const maxShields = vault.maxShieldStrength || 100;
-      const shieldRestoreAmount = Math.floor(maxShields * 0.5);
-      const currentShields = vault.shieldStrength || 0;
-      const actualRestore = Math.min(shieldRestoreAmount, maxShields - currentShields);
+      const maxShields = vExec.maxShieldStrength || 100;
+      const actualRestore = computeRrCandyShieldOnRestore(maxShields, vExec.shieldStrength || 0);
       playerShieldBoost = actualRestore;
       wasShieldAttacked = false; // This is a defensive move, not an attack
       damage = 0; // No damage from this move
@@ -4327,37 +5014,44 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newLog.push(`🔋 ${playerName} used ${displayMoveName} to restore ${actualRestore} shields (50% of max)!`);
       console.log('🔋 [Shield ON] Shield restore calculation:', {
         maxShields,
-        shieldRestoreAmount,
-        currentShields,
+        shieldRestoreAmount: Math.floor(maxShields * 0.5),
+        currentShields: vExec.shieldStrength,
         actualRestore,
         vault: {
-          shieldStrength: vault.shieldStrength,
-          maxShieldStrength: vault.maxShieldStrength
+          shieldStrength: vExec.shieldStrength,
+          maxShieldStrength: vExec.maxShieldStrength
         }
       });
     } else if (move.id === 'rr-candy-on-off-shields-off') {
-      // Shield OFF - Remove 25% of opponent's MAX shields (not current shields)
-      // This is a percentage-based shield removal that bypasses normal damage calculation
-      const opponentMaxShields = targetOpponent.maxShieldStrength || 100;
-      const shieldRemoveAmount = Math.floor(opponentMaxShields * 0.25); // 25% of MAX shields
-      const currentOpponentShields = targetOpponent.shieldStrength || 0;
-      // Remove the calculated amount, but don't go below 0
+      // Use latest opponents row — closure `targetOpponent` can lag behind Firestore/sync during animations.
+      const latestForShield =
+        (opponentsRef.current || opponents).find((o) => o.id === targetOpponent.id) || targetOpponent;
+      const opponentMaxShields = latestForShield.maxShieldStrength || 100;
+      const masteryForShieldOff = getEffectiveMasteryLevel(move, equippedArtifacts);
+      const shieldFrac = shieldOffMaxShieldRemoveFraction(masteryForShieldOff);
+      const shieldPct = shieldOffMaxShieldRemovePercent(masteryForShieldOff);
+      const shieldRemoveAmount = Math.floor(opponentMaxShields * shieldFrac);
+      const currentOpponentShields = latestForShield.shieldStrength || 0;
       const actualRemove = Math.min(shieldRemoveAmount, currentOpponentShields);
       shieldDamage = actualRemove;
-      damage = 0; // No health damage from this move
+      damage = 0;
       wasShieldAttacked = true;
-      wasAttacked = false; // This is shield-only damage, not a health attack
-      newLog.push(`🛡️ ${playerName} used ${displayMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
+      wasAttacked = false;
+      newLog.push(
+        `🛡️ ${playerName} used ${displayMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (${shieldPct}% of max shields: ${opponentMaxShields})!`
+      );
       console.log('🛡️ [Shield OFF] Shield removal calculation:', {
+        masteryForShieldOff,
+        shieldPct,
         opponentMaxShields,
         shieldRemoveAmount,
         currentOpponentShields,
         actualRemove,
-        targetOpponent: {
-          id: targetOpponent.id,
-          name: targetOpponent.name,
-          shieldStrength: targetOpponent.shieldStrength,
-          maxShieldStrength: targetOpponent.maxShieldStrength
+        latestForShield: {
+          id: latestForShield.id,
+          name: latestForShield.name,
+          shieldStrength: latestForShield.shieldStrength,
+          maxShieldStrength: latestForShield.maxShieldStrength
         }
       });
     }
@@ -4476,6 +5170,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Apply Mindforge damage multiplier
       damage = Math.floor(damageResult.damage * playerDamageMultiplier * artifactMultiplier);
+
+      if (move.type === 'attack' && damage > 0) {
+        const atkEl = attackElementFromMove(move);
+        const mult = getElementMultiplier(atkEl, targetOpponent.enemyType ?? null);
+        damage = Math.max(0, Math.floor(damage * mult));
+        elementMatchLog = elementEffectivenessBattleLogLine(mult);
+      }
       
       // Log damage reduction/increase for Mindforge mode
       if (mindforgeMode && !questionCorrect) {
@@ -4631,19 +5332,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       if (counterDamage > 0 && counterMoveName) {
         newLog.push(`⚔️ ${opponent.name} countered with ${counterMoveName} for ${counterDamage} damage!`);
         // Apply counter damage to player
-        const counterShieldDamage = Math.min(counterDamage, vault.shieldStrength);
-        const counterRemainingDamage = Math.max(0, counterDamage - vault.shieldStrength);
+        const counterShieldDamage = Math.min(counterDamage, vExec.shieldStrength);
+        const counterRemainingDamage = Math.max(0, counterDamage - vExec.shieldStrength);
         
         if (counterRemainingDamage > 0) {
           // Max vault health is always 10% of vault capacity
-          const maxVaultHealth = Math.floor(vault.capacity * 0.1);
-          const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
+          const maxVaultHealth = Math.floor(vExec.capacity * 0.1);
+          const currentVaultHealth = vExec.vaultHealth !== undefined ? vExec.vaultHealth : maxVaultHealth;
           const counterVaultDamage = Math.min(counterRemainingDamage, currentVaultHealth);
           
           // Update vault with counter damage
           try {
             await updateVault({
-              shieldStrength: Math.max(0, vault.shieldStrength - counterShieldDamage),
+              shieldStrength: Math.max(0, vExec.shieldStrength - counterShieldDamage),
               vaultHealth: Math.max(0, currentVaultHealth - counterVaultDamage)
             });
           } catch (error) {
@@ -4653,7 +5354,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           // Only shield damage
           try {
             await updateVault({
-              shieldStrength: Math.max(0, vault.shieldStrength - counterShieldDamage)
+              shieldStrength: Math.max(0, vExec.shieldStrength - counterShieldDamage)
             });
           } catch (error) {
             console.error('Failed to apply counter shield damage:', error);
@@ -4677,6 +5378,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         playerLogMessage = `⚔️ ${playerName} used ${displayMoveName} on ${targetOpponent.name}${rangeInfo}!`;
       }
       newLog.push(playerLogMessage);
+      if (elementMatchLog) newLog.push(elementMatchLog);
       console.log(`📝 [Player Move] Adding to battle log: ${playerLogMessage}`);
       
       console.log('Damage Roll Debug:', {
@@ -4721,46 +5423,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newLog.push(`💰 ${playerName} stole ${ppStolen} PP from ${targetOpponent.name}${rangeInfo}!`);
     }
     
-    // Special handling for RR Candy moves
-    // IMPORTANT: These must be handled BEFORE normal damage/shield calculations to ensure they work correctly
-    if (move.id === 'rr-candy-on-off-shields-on') {
-      // Shield ON - Restore 50% of max shields
-      const maxShields = vault.maxShieldStrength || 100;
-      const shieldRestoreAmount = Math.floor(maxShields * 0.5);
-      const currentShields = vault.shieldStrength || 0;
-      const actualRestore = Math.min(shieldRestoreAmount, maxShields - currentShields);
-      playerShieldBoost = actualRestore;
-      wasShieldAttacked = false; // This is a defensive move, not an attack
-      damage = 0; // No damage from this move
-      shieldDamage = 0; // No shield damage from this move
-      newLog.push(`🔋 ${playerName} used ${displayMoveName} to restore ${actualRestore} shields (50% of max)!`);
-    } else if (move.id === 'rr-candy-on-off-shields-off') {
-      // Shield OFF - Remove 25% of opponent's MAX shields (not current shields)
-      // This is a percentage-based shield removal that bypasses normal damage calculation
-      const opponentMaxShields = targetOpponent.maxShieldStrength || 100;
-      const shieldRemoveAmount = Math.floor(opponentMaxShields * 0.25); // 25% of MAX shields
-      const currentOpponentShields = targetOpponent.shieldStrength || 0;
-      // Remove the calculated amount, but don't go below 0
-      const actualRemove = Math.min(shieldRemoveAmount, currentOpponentShields);
-      shieldDamage = actualRemove;
-      damage = 0; // No health damage from this move
-      wasShieldAttacked = true;
-      wasAttacked = false; // This is shield-only damage, not a health attack
-      newLog.push(`🛡️ ${playerName} used ${displayMoveName} to remove ${actualRemove} shields from ${targetOpponent.name} (25% of max shields: ${opponentMaxShields})!`);
-      console.log('🛡️ [Shield OFF] Shield removal calculation:', {
-        opponentMaxShields,
-        shieldRemoveAmount,
-        currentOpponentShields,
-        actualRemove,
-        targetOpponent: {
-          id: targetOpponent.id,
-          name: targetOpponent.name,
-          shieldStrength: targetOpponent.shieldStrength,
-          maxShieldStrength: targetOpponent.maxShieldStrength
-        }
-      });
-    }
-    
     // Defensive moves (shield boost) - use shield boost range system
     if (move.shieldBoost && move.id !== 'rr-candy-on-off-shields-on') {
       let shieldRange = calculateShieldBoostRange(move.shieldBoost, move.level, move.masteryLevel);
@@ -4799,7 +5461,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         playerLevel,
         moveLevel: move.level,
         masteryLevel: move.masteryLevel,
-        currentShield: vault.shieldStrength
+        currentShield: vExec.shieldStrength
       });
     }
     
@@ -4833,9 +5495,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const effectsToApply = hasOverrideStatusEffects
       ? overrideStatusEffects
       : (hasOverrideSingleEffect ? [overrideSingleEffect] : (hasMoveStatusEffects ? moveStatusEffects : []));
-    
+
+    const fromMoveSummon = getFirstSummonEffectFromMove(move);
+    let effectsToIterate = [...effectsToApply];
+    if (
+      isStrokeOfCreationLikeMove(move) &&
+      !effectsToIterate.some((e) => e && e.type === 'summon')
+    ) {
+      effectsToIterate.push(
+        (fromMoveSummon || {
+          type: 'summon',
+          duration: 2,
+          summonElementalType: 'light',
+          summonDamage: 100,
+        }) as (typeof effectsToIterate)[number]
+      );
+    }
+
     // Apply all effects
-    for (const statusEffect of effectsToApply) {
+    for (const statusEffect of effectsToIterate) {
       if (statusEffect && statusEffect.type !== 'none') {
         const effect: ActiveEffect = {
           type: statusEffect.type,
@@ -4862,7 +5540,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               summonName: (statusEffect as any).summonName,
             } as const);
           const artifactLevelForSummon = move.artifactGrant?.artifactLevel ?? 1;
-          const stats = resolveConstructStatsForSummonEffect(summonEffectSource, artifactLevelForSummon);
+          const masteryLevelForSummon = move.masteryLevel ?? 1;
+          const stats = resolveConstructStatsForSummonEffect(
+            summonEffectSource,
+            artifactLevelForSummon,
+            masteryLevelForSummon
+          );
           const summonElementalType = stats.elementalType as NonNullable<Opponent['summonElementalType']>;
           const summonName = stats.displayName;
           const constructId = `summon_${currentUser.uid}_${Date.now()}`;
@@ -4883,13 +5566,24 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             isAI: true,
             controller: 'ai',
             isSummon: true,
-            summonDuration: stats.durationTurns,
             summonDamage: stats.attackDamage,
             summonElementalType,
             summonerId: currentUser.uid,
             ...(isLightConstruct && { image: '/images/Light_Construct.png', photoURL: '/images/Light_Construct.png' })
           };
-          setAllies(prev => {
+          setAllies((prev) => {
+            if (
+              prev.some(
+                (a) =>
+                  a.isSummon &&
+                  a.summonerId === currentUser.uid &&
+                  (a.name === summonName ||
+                    (isLightConstruct &&
+                      (a.name === 'Light Construct' || a.name === 'Construct of Light')))
+              )
+            ) {
+              return prev;
+            }
             const next = [...prev, newConstruct];
             if (onAlliesUpdate) {
               onAlliesUpdate(next);
@@ -4897,7 +5591,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             return next;
           });
           newLog.push(
-            `✨ You summoned ${summonName} to assist you for ${stats.durationTurns} turn(s)! (artifact level ${stats.artifactLevelUsed} · ${stats.attackDamage} atk · ${stats.maxHealth} HP · ${stats.maxShield} shields)`
+            `✨ You summoned ${summonName} to assist you until it is defeated! (art L${stats.artifactLevelUsed} · mastery M${stats.masteryLevelUsed} · ×${stats.powerMultiplier.toFixed(2)} power · ${stats.attackDamage} atk · ${stats.maxHealth} HP · ${stats.maxShield} shields)`
           );
           continue;
         }
@@ -4917,7 +5611,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     // Skip legacy debuffType for "Read the Room" and "Emotional Read" - they should never have effects
     // Also skip non-status-effect debuffTypes like 'accuracy', 'dodge', etc.
-    if (effectsToApply.length === 0 && move.debuffType && move.duration && moveName !== 'Read the Room' && moveName !== 'Emotional Read') {
+    if (effectsToIterate.length === 0 && move.debuffType && move.duration && moveName !== 'Read the Room' && moveName !== 'Emotional Read') {
       // Only apply legacy debuffType if it's an actual status effect type
       // Skip debuffTypes that are stat modifiers (accuracy, dodge, etc.)
       const statusEffectDebuffTypes: Array<'burn' | 'stun' | 'bleed' | 'poison' | 'confuse' | 'drain'> = ['burn', 'stun', 'bleed', 'poison', 'confuse', 'drain'];
@@ -5016,7 +5710,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             ...prev,
             selectedMove: null,
             selectedTarget: null,
-            phase: 'selection'
+            phase: 'selection',
+            currentAnimation: null,
+            isAnimating: false,
           }));
           return;
         }
@@ -5137,6 +5833,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         if (!moveResult.success) {
           console.error('❌ [In-Session Move] ⚠️ MOVE FAILED', move.name, '→', targetOpponent.name, '| Error:', moveResult.message);
           alert(`Failed to execute move: ${moveResult.message}`);
+          dismissSkillAnimationOverlay(`❌ ${move.name} failed: ${moveResult.message}`);
           return;
         }
         
@@ -5232,15 +5929,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             console.warn('⚠️ [In-Session Move] onBattleLogUpdate callback not provided!');
           }
           
-          // Set skill cooldown locally (will be synced via session state if needed)
-          const effCd = getBattleSkillCooldownTurns(move);
-          if (effCd > 0) {
-            setSkillCooldowns(prev => {
-              const updated = new Map(prev);
-              updated.set(move.id, effCd);
+          // Turn-based cooldowns optional in Live Session (see battleModeSkillRules).
+          if (skillRuntimePolicy.applyTurnSkillCooldownOnUse && currentUser?.uid) {
+            const effCd = getBattleSkillCooldownTurns(move);
+            if (effCd > 0) {
+              setCombatCooldowns((prev) => setSkillOnCooldown(currentUser.uid, move.id, effCd, prev));
               console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${effCd} turns (perk-adjusted)`);
-              return updated;
-            });
+            }
           }
           
           console.log('✅ [In-Session Move] Move applied via Firestore transaction:', moveResult);
@@ -5268,7 +5963,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             ...prev,
             selectedMove: null,
             selectedTarget: null,
-            phase: 'selection'
+            phase: 'selection',
+            currentAnimation: null,
+            isAnimating: false,
           }));
           return; // Don't fall through - the move failed
         }
@@ -5296,7 +5993,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ...prev,
           selectedMove: null,
           selectedTarget: null,
-          phase: 'selection'
+          phase: 'selection',
+          currentAnimation: null,
+          isAnimating: false,
         }));
         return; // Don't fall through - the move failed
       }
@@ -5385,8 +6084,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
 
     // Apply damage from LATEST state so Island Raid enemy stats don't fluctuate and attacks register accurately
-    const applyDamageToCurrent = (current: typeof targetOpponent) => {
-      const newShield = Math.max(0, (current.shieldStrength || 0) - shieldDamage);
+    const applyDamageToCurrent = (current: typeof targetOpponent, shieldDmg: number = shieldDamage) => {
+      const newShield = Math.max(0, (current.shieldStrength || 0) - shieldDmg);
       if (isCPUOpponent) {
         const newHealth = Math.max(0, (current.currentPP ?? 0) - healthDamage);
         const next = { ...current, shieldStrength: newShield, currentPP: newHealth };
@@ -5412,7 +6111,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       setOpponents(prev => {
         const current = prev.find(opp => opp.id === targetOpponent.id);
         if (!current) return prev;
-        const computed = applyDamageToCurrent(current);
+        let sd = shieldDamage;
+        if (move.id === 'rr-candy-on-off-shields-off') {
+          const mx = current.maxShieldStrength || 100;
+          const ml = getEffectiveMasteryLevel(move, equippedArtifacts);
+          const rm = Math.floor(mx * shieldOffMaxShieldRemoveFraction(ml));
+          sd = Math.min(rm, current.shieldStrength || 0);
+        }
+        let computed = applyDamageToCurrent(current, sd);
+        computed = maybeApplyCpuAwakenedPhase(computed, checkIsCPUOpponent(current));
         computed.isDefeated = ((computed.vaultHealth ?? computed.currentPP) ?? 0) <= 0 && (computed.shieldStrength ?? 0) <= 0;
         if (computed.isDefeated) (computed as any).defeatedAt = new Date();
         const updated = prev.map(opp => opp.id === targetOpponent.id ? computed : opp);
@@ -5428,10 +6135,36 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         } else setTimeout(() => { isInternalUpdateRef.current = false; }, 100);
         return updated;
       });
-      newTargetOpponent = applyDamageToCurrent(targetOpponent);
+      {
+        const latestT =
+          (opponentsRef.current || opponents).find((o) => o.id === targetOpponent.id) || targetOpponent;
+        let sdT = shieldDamage;
+        if (move.id === 'rr-candy-on-off-shields-off') {
+          const mx = latestT.maxShieldStrength || 100;
+          const ml = getEffectiveMasteryLevel(move, equippedArtifacts);
+          const rm = Math.floor(mx * shieldOffMaxShieldRemoveFraction(ml));
+          sdT = Math.min(rm, latestT.shieldStrength || 0);
+        }
+        newTargetOpponent = maybeApplyCpuAwakenedPhase(
+          applyDamageToCurrent(latestT, sdT),
+          checkIsCPUOpponent(latestT)
+        );
+      }
       newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
     } else {
-      newTargetOpponent = applyDamageToCurrent(targetOpponent);
+      {
+        const latestT =
+          (opponentsRef.current || opponents).find((o) => o.id === targetOpponent.id) || targetOpponent;
+        let sdT = shieldDamage;
+        if (move.id === 'rr-candy-on-off-shields-off') {
+          const mx = latestT.maxShieldStrength || 100;
+          const ml = getEffectiveMasteryLevel(move, equippedArtifacts);
+          const rm = Math.floor(mx * shieldOffMaxShieldRemoveFraction(ml));
+          sdT = Math.min(rm, latestT.shieldStrength || 0);
+        }
+        newTargetOpponent = applyDamageToCurrent(latestT, sdT);
+      }
+      newTargetOpponent = maybeApplyCpuAwakenedPhase(newTargetOpponent, isCPUOpponent);
       newTargetOpponent.isDefeated = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) <= 0 && (newTargetOpponent.shieldStrength ?? 0) <= 0;
       if (newTargetOpponent.isDefeated) (newTargetOpponent as any).defeatedAt = new Date();
       // Self-targeted skills (e.g. Stroke of Creation summon) must not overwrite the actual enemy.
@@ -5443,8 +6176,31 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // For self-targeted moves, opponent turns should still run against the real enemy.
     const opponentForTurn = isSelfTarget ? opponent : newTargetOpponent;
 
-    // Check if Terra reaches 50% health and trigger awakened state
-    if (onTerraAwakened && !isTerraAwakened && !terraAwakenedTriggeredRef.current && targetOpponent.name?.toLowerCase().includes('terra')) {
+    const cpuAwakenedMediaSteps =
+      !isSelfTarget &&
+      isCPUOpponent &&
+      !(targetOpponent as Opponent).isAwakened &&
+      (newTargetOpponent as Opponent).isAwakened
+        ? filterCpuAwakeningAnimationSteps((newTargetOpponent as Opponent).awakeningAnimation)
+        : [];
+
+    if (
+      !isSelfTarget &&
+      isCPUOpponent &&
+      !(targetOpponent as Opponent).isAwakened &&
+      (newTargetOpponent as Opponent).isAwakened
+    ) {
+      newLog.push(...buildCpuAwakenedAnnouncementLines(newTargetOpponent.name));
+    }
+
+    // Check if Terra reaches 50% health and trigger awakened state (legacy cutscene; skip if CPU awaken config handles this character)
+    if (
+      onTerraAwakened &&
+      !isTerraAwakened &&
+      !terraAwakenedTriggeredRef.current &&
+      targetOpponent.name?.toLowerCase().includes('terra') &&
+      !(targetOpponent as Opponent).awakenedModeEnabled
+    ) {
       const healthPercentage = ((newTargetOpponent.vaultHealth ?? newTargetOpponent.currentPP) ?? 0) / ((newTargetOpponent.maxVaultHealth ?? newTargetOpponent.maxPP) || 1) * 100;
       if (healthPercentage <= 50) {
         terraAwakenedTriggeredRef.current = true;
@@ -5489,20 +6245,31 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
     }
     
-    // Set skill cooldown in battle state (not in skill library)
-    const effCdAfterMove = getBattleSkillCooldownTurns(move);
-    if (effCdAfterMove > 0) {
-      setSkillCooldowns(prev => {
-        const updated = new Map(prev);
-        updated.set(move.id, effCdAfterMove);
+    // Set skill cooldown in battle state (not in skill library); skipped in Live Session when policy disables turn CDs.
+    if (skillRuntimePolicy.applyTurnSkillCooldownOnUse && currentUser?.uid) {
+      const effCdAfterMove = getBattleSkillCooldownTurns(move);
+      if (effCdAfterMove > 0) {
+        if (process.env.REACT_APP_DEBUG_SKILL_COOLDOWNS === 'true') {
+          const remBefore = getRemainingCooldown(currentUser.uid, move.id, combatCooldownsRef.current);
+          console.log('[BattleEngine] skill use cooldown', {
+            actorId: currentUser.uid,
+            skillId: move.id,
+            baseCooldown: move.cooldown,
+            remainingBeforeUse: remBefore,
+            appliedTurns: effCdAfterMove,
+            turnCount: battleState.turnCount,
+            wave: currentWaveIndex,
+            mode: isInSession ? 'live' : 'standard',
+          });
+        }
+        setCombatCooldowns((prev) => setSkillOnCooldown(currentUser.uid, move.id, effCdAfterMove, prev));
         console.log(`⏱️ [BattleEngine] Set cooldown for skill ${move.name} (${move.id}): ${effCdAfterMove} turns (perk-adjusted)`);
-        return updated;
-      });
+      }
     }
     
     // Update player vault
-    const newVault = { ...vault };
-    const vaultCapacity = vault.capacity || 1000;
+    const newVault = { ...vExec };
+    const vaultCapacity = vExec.capacity || 1000;
     // Don't add PP immediately - accumulate it for end of battle
     if (ppStolen > 0) {
       // Accumulate PP stolen instead of adding immediately
@@ -5514,13 +6281,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       newLog.push(`💰 ${playerName} stole ${ppStolen} PP from ${targetOpponent.name}!`);
     }
     if (playerShieldBoost > 0) {
-      const oldShield = vault.shieldStrength;
-      newVault.shieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + playerShieldBoost);
+      const oldShield = vExec.shieldStrength;
+      newVault.shieldStrength = Math.min(vExec.maxShieldStrength, vExec.shieldStrength + playerShieldBoost);
       console.log('Shield Boost Applied:', {
         oldShield,
         boostAmount: playerShieldBoost,
         newShield: newVault.shieldStrength,
-        maxShield: vault.maxShieldStrength
+        maxShield: vExec.maxShieldStrength
       });
     }
     if (playerHealing > 0) {
@@ -5530,7 +6297,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         equippableCatalogRaw,
         universalLawEffects
       );
-      newVault.currentPP = Math.min(vaultCapacity, vault.currentPP + healPP);
+      newVault.currentPP = Math.min(vaultCapacity, vExec.currentPP + healPP);
     }
     
     // Execute the actual vault siege attack in the database
@@ -5545,11 +6312,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           // The database has been updated, so we can trust the local state
         } else {
           console.error('❌ Database vault siege attack failed:', attackResult?.message);
-          // If database attack failed, we should revert local changes
+          dismissSkillAnimationOverlay('⚠️ Vault siege attack did not apply — try again.');
           return;
         }
       } catch (error) {
         console.error('❌ Error executing vault siege attack:', error);
+        dismissSkillAnimationOverlay('⚠️ Vault siege attack error — try again.');
         return;
       }
     } else {
@@ -5564,7 +6332,37 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         console.error('❌ Failed to update vault after player move:', error);
       }
     }
-    
+
+    // Island Raid / multiplayer: keep the local ally row in sync with vault after Shield ON / heals / PP changes.
+    // Relying only on BattleContext → IslandRaidBattle vault effect was overwriting shields with stale high vault reads.
+    if (
+      isMultiplayer &&
+      currentUser?.uid &&
+      onAlliesUpdate &&
+      (newVault.shieldStrength !== vExec.shieldStrength || newVault.currentPP !== vExec.currentPP)
+    ) {
+      setAllies((prev) => {
+        const next = prev.map((ally: Opponent) => {
+          if (ally.id !== currentUser.uid || ally.isSummon) return ally;
+          return {
+            ...ally,
+            shieldStrength: newVault.shieldStrength,
+            maxShieldStrength: Math.max(
+              ally.maxShieldStrength || 0,
+              vExec.maxShieldStrength || 0,
+              newVault.maxShieldStrength || 0
+            ),
+            currentPP: newVault.currentPP,
+            maxPP: vExec.capacity ?? ally.maxPP,
+            vaultHealth: newVault.vaultHealth ?? ally.vaultHealth,
+            maxVaultHealth: newVault.maxVaultHealth ?? ally.maxVaultHealth,
+          };
+        });
+        setTimeout(() => onAlliesUpdate(next), 0);
+        return next;
+      });
+    }
+
     // Check for victory (health depleted)
     // Self-directed moves (Pebble Guard, etc.) never deplete the caster - skip defeat/victory logic
     const opponentHealthDepleted = !isSelfTarget && (
@@ -5781,8 +6579,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       if (finalPPReward > 0) {
         // Add accumulated PP + defeated opponent's remaining PP
-        const vaultCapacity = vault.capacity || 1000;
-        const newPP = Math.min(vaultCapacity, vault.currentPP + finalPPReward);
+        const vaultCapacity = vExec.capacity || 1000;
+        const newPP = Math.min(vaultCapacity, vExec.currentPP + finalPPReward);
         
         try {
           await updateVault({
@@ -5933,8 +6731,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Check if this is single-player with AI allies (like Chapter 2-5)
-    const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || (!ally.isAI && ally.controller !== 'ai')).length;
+    const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
     const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    const isIslandRaidMissionSync = !!gameId && !isInSession;
     const hasOwnedSummon = allies.some(ally => ally.isSummon && ally.summonerId === currentUser?.uid);
     const nextTurnActionsUsed = {
       player: turnActionsUsed.player || !isConstructSkill,
@@ -5945,6 +6744,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       !mindforgeMode &&
       !isInSession &&
       !isPvP &&
+      !isIslandRaidMissionSync &&
       !isSinglePlayerWithAI &&
       (!nextTurnActionsUsed.player || !nextTurnActionsUsed.construct);
     setTurnActionsUsed(nextTurnActionsUsed);
@@ -5963,7 +6763,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
         const logEntries: string[] = [];
         const damageByTargetId: Record<string, number> = {};
-        const summonUpdates: { id: string; newDuration: number }[] = [];
 
         // Kon's Force Push (same as before)
         const konAlly = currentAllies.find((ally: Opponent) => ally.id === 'kon_ally' || ally.name === 'Kon');
@@ -5977,12 +6776,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         const summons = currentAllies.filter((a: Opponent) => a.isSummon && a.summonerId === currentUser?.uid);
         for (const summon of summons) {
           const targetEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-          const dmg = summon.summonDamage ?? 100;
-          damageByTargetId[targetEnemy.id] = (damageByTargetId[targetEnemy.id] || 0) + dmg;
+          const baseDmg = summon.summonDamage ?? 100;
           const elem = summon.summonElementalType || 'fire';
+          const atkEl = attackElementFromSummonAffinity(elem);
+          const mult = getElementMultiplier(atkEl, targetEnemy.enemyType ?? null);
+          const dmg = Math.max(0, Math.floor(baseDmg * mult));
+          damageByTargetId[targetEnemy.id] = (damageByTargetId[targetEnemy.id] || 0) + dmg;
           logEntries.push(`⚡ ${summon.name} struck ${targetEnemy.name} for ${dmg} ${elem} damage!`);
-          const newDuration = Math.max(0, (summon.summonDuration ?? 1) - 1);
-          summonUpdates.push({ id: summon.id, newDuration });
+          const effLine = elementEffectivenessBattleLogLine(mult);
+          if (effLine) logEntries.push(effLine);
         }
 
         if (Object.keys(damageByTargetId).length === 0) return;
@@ -6022,23 +6824,6 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           return updated;
         });
 
-        // Decrement summon durations and remove expired
-        if (summonUpdates.length > 0) {
-          setAllies(prev => {
-            let next = prev;
-            for (const { id, newDuration } of summonUpdates) {
-              if (newDuration <= 0) {
-                next = next.filter(a => a.id !== id);
-                logEntries.push(`✨ A summoned construct faded.`);
-              } else {
-                next = next.map(a => a.id === id ? { ...a, summonDuration: newDuration } : a);
-              }
-            }
-            if (onAlliesUpdate) onAlliesUpdate(next);
-            return next;
-          });
-        }
-
         if (logEntries.length > 0) {
           setBattleState(prev => {
             const newLog = [...prev.battleLog, ...logEntries];
@@ -6049,8 +6834,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }, 400);
     }
     
-    // Update battle state - keep animation state so BattleAnimations can play
-    // The animation will be cleared when handleAnimationComplete is called by BattleAnimations
+    // Skill overlay was cleared right after target validation so Firestore/network work does not trap the player under VFX.
     console.log(`📝 [Player Move] Updating battle state with ${newLog.length} log entries. Last entry: ${newLog[newLog.length - 1]}`);
     console.log(`📝 [Player Move] Full battle log:`, newLog);
     setBattleState(prev => {
@@ -6063,13 +6847,40 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         isPlayerTurn: shouldContinueSameTurn
           ? true
           : (mindforgeMode ? true : (isSinglePlayerWithAI ? true : false)),
-        selectedMove: null, // Clear selected move but keep animation
-        selectedTarget: null, // Clear selected target but keep animation
-        // Keep currentAnimation and isAnimating so BattleAnimations component can display
+        selectedMove: null,
+        selectedTarget: null,
+        currentAnimation: null,
+        isAnimating: false,
       };
       console.log(`📝 [Player Move] Battle state updated. New log length: ${updatedState.battleLog.length}`);
       return updatedState;
     });
+
+    const willDeferMindforgeCpuTurn = !shouldContinueSameTurn && mindforgeMode;
+    const willDeferStandardCpuTurn =
+      !shouldContinueSameTurn && !mindforgeMode && !(isPvP && battleRoom && currentUser);
+
+    if (cpuAwakenedMediaSteps.length > 0) {
+      if (willDeferMindforgeCpuTurn) {
+        resumeCpuTurnAfterAwakeningRef.current = {
+          newLog,
+          opponent: opponentForTurn as Opponent,
+          mult: opponentDamageMultiplier,
+        };
+      } else if (willDeferStandardCpuTurn) {
+        resumeCpuTurnAfterAwakeningRef.current = {
+          newLog,
+          opponent: opponentForTurn as Opponent,
+          mult: 1.0,
+        };
+      }
+      queueMicrotask(() => {
+        setCpuAwakeningMedia({
+          steps: cpuAwakenedMediaSteps,
+          title: `${formatOpponentName(newTargetOpponent.name)} — Awakening`,
+        });
+      });
+    }
 
     if (shouldContinueSameTurn) {
       if (onBattleLogUpdate) {
@@ -6096,10 +6907,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         })).filter(move => move.remainingTurns > 0);
       });
       
-      // Execute opponent turn after a short delay to show damage
-      setTimeout(() => {
-        executeOpponentTurn(newLog, opponentForTurn, opponentDamageMultiplier);
-      }, 500);
+      // Execute opponent turn after a short delay to show damage (deferred if awakening cutscene plays)
+      if (cpuAwakenedMediaSteps.length === 0) {
+        setTimeout(() => {
+          executeOpponentTurn(newLog, opponentForTurn, opponentDamageMultiplier);
+        }, 500);
+      }
       
       // Exit early - opponent turn will handle the rest
       return;
@@ -6148,7 +6961,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           ...prev,
           battleLog: newLog,
           phase: 'opponent_turn',
-          isPlayerTurn: false
+          isPlayerTurn: false,
+          currentAnimation: null,
+          isAnimating: false,
         }));
       } catch (error) {
         console.error('Error storing player move:', error);
@@ -6163,9 +6978,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
       
       // CPU: Start opponent turn after a delay (non-Mindforge mode uses default multiplier of 1.0)
-      setTimeout(() => {
-        executeOpponentTurn(newLog, opponentForTurn, 1.0);
-      }, 2000);
+      if (cpuAwakenedMediaSteps.length === 0) {
+        setTimeout(() => {
+          executeOpponentTurn(newLog, opponentForTurn, 1.0);
+        }, 2000);
+      }
     }
   };
 
@@ -6174,11 +6991,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       console.error('❌ Cannot execute opponent turn - vault is null');
       return;
     }
+    const v = vaultRef.current || vault;
+    const maxShieldCap = Math.max(1, Math.floor(Number(v.maxShieldStrength) || 0) || 100);
+    const clampVaultShield = (s: number) => Math.max(0, Math.min(maxShieldCap, s));
     
     console.log('🔍 Starting opponent turn with vault state:', {
-      shieldStrength: vault.shieldStrength,
-      vaultHealth: vault.vaultHealth,
-      overshield: vault.overshield
+      shieldStrength: v.shieldStrength,
+      vaultHealth: v.vaultHealth,
+      overshield: v.overshield
     });
     
     // Apply turn effects for opponent (before move execution)
@@ -6202,11 +7022,30 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }));
       return;
     }
+
+    // CPU turn boundary: decrement this opponent’s per-skill cooldowns once before choosing a move.
+    let cpuCooldownSnapshot = combatCooldownsRef.current;
+    if (skillRuntimePolicy.applyTurnSkillCooldownTicks && opp?.id) {
+      cpuCooldownSnapshot = decrementCooldownsForCombatant(opp.id, cpuCooldownSnapshot);
+      setCombatCooldowns(cpuCooldownSnapshot);
+      if (process.env.REACT_APP_DEBUG_SKILL_COOLDOWNS === 'true') {
+        console.log('⏱️ [BattleEngine] executeOpponentTurn: CPU cooldown tick', {
+          opponentId: opp.id,
+          row: cpuCooldownSnapshot[opp.id],
+        });
+      }
+    }
+
     // Opponent AI - different moves for different opponents
     let opponentMoves;
+
+    const embeddedTurnMoves = (opp as { moves?: unknown }).moves;
+    if (Array.isArray(embeddedTurnMoves) && embeddedTurnMoves.length > 0) {
+      opponentMoves = mapCpuMovesToBattleEngineFormat(embeddedTurnMoves as any[]);
+    }
     
     // Try to load moves from Firestore first
-    if (cpuOpponentMoves && Array.isArray(cpuOpponentMoves)) {
+    if ((!opponentMoves || opponentMoves.length === 0) && cpuOpponentMoves && Array.isArray(cpuOpponentMoves)) {
       const opponentId = opp.id || opp.name?.toLowerCase().replace(/\s+/g, '-');
       const opponentName = opp.name?.toLowerCase() || '';
       // Normalize opponent name by stripping trailing numbers (e.g., "Unpowered Zombie 1" -> "unpowered zombie")
@@ -6329,7 +7168,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           counterMove: move.counterMove,
             duration: move.duration,
             statusEffects: move.statusEffects || (move.statusEffect ? [move.statusEffect] : []),
-            description: move.description || ''
+            description: move.description || '',
+            elementalAffinity: move.elementalAffinity,
+            cooldown: typeof move.cooldown === 'number' ? move.cooldown : 0,
           };
         });
         console.log(`✅ Loaded moves for ${opp.name} from Firestore:`, opponentMoves.map((m: any) => `${m.name} (${m.damageRange ? `${m.damageRange.min}-${m.damageRange.max}` : m.baseDamage} damage)`));
@@ -6380,15 +7221,37 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       ];
       }
     }
-    
-    const opponentMove = opponentMoves[Math.floor(Math.random() * opponentMoves.length)];
-    
+
+    const oppIdForCd = opp.id || String(opp.name || 'cpu').toLowerCase().replace(/\s+/g, '-');
+    const poolForCpu =
+      skillRuntimePolicy.applyTurnSkillCooldownOnUse && opponentMoves.length > 0
+        ? opponentMoves.filter((m: any) => {
+            const mid = m.id || String(m.name || '').toLowerCase().replace(/\s+/g, '-');
+            return getRemainingCooldown(oppIdForCd, mid, cpuCooldownSnapshot) <= 0;
+          })
+        : opponentMoves;
+    const movePool = poolForCpu && poolForCpu.length > 0 ? poolForCpu : opponentMoves;
+    const opponentMove = movePool[Math.floor(Math.random() * movePool.length)];
+
     // CRITICAL: Log the selected move name to verify it's from Firestore
     console.log(`🎲 [CPU Move Selection - executeOpponentTurn] ${opp.name} selected move: "${opponentMove.name}" (ID: ${opponentMove.id})`);
     if (!opponentMove.name || opponentMove.name === 'Unknown Move') {
       console.error(`❌ [CPU Move Selection - executeOpponentTurn] Selected move is missing name!`, opponentMove);
     }
-    
+
+    const cpuMoveIdForCd = opponentMove.id || String(opponentMove.name || 'cpu-move').toLowerCase().replace(/\s+/g, '-');
+    const cpuBaseCd = Math.max(0, Math.floor(Number((opponentMove as any).cooldown) || 0));
+    if (skillRuntimePolicy.applyTurnSkillCooldownOnUse && oppIdForCd && cpuBaseCd > 0) {
+      setCombatCooldowns((prev) => setSkillOnCooldown(oppIdForCd, cpuMoveIdForCd, cpuBaseCd, prev));
+      if (process.env.REACT_APP_DEBUG_SKILL_COOLDOWNS === 'true') {
+        console.log('⏱️ [BattleEngine] CPU skill on cooldown', {
+          opponentId: oppIdForCd,
+          skillId: cpuMoveIdForCd,
+          baseCooldown: cpuBaseCd,
+        });
+      }
+    }
+
     // Activate defensive move if opponent uses one
     if (opponentMove.type === 'defense' && (opponentMove.damageReduction || opponentMove.counterMove)) {
       const defensiveMoveData = {
@@ -6420,6 +7283,32 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       damageRange = calculateDamageRange(opponentMove.baseDamage, opponentMove.level, opponentMove.masteryLevel);
       damageResult = rollDamage(damageRange, opp.level, opponentMove.level, opponentMove.masteryLevel);
       totalDamage = damageResult.damage;
+    }
+
+    const opponentStrikeType = opponentMove.type || 'attack';
+    /** Who this CPU hit prefers to strike (raid / mission: includes summons). */
+    let mpAllyStrikeTarget: Opponent | null = null;
+    if (isMultiplayer && !isPvP && opponentStrikeType === 'attack') {
+      const pool = alliesRef.current.filter((a) => {
+        const hp = a.vaultHealth !== undefined ? a.vaultHealth : (a.currentPP ?? 0);
+        const sh = a.shieldStrength ?? 0;
+        return hp > 0 || sh > 0;
+      });
+      if (pool.length > 0) {
+        const tid = selectOptimalCPUTarget(opponents, pool, opp.id);
+        mpAllyStrikeTarget = pool.find((x) => x.id === tid) || pool[0] || null;
+      }
+    }
+
+    let cpuOpponentTypeMatchLog: string | null = null;
+    if (opponentStrikeType === 'attack' && totalDamage > 0) {
+      const atkEl = attackElementFromCpuStrike(opponentMove as any, opp.enemyType ?? null);
+      const defEl = mpAllyStrikeTarget?.isSummon
+        ? normalizeElementType(mpAllyStrikeTarget.summonElementalType)
+        : normalizeElementType(userElement);
+      const mult = getElementMultiplier(atkEl, defEl);
+      totalDamage = Math.max(0, Math.floor(totalDamage * mult));
+      cpuOpponentTypeMatchLog = elementEffectivenessBattleLogLine(mult);
     }
     
     // Handle healing moves (Phoenix Regeneration)
@@ -6481,7 +7370,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
     }
-    
+
+    let cpuDamageUsedLocalVault = true;
+
     if (totalDamage > 0) {
       // Apply "reduce" status effect damage reduction
       // Check if the player has a "reduce" status effect active
@@ -6509,79 +7400,160 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           );
         }
       }
-      
-      // Check for overshield first (from Shield artifact)
-      let remainingDamage = totalDamage;
-      
-      if (vault.overshield && vault.overshield > 0) {
-        // Overshield absorbs the entire attack
-        overshieldAbsorbed = true;
-        remainingDamage = 0;
+
+      const rangeInfo = damageResult?.isMaxDamage ? ' (MAX DAMAGE!)' : '';
+      const strike = mpAllyStrikeTarget;
+      const strikeSummon = !!(isMultiplayer && !isPvP && strike?.isSummon);
+      const strikeTeammate =
+        !!(isMultiplayer && !isPvP && strike && !strike.isSummon && currentUser?.uid && strike.id !== currentUser.uid);
+
+      const applyRaidDamageToAllyRow = (row: Opponent, label: string) => {
+        const curHp = row.vaultHealth !== undefined ? row.vaultHealth : (row.currentPP ?? 0);
+        const maxHp = row.maxVaultHealth ?? row.maxPP ?? Math.max(1, curHp);
+        const curSh = Math.max(0, row.shieldStrength ?? 0);
+        const maxSh = Math.max(0, row.maxShieldStrength ?? curSh);
+        const sd = Math.min(totalDamage, curSh);
+        const rem = Math.max(0, totalDamage - sd);
+        const hpLoss = Math.min(rem, curHp);
+        const newSh = Math.max(0, curSh - sd);
+        const newHp = Math.max(0, curHp - hpLoss);
+        let cpuLogMessage = '';
+        if (sd > 0 && hpLoss > 0) {
+          cpuLogMessage = `⚔️ ${formattedOpponentName} attacked ${label} with ${opponentMove.name} for ${totalDamage} damage (${sd} to shields, ${hpLoss} to health)${rangeInfo}!`;
+        } else if (sd > 0) {
+          cpuLogMessage = `⚔️ ${formattedOpponentName} attacked ${label} with ${opponentMove.name} for ${sd} damage to shields${rangeInfo}!`;
+        } else if (hpLoss > 0) {
+          cpuLogMessage = `⚔️ ${formattedOpponentName} attacked ${label} with ${opponentMove.name} for ${hpLoss} damage to health${rangeInfo}!`;
+        } else {
+          cpuLogMessage = `⚔️ ${formattedOpponentName} used ${opponentMove.name} on ${label}${rangeInfo}!`;
+        }
+        newLog.push(cpuLogMessage);
+        if (cpuOpponentTypeMatchLog) newLog.push(cpuOpponentTypeMatchLog);
+        console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
+
+        const summonDestroyed =
+          !!row.isSummon && newHp <= 0 && newSh <= 0;
+        isInternalUpdateRef.current = true;
+        setAllies((prev) => {
+          const updated = prev.map((a) => {
+            if (a.id !== row.id) return a;
+            const next: Opponent = {
+              ...a,
+              shieldStrength: newSh,
+              maxShieldStrength: maxSh || a.maxShieldStrength,
+            };
+            if (a.vaultHealth !== undefined) {
+              next.vaultHealth = newHp;
+              next.maxVaultHealth = maxHp;
+              next.currentPP = newHp;
+              next.maxPP = maxHp;
+            } else {
+              next.currentPP = newHp;
+              next.maxPP = maxHp;
+            }
+            next.isDefeated = newHp <= 0 && newSh <= 0;
+            if (next.isDefeated) (next as { defeatedAt?: Date }).defeatedAt = new Date();
+            return next;
+          });
+          const pruned = summonDestroyed ? updated.filter((a) => a.id !== row.id) : updated;
+          if (onAlliesUpdate) {
+            setTimeout(() => {
+              onAlliesUpdate(pruned);
+              setTimeout(() => {
+                isInternalUpdateRef.current = false;
+              }, 50);
+            }, 0);
+          } else {
+            setTimeout(() => {
+              isInternalUpdateRef.current = false;
+            }, 50);
+          }
+          return pruned;
+        });
+        if (summonDestroyed) {
+          newLog.push(`💥 ${row.name} was destroyed!`);
+        }
+      };
+
+      if (strikeSummon && strike) {
+        cpuDamageUsedLocalVault = false;
         shieldDamage = 0;
         ppStolen = 0;
-        
-        // Overshield is consumed (set to 0) after absorbing an attack
-        newLog.push(`✨ Your overshield absorbed ${opp.name}'s ${opponentMove.name} attack! (0 overshields remaining)`);
-        
-        // Update vault with overshield consumed
-        try {
-          await updateVault({
-            overshield: 0
+        applyRaidDamageToAllyRow(strike, strike.name || 'Construct');
+      } else if (strikeTeammate && strike) {
+        cpuDamageUsedLocalVault = false;
+        shieldDamage = 0;
+        ppStolen = 0;
+        applyRaidDamageToAllyRow(strike, strike.name || 'ally');
+      } else {
+        // Local vault (solo, PvP, or this CPU swing is meant for your vault row)
+        let remainingDamage = totalDamage;
+
+        if (v.overshield && v.overshield > 0) {
+          overshieldAbsorbed = true;
+          remainingDamage = 0;
+          shieldDamage = 0;
+          ppStolen = 0;
+
+          newLog.push(`✨ Your overshield absorbed ${opp.name}'s ${opponentMove.name} attack! (0 overshields remaining)`);
+
+          try {
+            await updateVault({
+              overshield: 0
+            });
+          } catch (error) {
+            console.error('❌ Failed to update overshield:', error);
+          }
+        } else {
+          const currentShieldStrength = clampVaultShield(Math.floor(Number(v.shieldStrength) || 0));
+          shieldDamage = Math.min(totalDamage, currentShieldStrength);
+          remainingDamage = totalDamage - shieldDamage;
+
+          console.log('Shield Damage Calculation:', {
+            totalDamage,
+            currentShieldStrength,
+            calculatedShieldDamage: shieldDamage,
+            remainingDamage
           });
-        } catch (error) {
-          console.error('❌ Failed to update overshield:', error);
+
+          if (remainingDamage > 0) {
+            const maxVaultHealth = Math.floor(v.capacity * 0.1);
+            const currentVaultHealth = v.vaultHealth !== undefined ? v.vaultHealth : maxVaultHealth;
+            ppStolen = Math.min(remainingDamage, currentVaultHealth);
+          }
+
+          let cpuLogMessage = '';
+          if (shieldDamage > 0 && ppStolen > 0) {
+            cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to vault health)${rangeInfo}!`;
+          } else if (shieldDamage > 0) {
+            cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${shieldDamage} damage to shields${rangeInfo}!`;
+          } else if (ppStolen > 0) {
+            cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${ppStolen} damage to vault health${rangeInfo}!`;
+          } else {
+            cpuLogMessage = `⚔️ ${formattedOpponentName} used ${opponentMove.name} on you${rangeInfo}!`;
+          }
+          newLog.push(cpuLogMessage);
+          if (cpuOpponentTypeMatchLog) newLog.push(cpuOpponentTypeMatchLog);
+          console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
         }
-      } else {
-        // Apply damage to shields first, then vault health
-        // Ensure shield damage is calculated correctly
-        const currentShieldStrength = vault.shieldStrength || 0;
-        shieldDamage = Math.min(totalDamage, currentShieldStrength);
-        remainingDamage = totalDamage - shieldDamage;
-        
-        console.log('Shield Damage Calculation:', {
-          totalDamage,
-          currentShieldStrength,
-          calculatedShieldDamage: shieldDamage,
-          remainingDamage
-        });
-      
-      if (remainingDamage > 0) {
-          // Max vault health is always 10% of vault capacity
-          const maxVaultHealth = Math.floor(vault.capacity * 0.1);
-          const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
-          ppStolen = Math.min(remainingDamage, currentVaultHealth);
-      }
-      
-      // Log attack with damage breakdown and range info
-      const rangeInfo = damageResult?.isMaxDamage ? ' (MAX DAMAGE!)' : '';
-      let cpuLogMessage = '';
-      if (shieldDamage > 0 && ppStolen > 0) {
-        cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${totalDamage} damage (${shieldDamage} to shields, ${ppStolen} to vault health)${rangeInfo}!`;
-      } else if (shieldDamage > 0) {
-        cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${shieldDamage} damage to shields${rangeInfo}!`;
-      } else if (ppStolen > 0) {
-        cpuLogMessage = `⚔️ ${formattedOpponentName} attacked you with ${opponentMove.name} for ${ppStolen} damage to vault health${rangeInfo}!`;
-      } else {
-        cpuLogMessage = `⚔️ ${formattedOpponentName} used ${opponentMove.name} on you${rangeInfo}!`;
-      }
-      newLog.push(cpuLogMessage);
-      console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
       }
     } else {
       const cpuLogMessage = `⚔️ ${formattedOpponentName} used ${opponentMove.name}!`;
       newLog.push(cpuLogMessage);
       console.log(`📝 [CPU Move] Adding to battle log: ${cpuLogMessage}`);
     }
-    
-    // Update player vault (only if overshield didn't absorb the attack)
-    const currentShieldStrength = vault.shieldStrength || 0;
-    const newShieldStrength = overshieldAbsorbed ? currentShieldStrength : Math.max(0, currentShieldStrength - shieldDamage);
+
+    if (cpuDamageUsedLocalVault) {
+    const currentShieldStrength = clampVaultShield(Math.floor(Number(v.shieldStrength) || 0));
+    const newShieldStrength = overshieldAbsorbed
+      ? currentShieldStrength
+      : clampVaultShield(Math.max(0, currentShieldStrength - shieldDamage));
     // Max vault health is always 10% of vault capacity
-    const maxVaultHealth = Math.floor(vault.capacity * 0.1);
-    const currentVaultHealth = vault.vaultHealth !== undefined ? vault.vaultHealth : maxVaultHealth;
+    const maxVaultHealth = Math.floor(v.capacity * 0.1);
+    const currentVaultHealth = v.vaultHealth !== undefined ? v.vaultHealth : maxVaultHealth;
     const newVaultHealth = Math.max(0, currentVaultHealth - ppStolen);
     // Set cooldown if vault health reaches 0
-    const newVaultHealthCooldown = newVaultHealth === 0 && currentVaultHealth > 0 ? new Date() : vault.vaultHealthCooldown;
+    const newVaultHealthCooldown = newVaultHealth === 0 && currentVaultHealth > 0 ? new Date() : v.vaultHealthCooldown;
     
     console.log('CPU Attack Debug:', {
       opponentMove: opponentMove.name,
@@ -6621,46 +7593,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     } else {
       console.log('⏭️ Skipping vault update - overshield absorbed attack');
     }
-    
-    // Update opponent shields if Ice Wall was used
-    if (opponentShieldRestore > 0) {
-      setOpponent(prev => {
-        const newOpponentShieldStrength = Math.min(prev.maxShieldStrength, prev.shieldStrength + opponentShieldRestore);
-        console.log(`✅ ${opp.name}'s shields restored: ${prev.shieldStrength} → ${newOpponentShieldStrength}`);
-        const updatedOpponent = {
-          ...prev,
-          shieldStrength: newOpponentShieldStrength
-        };
-        
-        // In Mindforge mode, notify parent of opponent update
-        if (mindforgeMode && onOpponentUpdate) {
-          onOpponentUpdate(updatedOpponent);
-        }
-        
-        return updatedOpponent;
-      });
-    }
-    
-    // Update opponent health if Phoenix Regeneration was used
-    if (opponentHealing > 0) {
-      setOpponent(prev => {
-        const maxHealth = prev.maxPP || prev.currentPP;
-        const newHealth = Math.min(maxHealth, prev.currentPP + opponentHealing);
-        console.log(`✅ ${opp.name}'s health restored: ${prev.currentPP} → ${newHealth}`);
-        const updatedOpponent = {
-          ...prev,
-          currentPP: newHealth
-        };
-        
-        // In Mindforge mode, notify parent of opponent update
-        if (mindforgeMode && onOpponentUpdate) {
-          onOpponentUpdate(updatedOpponent);
-        }
-        
-        return updatedOpponent;
-      });
-    }
-    
+
     // Check for defeat (vault health depleted)
     if (newVaultHealth <= 0) {
       newLog.push('💀 Your vault health has been completely depleted!');
@@ -6685,7 +7618,45 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       return;
     }
-    
+    }
+
+    // Update opponent shields if Ice Wall was used
+    if (opponentShieldRestore > 0) {
+      setOpponent(prev => {
+        const newOpponentShieldStrength = Math.min(prev.maxShieldStrength, prev.shieldStrength + opponentShieldRestore);
+        console.log(`✅ ${opp.name}'s shields restored: ${prev.shieldStrength} → ${newOpponentShieldStrength}`);
+        const updatedOpponent = {
+          ...prev,
+          shieldStrength: newOpponentShieldStrength
+        };
+
+        if (mindforgeMode && onOpponentUpdate) {
+          onOpponentUpdate(updatedOpponent);
+        }
+
+        return updatedOpponent;
+      });
+    }
+
+    // Update opponent health if Phoenix Regeneration was used
+    if (opponentHealing > 0) {
+      setOpponent(prev => {
+        const maxHealth = prev.maxPP || prev.currentPP;
+        const newHealth = Math.min(maxHealth, prev.currentPP + opponentHealing);
+        console.log(`✅ ${opp.name}'s health restored: ${prev.currentPP} → ${newHealth}`);
+        const updatedOpponent = {
+          ...prev,
+          currentPP: newHealth
+        };
+
+        if (mindforgeMode && onOpponentUpdate) {
+          onOpponentUpdate(updatedOpponent);
+        }
+
+        return updatedOpponent;
+      });
+    }
+
     // In Mindforge mode, don't add turn counter message (each question is like a turn)
     if (!mindforgeMode) {
       newLog.push(`🔄 Turn ${battleState.turnCount + 1} begins!`);
@@ -6733,10 +7704,141 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
   };
 
+  executeOpponentTurnRef.current = executeOpponentTurn;
+
+  /** When stunned/frozen, player cannot pick a skill — advance turn (tick status + CPU) like post-move stun resolution. */
+  const handleSkipStunnedTurn = useCallback(async () => {
+    if (!currentUser?.uid) return;
+    if (!battleState.isPlayerTurn || battleState.phase !== 'selection' || battleState.isAnimating) return;
+    const immobilized = playerEffects.some(
+      (e) => (e.type === 'stun' || e.type === 'freeze') && (e.duration ?? 0) > 0
+    );
+    if (!immobilized) return;
+
+    const isIslandRaid = !!gameId && !isInSession;
+    const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser.uid);
+    const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
+    if (isPvP && battleRoom) {
+      window.alert('Passing your turn while stunned is not supported in this PvP mode yet.');
+      return;
+    }
+    if (isMultiplayer && !isInSession && !isIslandRaid && !isSinglePlayerWithAI) {
+      window.alert('Passing your turn while stunned is not supported in this battle mode yet.');
+      return;
+    }
+
+    const vNow = vault ?? vaultRef.current;
+    if (!vNow) {
+      window.alert('Battle data is still loading. Try again in a moment.');
+      return;
+    }
+
+    const playerEffectResult = await applyTurnEffects('player', [...battleState.battleLog]);
+    if (!playerEffectResult.skipTurn) return;
+
+    const logIndicatesDefeat = playerEffectResult.newLog.some(
+      (line) => line.includes('💀 Defeat') || line.includes('completely depleted')
+    );
+    if (logIndicatesDefeat) {
+      setBattleState((prev) => ({
+        ...prev,
+        battleLog: playerEffectResult.newLog,
+      }));
+      onBattleLogUpdate?.(playerEffectResult.newLog);
+      return;
+    }
+
+    setBattleState((prev) => ({
+      ...prev,
+      phase: 'opponent_turn',
+      battleLog: playerEffectResult.newLog,
+      selectedMove: null,
+      selectedTarget: null,
+      currentAnimation: null,
+      isAnimating: false,
+    }));
+    onBattleLogUpdate?.(playerEffectResult.newLog);
+
+    const aliveOpp =
+      opponents.find((o) => {
+        if (o.isDefeated) return false;
+        const health = o.vaultHealth !== undefined ? o.vaultHealth : o.currentPP ?? 0;
+        const shield = o.shieldStrength ?? 0;
+        return health > 0 || shield > 0;
+      }) || opponents[0] || opponent;
+
+    setTimeout(() => {
+      void executeOpponentTurnRef.current?.(playerEffectResult.newLog, aliveOpp, 1.0);
+    }, 900);
+  }, [
+    currentUser,
+    battleState.isPlayerTurn,
+    battleState.phase,
+    battleState.isAnimating,
+    battleState.battleLog,
+    playerEffects,
+    applyTurnEffects,
+    gameId,
+    isInSession,
+    isPvP,
+    battleRoom,
+    isMultiplayer,
+    allies,
+    opponents,
+    opponent,
+    vault,
+    onBattleLogUpdate,
+  ]);
+
+  const handleCpuAwakeningMediaDismiss = () => {
+    setCpuAwakeningMedia(null);
+    const held = resumeCpuTurnAfterAwakeningRef.current;
+    resumeCpuTurnAfterAwakeningRef.current = null;
+    if (held) {
+      setTimeout(() => {
+        void executeOpponentTurn(held.newLog, held.opponent, held.mult);
+      }, 400);
+    }
+  };
+
   const handleMoveSelect = (move: Move | null) => {
-    if (move && (move.currentCooldown ?? 0) > 0) return;
+    // Logged-in path uses getSkillAvailability below; avoid a stale UI-only cooldown short-circuit.
+    if (move && !currentUser?.uid && (move.currentCooldown ?? 0) > 0) return;
     if (move && turnActionsUsed.player && !turnActionsUsed.construct && !isConstructSkillId(move.id)) return;
     if (move && turnActionsUsed.construct && !turnActionsUsed.player && isConstructSkillId(move.id)) return;
+    if (move && currentUser?.uid) {
+      const selfAlly = allies.find((a) => a.id === currentUser.uid);
+      const movesEarned = (selfAlly as { movesEarned?: number } | undefined)?.movesEarned;
+      const liveBd =
+        isInSession && !isConstructSkillId(move.id)
+          ? computeLiveEventParticipationSkillCost(
+              move,
+              equippedArtifacts as Record<string, unknown> | null,
+              equippableCatalogRaw,
+              getSkillCostReductionFromBattleEffects(playerEffects as never)
+            )
+          : null;
+      const isStunned = playerEffects.some((e) => e.type === 'stun' && e.duration > 0);
+      const hasShieldBreak = playerEffects.some(
+        (e) => (e as { type: string }).type === 'shield_break' && (e.duration ?? 0) > 0
+      );
+      const clickAvail = getSkillAvailability({
+        actor: { id: currentUser.uid },
+        skill: move,
+        battleContext: {
+          policy: skillRuntimePolicy,
+          battleModeLabel: isInSession ? 'live' : 'standard',
+          waveNumber: currentWaveIndex,
+          turnOwnerId: currentUser.uid,
+          participationPointsAvailable: typeof movesEarned === 'number' ? movesEarned : undefined,
+          liveEventFinalCost: liveBd?.finalCost,
+          isActorStunned: isStunned,
+          hasShieldBreak,
+        },
+        currentState: { cooldowns: combatCooldowns },
+      });
+      if (!clickAvail.canUse) return;
+    }
     // Instrument: Skill clicked
     (async () => {
       const { battleDebug, detectBattleMode } = await import('../utils/battleDebug');
@@ -6761,7 +7863,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       ...prev,
       selectedMove: move,
       selectedTarget: move
-        ? (isDefensiveMove && currentUser?.uid ? currentUser.uid : prev.selectedTarget)
+        ? (isDefensiveMove ? (currentUser?.uid ?? 'self') : prev.selectedTarget)
         : null,
       phase: move ? (isDefensiveMove && isIslandRaidOrSession ? 'execution' : prev.phase) : 'selection'
     }));
@@ -6871,7 +7973,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     setBattleState(prev => {
       // Check if this is single-player with AI allies (like Chapter 2-5)
-      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
       // CRITICAL: In-Session mode and Island Raid mode always go directly to execution (no turn order needed)
@@ -6936,7 +8038,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Check if this is a single-player battle with AI allies (not true multiplayer)
       // If there's only one human player and the rest are AI, execute immediately
-      const humanPlayers = allies.filter(ally => ally.id === currentUser?.uid || !ally.isAI).length;
+      const humanPlayers = countHumanAlliesForTurnRules(allies, currentUser?.uid);
       const isSinglePlayerWithAI = isMultiplayer && humanPlayers === 1 && allies.length > 1;
       
       if (isMultiplayer && !isSinglePlayerWithAI) {
@@ -6950,7 +8052,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
       executePlayerMove();
     }
-  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer, allies, currentUser, isInSession, sessionId]);
+  }, [battleState.phase, battleState.selectedMove, battleState.selectedTarget, executePlayerMove, isMultiplayer, allies, currentUser, isInSession, sessionId, gameId]);
 
   // Listen for external move selection events (for In Session mode)
   useEffect(() => {
@@ -7257,26 +8359,36 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               }}>
                 {availableMoves.slice(0, 8).map((move) => {
                   const onCooldown = (move.currentCooldown ?? 0) > 0;
+                  const avail = skillAvailabilityByMoveId?.[move.id];
+                  const disabledMove = avail != null ? !avail.canUse : onCooldown;
+                  const disabledHint =
+                    avail != null
+                      ? avail.canUse
+                        ? undefined
+                        : avail.reasons.join(' · ')
+                      : onCooldown
+                        ? `Cooldown: ${move.currentCooldown} turn(s) remaining`
+                        : undefined;
                   return (
                     <button
                       key={move.id || move.name}
-                      onClick={() => !onCooldown && handleMoveSelect(move)}
-                      disabled={onCooldown}
+                      onClick={() => !disabledMove && handleMoveSelect(move)}
+                      disabled={disabledMove}
                       style={{
                         padding: '0.75rem',
-                        background: onCooldown ? 'rgba(107, 114, 128, 0.5)' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                        background: disabledMove ? 'rgba(107, 114, 128, 0.5)' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
                         color: 'white',
                         border: 'none',
                         borderRadius: '0.5rem',
-                        cursor: onCooldown ? 'not-allowed' : 'pointer',
+                        cursor: disabledMove ? 'not-allowed' : 'pointer',
                         fontSize: '0.875rem',
                         fontWeight: '500',
                         transition: 'all 0.2s',
                         boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                        opacity: onCooldown ? 0.65 : 1
+                        opacity: disabledMove ? 0.65 : 1
                       }}
                       onMouseEnter={(e) => {
-                        if (!onCooldown) {
+                        if (!disabledMove) {
                           e.currentTarget.style.transform = 'translateY(-2px)';
                           e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
                         }
@@ -7285,12 +8397,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                         e.currentTarget.style.transform = 'translateY(0)';
                         e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
                       }}
-                      title={onCooldown ? `${move.currentCooldown} turn(s) left` : undefined}
+                      title={disabledHint}
                     >
                       <div>{move.name}</div>
-                      {onCooldown && (
-                        <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', opacity: 0.9 }}>
-                          ⏱️ {move.currentCooldown} turn{move.currentCooldown !== 1 ? 's' : ''} left
+                      {disabledMove && (
+                        <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', opacity: 0.9, textAlign: 'center' }}>
+                          {avail != null && !avail.canUse
+                            ? avail.reasons.join(' · ')
+                            : `⏱️ ${move.currentCooldown} turn${move.currentCooldown !== 1 ? 's' : ''} left`}
                         </div>
                       )}
                     </button>
@@ -7683,7 +8797,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 ally.maxVaultHealth !== undefined
                   ? ally.maxVaultHealth
                   : Math.floor((ally.maxPP || 1000) * 0.1),
-              isPlayer: ally.id === currentUser?.uid
+              isPlayer: ally.id === currentUser?.uid,
+              movesEarned: (ally as { movesEarned?: number }).movesEarned,
             }))
           }
           enemies={
@@ -7702,7 +8817,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                     opp.maxVaultHealth !== undefined
                       ? opp.maxVaultHealth
                       : Math.floor((opp.maxPP || 1000) * 0.1),
-                  isPlayer: false
+                  isPlayer: false,
+                  enemyType: opp.enemyType,
+                  isAwakened: opp.isAwakened === true,
                 }))
               : raidStyleArenaRows?.enemies ?? []
           }
@@ -7718,6 +8835,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           allowInvites={allowInvites}
           currentWave={currentWaveIndex}
           maxWaves={maxWaves}
+          skillAvailabilityByMoveId={skillAvailabilityByMoveId}
+          showSkipStunnedTurn={showSkipStunnedTurn}
+          onSkipStunnedTurn={handleSkipStunnedTurn}
         />
       ) : (
       <BattleArena
@@ -7727,6 +8847,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         selectedMove={battleState.selectedMove}
         selectedTarget={battleState.selectedTarget}
         availableMoves={availableMoves}
+        skillAvailabilityByMoveId={skillAvailabilityByMoveId}
+        showSkipStunnedTurn={showSkipStunnedTurn}
+        onSkipStunnedTurn={handleSkipStunnedTurn}
         isInSession={isInSession}
         availableTargets={availableTargets}
         isPlayerTurn={battleState.isPlayerTurn}
@@ -7920,11 +9043,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         </div>
       )}
 
+      <CpuAwakeningSequenceModal
+        open={!!cpuAwakeningMedia}
+        title={cpuAwakeningMedia?.title ?? 'Awakening'}
+        steps={cpuAwakeningMedia?.steps ?? []}
+        onDismiss={handleCpuAwakeningMediaDismiss}
+      />
+
       {/* Battle Animations - Re-enabled for Mindforge mode with proper completion handling */}
       {battleState.isAnimating && battleState.currentAnimation && (
         <BattleAnimations
           move={battleState.currentAnimation}
-          isPlayerMove={battleState.isPlayerTurn}
+          isPlayerMove
           onAnimationComplete={handleAnimationComplete}
           actorDisplayName={
             allies.find((a) => a.id === currentUser?.uid)?.name ||

@@ -18,6 +18,27 @@ import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import AssessmentResultsSummaryModal from './AssessmentResultsSummaryModal';
 
+function formatHabitStatusLabel(status: string | undefined): string {
+  if (!status) return '—';
+  const u = status.toUpperCase().replace(/-/g, '_');
+  const labels: Record<string, string> = {
+    IN_PROGRESS: 'In progress',
+    COMPLETED: 'Completed',
+    BROKEN: 'Broken',
+    DISPUTED: 'Disputed',
+    ACTIVE: 'In progress',
+    FAILED: 'Broken',
+  };
+  return labels[u] ?? status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function habitStatusTone(status: string | undefined): string {
+  const u = (status || '').toUpperCase();
+  if (u === 'COMPLETED') return '#10b981';
+  if (u === 'BROKEN' || u === 'FAILED') return '#ef4444';
+  return '#3b82f6';
+}
+
 interface AssessmentDashboardProps {
   assessment: Assessment;
   classId: string;
@@ -51,13 +72,8 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
 
       try {
         setLoading(true);
-        
-        // Get class to get student IDs
-        const classData = await getClass(classId);
-        if (!classData) {
-          console.error('Class not found');
-          return;
-        }
+
+        const rosterClassId = assessment.classId || classId;
 
         // Get all goals, results, and habit submissions for this assessment
         const [goals, fetchedResults, fetchedHabitSubmissions] = await Promise.all([
@@ -65,16 +81,28 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
           getResultsByAssessment(assessment.id),
           isHabits ? getHabitSubmissionsByAssessment(assessment.id) : Promise.resolve([])
         ]);
-        
-        // Store results and habit submissions for use
+
         setResults(fetchedResults);
         setHabitSubmissions(fetchedHabitSubmissions);
 
-        // Fetch student data
-        const studentDataPromises = classData.studentIds.map(async (studentId) => {
+        const classData = await getClass(rosterClassId);
+        const rosterIds = new Set<string>(classData?.studentIds || []);
+        if (isHabits) {
+          fetchedHabitSubmissions.forEach((h) => rosterIds.add(h.studentId));
+        }
+        goals.forEach((g) => rosterIds.add(g.studentId));
+        fetchedResults.forEach((r) => rosterIds.add(r.studentId));
+
+        const studentDataPromises = Array.from(rosterIds).map(async (studentId) => {
           const studentRef = doc(db, 'students', studentId);
           const studentDoc = await getDoc(studentRef);
-          if (!studentDoc.exists()) return null;
+          if (!studentDoc.exists()) {
+            return {
+              id: studentId,
+              name: `Player ${studentId.slice(0, 8)}…`,
+              email: undefined as string | undefined,
+            };
+          }
           const studentData = studentDoc.data();
           return {
             id: studentId,
@@ -83,7 +111,9 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
           };
         });
 
-        const studentDataList = (await Promise.all(studentDataPromises)).filter(Boolean) as any[];
+        const studentDataList = ((await Promise.all(studentDataPromises)) as any[]).sort((a, b) =>
+          (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
+        );
 
         // Build student rows
         const rows: StudentAssessmentRow[] = studentDataList.map(student => {
@@ -131,7 +161,7 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
     };
 
     fetchData();
-  }, [assessment.id, classId, currentUser]);
+  }, [assessment.id, assessment.classId, assessment.type, classId, currentUser]);
 
   const handleScoreChange = async (studentId: string, score: number) => {
     if (!currentUser) return;
@@ -435,11 +465,13 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                             Duration: {(row as any).habitSubmission.duration.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
                           </div>
                           <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                            Status: <span style={{ 
-                              color: (row as any).habitSubmission.status === 'completed' ? '#10b981' : 
-                                     (row as any).habitSubmission.status === 'failed' ? '#ef4444' : '#3b82f6'
-                            }}>
-                              {(row as any).habitSubmission.status.charAt(0).toUpperCase() + (row as any).habitSubmission.status.slice(1)}
+                            Status:{' '}
+                            <span
+                              style={{
+                                color: habitStatusTone((row as any).habitSubmission.status),
+                              }}
+                            >
+                              {formatHabitStatusLabel((row as any).habitSubmission.status)}
                             </span>
                           </div>
                           <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>

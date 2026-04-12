@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
+import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
 
 interface VaultStatsProps {
   vault: Vault | null;
@@ -253,12 +254,13 @@ const VaultStats: React.FC<VaultStatsProps> = ({
 
     // If on cooldown, warn the player that restoring health will remove the cooldown
     if (vault.vaultHealthCooldown) {
-      const cooldownEnd = new Date(vault.vaultHealthCooldown);
-      cooldownEnd.setHours(cooldownEnd.getHours() + 4);
+      const cdStart = parseFirestoreDate(vault.vaultHealthCooldown);
+      if (cdStart) {
+      const cooldownEnd = vaultHealthCooldownEnd(cdStart);
       const now = new Date();
       const remainingMs = cooldownEnd.getTime() - now.getTime();
       
-      if (remainingMs > 0) {
+      if (remainingMs > 0 && Number.isFinite(remainingMs)) {
         const remainingHours = Math.floor(remainingMs / (1000 * 60 * 60));
         const remainingMinutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
         const remainingSeconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
@@ -274,6 +276,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         if (!window.confirm(confirmMessage)) {
           return;
         }
+      }
       }
     }
     
@@ -386,12 +389,16 @@ const VaultStats: React.FC<VaultStatsProps> = ({
     }
 
     const updateCooldownTimer = () => {
-      const cooldownEnd = new Date(vault.vaultHealthCooldown!);
-      cooldownEnd.setHours(cooldownEnd.getHours() + 4); // 4-hour cooldown
+      const cdStart = parseFirestoreDate(vault.vaultHealthCooldown);
+      if (!cdStart) {
+        setCooldownRemaining(null);
+        return;
+      }
+      const cooldownEnd = vaultHealthCooldownEnd(cdStart);
       const now = new Date();
       const remainingMs = cooldownEnd.getTime() - now.getTime();
       
-      if (remainingMs <= 0) {
+      if (remainingMs <= 0 || !Number.isFinite(remainingMs)) {
         setCooldownRemaining(null);
         return;
       }
@@ -564,7 +571,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
   const unlockedMoves = moves.filter(move => move.unlocked);
   const unlockedCards = actionCards.filter(card => card.unlocked);
   const ppPercentage = (vault.currentPP / vault.capacity) * 100;
-  const shieldPercentage = (vault.shieldStrength / vault.maxShieldStrength) * 100;
+  const maxShieldDisp = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
+  const shieldStrengthDisp = Math.max(
+    0,
+    maxShieldDisp > 0
+      ? Math.min(maxShieldDisp, Math.floor(Number(vault.shieldStrength) || 0))
+      : Math.floor(Number(vault.shieldStrength) || 0)
+  );
+  const shieldPercentage = maxShieldDisp > 0 ? (shieldStrengthDisp / maxShieldDisp) * 100 : 0;
   const offlineMovesPercentage = (remainingOfflineMoves / maxOfflineMoves) * 100;
 
   const getStatusColor = (percentage: number) => {
@@ -702,14 +716,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
           <button 
             onClick={() => onRestoreShields(5, 5)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -719,14 +733,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           <button 
             onClick={() => onRestoreShields(10, 10)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -736,14 +750,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           <button 
             onClick={() => onRestoreShields(25, 25)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -753,14 +767,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           <button 
             onClick={() => onRestoreShields(50, 50)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -770,14 +784,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           <button 
             onClick={() => onRestoreShields(100, 100)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -787,14 +801,14 @@ const VaultStats: React.FC<VaultStatsProps> = ({
           
           <button 
             onClick={() => onRestoreShields(1000, 1000)}
-            disabled={vault.shieldStrength >= vault.maxShieldStrength}
+            disabled={maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp}
             style={{
-              background: vault.shieldStrength >= vault.maxShieldStrength ? '#9ca3af' : '#10b981',
+              background: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? '#9ca3af' : '#10b981',
               color: 'white',
               border: 'none',
               padding: '0.75rem',
               borderRadius: '0.5rem',
-              cursor: vault.shieldStrength >= vault.maxShieldStrength ? 'not-allowed' : 'pointer',
+              cursor: maxShieldDisp > 0 && shieldStrengthDisp >= maxShieldDisp ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '0.875rem'
             }}
@@ -1040,7 +1054,7 @@ const VaultStats: React.FC<VaultStatsProps> = ({
             <span style={{ fontSize: '1.5rem' }}>🛡️</span>
           </div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2563eb', marginBottom: '0.5rem' }}>
-            {vault.shieldStrength} / {vault.maxShieldStrength}
+            {shieldStrengthDisp} / {maxShieldDisp || vault.maxShieldStrength}
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ 

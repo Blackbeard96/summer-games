@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getAttempt, getQuizSet, getQuestions } from '../utils/trainingGroundsService';
 import { TrainingAttempt, TrainingQuestion } from '../types/trainingGrounds';
@@ -9,6 +9,14 @@ const QuizResults: React.FC = () => {
   const { attemptId } = useParams<{ attemptId: string }>();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnMissionRaw = searchParams.get('returnMission');
+  const returnMission =
+    returnMissionRaw &&
+    returnMissionRaw.startsWith('/mission/') &&
+    !returnMissionRaw.includes('..')
+      ? returnMissionRaw
+      : null;
   
   const [attempt, setAttempt] = useState<TrainingAttempt | null>(null);
   const [quizSet, setQuizSet] = useState<any>(null);
@@ -313,8 +321,28 @@ const QuizResults: React.FC = () => {
           justifyContent: 'center',
           flexWrap: 'wrap'
         }}>
+          {returnMission && (
+            <button
+              onClick={() => navigate(returnMission)}
+              style={{
+                padding: '0.75rem 2rem',
+                background: '#7c3aed',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                fontSize: '1rem',
+                fontWeight: '600',
+                cursor: 'pointer',
+              }}
+            >
+              Back to mission
+            </button>
+          )}
           <button
-            onClick={() => navigate(`/training-grounds/quiz/${attempt.quizSetId}`)}
+            onClick={() => {
+              const base = `/training-grounds/quiz/${attempt.quizSetId}`;
+              navigate(returnMission ? `${base}?returnMission=${encodeURIComponent(returnMission)}` : base);
+            }}
             style={{
               padding: '0.75rem 2rem',
               background: '#4f46e5',

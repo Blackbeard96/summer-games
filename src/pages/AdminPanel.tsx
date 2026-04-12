@@ -43,6 +43,8 @@ import MissionAdmin from '../components/MissionAdmin';
 import IslandRaidLevelsAdmin from '../components/IslandRaidLevelsAdmin';
 import Season1AdminPanel from '../components/admin/Season1AdminPanel';
 import VaultRecoveryAdmin from '../components/admin/VaultRecoveryAdmin';
+import RRCandyAdminPage from './admin/RRCandyAdminPage';
+import Level2ManifestBuilderAdmin from '../components/admin/Level2ManifestBuilderAdmin';
 
 interface Classroom {
   id: string;
@@ -220,7 +222,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'season1' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1152,6 +1154,16 @@ const AdminPanel: React.FC = () => {
       setStoryProgressLoading(false);
     }
   };
+
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('tab') === 'rr-candies') setActiveTab('rr-candies');
+      if (p.get('tab') === 'level2-manifest') setActiveTab('level2-manifest');
+    } catch (_) {
+      /* ignore */
+    }
+  }, []);
 
   // Fetch story progress when tab is active
   useEffect(() => {
@@ -2742,6 +2754,23 @@ const AdminPanel: React.FC = () => {
           Manifests
         </button>
         <button
+          onClick={() => setActiveTab('level2-manifest')}
+          style={{
+            backgroundColor: activeTab === 'level2-manifest' ? '#4338ca' : '#e5e7eb',
+            color: activeTab === 'level2-manifest' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          L2 Manifest builder
+        </button>
+        <button
           onClick={() => setActiveTab('story-progress')}
           style={{
             backgroundColor: activeTab === 'story-progress' ? '#4f46e5' : '#e5e7eb',
@@ -2993,6 +3022,22 @@ const AdminPanel: React.FC = () => {
           🎯 Training Grounds
         </button>
         <button
+          onClick={() => setActiveTab('rr-candies')}
+          style={{
+            backgroundColor: activeTab === 'rr-candies' ? '#0891b2' : '#e5e7eb',
+            color: activeTab === 'rr-candies' ? 'white' : '#374151',
+            border: 'none',
+            padding: '0.5rem 1rem',
+            borderRadius: '0.375rem',
+            cursor: 'pointer',
+            fontWeight: 600,
+            marginRight: '0.5rem',
+            marginBottom: '0.5rem',
+          }}
+        >
+          RR Candies
+        </button>
+        <button
           onClick={() => setActiveTab('season1')}
           style={{
             backgroundColor: activeTab === 'season1' ? '#7c3aed' : '#e5e7eb',
@@ -3007,7 +3052,7 @@ const AdminPanel: React.FC = () => {
             whiteSpace: 'nowrap'
           }}
         >
-          🌊 Season 1
+          Battle Pass
         </button>
         <button
           onClick={() => setActiveTab('missions')}
@@ -3153,6 +3198,8 @@ const AdminPanel: React.FC = () => {
         <AssessmentGoalsAdmin />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />
+      ) : activeTab === 'rr-candies' ? (
+        <RRCandyAdminPage />
       ) : activeTab === 'season1' ? (
         <Season1AdminPanel />
       ) : activeTab === 'missions' ? (
@@ -3165,6 +3212,8 @@ const AdminPanel: React.FC = () => {
         <VaultRecoveryAdmin />
       ) : activeTab === 'uxp-approval' ? (
         <UXPApproval />
+      ) : activeTab === 'level2-manifest' ? (
+        <Level2ManifestBuilderAdmin />
       ) : activeTab === 'manifests' ? (
         <ManifestAdmin
           isOpen={true}

@@ -24,9 +24,10 @@ import { MOVE_TEMPLATES } from '../types/battle';
 import EditRivalModal from '../components/EditRivalModal';
 import { getRivals } from '../utils/rivalService';
 import { UniversalLawSkillTreePage } from '../components/skillTree/UniversalLawSkillTreePage';
-import { getRRCandyStatus } from '../utils/rrCandyUtils';
+import { getMergedRRCandyStatus, getRRCandyStatus } from '../utils/rrCandyUtils';
 import { normalizePlayerPowerStats } from '../utils/liveEventPowerStatsService';
 import PowerStatProgressBar from '../components/PowerStatProgressBar';
+import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -146,14 +147,16 @@ const Profile = () => {
   const [playerManifest, setPlayerManifest] = useState<PlayerManifest | null>(null);
   const [showManifestSelection, setShowManifestSelection] = useState(false);
   const [nextChallenge, setNextChallenge] = useState<any>(null);
-  const [showPPEarningModal, setShowPPEarningModal] = useState(false);
   const [squadAbbreviation, setSquadAbbreviation] = useState<string | null>(null);
   const [isSkillTreeShowing, setIsSkillTreeShowing] = useState(false);
   /** True if battleMoves already has RR Candy skills (unlock even when journey chapter shape differs) */
   const [skillTreeUnlockedFromBattleMoves, setSkillTreeUnlockedFromBattleMoves] = useState(false);
+  /** users + students merged RR candy (candyChoice often lives on only one doc) */
+  const [rrCandyMergedStatus, setRRCandyMergedStatus] = useState<ReturnType<typeof getMergedRRCandyStatus> | null>(null);
   const [showEditRivalModal, setShowEditRivalModal] = useState(false);
   const [rivals, setRivals] = useState<{ chosen?: any; inbound?: any }>({});
   const [showPowerBreakdown, setShowPowerBreakdown] = useState(false);
+  const [showWaysToEarnPpModal, setShowWaysToEarnPpModal] = useState(false);
   const [profilePowerStatHover, setProfilePowerStatHover] = useState<PowerStatBranch | null>(null);
 
   // Function to get manifest color
@@ -283,6 +286,9 @@ const Profile = () => {
         const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
         
         setUserData(mergedUserData);
+        setRRCandyMergedStatus(
+          getMergedRRCandyStatus(usersSnap.exists() ? usersSnap.data() : {}, userDataFromDB)
+        );
         setDisplayName(userDataFromDB.displayName || currentUser.displayName || '');
         setBio(userDataFromDB.bio || '');
         // Extract manifestId correctly - handle both object and string formats
@@ -363,6 +369,9 @@ const Profile = () => {
       } else {
         // Create user document if it doesn't exist
         setUserData({ xp: 0, powerPoints: 0, truthMetal: 0, challenges: {}, level: 1, rarity: 1, artifacts: [] });
+        setRRCandyMergedStatus(
+          getMergedRRCandyStatus(usersSnap.exists() ? usersSnap.data() : {}, null)
+        );
       }
     } catch (error) {
       if (isFirestoreInternalError(error)) {
@@ -493,14 +502,14 @@ const Profile = () => {
     }
   }, [skillTreeView]);
 
-  /** Skill tree on Profile: same robust unlock as RR Candy + any rr-candy-* moves in battleMoves */
+  /** Skill tree on Profile: merged users+students RR status + any rr-candy-* moves in battleMoves */
   const rrProfileSkill = useMemo(() => {
-    const rr = getRRCandyStatus(userData || {});
+    const rr = rrCandyMergedStatus ?? getRRCandyStatus(userData || {});
     return {
       hasAccess: skillTreeUnlockedFromBattleMoves || rr.unlocked,
       candyType: rr.candyType || 'on-off',
     };
-  }, [userData, skillTreeUnlockedFromBattleMoves]);
+  }, [userData, skillTreeUnlockedFromBattleMoves, rrCandyMergedStatus]);
 
   const profilePowerStats = useMemo(
     () => normalizePlayerPowerStats(userData?.stats),
@@ -1714,7 +1723,8 @@ const Profile = () => {
                 <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>Power Points</div>
                 {/* Want more PP? Button */}
                 <button
-                  onClick={() => setShowPPEarningModal(true)}
+                  type="button"
+                  onClick={() => setShowWaysToEarnPpModal(true)}
                   style={{
                     background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
                     color: '#1f2937',
@@ -3031,236 +3041,11 @@ const Profile = () => {
         />
       )}
 
-      {/* PP Earning Methods Modal */}
-      {showPPEarningModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.7)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 10000,
-            padding: '2rem'
-          }}
-          onClick={() => setShowPPEarningModal(false)}
-        >
-          <div
-            style={{
-              background: 'white',
-              borderRadius: '1rem',
-              padding: '2rem',
-              maxWidth: '600px',
-              width: '100%',
-              maxHeight: '80vh',
-              overflowY: 'auto',
-              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-              position: 'relative'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Close Button */}
-            <button
-              onClick={() => setShowPPEarningModal(false)}
-              style={{
-                position: 'absolute',
-                top: '1rem',
-                right: '1rem',
-                background: 'rgba(239, 68, 68, 0.2)',
-                border: '1px solid rgba(239, 68, 68, 0.5)',
-                borderRadius: '50%',
-                width: '40px',
-                height: '40px',
-                color: '#ef4444',
-                cursor: 'pointer',
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              ×
-            </button>
+      <WaysToEarnPowerPointsModal
+        open={showWaysToEarnPpModal}
+        onClose={() => setShowWaysToEarnPpModal(false)}
+      />
 
-            <h2 style={{
-              fontSize: '2rem',
-              fontWeight: 'bold',
-              marginBottom: '1rem',
-              color: '#1f2937',
-              textAlign: 'center'
-            }}>
-              💰 Ways to Earn Power Points
-            </h2>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {/* Battle Arena */}
-              <div
-                style={{
-                  padding: '1rem',
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  borderRadius: '0.75rem',
-                  color: 'white',
-                  cursor: 'pointer',
-                  transition: 'transform 0.2s'
-                }}
-                onClick={() => {
-                  setShowPPEarningModal(false);
-                  navigate('/battle');
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>⚔️</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>Battle Arena</h3>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, fontSize: '0.875rem' }}>
-                      Fight other players and win PP from their vaults. Practice mode also rewards PP!
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Island Raid */}
-              <div
-                style={{
-                  padding: '1rem',
-                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                  borderRadius: '0.75rem',
-                  color: 'white',
-                  cursor: 'pointer',
-                  transition: 'transform 0.2s'
-                }}
-                onClick={() => {
-                  setShowPPEarningModal(false);
-                  navigate('/island-raid');
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>🏝️</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>Island Raid</h3>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, fontSize: '0.875rem' }}>
-                      Complete Island Raids to earn PP rewards. Easy mode: 150 PP, Normal mode: 300 PP!
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Daily Challenges */}
-              <div
-                style={{
-                  padding: '1rem',
-                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                  borderRadius: '0.75rem',
-                  color: 'white',
-                  cursor: 'pointer',
-                  transition: 'transform 0.2s'
-                }}
-                onClick={() => {
-                  setShowPPEarningModal(false);
-                  navigate('/home');
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>📅</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>Daily Challenges</h3>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, fontSize: '0.875rem' }}>
-                      Complete daily challenges to earn PP rewards. New challenges refresh every day!
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Story Mode */}
-              <div
-                style={{
-                  padding: '1rem',
-                  background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-                  borderRadius: '0.75rem',
-                  color: 'white',
-                  cursor: 'pointer',
-                  transition: 'transform 0.2s'
-                }}
-                onClick={() => {
-                  setShowPPEarningModal(false);
-                  navigate('/story');
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>📖</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>Story Mode</h3>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, fontSize: '0.875rem' }}>
-                      Complete story episodes to earn PP and other rewards as you progress through the story!
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Player's Journey */}
-              <div
-                style={{
-                  padding: '1rem',
-                  background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)',
-                  borderRadius: '0.75rem',
-                  color: 'white',
-                  cursor: 'pointer',
-                  transition: 'transform 0.2s'
-                }}
-                onClick={() => {
-                  setShowPPEarningModal(false);
-                  navigate('/chapters');
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>🗺️</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>Player's Journey</h3>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, fontSize: '0.875rem' }}>
-                      Complete chapter challenges to earn PP and unlock new content!
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

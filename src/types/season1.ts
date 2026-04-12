@@ -4,6 +4,7 @@
  */
 
 import type { Timestamp } from 'firebase/firestore';
+import type { BattlePassIntroStep } from './missions';
 
 /** Live event modes (Season 1 taxonomy). */
 export type LiveEventModeType =
@@ -139,7 +140,7 @@ export interface GoalLinkedResponse {
 
 export interface BattlePassReward {
   id: string;
-  rewardType: 'xp' | 'pp' | 'artifact' | 'item' | 'skill_card';
+  rewardType: 'xp' | 'pp' | 'artifact' | 'item' | 'skill_card' | 'truth_metal' | 'ability';
   rewardRefId?: string;
   quantity?: number;
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
@@ -148,14 +149,32 @@ export interface BattlePassReward {
   iconUrl?: string;
 }
 
+/**
+ * Player picks `pickCount` reward(s) from `options` (e.g. pick 1 of 3). Stored in tier `rewards` next to flat rewards.
+ */
+export interface BattlePassRewardChoiceGroup {
+  id: string;
+  pickCount: number;
+  displayName?: string;
+  description?: string;
+  options: BattlePassReward[];
+}
+
+export type BattlePassTierRewardEntry = BattlePassReward | BattlePassRewardChoiceGroup;
+
+export function isBattlePassChoiceGroup(e: BattlePassTierRewardEntry): e is BattlePassRewardChoiceGroup {
+  return e != null && typeof e === 'object' && 'options' in e && Array.isArray((e as BattlePassRewardChoiceGroup).options);
+}
+
 export interface BattlePassTier {
   id: string;
   tierNumber: number;
   requiredXP: number;
-  rewards: BattlePassReward[];
+  rewards: BattlePassTierRewardEntry[];
 }
 
 export interface Season {
+  /** Document id under `seasons/{id}`. */
   id: string;
   name: string;
   theme: string;
@@ -163,8 +182,18 @@ export interface Season {
   startAt: Timestamp | Date;
   endAt: Timestamp | Date;
   description: string;
+  /**
+   * Which game/content season this pass is tied to (e.g. Flow Season 1).
+   * Clients can filter or theme UI; use presets from admin or a custom key.
+   */
+  linkedGameSeasonKey?: string;
   featuredHero?: string;
   homeBannerImage?: string;
+  /** Optional full-season intro video (Storage download URL or external). */
+  seasonIntroVideoUrl?: string;
+  seasonIntroVideoStoragePath?: string;
+  /** Ordered slides + inline videos (mission-builder–compatible steps). */
+  introSequence?: BattlePassIntroStep[];
   tiers: BattlePassTier[];
 }
 

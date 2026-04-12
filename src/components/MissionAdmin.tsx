@@ -9,11 +9,19 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, orderBy, serverTimestamp, writeBatch, getDoc as getDocFn } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, deleteField, query, orderBy, serverTimestamp, writeBatch, getDoc as getDocFn } from 'firebase/firestore';
 import { db } from '../firebase';
 import { MissionTemplate, MissionCategory, DeliveryChannel, PlayerJourneyLink, MissionSequenceStep, ProfileMetadata, ProfileJourneyStageId } from '../types/missions';
 import { CHAPTERS, ChapterChallenge } from '../types/chapters';
 import MissionSequenceBuilder from './MissionSequenceBuilder';
+import { stripUndefinedDeep } from '../utils/firestoreSanitize';
+import { deleteAllPlayerMissionDocsForMissionTemplate, parseMissionRewardsFromDoc } from '../utils/missionsService';
+import type { BattlePassTierRewardEntry } from '../types/season1';
+import { legacyMissionRewardsToEntries } from '../utils/missionBattlePassRewards';
+import MissionRewardsBattlePassEditor, {
+  validateMissionRewardEntries,
+  serializeMissionRewardEntries,
+} from './admin/MissionRewardsBattlePassEditor';
 
 const PROFILE_JOURNEY_STAGE_OPTIONS: Array<{ value: ProfileJourneyStageId; label: string }> = [
   { value: 'ordinary-world', label: '1. Ordinary World' },
@@ -31,6 +39,7 @@ const MissionAdmin: React.FC = () => {
   const [selectedMission, setSelectedMission] = useState<MissionTemplate | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isDeletingMission, setIsDeletingMission] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
@@ -58,10 +67,14 @@ const MissionAdmin: React.FC = () => {
           profile: data.profile || undefined,
           playerJourneyLink: data.playerJourneyLink || undefined,
           gating: data.gating || undefined,
-          rewards: data.rewards || {},
+          rewards: parseMissionRewardsFromDoc(data.rewards),
           objectives: data.objectives || [],
           sequence: data.sequence || undefined,
           sequenceVersion: data.sequenceVersion || undefined,
+          hubDisplayOrder:
+            typeof data.hubDisplayOrder === 'number' && Number.isFinite(data.hubDisplayOrder)
+              ? data.hubDisplayOrder
+              : undefined,
           createdAt: data.createdAt,
           updatedAt: data.updatedAt
         });
@@ -76,16 +89,26 @@ const MissionAdmin: React.FC = () => {
     }
   };
 
-  const handleSaveMission = async (missionData: Partial<MissionTemplate>) => {
+  const handleSaveMission = async (
+    missionData: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean }
+  ) => {
     if (!selectedMission) return;
 
     setSaving(true);
     try {
       const missionRef = doc(db, 'missions', selectedMission.id);
-      await updateDoc(missionRef, {
-        ...missionData,
+      const { hubDisplayOrderClear, hubDisplayOrder, ...rest } = missionData;
+      const payload: Record<string, unknown> = {
+        ...rest,
         updatedAt: serverTimestamp()
-      });
+      };
+      if (hubDisplayOrderClear) {
+        payload.hubDisplayOrder = deleteField();
+      } else if (typeof hubDisplayOrder === 'number' && Number.isFinite(hubDisplayOrder)) {
+        payload.hubDisplayOrder = hubDisplayOrder;
+      }
+      const cleaned = stripUndefinedDeep(payload) as Record<string, unknown>;
+      await updateDoc(missionRef, cleaned as never);
       
       await loadMissions();
       setSelectedMission(null);
@@ -95,6 +118,21 @@ const MissionAdmin: React.FC = () => {
       alert('Failed to save mission');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteMission = async (missionId: string) => {
+    setIsDeletingMission(true);
+    try {
+      await deleteDoc(doc(db, 'missions', missionId));
+      await loadMissions();
+      setSelectedMission(null);
+      alert('Mission deleted.');
+    } catch (error) {
+      console.error('Error deleting mission:', error);
+      alert('Failed to delete mission');
+    } finally {
+      setIsDeletingMission(false);
     }
   };
 
@@ -118,9 +156,10 @@ const MissionAdmin: React.FC = () => {
       const normalizedSequence = sequence?.map((step, idx) => ({ ...step, order: idx })) || undefined;
       
       // Create/update mission document
-      const missionDocData: any = {
+      const missionDocData: Record<string, unknown> = {
         ...missionData,
-        isDraft: undefined, // Remove draft flag
+        // Firestore rejects undefined; false clears the draft created for upload IDs
+        isDraft: false,
         updatedAt: serverTimestamp()
       };
       
@@ -134,11 +173,17 @@ const MissionAdmin: React.FC = () => {
         missionDocData.sequence = normalizedSequence;
         missionDocData.sequenceVersion = 1;
       }
+
+      if (typeof missionData.hubDisplayOrder !== 'number' || !Number.isFinite(missionData.hubDisplayOrder)) {
+        delete missionDocData.hubDisplayOrder;
+      }
+
+      const sanitized = stripUndefinedDeep(missionDocData) as Record<string, unknown>;
       
       if (draftMissionId) {
-        batch.update(missionRef, missionDocData);
+        batch.update(missionRef, sanitized as never);
       } else {
-        batch.set(missionRef, missionDocData);
+        batch.set(missionRef, sanitized as never);
       }
       
       await batch.commit();
@@ -249,10 +294,13 @@ const MissionAdmin: React.FC = () => {
       {/* Edit Modal */}
       {selectedMission && (
         <MissionEditModal
+          key={selectedMission.id}
           mission={selectedMission}
           onClose={() => setSelectedMission(null)}
           onSave={handleSaveMission}
+          onDelete={handleDeleteMission}
           saving={saving}
+          deleting={isDeletingMission}
         />
       )}
 
@@ -271,11 +319,15 @@ const MissionAdmin: React.FC = () => {
 interface MissionEditModalProps {
   mission: MissionTemplate;
   onClose: () => void;
-  onSave: (data: Partial<MissionTemplate>) => void;
+  onSave: (data: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean }) => void;
+  onDelete: (missionId: string) => void | Promise<void>;
   saving: boolean;
+  deleting: boolean;
 }
 
-const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, onClose, saving }) => {
+const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, onClose, onDelete, saving, deleting }) => {
+  const [resettingProgress, setResettingProgress] = useState(false);
+  const busy = saving || deleting || resettingProgress;
   const [formData, setFormData] = useState({
     title: mission.title,
     description: mission.description,
@@ -289,7 +341,17 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
     profileJourneyStageId: (mission.profile?.journeyStageId || 'ordinary-world') as ProfileJourneyStageId,
     profileOrder: mission.profile?.order ?? 1,
     gatingMinLevel: mission.gating?.minPlayerLevel ? String(mission.gating.minPlayerLevel) : '',
-    gatingChapterId: mission.gating?.chapterId || ''
+    gatingChapterId: mission.gating?.chapterId || '',
+    hubDisplayOrder:
+      mission.hubDisplayOrder != null && Number.isFinite(mission.hubDisplayOrder)
+        ? String(mission.hubDisplayOrder)
+        : ''
+  });
+
+  const [rewardEntries, setRewardEntries] = useState<BattlePassTierRewardEntry[]>(() => {
+    const e = mission.rewards?.entries;
+    if (Array.isArray(e) && e.length > 0) return e;
+    return legacyMissionRewardsToEntries(mission.rewards);
   });
 
   const [sequence, setSequence] = useState<MissionSequenceStep[]>(mission.sequence || []);
@@ -297,13 +359,55 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const missionData: Partial<MissionTemplate> = {
+    const missionData: Partial<MissionTemplate> & { hubDisplayOrderClear?: boolean } = {
       title: formData.title,
       description: formData.description,
       npc: formData.npc || undefined,
       missionCategory: formData.missionCategory,
       deliveryChannels: formData.deliveryChannels
     };
+
+    if (formData.missionCategory === 'SIDE') {
+      const raw = formData.hubDisplayOrder.trim();
+      if (raw === '') {
+        if (mission.hubDisplayOrder != null) {
+          missionData.hubDisplayOrderClear = true;
+        }
+      } else {
+        const n = parseInt(raw, 10);
+        if (!Number.isFinite(n)) {
+          alert('Hub list order must be a whole number (e.g. 1, 2, 3) or left blank for automatic order.');
+          return;
+        }
+        missionData.hubDisplayOrder = n;
+      }
+    } else if (mission.hubDisplayOrder != null) {
+      missionData.hubDisplayOrderClear = true;
+    }
+
+    const rewardErr = validateMissionRewardEntries(rewardEntries);
+    if (rewardErr) {
+      alert(rewardErr);
+      return;
+    }
+    if (rewardEntries.length > 0) {
+      // Firestore: deleteField() must be top-level — use dotted paths, not nested under `rewards`.
+      const md = missionData as Record<string, unknown>;
+      md['rewards.entries'] = serializeMissionRewardEntries(rewardEntries);
+      for (const k of [
+        'xp',
+        'pp',
+        'truthMetal',
+        'artifactIds',
+        'items',
+        'moves',
+        'abilities',
+      ] as const) {
+        md[`rewards.${k}`] = deleteField();
+      }
+    } else if (mission.rewards && Object.keys(mission.rewards).length > 0) {
+      (missionData as Record<string, unknown>).rewards = deleteField();
+    }
 
     // Add story metadata if STORY mission
     if (formData.missionCategory === 'STORY') {
@@ -340,6 +444,57 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
       };
     }
     
+    if (sequence && sequence.length > 0) {
+      const maxSteps = 20;
+      if (sequence.length > maxSteps) {
+        alert(`Maximum ${maxSteps} steps allowed. Please remove some steps.`);
+        return;
+      }
+      for (const step of sequence) {
+        if (step.type === 'STORY_SLIDE' && (!step.bodyText || !step.image.url)) {
+          alert('All Story Slides must have caption text and an image.');
+          return;
+        }
+        if (step.type === 'VIDEO' && !step.video.url) {
+          alert('All Video steps must have a video URL.');
+          return;
+        }
+        if (step.type === 'BATTLE') {
+          const hasEnemies =
+            step.battle.enemySet.length > 0 ||
+            step.battle.waveConfigs?.some((w) => w.enemySet.length > 0 || (w.opponentIds?.length ?? 0) > 0);
+          if (!hasEnemies) {
+            alert('All Battle steps must have at least one enemy type or CPU opponent selected per wave.');
+            return;
+          }
+        }
+        if (step.type === 'TRAINING_ASSIGNMENT') {
+          if (!step.training.quizSetId?.trim()) {
+            alert('All Training Assignment steps must have a quiz selected.');
+            return;
+          }
+          const p = step.training.minimumPassPercent;
+          if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 100) {
+            alert('Minimum pass percent must be a number from 0 to 100.');
+            return;
+          }
+        }
+        if (step.type === 'REFLECTION' && !step.prompt?.trim()) {
+          alert('All Reflection steps must include a reflection question (prompt).');
+          return;
+        }
+        if (step.type === 'LEVEL2_MANIFEST') {
+          const hasCopy = [step.title, step.description, step.sonidoDialogue].some(
+            (s) => typeof s === 'string' && s.trim().length > 0
+          );
+          if (!hasCopy) {
+            alert('Level 2 Manifest steps need a title, description, or Sonido dialogue so players see mentor guidance.');
+            return;
+          }
+        }
+      }
+    }
+
     // Add sequence if present
     if (sequence && sequence.length > 0) {
       const normalizedSequence = sequence.map((step: MissionSequenceStep, idx: number) => ({ ...step, order: idx }));
@@ -425,6 +580,27 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
+
+          {formData.missionCategory === 'SIDE' && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Hub list order (optional)
+              </label>
+              <input
+                type="number"
+                value={formData.hubDisplayOrder}
+                onChange={(e) => setFormData({ ...formData, hubDisplayOrder: e.target.value })}
+                min={1}
+                step={1}
+                placeholder="e.g. 1 — leave blank for automatic"
+                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+              />
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                Lower numbers appear first in this NPC&apos;s Side Missions list. Leave blank to sort by creation time
+                (oldest first). Players still see numbered steps 1, 2, 3… in that order.
+              </p>
+            </div>
+          )}
 
           {formData.missionCategory === 'STORY' && (
             <>
@@ -571,6 +747,8 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
             </div>
           </div>
 
+          <MissionRewardsBattlePassEditor entries={rewardEntries} onChange={setRewardEntries} />
+
           {/* Mission Sequence Builder */}
           <MissionSequenceBuilder
             sequence={sequence}
@@ -578,38 +756,123 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
             missionId={mission.id}
           />
 
-          <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem' }}>
-            <button
-              type="submit"
-              disabled={saving}
-              style={{
-                backgroundColor: '#3b82f6',
-                color: 'white',
-                border: 'none',
-                padding: '0.75rem 1.5rem',
-                borderRadius: '0.5rem',
-                cursor: saving ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold',
-                opacity: saving ? 0.5 : 1
-              }}
-            >
-              {saving ? 'Saving...' : 'Save Mission'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                backgroundColor: '#6b7280',
-                color: 'white',
-                border: 'none',
-                padding: '0.75rem 1.5rem',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Cancel
-            </button>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '1rem',
+              marginTop: '2rem',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                disabled={busy}
+                style={{
+                  backgroundColor: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  fontWeight: 'bold',
+                  opacity: busy ? 0.5 : 1
+                }}
+              >
+                {saving ? 'Saving...' : 'Save Mission'}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  fontWeight: 'bold',
+                  opacity: busy ? 0.5 : 1
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  const label = mission.title?.trim() || 'Untitled Mission';
+                  if (
+                    !window.confirm(
+                      `Reset progress for ALL players on "${label}"?\n\n` +
+                        `This removes every active and completed record of this mission from player accounts. ` +
+                        `Players can accept and play it again from the hub or journey.\n\n` +
+                        `It does not undo Player Journey steps already marked complete, and does not remove optional notes in mission reflection history.`
+                    )
+                  ) {
+                    return;
+                  }
+                  setResettingProgress(true);
+                  try {
+                    const { deletedCount } = await deleteAllPlayerMissionDocsForMissionTemplate(mission.id);
+                    alert(
+                      deletedCount === 0
+                        ? 'No player progress was stored for this mission (nothing to reset).'
+                        : `Removed ${deletedCount} player mission record${deletedCount === 1 ? '' : 's'}. Players can start this mission again.`
+                    );
+                  } catch (e) {
+                    console.error('Reset mission progress failed', e);
+                    alert('Failed to reset player progress. Check the console and ensure your account has admin access and Firestore rules are deployed.');
+                  } finally {
+                    setResettingProgress(false);
+                  }
+                }}
+                style={{
+                  backgroundColor: '#d97706',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  fontWeight: 'bold',
+                  opacity: busy ? 0.5 : 1
+                }}
+              >
+                {resettingProgress ? 'Resetting…' : 'Reset all player progress'}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const label = mission.title?.trim() || 'Untitled Mission';
+                  if (
+                    !window.confirm(
+                      `Permanently delete "${label}"? Player progress tied to this mission may become inconsistent. This cannot be undone.`
+                    )
+                  ) {
+                    return;
+                  }
+                  void onDelete(mission.id);
+                }}
+                style={{
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '0.5rem',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  fontWeight: 'bold',
+                  opacity: busy ? 0.5 : 1
+                }}
+              >
+                {deleting ? 'Deleting...' : 'Delete mission'}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -634,8 +897,11 @@ const MissionCreateModal: React.FC<{
     storyPrerequisites: '',
     profileJourneyStageId: 'ordinary-world' as ProfileJourneyStageId,
     profileOrder: 1,
-    linkedJourneyStep: '' // Format: "chapterId::challengeId"
+    linkedJourneyStep: '', // Format: "chapterId::challengeId"
+    hubDisplayOrder: ''
   });
+
+  const [rewardEntries, setRewardEntries] = useState<BattlePassTierRewardEntry[]>([]);
   
   const [sequence, setSequence] = useState<MissionSequenceStep[]>([]);
   const [draftMissionId, setDraftMissionId] = useState<string | null>(null);
@@ -669,13 +935,10 @@ const MissionCreateModal: React.FC<{
     };
     
     createDraftMission();
-    
-    // Cleanup: delete draft if modal is closed without saving
-    return () => {
-      if (draftId) {
-        deleteDoc(doc(db, 'missions', draftId)).catch(console.error);
-      }
-    };
+
+    // Intentionally no cleanup deleteDoc: the draft doc id becomes the real mission on save.
+    // Unmount-after-success would delete the mission we just wrote. Abandoned drafts are
+    // removed in handleClose (Cancel / backdrop).
   }, []);
   
   // Build journey step options for dropdown
@@ -713,6 +976,18 @@ const MissionCreateModal: React.FC<{
       deliveryChannels: formData.deliveryChannels
     };
 
+    if (formData.missionCategory === 'SIDE') {
+      const raw = formData.hubDisplayOrder.trim();
+      if (raw !== '') {
+        const n = parseInt(raw, 10);
+        if (!Number.isFinite(n)) {
+          alert('Hub list order must be a whole number (e.g. 1, 2, 3) or left blank for automatic order.');
+          return;
+        }
+        missionData.hubDisplayOrder = n;
+      }
+    }
+
     if (formData.missionCategory === 'STORY') {
       if (!formData.storyChapterId) {
         alert('Chapter ID is required for STORY missions');
@@ -748,6 +1023,27 @@ const MissionCreateModal: React.FC<{
       }
     }
 
+    const rewardErr = validateMissionRewardEntries(rewardEntries);
+    if (rewardErr) {
+      alert(rewardErr);
+      return;
+    }
+    if (rewardEntries.length > 0) {
+      const md = missionData as Record<string, unknown>;
+      md['rewards.entries'] = serializeMissionRewardEntries(rewardEntries);
+      for (const k of [
+        'xp',
+        'pp',
+        'truthMetal',
+        'artifactIds',
+        'items',
+        'moves',
+        'abilities',
+      ] as const) {
+        md[`rewards.${k}`] = deleteField();
+      }
+    }
+
     // Validate sequence if present
     if (sequence.length > 0) {
       const maxSteps = 20;
@@ -770,6 +1066,30 @@ const MissionCreateModal: React.FC<{
           const hasEnemies = step.battle.enemySet.length > 0 || (step.battle.waveConfigs?.some(w => w.enemySet.length > 0 || (w.opponentIds?.length ?? 0) > 0));
           if (!hasEnemies) {
             alert('All Battle steps must have at least one enemy type or CPU opponent selected per wave.');
+            return;
+          }
+        }
+        if (step.type === 'TRAINING_ASSIGNMENT') {
+          if (!step.training.quizSetId?.trim()) {
+            alert('All Training Assignment steps must have a quiz selected.');
+            return;
+          }
+          const p = step.training.minimumPassPercent;
+          if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 100) {
+            alert('Minimum pass percent must be a number from 0 to 100.');
+            return;
+          }
+        }
+        if (step.type === 'REFLECTION' && !step.prompt?.trim()) {
+          alert('All Reflection steps must include a reflection question (prompt).');
+          return;
+        }
+        if (step.type === 'LEVEL2_MANIFEST') {
+          const hasCopy = [step.title, step.description, step.sonidoDialogue].some(
+            (s) => typeof s === 'string' && s.trim().length > 0
+          );
+          if (!hasCopy) {
+            alert('Level 2 Manifest steps need a title, description, or Sonido dialogue so players see mentor guidance.');
             return;
           }
         }
@@ -860,6 +1180,27 @@ const MissionCreateModal: React.FC<{
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
+
+          {formData.missionCategory === 'SIDE' && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Hub list order (optional)
+              </label>
+              <input
+                type="number"
+                value={formData.hubDisplayOrder}
+                onChange={(e) => setFormData({ ...formData, hubDisplayOrder: e.target.value })}
+                min={1}
+                step={1}
+                placeholder="e.g. 1 — leave blank for automatic"
+                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+              />
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                Lower numbers appear first in this NPC&apos;s Side Missions list. Leave blank to sort by creation time
+                (oldest first). Players still see numbered steps 1, 2, 3… in that order.
+              </p>
+            </div>
+          )}
 
           {formData.missionCategory === 'STORY' && (
             <>
@@ -1030,6 +1371,8 @@ const MissionCreateModal: React.FC<{
               </p>
             </div>
           )}
+
+          <MissionRewardsBattlePassEditor entries={rewardEntries} onChange={setRewardEntries} />
 
           {/* Mission Sequence Builder */}
           <MissionSequenceBuilder

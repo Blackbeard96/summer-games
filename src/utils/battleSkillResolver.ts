@@ -13,6 +13,8 @@
  */
 
 import type { Move } from '../types/battle';
+import type { SkillEffectInstance } from '../types/skillEffects';
+import { shieldOffMaxShieldRemoveFraction, shieldOffMaxShieldRemovePercent } from './rrCandyMoves';
 import { getMoveDamage } from './moveOverrides';
 import { calculateDamageRange, rollDamage, calculateShieldBoostRange, calculateHealingRange } from './damageCalculator';
 import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier, getElementalRingLevel } from './artifactUtils';
@@ -24,6 +26,8 @@ import {
   getOutgoingDamageMultiplierFromManifestBoostPerk,
 } from './artifactPerkEffects';
 import type { UniversalLawBoonEffects } from './universalLawBoons';
+import { getSkillEffectsSync } from './moveOverrides';
+import { mergeSkillEffectsIntoResolvedSkillAction } from './skillEffectEngine/resolverBridge';
 
 export interface ActorState {
   uid: string;
@@ -103,6 +107,11 @@ export interface ResolvedSkillAction {
   wasMaxShieldBoost: boolean;
   manifestBoost?: number;
   artifactMultiplier?: number;
+  /** Proposed timed / passive instances for battle layers that persist engine state per participant. */
+  proposedSkillEffectInstances?: {
+    actor?: SkillEffectInstance[];
+    target?: SkillEffectInstance[];
+  };
 }
 
 /**
@@ -127,6 +136,14 @@ export async function resolveSkillAction(
   skill: Move,
   context: BattleContext
 ): Promise<ResolvedSkillAction> {
+  const mergedSkillEffects =
+    Array.isArray(skill.skillEffects) && skill.skillEffects.length > 0
+      ? skill.skillEffects
+      : getSkillEffectsSync(skill.name);
+  const skillForEffects: Move = { ...skill, skillEffects: mergedSkillEffects };
+  const hasEngineHeal = mergedSkillEffects.some((e) => e?.type === 'heal');
+  const hasEngineShield = mergedSkillEffects.some((e) => e?.type === 'shield');
+
   const result: ResolvedSkillAction = {
     damage: 0,
     shieldDamage: 0,
@@ -310,7 +327,7 @@ export async function resolveSkillAction(
   }
 
   // Calculate healing
-  if (skill.healing && skill.healing > 0) {
+  if (skill.healing && skill.healing > 0 && !hasEngineHeal) {
     const healingRange = calculateHealingRange(skill.healing, skill.level, effectiveMasteryLevel);
     const healingResult = rollDamage(healingRange, context.playerLevel, skill.level, effectiveMasteryLevel);
     
@@ -403,14 +420,18 @@ export async function resolveSkillAction(
     // Replace any existing log messages with the RR Candy message
     result.logMessages = [`🔋 ${actor.name} used ${skill.name} to restore ${shieldRestoreAmount} shields (50% of max)!`];
   } else if (skill.id === 'rr-candy-on-off-shields-off') {
-    // Shield OFF - Remove 25% of max shields
     const maxShields = target.maxShield || target.maxShieldStrength || 100;
-    const shieldRemoveAmount = Math.floor(maxShields * 0.25);
+    const pct = shieldOffMaxShieldRemovePercent(effectiveMasteryLevel);
+    const frac = shieldOffMaxShieldRemoveFraction(effectiveMasteryLevel);
+    const shieldRemoveAmount = Math.floor(maxShields * frac);
     result.shieldDamage = shieldRemoveAmount;
     result.targetDelta.shield = -shieldRemoveAmount;
-    // Replace any existing log messages with the RR Candy message
-    result.logMessages = [`🛡️ ${actor.name} used ${skill.name} to remove ${shieldRemoveAmount} shields from ${target.name} (25% of max shields: ${maxShields})!`];
+    result.logMessages = [
+      `🛡️ ${actor.name} used ${skill.name} to remove ${shieldRemoveAmount} shields from ${target.name} (${pct}% of max shields: ${maxShields})!`,
+    ];
   }
+
+  mergeSkillEffectsIntoResolvedSkillAction(actor, target, skillForEffects, result);
 
   // If no log message was created, create a default one
   if (result.logMessages.length === 0) {
