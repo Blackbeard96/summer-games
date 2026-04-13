@@ -5,6 +5,7 @@
 
 import { doc, getDoc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 import { TrainingAttempt, TrainingAnswer, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getPlayerUniversalLawEffects } from './universalLawBoons';
 
@@ -154,5 +155,10 @@ export async function grantQuizRewards(
       });
     }
   });
+
+  const xpGain = Math.max(0, Math.floor(Number(rewards.xpGained) || 0));
+  if (xpGain > 0) {
+    await awardBattlePassXpForDeployedSeason(userId, xpGain);
+  }
 }
 

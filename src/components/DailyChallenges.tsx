@@ -3,6 +3,13 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot, increment, runTransaction } from 'firebase/firestore';
 import { getTodayDateStringEastern, getDayStartForDateEastern, getNextResetTimeEastern } from '../utils/dailyChallengeDateUtils';
+import {
+  getEffectiveDailyChallengeTarget,
+  scaledDailyChallengeRewardPP,
+  scaledDailyChallengeRewardTruthMetal,
+  scaledDailyChallengeRewardXP,
+} from '../utils/dailyChallengeShared';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface DailyChallenge {
   id: string;
@@ -120,30 +127,36 @@ const DailyChallenges: React.FC = () => {
           return;
         }
         const challengeData = challengeDoc.data() as DailyChallenge;
-        
+
         const progressDoc = await transaction.get(playerChallengesRef);
         if (!progressDoc.exists()) {
           console.warn('[Daily Challenges] Progress document not found');
           return;
         }
-        
+
         const progressData = progressDoc.data();
         const challenges: PlayerChallengeProgress[] = progressData.challenges || [];
         const challengeProgress = challenges.find(c => c.challengeId === challengeId);
-        
+
         // IDEMPOTENCY CHECK: If already claimed, do nothing
         if (!challengeProgress || challengeProgress.claimed) {
           console.log(`[Daily Challenges] Rewards already claimed for challenge ${challengeId}`);
           return;
         }
-        
+
+        const ppGrant = scaledDailyChallengeRewardPP(challengeData.rewardPP);
+        const xpGrant = scaledDailyChallengeRewardXP(challengeData.rewardXP);
+        const tmGrant = challengeData.rewardTruthMetal
+          ? scaledDailyChallengeRewardTruthMetal(challengeData.rewardTruthMetal)
+          : 0;
+
         // Grant rewards using atomic increments
         const updateData: any = {
-          powerPoints: increment(challengeData.rewardPP),
-          xp: increment(challengeData.rewardXP)
+          powerPoints: increment(ppGrant),
+          xp: increment(xpGrant),
         };
-        if (challengeData.rewardTruthMetal) {
-          updateData.truthMetal = increment(challengeData.rewardTruthMetal);
+        if (tmGrant > 0) {
+          updateData.truthMetal = increment(tmGrant);
         }
         transaction.update(studentRef, updateData);
 
@@ -250,7 +263,7 @@ const DailyChallenges: React.FC = () => {
         claimed: false,
         assignedDate: getTodayDateString(),
         type: challenge.type, // Store type for efficient tracking
-        target: challenge.target // Store target for completion checking
+        target: getEffectiveDailyChallengeTarget(challenge),
       }));
 
       // Save to player's daily challenges
@@ -281,11 +294,20 @@ const DailyChallenges: React.FC = () => {
 
       // Update player stats using atomic updates
       const studentRef = doc(db, 'students', currentUser.uid);
+      const ppGrant = scaledDailyChallengeRewardPP(challenge.rewardPP);
+      const xpGrant = scaledDailyChallengeRewardXP(challenge.rewardXP);
+      const tmGrant = challenge.rewardTruthMetal
+        ? scaledDailyChallengeRewardTruthMetal(challenge.rewardTruthMetal)
+        : 0;
       await updateDoc(studentRef, {
-        powerPoints: increment(challenge.rewardPP),
-        xp: increment(challenge.rewardXP),
-        ...(challenge.rewardTruthMetal ? { truthMetal: increment(challenge.rewardTruthMetal) } : {})
+        powerPoints: increment(ppGrant),
+        xp: increment(xpGrant),
+        ...(tmGrant > 0 ? { truthMetal: increment(tmGrant) } : {}),
       });
+
+      if (xpGrant > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, xpGrant);
+      }
 
       // Mark as claimed
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
@@ -305,7 +327,13 @@ const DailyChallenges: React.FC = () => {
         [challenge.id]: { ...prev[challenge.id], claimed: true }
       }));
 
-      alert(`✅ Claimed rewards: ${challenge.rewardPP} PP, ${challenge.rewardXP} XP${challenge.rewardTruthMetal ? `, ${challenge.rewardTruthMetal} Truth Metal` : ''}`);
+      alert(
+        `✅ Claimed rewards: ${scaledDailyChallengeRewardPP(challenge.rewardPP)} PP, ${scaledDailyChallengeRewardXP(challenge.rewardXP)} XP${
+          challenge.rewardTruthMetal
+            ? `, ${scaledDailyChallengeRewardTruthMetal(challenge.rewardTruthMetal)} Truth Metal`
+            : ''
+        }`
+      );
     } catch (error) {
       console.error('Error claiming reward:', error);
       alert('Failed to claim reward. Please try again.');
@@ -314,52 +342,10 @@ const DailyChallenges: React.FC = () => {
     }
   };
 
-  // Helper to extract target from title if it contains a number (e.g., "THREE (3)" or "5 enemies")
-  const getEffectiveTarget = (challenge: DailyChallenge): number => {
-    // Check if title contains a number in parentheses or as a word
-    const title = challenge.title;
-    
-    // Look for patterns like "THREE (3)", "FIVE (5)", etc.
-    const parenMatch = title.match(/\((\d+)\)/);
-    if (parenMatch) {
-      const extractedTarget = parseInt(parenMatch[1]);
-      if (extractedTarget > 0) {
-        // Always use extracted target from parentheses if found (more reliable than stored value)
-        if (extractedTarget !== challenge.target) {
-          console.log(`[DailyChallenges] Extracted target ${extractedTarget} from title "${title}" (stored: ${challenge.target})`);
-        }
-        return extractedTarget;
-      }
-    }
-    
-    // Look for number words followed by numbers: "THREE 3", "FIVE 5", etc.
-    const numberWordMap: { [key: string]: number } = {
-      'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-      'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
-    };
-    
-    const titleLower = title.toLowerCase();
-    for (const [word, num] of Object.entries(numberWordMap)) {
-      if (titleLower.includes(word)) {
-        // Check if there's also a digit that matches
-        const digitMatch = title.match(/\b(\d+)\b/);
-        if (digitMatch && parseInt(digitMatch[1]) === num) {
-          if (num !== challenge.target) {
-            console.log(`[DailyChallenges] Extracted target ${num} from title "${title}" (stored: ${challenge.target})`);
-          }
-          return num;
-        }
-      }
-    }
-    
-    // Fallback to stored target
-    return challenge.target;
-  };
-
   const getProgressPercentage = (challenge: DailyChallenge) => {
     const challengeProgress = progress[challenge.id];
     if (!challengeProgress) return 0;
-    const effectiveTarget = getEffectiveTarget(challenge);
+    const effectiveTarget = getEffectiveDailyChallengeTarget(challenge);
     return Math.min(100, (challengeProgress.progress / effectiveTarget) * 100);
   };
 
@@ -458,7 +444,7 @@ const DailyChallenges: React.FC = () => {
                   <div style={{ marginBottom: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                       <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#374151' }}>
-                        Progress: {challengeProgress?.progress || 0} / {getEffectiveTarget(challenge)}
+                        Progress: {challengeProgress?.progress || 0} / {getEffectiveDailyChallengeTarget(challenge)}
                       </span>
                       <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                         {Math.round(progressPercent)}%
@@ -495,7 +481,7 @@ const DailyChallenges: React.FC = () => {
                       fontSize: '0.875rem',
                       fontWeight: 'bold'
                     }}>
-                      🪙 {challenge.rewardPP} PP
+                      🪙 {scaledDailyChallengeRewardPP(challenge.rewardPP)} PP
                     </span>
                     <span style={{
                       padding: '0.375rem 0.75rem',
@@ -505,7 +491,7 @@ const DailyChallenges: React.FC = () => {
                       fontSize: '0.875rem',
                       fontWeight: 'bold'
                     }}>
-                      ⭐ {challenge.rewardXP} XP
+                      ⭐ {scaledDailyChallengeRewardXP(challenge.rewardXP)} XP
                     </span>
                     {challenge.rewardTruthMetal && challenge.rewardTruthMetal > 0 && (
                       <span style={{
@@ -516,7 +502,7 @@ const DailyChallenges: React.FC = () => {
                         fontSize: '0.875rem',
                         fontWeight: 'bold'
                       }}>
-                        💎 {challenge.rewardTruthMetal} Truth Metal
+                        💎 {scaledDailyChallengeRewardTruthMetal(challenge.rewardTruthMetal)} Truth Metal
                       </span>
                     )}
                   </div>

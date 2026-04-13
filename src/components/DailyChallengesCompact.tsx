@@ -4,8 +4,15 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, collection, getDocs, serverTimestamp, onSnapshot, increment, runTransaction, setDoc } from 'firebase/firestore';
 import { getTodayDateStringEastern, getDayStartForDateEastern, getNextResetTimeEastern } from '../utils/dailyChallengeDateUtils';
+import {
+  getEffectiveDailyChallengeTarget,
+  scaledDailyChallengeRewardPP,
+  scaledDailyChallengeRewardTruthMetal,
+  scaledDailyChallengeRewardXP,
+} from '../utils/dailyChallengeShared';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { getLevelFromXP } from '../utils/leveling';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface DailyChallenge {
   id: string;
@@ -282,8 +289,8 @@ const DailyChallengesCompact: React.FC = () => {
         progress: 0,
         completed: false,
         claimed: false,
-        target: challenge.target,
-        type: challenge.type // Store type for efficient tracking
+        target: getEffectiveDailyChallengeTarget(challenge),
+        type: challenge.type, // Store type for efficient tracking
       }));
       
       // Save to player's daily challenges
@@ -308,28 +315,56 @@ const DailyChallengesCompact: React.FC = () => {
 
   const autoGrantRewards = async (challengeId: string) => {
     if (!currentUser) return;
-    
-    const challenge = challenges.find(c => c.id === challengeId);
-    if (!challenge) return;
 
     try {
+      const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
       const studentRef = doc(db, 'students', currentUser.uid);
-      await runTransaction(db, async (transaction) => {
-        const studentDoc = await transaction.get(studentRef);
-        if (!studentDoc.exists()) return;
 
-        const studentData = studentDoc.data();
-        const updates: any = {
-          xp: increment(challenge.rewardXP),
-          pp: increment(challenge.rewardPP)
-        };
+      const grantedXp = await runTransaction(db, async (transaction) => {
+        const challengeDefDoc = await transaction.get(
+          doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId)
+        );
+        if (!challengeDefDoc.exists()) return 0;
 
-        if (challenge.rewardTruthMetal && challenge.rewardTruthMetal > 0) {
-          updates.truthMetal = increment(challenge.rewardTruthMetal);
+        const challengeData = challengeDefDoc.data() as DailyChallenge;
+        const progressDoc = await transaction.get(playerChallengesRef);
+        if (!progressDoc.exists()) return 0;
+
+        const progressData = progressDoc.data();
+        const list: PlayerChallengeProgress[] = progressData.challenges || [];
+        const challengeProgress = list.find(c => c.challengeId === challengeId);
+
+        if (!challengeProgress || !challengeProgress.completed || challengeProgress.claimed) {
+          return 0;
         }
 
-        transaction.update(studentRef, updates);
+        const ppGrant = scaledDailyChallengeRewardPP(challengeData.rewardPP);
+        const xpGrant = scaledDailyChallengeRewardXP(challengeData.rewardXP);
+        const tmGrant = challengeData.rewardTruthMetal
+          ? scaledDailyChallengeRewardTruthMetal(challengeData.rewardTruthMetal)
+          : 0;
+
+        const updateData: Record<string, ReturnType<typeof increment>> = {
+          powerPoints: increment(ppGrant),
+          xp: increment(xpGrant),
+        };
+        if (tmGrant > 0) {
+          updateData.truthMetal = increment(tmGrant);
+        }
+
+        transaction.update(studentRef, updateData);
+
+        const updatedChallenges = list.map((c: PlayerChallengeProgress) =>
+          c.challengeId === challengeId ? { ...c, claimed: true } : c
+        );
+        transaction.update(playerChallengesRef, {
+          challenges: updatedChallenges,
+        });
+        return xpGrant;
       });
+      if (grantedXp > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, grantedXp);
+      }
     } catch (error) {
       console.error('Error auto-granting rewards:', error);
     }
@@ -343,33 +378,38 @@ const DailyChallengesCompact: React.FC = () => {
       const studentRef = doc(db, 'students', currentUser.uid);
       const playerChallengesRef = doc(db, 'students', currentUser.uid, 'dailyChallenges', 'current');
       
-      await runTransaction(db, async (transaction) => {
+      const claimXp = await runTransaction(db, async (transaction) => {
         const studentDoc = await transaction.get(studentRef);
         const challengesDoc = await transaction.get(playerChallengesRef);
         
-        if (!studentDoc.exists() || !challengesDoc.exists()) return;
+        if (!studentDoc.exists() || !challengesDoc.exists()) return 0;
 
-        const studentData = studentDoc.data();
         const challengesData = challengesDoc.data();
         const today = getTodayDateStringEastern();
         
-        if (challengesData.assignedDate !== today) return;
+        if (challengesData.assignedDate !== today) return 0;
 
         const challengeProgress = challengesData.challenges?.find(
           (c: PlayerChallengeProgress) => c.challengeId === challenge.id
         );
         
         if (!challengeProgress || !challengeProgress.completed || challengeProgress.claimed) {
-          return;
+          return 0;
         }
 
-        const updates: any = {
-          xp: increment(challenge.rewardXP),
-          pp: increment(challenge.rewardPP)
+        const ppGrant = scaledDailyChallengeRewardPP(challenge.rewardPP);
+        const xpGrant = scaledDailyChallengeRewardXP(challenge.rewardXP);
+        const tmGrant = challenge.rewardTruthMetal
+          ? scaledDailyChallengeRewardTruthMetal(challenge.rewardTruthMetal)
+          : 0;
+
+        const updates: Record<string, ReturnType<typeof increment>> = {
+          powerPoints: increment(ppGrant),
+          xp: increment(xpGrant),
         };
 
-        if (challenge.rewardTruthMetal && challenge.rewardTruthMetal > 0) {
-          updates.truthMetal = increment(challenge.rewardTruthMetal);
+        if (tmGrant > 0) {
+          updates.truthMetal = increment(tmGrant);
         }
 
         transaction.update(studentRef, updates);
@@ -384,7 +424,12 @@ const DailyChallengesCompact: React.FC = () => {
         transaction.update(playerChallengesRef, {
           challenges: updatedChallenges
         });
+        return xpGrant;
       });
+
+      if (claimXp > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, claimXp);
+      }
 
       // Create milestone event after successful claim
       try {
@@ -412,8 +457,8 @@ const DailyChallengesCompact: React.FC = () => {
           'challenge_complete',
           {
             challengeTitle: challenge.title,
-            ppEarned: challenge.rewardPP,
-            xpEarned: challenge.rewardXP
+            ppEarned: scaledDailyChallengeRewardPP(challenge.rewardPP),
+            xpEarned: scaledDailyChallengeRewardXP(challenge.rewardXP),
           },
           challenge.id
         );
@@ -432,12 +477,8 @@ const DailyChallengesCompact: React.FC = () => {
   const getProgressPercentage = (challenge: DailyChallenge): number => {
     const challengeProgress = progress[challenge.id];
     if (!challengeProgress) return 0;
-    const target = challenge.target || 1;
+    const target = getEffectiveDailyChallengeTarget(challenge);
     return Math.min(100, (challengeProgress.progress / target) * 100);
-  };
-
-  const getEffectiveTarget = (challenge: DailyChallenge): number => {
-    return challenge.target || 1;
   };
 
   if (loading) {
@@ -548,7 +589,7 @@ const DailyChallengesCompact: React.FC = () => {
                         fontWeight: 'bold',
                         color: 'rgba(255, 255, 255, 0.9)'
                       }}>
-                        Progress: {challengeProgress?.progress || 0} / {getEffectiveTarget(challenge)}
+                        Progress: {challengeProgress?.progress || 0} / {getEffectiveDailyChallengeTarget(challenge)}
                       </span>
                     </div>
                     <div style={{
@@ -582,7 +623,7 @@ const DailyChallengesCompact: React.FC = () => {
                       fontSize: '0.75rem',
                       fontWeight: 'bold'
                     }}>
-                      🪙 {challenge.rewardPP} PP
+                      🪙 {scaledDailyChallengeRewardPP(challenge.rewardPP)} PP
                     </span>
                     <span style={{
                       padding: '0.25rem 0.5rem',
@@ -592,7 +633,7 @@ const DailyChallengesCompact: React.FC = () => {
                       fontSize: '0.75rem',
                       fontWeight: 'bold'
                     }}>
-                      ⭐ {challenge.rewardXP} XP
+                      ⭐ {scaledDailyChallengeRewardXP(challenge.rewardXP)} XP
                     </span>
                   </div>
 

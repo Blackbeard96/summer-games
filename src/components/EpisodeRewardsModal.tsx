@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { doc, updateDoc, increment, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface EpisodeRewardsModalProps {
   episode: StoryEpisode;
@@ -163,6 +164,11 @@ const EpisodeRewardsModal: React.FC<EpisodeRewardsModalProps> = ({ episode, onCl
         powerPoints: increment(finalPP),
         xp: increment(episode.rewards.xp)
       });
+
+      const storyXp = Math.max(0, Math.floor(Number(episode.rewards.xp) || 0));
+      if (storyXp > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, storyXp);
+      }
 
       // Grant fixed rewards (moves, items, artifacts, etc.)
       await grantFixedRewards(episode.rewards.fixed);

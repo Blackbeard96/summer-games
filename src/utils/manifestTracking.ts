@@ -192,7 +192,7 @@ const getManifestLevelForMove = (moveName: string, manifestId: string): number |
   // Patterns match actual move names from MOVE_TEMPLATES and common variations
   const manifestLevelPatterns: { [key: string]: { [level: number]: string[] } } = {
     'reading': {
-      1: ['read the room', 'emotional read', 'read'], // Level 1: Emotional Read, Read the Room (custom)
+      1: ['read the room', 'emotional read', 'room scan', 'self read', 'read'], // L1 + VFX / override display names
       2: ['pattern shield', 'shield'], // Level 2: Pattern Shield
       3: ['team read', 'read pattern', 'pattern'], // Level 3: Team Read
       4: ['environment read', 'read environment', 'environment'] // Level 4: Environment Read

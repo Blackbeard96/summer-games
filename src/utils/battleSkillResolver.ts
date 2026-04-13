@@ -22,7 +22,13 @@ import {
 } from './rrCandyMoves';
 import { getMoveDamage } from './moveOverrides';
 import { calculateDamageRange, rollDamage, calculateShieldBoostRange, calculateHealingRange } from './damageCalculator';
-import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier, getElementalRingLevel } from './artifactUtils';
+import {
+  getEffectiveMasteryLevel,
+  getManifestDamageBoost,
+  getArtifactDamageMultiplier,
+  getElementalRingLevel,
+  getElementalAffinityRingDamageMultiplierForMove,
+} from './artifactUtils';
 import {
   applyPpEconomyToPPGain,
   getOutgoingDamageMultiplierFromCostReductionPerk,
@@ -224,12 +230,16 @@ export async function resolveSkillAction(
       }
     }
 
-    // Elemental: Elemental Ring level + Elemental Boost perk
+    // Elemental: Elemental Ring level + affinity ring (Blaze, etc.) + Elemental Boost perk
     if (skill.category === 'elemental' && actor.equippedArtifacts) {
       const ringLevel = getElementalRingLevel(actor.equippedArtifacts);
       const elementalMultiplier = getArtifactDamageMultiplier(ringLevel);
       if (elementalMultiplier > 1.0) {
         artifactMultiplier *= elementalMultiplier;
+      }
+      const affinityMult = getElementalAffinityRingDamageMultiplierForMove(skill, actor.equippedArtifacts);
+      if (affinityMult > 1.001) {
+        artifactMultiplier *= affinityMult;
       }
       const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(
         eqArt,
@@ -299,6 +309,12 @@ export async function resolveSkillAction(
       if (ringMult > 1.0) {
         result.logMessages.push(
           `💍 Elemental Ring (Level ${ringLevel}) boosts ${skill.name} damage by ${Math.round((ringMult - 1) * 100)}%!`
+        );
+      }
+      const affMult = getElementalAffinityRingDamageMultiplierForMove(skill, actor.equippedArtifacts);
+      if (affMult > 1.001) {
+        result.logMessages.push(
+          `💎 Affinity ring boosts ${skill.name} damage by ${Math.round((affMult - 1) * 100)}%!`
         );
       }
       const ePerk = getOutgoingDamageMultiplierFromElementalBoostPerk(

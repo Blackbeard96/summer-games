@@ -4,7 +4,13 @@ import { useBattle } from '../context/BattleContext';
 import { Move, MOVE_DAMAGE_VALUES } from '../types/battle';
 import { getMoveDamage, getMoveName, getMoveNameSync } from '../utils/moveOverrides';
 import { trackMoveUsage } from '../utils/manifestTracking';
-import { getElementalRingLevel, getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
+import {
+  getElementalRingLevel,
+  getArtifactDamageMultiplier,
+  getEffectiveMasteryLevel,
+  getManifestDamageBoost,
+  getElementalAffinityRingDamageMultiplierForMove,
+} from '../utils/artifactUtils';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { debug } from '../utils/debug';
@@ -24,6 +30,10 @@ import { resolveSkillVfxConfig, getStoredVfxQuality } from '../skillAnimation';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import {
+  moveCountsForDailyElementalChallenge,
+  moveCountsForDailyManifestChallenge,
+} from '../utils/dailyChallengeShared';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
@@ -140,7 +150,33 @@ function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
   const o = opp as Opponent;
   if (!o.awakenedModeEnabled || o.isAwakened) return opp;
   const hp = (o.vaultHealth ?? o.currentPP) ?? 0;
-  const maxHp = (o.maxVaultHealth ?? o.maxPP) || 1;
+  const sh = Math.max(0, Math.floor(Number(o.shieldStrength) || 0));
+  const maxHpCur = Math.floor(Number(o.maxVaultHealth ?? o.maxPP) || 0);
+  const ahTarget =
+    o.awakenedHealth != null && Number.isFinite(o.awakenedHealth)
+      ? Math.floor(Number(o.awakenedHealth))
+      : 0;
+  /**
+   * Second-phase death: if `isAwakened` was dropped by a sync bug but stats already match the awakened
+   * HP cap, do NOT run "lethal first-hit awaken" again (that would refill HP/shields and revive the boss).
+   */
+  if (ahTarget > 0 && maxHpCur === ahTarget && hp <= 0 && sh <= 0) {
+    const maxS = Math.max(0, Math.floor(Number(o.maxShieldStrength) || 0));
+    return {
+      ...o,
+      isAwakened: true,
+      isDefeated: true,
+      currentPP: 0,
+      maxPP: maxHpCur,
+      vaultHealth: 0,
+      maxVaultHealth: maxHpCur,
+      shieldStrength: 0,
+      maxShieldStrength: maxS,
+      defeatedAt: (o as { defeatedAt?: Date }).defeatedAt ?? new Date(),
+    };
+  }
+
+  const maxHp = maxHpCur || 1;
   const threshold = Math.min(100, Math.max(1, o.awakenAtHealthPercent ?? 50));
   if (hp > 0) {
     const pct = maxHp > 0 ? (hp / maxHp) * 100 : 100;
@@ -787,6 +823,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     opponent: Opponent;
     mult: number;
   } | null>(null);
+  /** When awakening plays during turn-order execution, resume the async loop after the modal dismisses. */
+  const pendingTurnOrderAwakeningResolveRef = useRef<(() => void) | null>(null);
 
   // Apply status effects at the start of a turn
   const applyTurnEffects = useCallback(async (target: 'player' | 'opponent', log: string[]) => {
@@ -3804,6 +3842,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           if (playerMove.category === 'elemental' && equippedArtifacts) {
             const ringLevel = getElementalRingLevel(equippedArtifacts);
             dmgMult *= getArtifactDamageMultiplier(ringLevel);
+            dmgMult *= getElementalAffinityRingDamageMultiplierForMove(playerMove, equippedArtifacts);
             dmgMult *= getOutgoingDamageMultiplierFromElementalBoostPerk(eqRec, equippableCatalogRaw, universalLawEffects);
           }
           dmgMult *= getOutgoingDamageMultiplierFromDamageBoostPerk(eqRec, equippableCatalogRaw, universalLawEffects);
@@ -3869,6 +3908,34 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
           
           if (targetId && targetInOpponents) {
+            let turnOrderAwakenMedia: { steps: MissionMediaSequenceStep[]; title: string } | null = null;
+            const preFresh = (opponentsRef.current || opponents).find((o) => o.id === targetId);
+            if (preFresh) {
+              const ch = preFresh.vaultHealth !== undefined ? preFresh.vaultHealth : (preFresh.currentPP ?? 0);
+              const cs = preFresh.shieldStrength ?? 0;
+              const newTargetShieldFromPrev = Math.max(0, cs - targetShieldDamage);
+              const newTargetHealthFromPrev = Math.max(0, ch - targetHealthDamage);
+              let preview: Opponent = { ...preFresh, shieldStrength: newTargetShieldFromPrev };
+              if (preFresh.vaultHealth !== undefined) {
+                preview.vaultHealth = newTargetHealthFromPrev;
+                preview.maxVaultHealth = preFresh.maxVaultHealth ?? targetMaxHealth;
+                if (checkIsCPUOpponent(preFresh)) preview.currentPP = newTargetHealthFromPrev;
+              } else {
+                preview.currentPP = newTargetHealthFromPrev;
+              }
+              const wasAwakenedBeforePreview = !!preFresh.isAwakened;
+              preview = maybeApplyCpuAwakenedPhase(preview, checkIsCPUOpponent(preFresh));
+              if (!wasAwakenedBeforePreview && preview.isAwakened) {
+                const st = filterCpuAwakeningAnimationSteps(preview.awakeningAnimation);
+                if (st.length > 0) {
+                  turnOrderAwakenMedia = {
+                    steps: st,
+                    title: `${formatOpponentName(preview.name)} — Awakening`,
+                  };
+                }
+              }
+            }
+
             // Apply damage from LATEST state (prev) so Island Raid enemy stats don't fluctuate
             setOpponents(prev => {
               const current = prev.find(opp => opp.id === targetId);
@@ -3964,6 +4031,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               
               return updated;
             });
+
+            if (turnOrderAwakenMedia) {
+              await new Promise<void>((resolve) => {
+                pendingTurnOrderAwakeningResolveRef.current = resolve;
+                queueMicrotask(() => setCpuAwakeningMedia(turnOrderAwakenMedia));
+              });
+            }
             
             // Check if Ice Golem is defeated
             const isIceGolem = (targetName.toLowerCase().includes('ice golem') || 
@@ -4977,38 +5051,14 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const moveName = getMoveNameSync(move.name) || move.name;
     console.log(`[BattleEngine] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
-    // Track daily challenge: Use Elemental Move
-    if (move.category === 'elemental' && currentUser) {
-      updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err => 
-        console.error('Error updating daily challenge progress:', err)
-      );
-    }
-    
-    // Track daily challenge: Use Manifest Ability
-    // Check if move is a manifest ability by checking move category or if it matches manifest patterns
-    if (currentUser && move.category === 'manifest') {
-      updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err => 
-        console.error('Error updating daily challenge progress for manifest ability:', err)
-      );
-    } else if (currentUser && moveName) {
-      // Also check by move name patterns (in case category isn't set)
-      // This is a fallback to catch manifest moves that might not have the category set
-      const manifestMovePatterns = [
-        'read the room', 'emotional read', 'pattern shield', 'team read', 'environment read',
-        'reality rewrite', 'narrative barrier', 'story weave', 'world rewrite',
-        'illusion strike', 'mirage shield', 'visual deception', 'reality illusion',
-        'flow strike', 'rhythm guard', 'team flow', 'athletic mastery',
-        'harmonic blast', 'melody shield', 'chorus power', 'song of power',
-        'pattern break', 'strategy matrix', 'game mastery', 'ultimate strategy',
-        'precision strike', 'memory shield', 'perfect observation', 'omniscient view',
-        'emotional resonance', 'empathic barrier', 'group empathy', 'universal connection',
-        'tool strike', 'construct shield', 'creative mastery', 'divine creation',
-        'energy feast', 'nourishing barrier', 'feast of power', 'divine nourishment'
-      ];
-      const moveNameLower = moveName.toLowerCase();
-      const isManifestMove = manifestMovePatterns.some(pattern => moveNameLower.includes(pattern));
-      if (isManifestMove) {
-        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err => 
+    if (currentUser) {
+      if (moveCountsForDailyElementalChallenge(move)) {
+        updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
+          console.error('Error updating daily challenge progress:', err)
+        );
+      }
+      if (moveCountsForDailyManifestChallenge({ ...move, name: moveName })) {
+        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
           console.error('Error updating daily challenge progress for manifest ability:', err)
         );
       }
@@ -5181,6 +5231,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         if (ringMultiplier > 1.0) {
           artifactMultiplier *= ringMultiplier;
           newLog.push(`💍 Elemental Ring (Level ${ringLevel}) boosts ${displayMoveName} damage by ${Math.round((ringMultiplier - 1) * 100)}%!`);
+        }
+        const affinityMult = getElementalAffinityRingDamageMultiplierForMove(move, equippedArtifacts);
+        if (affinityMult > 1.001) {
+          artifactMultiplier *= affinityMult;
+          newLog.push(
+            `💎 Affinity ring boosts ${displayMoveName} damage by ${Math.round((affinityMult - 1) * 100)}%!`
+          );
         }
         const elementalPerkMult = getOutgoingDamageMultiplierFromElementalBoostPerk(
           equippedArtifacts as Record<string, unknown> | null,
@@ -7865,6 +7922,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
 
   const handleCpuAwakeningMediaDismiss = () => {
     setCpuAwakeningMedia(null);
+    const resumeTurnOrder = pendingTurnOrderAwakeningResolveRef.current;
+    pendingTurnOrderAwakeningResolveRef.current = null;
+    if (resumeTurnOrder) resumeTurnOrder();
+
     const held = resumeCpuTurnAfterAwakeningRef.current;
     resumeCpuTurnAfterAwakeningRef.current = null;
     if (held) {
@@ -8510,11 +8571,13 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               const baseHealing = move.healing || 0;
               const healingRange = baseHealing > 0 ? calculateHealingRange(baseHealing, move.level || 1, effectiveMasteryLevel) : null;
               
-              // Get artifact multiplier for elemental moves
+              // Get artifact multiplier for elemental moves (Elemental Ring + Blaze/Thunder/etc.)
               let artifactMultiplier = 1.0;
+              let affinityRingPreviewMult = 1.0;
               if (move.category === 'elemental' && equippedArtifacts) {
                 const ringLevel = getElementalRingLevel(equippedArtifacts);
                 artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
+                affinityRingPreviewMult = getElementalAffinityRingDamageMultiplierForMove(move, equippedArtifacts);
               }
               
               const manifestBoost = move.category === 'manifest' ? getManifestDamageBoost(equippedArtifacts) : 1.0;
@@ -8639,6 +8702,11 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                             {artifactMultiplier > 1.0 && move.category === 'elemental' && (
                               <span style={{ fontSize: '0.65rem', color: '#f59e0b' }}>
                                 💍 +{Math.round((artifactMultiplier - 1) * 100)}%
+                              </span>
+                            )}
+                            {affinityRingPreviewMult > 1.001 && move.category === 'elemental' && (
+                              <span style={{ fontSize: '0.65rem', color: '#0ea5e9' }}>
+                                💎 +{Math.round((affinityRingPreviewMult - 1) * 100)}%
                               </span>
                             )}
                             {manifestBoost > 1.0 && move.category === 'manifest' && (

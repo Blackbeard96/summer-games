@@ -11,7 +11,11 @@ import { getLevelFromXP } from '../utils/leveling';
 import { getUserSquadAbbreviations } from '../utils/squadUtils';
 import { isUserScorekeeper, isUserAdmin, canEndLiveEventSession } from '../utils/roleManagement';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
-import { getEffectiveMasteryLevel, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import {
+  getEffectiveMasteryLevel,
+  getArtifactDamageMultiplier,
+  getElementalAffinityRingDamageMultiplierForMove,
+} from '../utils/artifactUtils';
 import { getMoveDamageSync } from '../utils/moveOverrides';
 import { getEquippedSkillsForBattle, mergeEquippableCatalogLayers } from '../utils/battleSkillsService';
 import { getRRCandyDisplayName } from '../utils/rrCandyMoves';
@@ -5102,6 +5106,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     let shieldRange = null;
                     let healingRange = null;
                     let artifactMultiplier = 1.0;
+                    let affinityDamageMult = 1.0;
                     
                     if (selectedMove.type === 'attack') {
                       const baseDamage = getMoveDamageValue(selectedMove);
@@ -5124,6 +5129,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               break;
                             }
                           }
+                          affinityDamageMult = getElementalAffinityRingDamageMultiplierForMove(
+                            selectedMove,
+                            equippedArtifacts
+                          );
+                          if (affinityDamageMult > 1.001 && damageRange) {
+                            damageRange = {
+                              min: Math.floor(damageRange.min * affinityDamageMult),
+                              max: Math.floor(damageRange.max * affinityDamageMult),
+                              average: Math.floor(damageRange.average * affinityDamageMult),
+                            };
+                          }
                         }
                       }
                     }
@@ -5144,6 +5160,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             {artifactMultiplier > 1.0 && (
                               <span style={{ color: '#f59e0b', marginLeft: '0.25rem' }}>
                                 💍 +{Math.round((artifactMultiplier - 1) * 100)}%
+                              </span>
+                            )}
+                            {affinityDamageMult > 1.001 && (
+                              <span style={{ color: '#0ea5e9', marginLeft: '0.25rem' }}>
+                                💎 +{Math.round((affinityDamageMult - 1) * 100)}%
                               </span>
                             )}
                           </div>
@@ -5441,13 +5462,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               let shieldRange = null;
                               let healingRange = null;
                               let artifactMultiplier = 1.0;
+                              let affinityDamageMult = 1.0;
                               
                               if (move.type === 'attack') {
                                 const baseDamage = getMoveDamageValue(move);
                                 if (baseDamage > 0) {
                                   damageRange = calculateDamageRange(baseDamage, move.level, effectiveMasteryLevel);
-                                  // Apply artifact multiplier for elemental moves
-                                  if (equippedArtifacts) {
+                                  if (move.category === 'elemental' && equippedArtifacts) {
                                     const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
                                     for (const slot of ringSlots) {
                                       const ring = equippedArtifacts[slot];
@@ -5463,6 +5484,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                         };
                                         break;
                                       }
+                                    }
+                                    affinityDamageMult = getElementalAffinityRingDamageMultiplierForMove(
+                                      move,
+                                      equippedArtifacts
+                                    );
+                                    if (affinityDamageMult > 1.001 && damageRange) {
+                                      damageRange = {
+                                        min: Math.floor(damageRange.min * affinityDamageMult),
+                                        max: Math.floor(damageRange.max * affinityDamageMult),
+                                        average: Math.floor(damageRange.average * affinityDamageMult),
+                                      };
                                     }
                                   }
                                 }
@@ -5574,6 +5606,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                         {artifactMultiplier > 1.0 && (
                                           <span style={{ color: '#fde68a', marginLeft: '0.25rem', fontSize: '0.65rem' }}>
                                             💍 +{Math.round((artifactMultiplier - 1) * 100)}%
+                                          </span>
+                                        )}
+                                        {affinityDamageMult > 1.001 && (
+                                          <span style={{ color: '#bae6fd', marginLeft: '0.25rem', fontSize: '0.65rem' }}>
+                                            💎 +{Math.round((affinityDamageMult - 1) * 100)}%
                                           </span>
                                         )}
                                       </div>

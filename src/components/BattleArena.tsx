@@ -15,7 +15,12 @@ import { loadMoveOverrides } from '../utils/moveOverrides';
 import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
-import { getEffectiveMasteryLevel, getManifestDamageBoost, getArtifactDamageMultiplier } from '../utils/artifactUtils';
+import {
+  getEffectiveMasteryLevel,
+  getManifestDamageBoost,
+  getArtifactDamageMultiplier,
+  getElementalAffinityRingDamageMultiplierForMove,
+} from '../utils/artifactUtils';
 import { formatOpponentName } from '../utils/opponentNameFormatter';
 import { statusEffectVisualClass } from '../skillAnimation/statusVisuals';
 import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
@@ -1119,7 +1124,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                       }
                     }
                     
-                    // Apply Elemental Ring damage multiplier for elemental moves
+                    // Apply Elemental Ring + affinity ring for elemental moves
                     if (move.category === 'elemental' && equippedArtifacts) {
                       const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
                       for (const slot of ringSlots) {
@@ -1136,6 +1141,14 @@ const BattleArena: React.FC<BattleArenaProps> = ({
                           };
                           break;
                         }
+                      }
+                      const affinityMult = getElementalAffinityRingDamageMultiplierForMove(move, equippedArtifacts);
+                      if (affinityMult > 1.001) {
+                        damageRange = {
+                          min: Math.floor(damageRange.min * affinityMult),
+                          max: Math.floor(damageRange.max * affinityMult),
+                          average: Math.floor(damageRange.average * affinityMult),
+                        };
                       }
                     }
                     

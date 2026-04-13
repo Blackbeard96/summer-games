@@ -330,7 +330,8 @@ export function filterCpuAwakeningAnimationSteps(raw: unknown): MissionMediaSequ
   if (!Array.isArray(raw)) return [];
   return raw.filter((s): s is MissionMediaSequenceStep => {
     if (!s || typeof s !== 'object') return false;
-    const t = (s as { type?: string }).type;
+    const typeRaw = (s as { type?: unknown }).type;
+    const t = typeof typeRaw === 'string' ? typeRaw.trim().toUpperCase() : '';
     return t === 'STORY_SLIDE' || t === 'VIDEO';
   });
 }

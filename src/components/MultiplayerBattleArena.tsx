@@ -9,7 +9,14 @@ import BagModal from './BagModal';
 import VaultModal from './VaultModal';
 import { getActivePPBoost, getPPBoostStatus } from '../utils/ppBoost';
 import { calculateDamageRange, calculateShieldBoostRange, calculateHealingRange } from '../utils/damageCalculator';
-import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getManifestDamageBoost } from '../utils/artifactUtils';
+import {
+  getEffectiveMasteryLevel,
+  getArtifactDamageMultiplier,
+  getManifestDamageBoost,
+  getElementalAffinityRingDamageMultiplierForMove,
+  findElementalAffinityRingForMove,
+  getElementalAffinityRingMasteryBonusFromArtifactLevel,
+} from '../utils/artifactUtils';
 import { MOVE_DAMAGE_VALUES } from '../types/battle';
 import { getUserSquadAbbreviations } from '../utils/squadUtils';
 import { formatOpponentName } from '../utils/opponentNameFormatter';
@@ -1148,6 +1155,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                       // Calculate damage for attack moves
                       let artifactMultiplier = 1.0;
                       let elementalRingLevel = 1;
+                      let affinityDamageMult = 1.0;
                       if (move.type === 'attack') {
                         const baseDamage = getMoveDamageValue(move);
                         if (baseDamage > 0) {
@@ -1170,6 +1178,14 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                                 };
                                 break; // Only apply once
                               }
+                            }
+                            affinityDamageMult = getElementalAffinityRingDamageMultiplierForMove(move, equippedArtifacts);
+                            if (affinityDamageMult > 1.001 && damageRange) {
+                              damageRange = {
+                                min: Math.floor(damageRange.min * affinityDamageMult),
+                                max: Math.floor(damageRange.max * affinityDamageMult),
+                                average: Math.floor(damageRange.average * affinityDamageMult),
+                              };
                             }
                           }
                         }
@@ -1306,6 +1322,11 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                                 💍 +{Math.round((artifactMultiplier - 1) * 100)}%
                               </span>
                             )}
+                            {affinityDamageMult > 1.001 && move.category === 'elemental' && (
+                              <span style={{ color: '#0ea5e9', marginLeft: '0.25rem', fontSize: '0.65rem' }}>
+                                💎 +{Math.round((affinityDamageMult - 1) * 100)}%
+                              </span>
+                            )}
                             {move.category === 'manifest' && equippedArtifacts && (() => {
                               const manifestBoost = getManifestDamageBoost(equippedArtifacts);
                               if (manifestBoost > 1.0) {
@@ -1358,41 +1379,19 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                           </div>
                         )}
                         {effectiveMasteryLevel > move.masteryLevel && move.category === 'elemental' && equippedArtifacts && (() => {
-                          const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
-                          const moveElement = move.elementalAffinity?.toLowerCase();
-                          for (const slot of ringSlots) {
-                            const ring = equippedArtifacts[slot];
-                            if (!ring) continue;
-                            if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
-                              return (
-                                <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
-                                  🔥 Blaze Ring: +1 Level
-                                </div>
-                              );
-                            }
-                            if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
-                              return (
-                                <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
-                                  🌍 Terra Ring: +1 Level
-                                </div>
-                              );
-                            }
-                            if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
-                              return (
-                                <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
-                                  💧 Aqua Ring: +1 Level
-                                </div>
-                              );
-                            }
-                            if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
-                              return (
-                                <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
-                                  💨 Air Ring: +1 Level
-                                </div>
-                              );
-                            }
-                          }
-                          return null;
+                          const hit = findElementalAffinityRingForMove(move, equippedArtifacts);
+                          if (!hit) return null;
+                          const bonus = getElementalAffinityRingMasteryBonusFromArtifactLevel(hit.artifactLevel);
+                          const rawName = (hit.ring as { name?: string }).name;
+                          const label =
+                            typeof rawName === 'string' && rawName.trim()
+                              ? rawName.split(':')[0].trim()
+                              : 'Affinity ring';
+                          return (
+                            <div style={{ color: '#8b5cf6', fontWeight: 'bold', fontSize: '0.65rem' }}>
+                              📈 {label}: +{bonus} mastery
+                            </div>
+                          );
                         })()}
                         {move.debuffType && (
                           <div style={{ color: '#8b5cf6', fontSize: '0.65rem' }}>

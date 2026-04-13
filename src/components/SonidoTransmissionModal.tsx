@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { doc, setDoc, serverTimestamp, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
-import { useBattle } from '../context/BattleContext';
 import IslandRaidBattle from './IslandRaidBattle';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
@@ -22,12 +21,10 @@ interface TransmissionScene {
 
 const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpen, onClose, onComplete }) => {
   const { currentUser } = useAuth();
-  const { vault, moves } = useBattle();
   const [currentScene, setCurrentScene] = useState(0);
   const [selectedCandy, setSelectedCandy] = useState<string | null>(null);
   const [showBattle, setShowBattle] = useState(false);
   const [gameId, setGameId] = useState<string | null>(null);
-  const [showUpDownTooltip, setShowUpDownTooltip] = useState(false);
   const battleWonRef = useRef(false); // Track if battle was actually won
 
   // Define handleComplete early so it can be used in useEffect dependencies
@@ -237,8 +234,26 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
           image: '/images/Luz, Wielder of Light.png' // Luz, Wielder of Light battle image
         };
       case 'up-down':
-        // Will be implemented later
-        return null;
+        return {
+          id: 'unveiled_elite_varion',
+          type: 'unveiled_elite',
+          name: 'Varion, Elite of the Vertical',
+          health: 2000,
+          maxHealth: 2000,
+          currentPP: 2000,
+          maxPP: 2000,
+          vaultHealth: 2000,
+          maxVaultHealth: 2000,
+          shieldStrength: 500,
+          maxShieldStrength: 500,
+          level: 20,
+          damage: 150,
+          moves: [],
+          position: { x: 50, y: 50 },
+          spawnTime: new Date(),
+          waveNumber: 4,
+          image: '/images/Varion - Elite.png',
+        };
       case 'config':
         return {
           id: 'unveiled_elite_kon',
@@ -438,7 +453,10 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   };
 
   const startRRCandyBattle = async (candyType: string) => {
-    if (!currentUser || !vault) return;
+    if (!currentUser) {
+      alert('You must be signed in to start this battle.');
+      return;
+    }
 
     try {
       // Generate unique game ID
@@ -471,7 +489,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
         updatedAt: serverTimestamp()
       });
 
-      // Set battle state (Island Raid style)
+      // Set battle state (Island Raid style) — only after room is created so UI never locks without a battle
       setGameId(gameId);
       setShowBattle(true);
       setSelectedCandy(candyType);
@@ -482,9 +500,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
   };
 
   const handleCandyChoice = (candyType: string) => {
-    setSelectedCandy(candyType);
-    // Start the battle
-    startRRCandyBattle(candyType);
+    void startRRCandyBattle(candyType);
   };
 
 
@@ -511,6 +527,8 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
             // Only hide the battle, don't close the modal yet
             // The listener needs to stay active to detect victory and call handleComplete
             setShowBattle(false);
+            // Let players pick again if they retreated / lost without finishing (victory path still closes modal)
+            setSelectedCandy(null);
             // DON'T call onClose() here - let the listener detect victory first
             // handleComplete() will call onClose() after marking chapter as complete
           }}
@@ -534,7 +552,12 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
         zIndex: 10000,
         padding: '2rem'
       }}
-      onClick={onClose}
+      onClick={(e) => {
+        // Do not dismiss during candy choice — mis-taps left players stuck with a selection and no battle
+        if (e.target === e.currentTarget && !scenes[currentScene]?.isChoice) {
+          onClose();
+        }
+      }}
     >
       <div
         style={{
@@ -635,6 +658,7 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
             {/* Candy Choice Buttons */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginTop: '1rem' }}>
               <button
+                type="button"
                 onClick={() => handleCandyChoice('on-off')}
                 disabled={selectedCandy !== null}
                 style={{
@@ -664,56 +688,40 @@ const SonidoTransmissionModal: React.FC<SonidoTransmissionModalProps> = ({ isOpe
                 On/Off
               </button>
               
-              <div style={{ position: 'relative' }}>
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  disabled={true}
-                  style={{
-                    backgroundColor: '#6b7280',
-                    color: '#9ca3af',
-                    padding: '1rem',
-                    borderRadius: '0.5rem',
-                    border: '2px solid #4b5563',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    cursor: 'not-allowed',
-                    transition: 'all 0.2s ease',
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3)',
-                    opacity: 0.6,
-                    width: '100%'
-                  }}
-                  onMouseEnter={() => setShowUpDownTooltip(true)}
-                  onMouseLeave={() => setShowUpDownTooltip(false)}
-                >
-                  Up/Down
-                </button>
-                {showUpDownTooltip && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      bottom: '100%',
-                      left: '50%',
-                      transform: 'translateX(-50%)',
-                      background: 'rgba(0, 0, 0, 0.9)',
-                      color: 'white',
-                      padding: '0.5rem 1rem',
-                      borderRadius: '0.5rem',
-                      fontSize: '0.875rem',
-                      whiteSpace: 'nowrap',
-                      marginBottom: '0.5rem',
-                      zIndex: 1000,
-                      pointerEvents: 'none'
-                    }}
-                  >
-                    Coming Soon
-                  </div>
-                )}
-              </div>
+              <button
+                type="button"
+                onClick={() => handleCandyChoice('up-down')}
+                disabled={selectedCandy !== null}
+                style={{
+                  backgroundColor: selectedCandy === 'up-down' ? '#10b981' : selectedCandy ? '#374151' : '#3b82f6',
+                  color: 'white',
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  border: selectedCandy === 'up-down' ? '2px solid #10b981' : '2px solid #3b82f6',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  cursor: selectedCandy ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3)',
+                  opacity: selectedCandy && selectedCandy !== 'up-down' ? 0.5 : 1,
+                  width: '100%',
+                }}
+                onMouseOver={(e) => {
+                  if (!selectedCandy) {
+                    e.currentTarget.style.backgroundColor = '#2563eb';
+                  }
+                }}
+                onMouseOut={(e) => {
+                  if (!selectedCandy) {
+                    e.currentTarget.style.backgroundColor = '#3b82f6';
+                  }
+                }}
+              >
+                Up/Down
+              </button>
               
               <button
+                type="button"
                 onClick={() => handleCandyChoice('config')}
                 disabled={selectedCandy !== null}
                 style={{

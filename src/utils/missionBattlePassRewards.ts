@@ -4,7 +4,6 @@ import type { MissionTemplate } from '../types/missions';
 import type { ChallengeReward } from '../types/chapters';
 import { grantChallengeRewards } from './challengeRewards';
 import { grantMissionExtraRewards } from './missionExtraRewards';
-import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 
 function qty(r: BattlePassReward): number {
   const q = r.quantity;
@@ -266,10 +265,6 @@ export async function grantPackedBattlePassMissionRewards(
       moves: extras.moves,
       items: extras.items,
     });
-  }
-
-  if (xpGranted > 0) {
-    await awardBattlePassXpForDeployedSeason(userId, xpGranted);
   }
 
   return { xpGranted, grantOk };

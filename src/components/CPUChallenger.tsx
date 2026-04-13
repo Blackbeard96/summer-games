@@ -4,9 +4,19 @@ import { useBattle } from '../context/BattleContext';
 import { Move, ActionCard } from '../types/battle';
 import { trackMoveUsage } from '../utils/manifestTracking';
 import { getMoveNameSync } from '../utils/moveOverrides';
-import { getEffectiveMasteryLevel, getArtifactDamageMultiplier, getElementalRingLevel } from '../utils/artifactUtils';
+import {
+  getEffectiveMasteryLevel,
+  getArtifactDamageMultiplier,
+  getElementalRingLevel,
+  getElementalAffinityRingDamageMultiplierForMove,
+  findElementalAffinityRingForMove,
+} from '../utils/artifactUtils';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import {
+  moveCountsForDailyElementalChallenge,
+  moveCountsForDailyManifestChallenge,
+} from '../utils/dailyChallengeShared';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -123,11 +133,17 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
     const moveName = getMoveNameSync(selectedMove.name) || selectedMove.name;
     console.log(`[CPUChallenger] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
-    // Track daily challenge: Use Elemental Move
-    if (selectedMove.category === 'elemental' && currentUser) {
-      updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err => 
-        console.error('Error updating daily challenge progress:', err)
-      );
+    if (currentUser) {
+      if (moveCountsForDailyElementalChallenge(selectedMove)) {
+        updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
+          console.error('Error updating daily challenge progress:', err)
+        );
+      }
+      if (moveCountsForDailyManifestChallenge({ ...selectedMove, name: moveName })) {
+        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
+          console.error('Error updating daily challenge progress (manifest):', err)
+        );
+      }
     }
     
     if (currentUser.uid) {
@@ -161,39 +177,34 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
       const damageResult = rollDamage(damageRange, playerLevel, selectedMove.level, effectiveMasteryLevel);
       damage = damageResult.damage;
       
-      // Apply artifact damage multiplier for elemental moves
       if (selectedMove.category === 'elemental' && equippedArtifacts) {
+        let mult = 1.0;
         const ringLevel = getElementalRingLevel(equippedArtifacts);
         const artifactMultiplier = getArtifactDamageMultiplier(ringLevel);
         if (artifactMultiplier > 1.0) {
-          damage = Math.floor(damage * artifactMultiplier);
+          mult *= artifactMultiplier;
           addToBattleLog(`💍 Elemental Ring (Level ${ringLevel}) boosts ${selectedMove.name} damage by ${Math.round((artifactMultiplier - 1) * 100)}%!`);
         }
+        const affinityMult = getElementalAffinityRingDamageMultiplierForMove(selectedMove, equippedArtifacts);
+        if (affinityMult > 1.001) {
+          mult *= affinityMult;
+          addToBattleLog(`💎 Affinity ring boosts ${selectedMove.name} damage by ${Math.round((affinityMult - 1) * 100)}%!`);
+        }
+        if (mult > 1.001) {
+          damage = Math.floor(damage * mult);
+        }
       }
-      
-      // Log ring boost if applicable
+
       if (effectiveMasteryLevel > selectedMove.masteryLevel && equippedArtifacts) {
-        const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
-        const moveElement = selectedMove.elementalAffinity?.toLowerCase();
-        for (const slot of ringSlots) {
-          const ring = equippedArtifacts[slot];
-          if (!ring) continue;
-          if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
-            addToBattleLog(`🔥 Blaze Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
-            break;
-          }
-          if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
-            addToBattleLog(`🌍 Terra Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
-            break;
-          }
-          if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
-            addToBattleLog(`💧 Aqua Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
-            break;
-          }
-          if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
-            addToBattleLog(`💨 Air Ring: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`);
-            break;
-          }
+        const hit = findElementalAffinityRingForMove(selectedMove, equippedArtifacts);
+        if (hit) {
+          const label =
+            typeof (hit.ring as { name?: string }).name === 'string' && (hit.ring as { name?: string }).name
+              ? (hit.ring as { name?: string }).name
+              : 'Affinity ring';
+          addToBattleLog(
+            `📈 ${label}: ${selectedMove.name} effective mastery level ${effectiveMasteryLevel} (base: ${selectedMove.masteryLevel})`
+          );
         }
       }
       

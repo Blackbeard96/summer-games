@@ -33,6 +33,7 @@ import type {
   LiveQuizPerQuestionResultEntry,
 } from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
 import { trackParticipation, trackElimination, breakParticipationStreak } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
@@ -327,7 +328,12 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         }
         if (Object.keys(studentUpdates).length > 0) {
           const studentDoc = await getDoc(studentRef);
-          if (studentDoc.exists()) await updateDoc(studentRef, studentUpdates);
+          if (studentDoc.exists()) {
+            await updateDoc(studentRef, studentUpdates);
+            if (config.rewardTypes.xp && config.xpAmount > 0) {
+              await awardBattlePassXpForDeployedSeason(uid, config.xpAmount);
+            }
+          }
         }
         if (Object.keys(userUpdates).length > 0) {
           const userDoc = await getDoc(userRef);
@@ -405,7 +411,12 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       }
       if (Object.keys(studentUpdates).length > 0) {
         const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) await updateDoc(studentRef, studentUpdates);
+        if (studentDoc.exists()) {
+          await updateDoc(studentRef, studentUpdates);
+          if (xpAmount > 0) {
+            await awardBattlePassXpForDeployedSeason(uid, xpAmount);
+          }
+        }
       }
       if (Object.keys(userUpdates).length > 0) {
         const userDoc = await getDoc(userRef);

@@ -1,6 +1,10 @@
 import { db } from '../firebase';
 import { doc, getDoc, updateDoc, serverTimestamp, runTransaction, increment } from 'firebase/firestore';
 import { getTodayDateStringEastern } from './dailyChallengeDateUtils';
+import {
+  dailyChallengeStoredTypeMatchesEvent,
+  getEffectiveDailyChallengeTarget,
+} from './dailyChallengeShared';
 
 // Debug flag - set REACT_APP_DEBUG_DAILY=true to enable verbose logging
 const DEBUG_DAILY = process.env.REACT_APP_DEBUG_DAILY === 'true';
@@ -277,28 +281,26 @@ export const updateChallengeProgressByType = async (
           });
         }
         
-        // Normalize types for comparison (handle case, whitespace, and "Attack Vault" vs "attack_vault")
-        const normalizeType = (t: string) => t.toLowerCase().trim().replace(/\s+/g, '_');
-        const normalizedStoredType = normalizeType(String(storedType));
-        const normalizedChallengeType = normalizeType(String(challengeType));
-        
+        const details = challengeDetails[challenge.challengeId];
+        const typeMatches = dailyChallengeStoredTypeMatchesEvent(String(storedType), String(challengeType));
+
         // ALWAYS log challenge matching (critical for debugging)
         console.log('[Daily Challenge] 🔍 Checking challenge:', {
           challengeId: challenge.challengeId,
           storedType,
-          normalizedStoredType,
           challengeType,
-          normalizedChallengeType,
-          matches: normalizedStoredType === normalizedChallengeType,
+          typeMatches,
           completed: challenge.completed,
           currentProgress: challenge.progress,
           target: challengeTarget,
-          challengeDetails: challengeDetails[challenge.challengeId]
+          challengeDetails: details,
         });
-        
-        if (normalizedStoredType === normalizedChallengeType && !challenge.completed) {
-          // Use stored target or fetch from details, but ensure we have a valid target
-          const target = challengeTarget || challengeDetails[challenge.challengeId]?.target || 999999;
+
+        if (typeMatches && !challenge.completed) {
+          const target = getEffectiveDailyChallengeTarget({
+            title: details?.title,
+            target: challengeTarget ?? details?.target,
+          });
           const oldProgress = challenge.progress || 0;
           const newProgress = oldProgress + amount;
           // Only mark as completed if we've reached or exceeded the target
@@ -370,14 +372,13 @@ export const updateChallengeProgressByType = async (
         
         console.warn('[Daily Challenge] ⚠️ NO MATCHING CHALLENGES FOUND:', {
           requestedType: challengeType,
-          normalizedRequestedType: challengeType.toLowerCase().trim(),
           availableChallenges: availableTypes,
           challengeIds: currentChallenges.map(c => c.challengeId),
           matchAttempts: availableTypes.map(a => ({
             challengeId: a.challengeId,
-            matches: a.normalizedFinalType === challengeType.toLowerCase().trim(),
-            reason: a.completed ? 'already completed' : (a.normalizedFinalType === challengeType.toLowerCase().trim() ? 'should match' : 'type mismatch')
-          }))
+            matches: dailyChallengeStoredTypeMatchesEvent(String(a.finalType), String(challengeType)),
+            reason: a.completed ? 'already completed' : 'type mismatch',
+          })),
         });
       }
     });
@@ -436,7 +437,12 @@ export const repairChallengeProgress = async (userId: string) => {
           return {
             ...challenge,
             type: challenge.type || details.type,
-            target: challenge.target || details.target
+            target:
+              challenge.target ||
+              getEffectiveDailyChallengeTarget({
+                title: details.title,
+                target: details.target,
+              }),
           };
         }
       }

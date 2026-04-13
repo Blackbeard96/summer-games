@@ -10,6 +10,7 @@ import {
   mergeEquippableCatalogLayers,
 } from './battleSkillsService';
 import { formatUniversalLawBoonBattleSummary, type UniversalLawBoonEffects } from './universalLawBoons';
+import { ARTIFACT_MAX_LEVEL } from './artifactUtils';
 
 export const ELEMENTAL_ACCESS_PERK_ID = 'elemental-access';
 export const SHIELD_BOOST_PERK_ID = 'shield-boost';
@@ -29,7 +30,7 @@ export const PP_ECONOMY_PERK_ID = 'pp-economy';
 export const FREEZE_ON_HIT_PERK_ID = 'freeze-on-hit';
 
 /** Level range used for linear scaling (10%→100%, 5%→30%, etc.). */
-export const ARTIFACT_PERK_SCALE_MAX_LEVEL = 10;
+export const ARTIFACT_PERK_SCALE_MAX_LEVEL = ARTIFACT_MAX_LEVEL;
 
 /** Universal Law (e.g. Shared Resonance): multiply numeric totals from artifact perks by (1 + bonus). */
 function artifactPerkStrengthMultiplierFromLaw(lawEffects?: UniversalLawBoonEffects | null): number {
@@ -57,7 +58,7 @@ function scaleArtifactPerkFlatTotal(
 }
 
 function clampArtifactLevelForPerks(level: unknown): number {
-  return Math.max(1, Math.min(ARTIFACT_PERK_SCALE_MAX_LEVEL, Math.floor(Number(level) || 1)));
+  return Math.max(1, Math.min(ARTIFACT_MAX_LEVEL, Math.floor(Number(level) || 1)));
 }
 
 /**
@@ -211,7 +212,7 @@ export function getShieldBoostFlatBonus(
   for (const slot of EQUIP_SLOTS) {
     const art = eq[slot] as Record<string, unknown> | undefined;
     if (!perkIdsForArtifact(art, rawCatalog).includes(SHIELD_BOOST_PERK_ID)) continue;
-    const level = Math.max(1, Number((art as { level?: number }).level) || 1);
+    const level = clampArtifactLevelForPerks((art as { level?: number }).level);
     const base = 100 + (level - 1) * 50;
     const name = String((art as { name?: string }).name || '');
     const syn = getArtifactSynergyMultiplierForTarget(name, slot, eq, rawCatalog);

@@ -18,6 +18,7 @@ import type { UpdateData, DocumentData } from 'firebase/firestore';
 import type { ClassFlowSprintState } from '../types/season1';
 import { trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -352,7 +353,12 @@ export async function grantSprintRewardForSinglePlayer(
       }
       if (Object.keys(studentUpdates).length > 0) {
         const studentDoc = await getDoc(studentRef);
-        if (studentDoc.exists()) await updateDoc(studentRef, studentUpdates);
+        if (studentDoc.exists()) {
+          await updateDoc(studentRef, studentUpdates);
+          if (xpAmt > 0) {
+            await awardBattlePassXpForDeployedSeason(playerUid, xpAmt);
+          }
+        }
       }
       if (Object.keys(userUpdates).length > 0) {
         const userDoc = await getDoc(userRef);

@@ -4,7 +4,17 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { calculateUpgradeCost, getArtifactDamageMultiplier, getManifestDamageBoost, normalizeArtifact } from '../utils/artifactUtils';
+import {
+  ARTIFACT_MAX_LEVEL,
+  calculateUpgradeCost,
+  clampArtifactLevel,
+  getArtifactDamageMultiplier,
+  getManifestDamageBoost,
+  getElementalAffinityRingMasteryBonusFromArtifactLevel,
+  getElementalAffinityRingDamageBonusFraction,
+  MOVE_MASTERY_CAP_WITH_RING,
+  normalizeArtifact,
+} from '../utils/artifactUtils';
 import {
   enrichEquippedArtifactsFromCatalog,
   equippableCatalogFromDoc,
@@ -39,6 +49,23 @@ function studentOwnsEquippableArtifact(
     } else if (artifacts[key] === true && norm(key) === t) return true;
   }
   return false;
+}
+
+/** Blaze / Terra / Aqua / Air / Thunder rings — which element gets the bonuses (matches battle). */
+function getElementalAffinityRingDisplay(equipped: { id?: string; name?: string }): { element: string } | null {
+  const id = (equipped.id || '').toLowerCase();
+  const n = (equipped.name || '').toLowerCase();
+  const idMatch = (prefix: string) =>
+    id === prefix ||
+    id.startsWith(`${prefix}-`) ||
+    id.startsWith(`${prefix}_`) ||
+    id.startsWith(`${prefix}.`);
+  if (idMatch('blaze-ring') || n.includes('blaze ring')) return { element: 'Fire' };
+  if (idMatch('terra-ring') || n.includes('terra ring')) return { element: 'Earth' };
+  if (idMatch('aqua-ring') || n.includes('aqua ring')) return { element: 'Water' };
+  if (idMatch('air-ring') || n.includes('air ring')) return { element: 'Air' };
+  if (idMatch('thunder-ring') || n.includes('thunder ring')) return { element: 'Lightning' };
+  return null;
 }
 
 function slotEquippedMatchesCatalogId(equipped: unknown, catalogKey: string): boolean {
@@ -1286,110 +1313,133 @@ const Artifacts: React.FC = () => {
   };
 
 
-  // Handle artifact upgrade
+  /** Firestore key for optional purchase metadata (level, stats, …). */
+  const artifactPurchaseDocKey = (artifactId: string) => `${artifactId}_purchase`;
+
+  // Handle artifact upgrade (any equipped artifact; max level ARTIFACT_MAX_LEVEL)
   const handleUpgradeArtifact = async (slot: keyof EquippedArtifacts) => {
     if (!currentUser) return;
-    
+
     const artifact = equippedArtifacts[slot];
-    if (!artifact || artifact.id !== 'elemental-ring-level-1') {
-      alert('Only Elemental Rings can be upgraded at this time.');
+    if (!artifact?.id) return;
+
+    const currentLevel = clampArtifactLevel(artifact.level ?? 1);
+    if (currentLevel >= ARTIFACT_MAX_LEVEL) {
+      alert(`This artifact is already at max level (${ARTIFACT_MAX_LEVEL}).`);
       return;
     }
 
-    const currentLevel = artifact.level || 1;
     const upgradeCost = calculateUpgradeCost(currentLevel);
-    
-    // Check if player has enough resources
+    if (upgradeCost.pp <= 0) {
+      alert(`This artifact is already at max level (${ARTIFACT_MAX_LEVEL}).`);
+      return;
+    }
+
     if (powerPoints < upgradeCost.pp) {
       alert(`Insufficient Power Points! Need ${upgradeCost.pp} PP, have ${powerPoints} PP.`);
       return;
     }
-    
+
     if (truthMetal < upgradeCost.truthMetal) {
       alert(`Insufficient Truth Metal! Need ${upgradeCost.truthMetal} shard(s), have ${truthMetal} shard(s).`);
       return;
     }
 
-    // Calculate damage multipliers for confirmation dialog
-    const oldMultiplier = getArtifactDamageMultiplier(currentLevel);
-    const newMultiplier = getArtifactDamageMultiplier(currentLevel + 1);
-    const damageIncrease = Math.round((newMultiplier - oldMultiplier) * 100);
-    const totalDamageIncrease = Math.round((newMultiplier - 1) * 100);
-    const element = artifact.name.match(/Elemental Ring: (\w+)/)?.[1] || 'elemental';
-    
-    if (!window.confirm(
-      `Upgrade ${artifact.name} to Level ${currentLevel + 1}?\n\n` +
-      `💰 Cost: ${upgradeCost.pp} PP + ${upgradeCost.truthMetal} Truth Metal shard(s)\n\n` +
-      `⚔️ DAMAGE INCREASE:\n` +
-      `   Current: +${Math.round((oldMultiplier - 1) * 100)}% damage\n` +
-      `   After Upgrade: +${totalDamageIncrease}% damage\n` +
-      `   Gain: +${damageIncrease}% more damage!\n\n` +
-      `🔥 All your ${element.toLowerCase()} elemental moves will deal ${totalDamageIncrease}% more damage in battle!`
-    )) {
-      return;
+    const newLevel = currentLevel + 1;
+    const isElementalRing =
+      artifact.id === 'elemental-ring-level-1' ||
+      (typeof artifact.name === 'string' && artifact.name.includes('Elemental Ring'));
+
+    let confirmBody = `Upgrade ${artifact.name} to Level ${newLevel}?\n\n💰 Cost: ${upgradeCost.pp} PP + ${upgradeCost.truthMetal} Truth Metal shard(s)\n\n`;
+    if (isElementalRing) {
+      const oldMultiplier = getArtifactDamageMultiplier(currentLevel);
+      const newMultiplier = getArtifactDamageMultiplier(newLevel);
+      const damageIncrease = Math.round((newMultiplier - oldMultiplier) * 100);
+      const totalDamageIncrease = Math.round((newMultiplier - 1) * 100);
+      const element = artifact.name.match(/Elemental Ring: (\w+)/)?.[1] || 'elemental';
+      confirmBody +=
+        `⚔️ ELEMENTAL RING DAMAGE:\n` +
+        `   Current: +${Math.round((oldMultiplier - 1) * 100)}% damage\n` +
+        `   After: +${totalDamageIncrease}% damage (gain +${damageIncrease}%)\n\n` +
+        `🔥 Your ${element.toLowerCase()} elemental moves scale with this bonus in battle.`;
+    } else {
+      confirmBody +=
+        `✨ Perk strength (Damage Boost, Shield Boost, Status Defense, etc.) scales with artifact level up to level ${ARTIFACT_MAX_LEVEL} — see each perk’s description for the curve.`;
     }
+
+    if (!window.confirm(confirmBody)) return;
 
     try {
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
-      
+
       if (!studentDoc.exists()) {
         alert('Error: Student data not found.');
         return;
       }
 
       const studentData = studentDoc.data();
-      const newLevel = currentLevel + 1;
-      
-      // Extract element from artifact name
-      const elementMatch = artifact.name.match(/Elemental Ring: (\w+)/);
-      const element = elementMatch ? elementMatch[1] : 'Element';
-      
-      // Update artifact with new level
-      const updatedArtifact: Artifact = {
+      const prevArtifacts = (studentData.artifacts || {}) as Record<string, unknown>;
+      const purchaseKey = artifactPurchaseDocKey(artifact.id);
+      const prevPurchase =
+        typeof prevArtifacts[purchaseKey] === 'object' && prevArtifacts[purchaseKey] != null
+          ? (prevArtifacts[purchaseKey] as Record<string, unknown>)
+          : {};
+
+      let updatedArtifact: Artifact = {
         ...artifact,
         level: newLevel,
-        name: `Elemental Ring: ${element} (Level ${newLevel})`
       };
-      
-      // Update equipped artifacts
+      if (isElementalRing) {
+        const elementMatch = artifact.name.match(/Elemental Ring: (\w+)/);
+        const element = elementMatch ? elementMatch[1] : 'Element';
+        updatedArtifact = {
+          ...updatedArtifact,
+          name: `Elemental Ring: ${element} (Level ${newLevel})`,
+        };
+      }
+
       const updatedEquipped = {
         ...equippedArtifacts,
-        [slot]: updatedArtifact
+        [slot]: updatedArtifact,
       };
-      
-      // Update student data
+
       const newPowerPoints = (studentData.powerPoints || 0) - upgradeCost.pp;
       const newTruthMetal = (studentData.truthMetal || 0) - upgradeCost.truthMetal;
-      
+
       await updateDoc(studentRef, {
         equippedArtifacts: updatedEquipped,
         powerPoints: newPowerPoints,
-        truthMetal: newTruthMetal
+        truthMetal: newTruthMetal,
+        artifacts: {
+          ...prevArtifacts,
+          [purchaseKey]: { ...prevPurchase, level: newLevel },
+        },
       });
-      
-      // Update local state
+
       setEquippedArtifacts(updatedEquipped);
       setPowerPoints(newPowerPoints);
       setTruthMetal(newTruthMetal);
-      
-      // Calculate damage multipliers for before and after
-      const oldMultiplier = getArtifactDamageMultiplier(currentLevel);
-      const newMultiplier = getArtifactDamageMultiplier(newLevel);
-      const damageIncrease = Math.round((newMultiplier - oldMultiplier) * 100);
-      const totalDamageIncrease = Math.round((newMultiplier - 1) * 100);
-      
-      // Show detailed upgrade impact
-      const upgradeMessage = `✅ Elemental Ring: ${element} upgraded to Level ${newLevel}!\n\n` +
-        `🔥 DAMAGE INCREASE:\n` +
-        `   • Previous: +${Math.round((oldMultiplier - 1) * 100)}% damage\n` +
-        `   • New: +${totalDamageIncrease}% damage\n` +
-        `   • Increase: +${damageIncrease}% more damage!\n\n` +
-        `⚔️ IMPACT ON YOUR ${element.toUpperCase()} MOVES:\n` +
-        `   All your ${element.toLowerCase()} elemental moves now deal ${totalDamageIncrease}% more damage in battle!\n\n` +
-        `💪 Example: A move that dealt 10 damage now deals ${Math.round(10 * newMultiplier)} damage!`;
-      
-      alert(upgradeMessage);
+      setStudentArtifactsRecord((prev) => ({
+        ...prev,
+        [purchaseKey]: { ...prevPurchase, level: newLevel },
+      }));
+
+      if (isElementalRing) {
+        const oldMultiplier = getArtifactDamageMultiplier(currentLevel);
+        const newMultiplier = getArtifactDamageMultiplier(newLevel);
+        const damageIncrease = Math.round((newMultiplier - oldMultiplier) * 100);
+        const totalDamageIncrease = Math.round((newMultiplier - 1) * 100);
+        const elementMatch = artifact.name.match(/Elemental Ring: (\w+)/);
+        const element = elementMatch ? elementMatch[1] : 'Element';
+        alert(
+          `✅ Elemental Ring: ${element} upgraded to Level ${newLevel}!\n\n` +
+            `🔥 DAMAGE: +${Math.round((oldMultiplier - 1) * 100)}% → +${totalDamageIncrease}% (+${damageIncrease}%)\n\n` +
+            `Example: 10 damage → ~${Math.round(10 * newMultiplier)} damage.`
+        );
+      } else {
+        alert(`✅ ${artifact.name} is now Level ${newLevel}! Perk effectiveness scales up to level ${ARTIFACT_MAX_LEVEL}.`);
+      }
     } catch (error) {
       console.error('Error upgrading artifact:', error);
       alert('Failed to upgrade artifact. Please try again.');
@@ -2259,6 +2309,59 @@ const Artifacts: React.FC = () => {
                               </div>
                             );
                           })()}
+                        {/* Element affinity rings: +N move mastery levels (matches getEffectiveMasteryLevel) */}
+                        {(() => {
+                          const ringMeta = getElementalAffinityRingDisplay(equipped);
+                          if (!ringMeta) return null;
+                          const ringLv = clampArtifactLevel(equipped.level ?? 1);
+                          const n = getElementalAffinityRingMasteryBonusFromArtifactLevel(ringLv);
+                          const dmgPct = Math.round(getElementalAffinityRingDamageBonusFraction(ringLv) * 100);
+                          return (
+                            <div style={{
+                              marginTop: '0.75rem',
+                              paddingTop: '0.75rem',
+                              borderTop: '1px solid #e5e7eb'
+                            }}>
+                              <div style={{
+                                background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
+                                border: '1px solid #fb923c',
+                                borderRadius: '0.5rem',
+                                padding: '0.5rem',
+                                marginTop: '0.5rem'
+                              }}>
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  fontSize: '0.875rem',
+                                  fontWeight: 'bold',
+                                  color: '#9a3412'
+                                }}>
+                                  <span style={{ fontSize: '1rem' }}>📈</span>
+                                  <span>
+                                    Move mastery: +{n} level{n === 1 ? '' : 's'} on {ringMeta.element}
+                                  </span>
+                                </div>
+                                <div style={{
+                                  fontSize: '0.75rem',
+                                  color: '#c2410c',
+                                  marginTop: '0.25rem',
+                                  fontStyle: 'italic'
+                                }}>
+                                  Your {ringMeta.element.toLowerCase()} elemental skills treat mastery as {n} higher
+                                  (capped at {MOVE_MASTERY_CAP_WITH_RING} per move after this bonus).
+                                  {dmgPct > 0 ? (
+                                    <>
+                                      {' '}
+                                      Matching {ringMeta.element.toLowerCase()} attack damage: +{dmgPct}%
+                                      {ringLv >= 9 ? ' (max from this ring).' : ' (scales with ring level).'}
+                                    </>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         {/* Show perk for Elemental Ring */}
                         {(equipped.id === 'elemental-ring-level-1' ||
                           (equipped.name && equipped.name.includes('Elemental Ring'))) && (
@@ -2338,98 +2441,105 @@ const Artifacts: React.FC = () => {
                             </div>
                           );
                         })()}
-                        {equipped.level && (
+                        <div style={{
+                          marginTop: '0.5rem',
+                          marginBottom: '0.75rem'
+                        }}>
                           <div style={{
-                            marginTop: '0.5rem',
-                            marginBottom: '0.75rem'
+                            fontSize: '0.75rem',
+                            color: '#6b7280',
+                            marginBottom: '0.25rem'
                           }}>
-                            <div style={{
-                              fontSize: '0.75rem',
-                              color: '#6b7280',
-                              marginBottom: '0.25rem'
-                            }}>
-                              Level: {equipped.level}
-                            </div>
-                            {equipped.id === 'elemental-ring-level-1' && (() => {
-                              const damageMultiplier = getArtifactDamageMultiplier(equipped.level);
-                              const damagePercent = Math.round((damageMultiplier - 1) * 100);
-                              return (
-                                <div style={{
-                                  background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                                  border: '1px solid #fbbf24',
-                                  borderRadius: '0.5rem',
-                                  padding: '0.5rem',
-                                  marginTop: '0.5rem'
-                                }}>
-                                  <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    fontSize: '0.875rem',
-                                    fontWeight: 'bold',
-                                    color: '#92400e'
-                                  }}>
-                                    <span style={{ fontSize: '1rem' }}>⚔️</span>
-                                    <span>Elemental Damage Boost: +{damagePercent}%</span>
-                                  </div>
-                                  <div style={{
-                                    fontSize: '0.75rem',
-                                    color: '#78350f',
-                                    marginTop: '0.25rem',
-                                    fontStyle: 'italic'
-                                  }}>
-                                    All {equipped.name.match(/Elemental Ring: (\w+)/)?.[1]?.toLowerCase() || 'elemental'} moves deal {damagePercent}% more damage
-                                  </div>
-                                </div>
-                              );
-                            })()}
+                            Level: {clampArtifactLevel(equipped.level ?? 1)} / {ARTIFACT_MAX_LEVEL}
                           </div>
-                        )}
-                        {/* Upgrade button for Elemental Ring */}
-                        {equipped.id === 'elemental-ring-level-1' && (
-                          <div style={{
-                            marginTop: '0.75rem',
-                            paddingTop: '0.75rem',
-                            borderTop: '1px solid #e5e7eb'
-                          }}>
-                            {(() => {
-                              const currentLevel = equipped.level || 1;
-                              const upgradeCost = calculateUpgradeCost(currentLevel);
-                              const canAfford = powerPoints >= upgradeCost.pp && truthMetal >= upgradeCost.truthMetal;
-                              
-                              return (
-                                <button
-                                  onClick={() => handleUpgradeArtifact(slot.key)}
-                                  disabled={!canAfford}
-                                  style={{
-                                    width: '100%',
-                                    padding: '0.75rem',
-                                    background: canAfford 
+                          {(equipped.id === 'elemental-ring-level-1' ||
+                            (equipped.name && equipped.name.includes('Elemental Ring'))) && (() => {
+                            const damageMultiplier = getArtifactDamageMultiplier(equipped.level ?? 1);
+                            const damagePercent = Math.round((damageMultiplier - 1) * 100);
+                            return (
+                              <div style={{
+                                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                                border: '1px solid #fbbf24',
+                                borderRadius: '0.5rem',
+                                padding: '0.5rem',
+                                marginTop: '0.5rem'
+                              }}>
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  fontSize: '0.875rem',
+                                  fontWeight: 'bold',
+                                  color: '#92400e'
+                                }}>
+                                  <span style={{ fontSize: '1rem' }}>⚔️</span>
+                                  <span>Elemental Damage Boost: +{damagePercent}%</span>
+                                </div>
+                                <div style={{
+                                  fontSize: '0.75rem',
+                                  color: '#78350f',
+                                  marginTop: '0.25rem',
+                                  fontStyle: 'italic'
+                                }}>
+                                  All {equipped.name.match(/Elemental Ring: (\w+)/)?.[1]?.toLowerCase() || 'elemental'} moves deal {damagePercent}% more damage
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        {/* Level up: all equipped artifacts (perk scaling max level {ARTIFACT_MAX_LEVEL}) */}
+                        <div style={{
+                          marginTop: '0.75rem',
+                          paddingTop: '0.75rem',
+                          borderTop: '1px solid #e5e7eb'
+                        }}>
+                          {(() => {
+                            const currentLevel = clampArtifactLevel(equipped.level ?? 1);
+                            const atMax = currentLevel >= ARTIFACT_MAX_LEVEL;
+                            const upgradeCost = calculateUpgradeCost(currentLevel);
+                            const canAfford =
+                              !atMax &&
+                              upgradeCost.pp > 0 &&
+                              powerPoints >= upgradeCost.pp &&
+                              truthMetal >= upgradeCost.truthMetal;
+                            return (
+                              <button
+                                onClick={() => handleUpgradeArtifact(slot.key)}
+                                disabled={atMax || !canAfford}
+                                style={{
+                                  width: '100%',
+                                  padding: '0.75rem',
+                                  background: atMax
+                                    ? '#9ca3af'
+                                    : canAfford
                                       ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
                                       : '#d1d5db',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '0.5rem',
-                                    fontSize: '0.875rem',
-                                    fontWeight: 'bold',
-                                    cursor: canAfford ? 'pointer' : 'not-allowed',
-                                    transition: 'all 0.2s',
-                                    opacity: canAfford ? 1 : 0.6
-                                  }}
-                                  onMouseOver={(e) => {
-                                    if (canAfford) {
-                                      e.currentTarget.style.transform = 'translateY(-2px)';
-                                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)';
-                                    }
-                                  }}
-                                  onMouseOut={(e) => {
-                                    if (canAfford) {
-                                      e.currentTarget.style.transform = 'translateY(0)';
-                                      e.currentTarget.style.boxShadow = 'none';
-                                    }
-                                  }}
-                                >
-                                  ⬆️ Upgrade to Level {currentLevel + 1}
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '0.5rem',
+                                  fontSize: '0.875rem',
+                                  fontWeight: 'bold',
+                                  cursor: atMax || !canAfford ? 'not-allowed' : 'pointer',
+                                  transition: 'all 0.2s',
+                                  opacity: atMax ? 0.85 : canAfford ? 1 : 0.6
+                                }}
+                                onMouseOver={(e) => {
+                                  if (canAfford) {
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)';
+                                  }
+                                }}
+                                onMouseOut={(e) => {
+                                  if (canAfford) {
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = 'none';
+                                  }
+                                }}
+                              >
+                                {atMax
+                                  ? `Max level (${ARTIFACT_MAX_LEVEL})`
+                                  : `⬆️ Level up to ${currentLevel + 1}`}
+                                {!atMax && (
                                   <div style={{
                                     fontSize: '0.75rem',
                                     marginTop: '0.25rem',
@@ -2437,11 +2547,44 @@ const Artifacts: React.FC = () => {
                                   }}>
                                     {upgradeCost.pp} PP + {upgradeCost.truthMetal} 💎 Truth Metal
                                   </div>
-                                  {(() => {
-                                    const nextLevelMultiplier = getArtifactDamageMultiplier(currentLevel + 1);
-                                    const currentMultiplier = getArtifactDamageMultiplier(currentLevel);
-                                    const nextDamagePercent = Math.round((nextLevelMultiplier - 1) * 100);
-                                    const damageIncrease = Math.round((nextLevelMultiplier - currentMultiplier) * 100);
+                                )}
+                                {!atMax &&
+                                  (equipped.id === 'elemental-ring-level-1' ||
+                                    (equipped.name && equipped.name.includes('Elemental Ring'))) && (() => {
+                                  const nextLevelMultiplier = getArtifactDamageMultiplier(currentLevel + 1);
+                                  const currentMultiplier = getArtifactDamageMultiplier(currentLevel);
+                                  const nextDamagePercent = Math.round((nextLevelMultiplier - 1) * 100);
+                                  const damageIncrease = Math.round((nextLevelMultiplier - currentMultiplier) * 100);
+                                  return (
+                                    <div style={{
+                                      fontSize: '0.7rem',
+                                      marginTop: '0.25rem',
+                                      opacity: 0.95,
+                                      fontWeight: '600'
+                                    }}>
+                                      Ring damage → +{nextDamagePercent}% (+{damageIncrease}% vs current)
+                                    </div>
+                                  );
+                                })()}
+                                {!atMax &&
+                                  (() => {
+                                    const aff = getElementalAffinityRingDisplay(equipped);
+                                    if (!aff) return null;
+                                    const nextLv = Math.min(ARTIFACT_MAX_LEVEL, currentLevel + 1);
+                                    const nNext = getElementalAffinityRingMasteryBonusFromArtifactLevel(nextLv);
+                                    const nCur = getElementalAffinityRingMasteryBonusFromArtifactLevel(currentLevel);
+                                    const dmgNext = Math.round(getElementalAffinityRingDamageBonusFraction(nextLv) * 100);
+                                    const dmgCur = Math.round(getElementalAffinityRingDamageBonusFraction(currentLevel) * 100);
+                                    const masteryHint =
+                                      nNext !== nCur
+                                        ? `Mastery on ${aff.element}: +${nCur} → +${nNext} at level ${nextLv}.`
+                                        : `Mastery on ${aff.element}: +${nNext} (cap ${MOVE_MASTERY_CAP_WITH_RING} per move).`;
+                                    const dmgHint =
+                                      dmgNext !== dmgCur
+                                        ? ` Matching skill damage: +${dmgCur}% → +${dmgNext}%.`
+                                        : dmgNext > 0
+                                          ? ` Damage bonus stays +${dmgNext}% until level 10.`
+                                          : '';
                                     return (
                                       <div style={{
                                         fontSize: '0.7rem',
@@ -2449,15 +2592,15 @@ const Artifacts: React.FC = () => {
                                         opacity: 0.95,
                                         fontWeight: '600'
                                       }}>
-                                        → +{nextDamagePercent}% damage (+{damageIncrease}% increase)
+                                        {masteryHint}
+                                        {dmgHint}
                                       </div>
                                     );
                                   })()}
-                                </button>
-                              );
-                            })()}
-                          </div>
-                        )}
+                              </button>
+                            );
+                          })()}
+                        </div>
                       </div>
                     );
                   })}

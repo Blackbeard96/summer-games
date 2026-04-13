@@ -51,6 +51,68 @@ function pickAwakenFieldsFromEnemy(enemy: Record<string, unknown>): Record<strin
   return out;
 }
 
+/**
+ * BattleEngine payloads sometimes omit `shieldStrength` / health fields. Coercing missing → 0 made
+ * Firestore persistence use min(0, current) and wipe enemy shields (and oscillate ally vs vault).
+ */
+function islandRaidExtractNumericField(opp: Record<string, unknown>, key: string): number | null {
+  if (!Object.prototype.hasOwnProperty.call(opp, key)) return null;
+  const v = opp[key];
+  if (v === undefined || v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function islandRaidExtractPrimaryEnemyHealth(opp: Record<string, unknown>): number | null {
+  const vh = islandRaidExtractNumericField(opp, 'vaultHealth');
+  if (vh !== null) return vh;
+  return islandRaidExtractNumericField(opp, 'health');
+}
+
+/**
+ * Enemy persist merge:
+ * - `conservative`: min(engine, firestore) for multi-writer damage races (co-op).
+ * - `trust_engine`: BattleEngine is authoritative when it sends a value (solo / awaken cap jump).
+ *   Using min() alone broke CPU awaken (engine full shields > stale Firestore partial).
+ */
+type IslandRaidEnemyPersistMergeMode = 'conservative' | 'trust_engine';
+
+function islandRaidMergedShieldPersist(
+  engineShield: number | null,
+  firestoreShield: number,
+  cap: number,
+  mode: IslandRaidEnemyPersistMergeMode = 'conservative'
+): number {
+  const fs = Math.max(0, Math.floor(firestoreShield));
+  if (engineShield === null) return fs;
+  const be = Math.max(0, Math.floor(engineShield));
+  const c = Math.max(0, Math.floor(cap));
+  if (mode === 'trust_engine') {
+    return c > 0 ? Math.min(be, c) : be;
+  }
+  return c > 0 ? Math.min(be, fs, c) : Math.min(be, fs);
+}
+
+function islandRaidMergedHealthPersist(
+  engineHealth: number | null | undefined,
+  firestoreHealth: number,
+  mode: IslandRaidEnemyPersistMergeMode = 'conservative'
+): number {
+  const fs = Math.max(0, firestoreHealth);
+  if (engineHealth == null) return fs;
+  const be = Math.max(0, Math.floor(engineHealth));
+  if (mode === 'trust_engine') return be;
+  return Math.min(be, fs);
+}
+
+function islandRaidEnemyPersistMergeMode(
+  room: IslandRaidBattleRoom | null,
+  structuralTrust: boolean
+): IslandRaidEnemyPersistMergeMode {
+  const n = room?.players?.length ?? 1;
+  return n <= 1 || structuralTrust ? 'trust_engine' : 'conservative';
+}
+
 /** Artifact id -> name/image for granting level completion rewards. */
 const REWARD_ARTIFACT_INFO: Record<string, { name: string; image: string }> = {
   'checkin-free': { name: 'Get Out of Check-in Free', image: '/images/Get-Out-of-Check-in-Free.png' },
@@ -151,11 +213,22 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         if (a.id !== currentUser.uid || a.isSummon) return a;
         const allyMax = Math.max(0, Math.floor(Number(a.maxShieldStrength) || 0));
         const mergedMax = Math.max(maxS, allyMax);
-        // Do not overwrite shieldStrength from vault here — BattleEngine + handleAlliesUpdate are authoritative
-        // during combat; stale vault snapshots were raising shields after incoming damage.
+        const cap = mergedMax > 0 ? mergedMax : Math.max(allyMax, maxS, 1);
+        const vSh = Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
+        const aSh = Math.max(0, Math.floor(Number(a.shieldStrength) || 0));
+        // Reconcile: hydrate from vault when ally row is empty; if battle row is ahead of vault (Shield ON /
+        // heals applied in-engine before BattleContext catches up), use ally up to cap; otherwise min so
+        // stale high vault cannot override local damage.
+        const nextSh =
+          aSh === 0 && vSh > 0
+            ? Math.min(vSh, cap)
+            : aSh > vSh
+              ? Math.min(aSh, cap)
+              : Math.min(vSh, aSh, cap);
         const n = {
           ...a,
-          maxShieldStrength: mergedMax > 0 ? mergedMax : allyMax,
+          maxShieldStrength: cap,
+          shieldStrength: nextSh,
           vaultHealth: vault.vaultHealth ?? a.vaultHealth,
           maxVaultHealth: vault.maxVaultHealth ?? a.maxVaultHealth,
           currentPP: vault.currentPP ?? a.currentPP,
@@ -163,6 +236,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         };
         if (
           (n.maxShieldStrength ?? 0) !== (a.maxShieldStrength ?? 0) ||
+          (n.shieldStrength ?? 0) !== (a.shieldStrength ?? 0) ||
           (n.vaultHealth ?? 0) !== (a.vaultHealth ?? 0) ||
           (n.currentPP ?? 0) !== (a.currentPP ?? 0)
         ) {
@@ -722,11 +796,43 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   // This prevents stale Firestore data from overwriting correct local damage
                   let mergedHealth = Math.min(firestoreHealth, localHealth);
                   let mergedShield = Math.min(firestoreShield, localShield);
-                  // Awakened phase only exists in client battle state; room.enemies stays at pre-awaken template.
-                  // Prefer local row so we do not snap HP/moves/portrait back on the next snapshot.
-                  if (existingOpp?.isAwakened) {
-                    mergedHealth = localHealth;
-                    mergedShield = localShield;
+                  // Awakened bosses: persist may carry full shields/HP while a snapshot races before React
+                  // applies the engine row — min(local, fs) would freeze partial shields. Take the better
+                  // of the two streams, clamped to the awakened caps from room vs local.
+                  if (existingOpp?.isAwakened || enemy.isAwakened === true) {
+                    const localDead =
+                      existingOpp?.isDefeated === true ||
+                      (localHealth <= 0 && localShield <= 0);
+                    const fsDead =
+                      (enemy as IslandRaidEnemy & { isDefeated?: boolean }).isDefeated === true ||
+                      (firestoreHealth <= 0 && firestoreShield <= 0);
+                    // Never "max merge" a dead boss back to full HP/shields when Firestore or local is stale.
+                    if (localDead || fsDead) {
+                      mergedHealth = 0;
+                      mergedShield = 0;
+                    } else {
+                      const capH = Math.max(
+                        Number(enemy.maxHealth || 0),
+                        Number(
+                          existingOpp?.maxVaultHealth ??
+                            existingOpp?.maxHealth ??
+                            existingOpp?.maxPP ??
+                            0
+                        )
+                      );
+                      const capS = Math.max(
+                        Number(enemy.maxShieldStrength || 0),
+                        Number(existingOpp?.maxShieldStrength || 0)
+                      );
+                      mergedHealth =
+                        capH > 0
+                          ? Math.min(Math.max(firestoreHealth, localHealth), capH)
+                          : Math.max(firestoreHealth, localHealth);
+                      mergedShield =
+                        capS > 0
+                          ? Math.min(Math.max(firestoreShield, localShield), capS)
+                          : Math.max(firestoreShield, localShield);
+                    }
                   }
 
                   // Log if we're using a different value (for debugging)
@@ -746,6 +852,11 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                     Array.isArray((enemy as any).moves) && (enemy as any).moves.length > 0
                       ? (enemy as any).moves
                       : existingOpp?.moves;
+
+                  const mergedDefeated = mergedHealth <= 0 && mergedShield <= 0;
+                  const defeatOverlay = mergedDefeated
+                    ? { isDefeated: true as const, defeatedAt: new Date() }
+                    : {};
 
                   const baseRow = {
                     id: enemy.id,
@@ -768,6 +879,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                         ? enemy.enemyType
                         : existingOpp?.enemyType,
                     ...pickAwakenFieldsFromEnemy(enemy as unknown as Record<string, unknown>),
+                    ...defeatOverlay,
                   };
 
                   if (existingOpp?.isAwakened) {
@@ -1514,13 +1626,16 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           pendingWave4SpawnRef.current = null; // Clear any old reference
           setShowKonCutscene(true);
           setHasShownKonIntro(true);
-          // Don't release lock yet - cutscene will handle it
+          // Wave 4 is already persisted above — release locks so final-wave defeat / victory can run
+          isProcessingWaveTransitionRef.current = false;
+          waveAdvanceLockRef.current = false;
           debug.groupEnd();
           return true;
         } else if (candyChoice === 'on-off') {
           debug.log('IslandRaidBattle', '🎬 Showing Luz intro cutscene before Wave 4');
           setShowLuzCutscene(true);
-          // Don't release lock yet - cutscene will handle it
+          isProcessingWaveTransitionRef.current = false;
+          waveAdvanceLockRef.current = false;
           debug.groupEnd();
           return true;
         }
@@ -1904,6 +2019,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
   const handleLuzCutsceneComplete = () => {
     console.log('🏝️ Luz intro cutscene completed, spawning Wave 4');
     setShowLuzCutscene(false);
+    isProcessingWaveTransitionRef.current = false;
+    waveAdvanceLockRef.current = false;
     if (pendingWave4SpawnRef.current) {
       pendingWave4SpawnRef.current();
       pendingWave4SpawnRef.current = null;
@@ -1918,7 +2035,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
     // Mark as completed using ref to prevent infinite loop
     konIntroCompletedRef.current = true;
     setShowKonCutscene(false);
-    
+    isProcessingWaveTransitionRef.current = false;
+    waveAdvanceLockRef.current = false;
+
     // Kon intro now shows before Wave 4, so spawn Wave 4
     if (pendingWave4SpawnRef.current) {
       console.log('🎬 [KON CUTSCENE] Calling pendingWave4SpawnRef to spawn Wave 4');
@@ -2037,31 +2156,40 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       // CRITICAL FIX: Store BattleEngine values for use inside transaction
       // We'll build the enemy array INSIDE the transaction using fresh Firestore data
       const battleEngineUpdates = new Map<string, {
-        health: number;
-        shield: number;
+        health: number | null;
+        shield: number | null;
         maxHealth: number;
         maxShield: number;
         opp: any;
       }>();
       
       updatedOpponents.forEach(opp => {
-        const health = opp.vaultHealth !== undefined ? opp.vaultHealth : (opp.health !== undefined ? opp.health : 0);
-        const shield = opp.shieldStrength !== undefined ? opp.shieldStrength : 0;
+        const engineHealth = islandRaidExtractPrimaryEnemyHealth(opp as Record<string, unknown>);
+        const engineShield = islandRaidExtractNumericField(opp as Record<string, unknown>, 'shieldStrength');
         const maxHealth = opp.maxVaultHealth !== undefined ? opp.maxVaultHealth : (opp.maxHealth !== undefined ? opp.maxHealth : 100);
         const maxShield = opp.maxShieldStrength !== undefined ? opp.maxShieldStrength : 0;
+        const healthForLog =
+          engineHealth !== null
+            ? engineHealth
+            : opp.vaultHealth !== undefined
+              ? opp.vaultHealth
+              : (opp.health !== undefined ? opp.health : 0);
+        const shieldForLog = engineShield !== null ? engineShield : opp.shieldStrength;
         
         // Log what BattleEngine is sending for debugging
         console.log(`📥 IslandRaidBattle: BattleEngine update for ${opp.name} (${opp.id}):`, {
           vaultHealth: opp.vaultHealth,
           health: opp.health,
-          extractedHealth: health,
+          extractedHealth: healthForLog,
           shieldStrength: opp.shieldStrength,
-          extractedShield: shield
+          extractedShield: shieldForLog,
+          engineHealthSent: engineHealth,
+          engineShieldSent: engineShield,
         });
         
         battleEngineUpdates.set(opp.id, {
-          health,
-          shield,
+          health: engineHealth,
+          shield: engineShield,
           maxHealth,
           maxShield,
           opp
@@ -2098,18 +2226,55 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 return currentEnemy;
               }
               
-              // Merge BattleEngine values with current Firestore values
-              // Use minimum (most damage) to ensure consistency
+              // Merge BattleEngine values with current Firestore values (min = most damage).
+              // When the engine payload omits shield/health, preserve Firestore — do not treat as 0.
               const battleEngineHealth = battleEngineUpdate.health;
               const battleEngineShield = battleEngineUpdate.shield;
               const currentHealth = Number(currentEnemy.health || 100);
               const currentShield = Number(currentEnemy.shieldStrength || 0);
-              
-              const mergedHealth = Math.min(battleEngineHealth, currentHealth);
-              const mergedShield = Math.min(battleEngineShield, currentShield);
-              
+              const shieldCap =
+                Number(battleEngineUpdate.maxShield) ||
+                Number(currentEnemy.maxShieldStrength) ||
+                0;
+
+              const bo = battleEngineUpdate.opp as Record<string, unknown>;
+              const awakeNow = bo?.isAwakened === true && currentEnemy.isAwakened !== true;
+              const nextMaxS = Number(battleEngineUpdate.maxShield) || 0;
+              const prevMaxS = Number(currentEnemy.maxShieldStrength || 0);
+              const maxShieldIncreased = nextMaxS > prevMaxS + 0.5;
+              const nextMaxH = Number(battleEngineUpdate.maxHealth) || 0;
+              const prevMaxH = Number(currentEnemy.maxHealth || 0);
+              const maxHealthIncreased = nextMaxH > prevMaxH + 0.5;
+              const structuralTrust = awakeNow || maxShieldIncreased || maxHealthIncreased;
+              const persistMode = islandRaidEnemyPersistMergeMode(battleRoom, structuralTrust);
+
+              const mergedHealth = islandRaidMergedHealthPersist(
+                battleEngineHealth,
+                currentHealth,
+                persistMode
+              );
+              let mergedShield = islandRaidMergedShieldPersist(
+                battleEngineShield,
+                currentShield,
+                shieldCap,
+                persistMode
+              );
+              // Awaken transition: engine payload often omits `shieldStrength` (extract → null). Falling back
+              // to Firestore alone kept pre-awaken damaged shields while maxShieldStrength jumped to phase-2 cap.
+              if (
+                awakeNow &&
+                battleEngineShield === null &&
+                shieldCap > 0 &&
+                mergedHealth > 0
+              ) {
+                mergedShield = shieldCap;
+              }
+
               // Log if merge resulted in different values (for debugging)
-              if (Math.abs(mergedHealth - battleEngineHealth) > 0.1 || Math.abs(mergedShield - battleEngineShield) > 0.1) {
+              if (
+                (battleEngineHealth !== null && Math.abs(mergedHealth - battleEngineHealth) > 0.1) ||
+                (battleEngineShield !== null && Math.abs(mergedShield - battleEngineShield) > 0.1)
+              ) {
                 console.log(`🔄 IslandRaidBattle: Merged ${currentEnemy.name} (${currentEnemy.id}):`, {
                   battleEngineHealth,
                   firestoreHealth: currentHealth,
@@ -2120,7 +2285,6 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 });
               }
               
-              const bo = battleEngineUpdate.opp as Record<string, unknown>;
               const awakenSync =
                 bo?.isAwakened === true
                   ? {
@@ -2159,9 +2323,9 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   id: opp.id,
                   type: opp.type || 'zombie',
                   name: opp.name || 'Unknown Enemy',
-                  health: update.health,
+                  health: update.health ?? update.maxHealth ?? 100,
                   maxHealth: update.maxHealth,
-                  shieldStrength: update.shield,
+                  shieldStrength: update.shield ?? 0,
                   maxShieldStrength: update.maxShield,
                   level: opp.level || 1,
                   damage: 30,
@@ -2222,6 +2386,17 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                   if (!update) return enemy;
                   
                   const bo2 = update.opp as Record<string, unknown>;
+                  const awakeNow2 = bo2?.isAwakened === true && enemy.isAwakened !== true;
+                  const nextMaxS2 = Number(update.maxShield) || 0;
+                  const prevMaxS2 = Number(enemy.maxShieldStrength || 0);
+                  const maxShieldIncreased2 = nextMaxS2 > prevMaxS2 + 0.5;
+                  const nextMaxH2 = Number(update.maxHealth) || 0;
+                  const prevMaxH2 = Number(enemy.maxHealth || 0);
+                  const maxHealthIncreased2 = nextMaxH2 > prevMaxH2 + 0.5;
+                  const persistMode2 = islandRaidEnemyPersistMergeMode(
+                    battleRoom,
+                    awakeNow2 || maxShieldIncreased2 || maxHealthIncreased2
+                  );
                   const awakenSync2 =
                     bo2?.isAwakened === true
                       ? {
@@ -2238,10 +2413,30 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                           maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0,
                         }
                       : {};
+                  const fbCap = Number(update.maxShield || enemy.maxShieldStrength || 0);
+                  const fbMergedHealth = islandRaidMergedHealthPersist(
+                    update.health,
+                    Number(enemy.health || 100),
+                    persistMode2
+                  );
+                  let fbMergedShield = islandRaidMergedShieldPersist(
+                    update.shield,
+                    Number(enemy.shieldStrength || 0),
+                    fbCap,
+                    persistMode2
+                  );
+                  if (
+                    awakeNow2 &&
+                    update.shield === null &&
+                    fbCap > 0 &&
+                    fbMergedHealth > 0
+                  ) {
+                    fbMergedShield = fbCap;
+                  }
                   return {
                     ...enemy,
-                    health: Math.min(update.health, Number(enemy.health || 100)),
-                    shieldStrength: Math.min(update.shield, Number(enemy.shieldStrength || 0)),
+                    health: fbMergedHealth,
+                    shieldStrength: fbMergedShield,
                     maxHealth: update.maxHealth || enemy.maxHealth || 100,
                     maxShieldStrength: update.maxShield || enemy.maxShieldStrength || 0,
                     ...awakenSync2,
@@ -2387,9 +2582,11 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 updates.vaultHealth = ally.vaultHealth;
               }
               if (ally.shieldStrength !== undefined) {
-                const cap = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 0));
+                const vaultCap = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 0));
+                const allyCap = Math.max(0, Math.floor(Number((ally as { maxShieldStrength?: number }).maxShieldStrength) || 0));
+                const cap = Math.max(vaultCap, allyCap, 1);
                 const raw = Math.floor(Number(ally.shieldStrength) || 0);
-                updates.shieldStrength = cap > 0 ? Math.min(cap, Math.max(0, raw)) : Math.max(0, raw);
+                updates.shieldStrength = Math.min(cap, Math.max(0, raw));
               }
               
               if (Object.keys(updates).length > 0) {

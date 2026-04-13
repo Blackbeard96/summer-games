@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
 import { collection, addDoc, getDocs, doc, getDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface Badge {
@@ -409,6 +410,10 @@ const BadgeManager: React.FC = () => {
             powerPoints: increment(ppReward),
             ...(artifactRewards.length > 0 && { artifacts: updatedStudentArtifacts })
           });
+
+          if (xpReward > 0) {
+            await awardBattlePassXpForDeployedSeason(studentId, xpReward);
+          }
 
           try {
             const userDoc = await getDoc(userRef);

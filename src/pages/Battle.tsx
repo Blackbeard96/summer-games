@@ -332,6 +332,11 @@ const Battle: React.FC = () => {
     }
   };
 
+  /**
+   * Quick shield restore must use `restoreVaultShields` from context (operates on stored/base vault).
+   * Context `vault` is `vaultForUI` (includes Shield Boost / perks for display); adding to that and
+   * persisting double-counted perks and made restores look "many times" the button value.
+   */
   const handleRestoreShields = async (shieldAmount: number, cost: number) => {
     if (!vault) {
       alert('Vault not loaded');
@@ -349,15 +354,7 @@ const Battle: React.FC = () => {
     }
 
     try {
-      const newShieldStrength = Math.min(vault.maxShieldStrength, vault.shieldStrength + shieldAmount);
-      const newPP = vault.currentPP - cost;
-      
-      await updateVault({
-        shieldStrength: newShieldStrength,
-        currentPP: newPP
-      });
-      
-      alert(`Shields restored! +${shieldAmount} shields for ${cost} PP.`);
+      await restoreVaultShields(shieldAmount, cost);
     } catch (err) {
       console.error('Error restoring shields:', err);
       alert('Failed to restore shields');

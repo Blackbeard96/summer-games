@@ -127,7 +127,44 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
     });
   }
 
-  // TODO: Add moves for 'up-down' and 'config' candy types
+  if (candyType === 'up-down') {
+    // Same mechanical skeleton as On/Off for parity until a dedicated Up/Down kit ships
+    moves.push({
+      id: 'rr-candy-up-down-pressure-down',
+      name: 'Pressure Down',
+      description: `Suppress shields: remove up to ${shieldOffMaxShieldRemovePercent(1)}% of the opponent's maximum shields (scales with mastery, cap ${SHIELD_OFF_MAX_PERCENT}%).`,
+      category: 'system',
+      type: 'control',
+      level: 1,
+      cost: 2,
+      debuffType: 'shield_break',
+      debuffStrength: shieldOffMaxShieldRemovePercent(1),
+      cooldown: 3,
+      currentCooldown: 0,
+      unlocked: true,
+      masteryLevel: 1,
+      targetType: 'single',
+      priority: 0,
+    });
+    moves.push({
+      id: 'rr-candy-up-down-lift-up',
+      name: 'Lift Up',
+      description: 'Restore up to 50% of your maximum shields.',
+      category: 'system',
+      type: 'defense',
+      level: 1,
+      cost: 3,
+      shieldBoost: 50,
+      cooldown: 4,
+      currentCooldown: 0,
+      unlocked: true,
+      masteryLevel: 1,
+      targetType: 'self',
+      priority: 0,
+    });
+  }
+
+  // Config (Konfig) skills are loaded from the learned Konfig tree + rrCandyService
 
   return moves;
 }

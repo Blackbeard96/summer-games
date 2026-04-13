@@ -9,7 +9,14 @@ import {
 } from '../utils/damageCalculator';
 import { loadMoveOverrides, getMoveDamage, getMoveName, getMoveDescription, getMoveNameSync, getMoveDescriptionSync } from '../utils/moveOverrides';
 import { useAuth } from '../context/AuthContext';
-import { getArtifactDamageMultiplier, getEffectiveMasteryLevel, getManifestDamageBoost } from '../utils/artifactUtils';
+import {
+  getArtifactDamageMultiplier,
+  getEffectiveMasteryLevel,
+  getManifestDamageBoost,
+  findElementalAffinityRingForMove,
+  getElementalAffinityRingDamageMultiplierForMove,
+  getElementalAffinityRingMasteryBonusFromArtifactLevel,
+} from '../utils/artifactUtils';
 import { formatBattleMoveTargetLabel } from '../utils/battleMoveTargetUi';
 import { doc, getDoc, getDocFromCache, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -40,6 +47,21 @@ import {
   getPlayerUniversalLawEffects,
   type UniversalLawBoonEffects,
 } from '../utils/universalLawBoons';
+
+function affinityRingShortLabel(ring: { id?: string; name?: string }): string {
+  const raw = (ring.name || '').trim();
+  if (raw) {
+    const cut = raw.split(':')[0].trim();
+    return cut || raw;
+  }
+  const id = (ring.id || '').toLowerCase();
+  if (id.includes('blaze')) return 'Blaze Ring';
+  if (id.includes('terra')) return 'Terra Ring';
+  if (id.includes('aqua')) return 'Aqua Ring';
+  if (id.includes('thunder')) return 'Thunder Ring';
+  if (id.includes('air')) return 'Air Ring';
+  return 'Affinity ring';
+}
 
 interface MovesDisplayProps {
   moves: Move[];
@@ -868,61 +890,20 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           }}>
             {(move.id === 'rr-candy-on-off-shields-off' ? 'Shield OFF' : move.id === 'rr-candy-on-off-shields-on' ? 'Shield ON' : move.id?.startsWith('rr-candy-') ? move.name : getMoveDataWithOverrides(move.name).name)} [Level {effectiveMasteryLevel}]
             {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
-              const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
-              const moveElement = move.elementalAffinity?.toLowerCase();
-              for (const slot of ringSlots) {
-                const ring = equippedArtifacts[slot];
-                if (!ring) continue;
-                if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
-                  return (
-                    <span style={{
-                      fontSize: '0.875rem',
-                      color: '#f59e0b',
-                      marginLeft: '0.5rem',
-                      fontWeight: 'normal'
-                    }}>
-                      (Base: {move.masteryLevel} + Blaze Ring)
-                    </span>
-                  );
-                }
-                if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
-                  return (
-                    <span style={{
-                      fontSize: '0.875rem',
-                      color: '#8b5cf6',
-                      marginLeft: '0.5rem',
-                      fontWeight: 'normal'
-                    }}>
-                      (Base: {move.masteryLevel} + Terra Ring)
-                    </span>
-                  );
-                }
-                if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
-                  return (
-                    <span style={{
-                      fontSize: '0.875rem',
-                      color: '#8b5cf6',
-                      marginLeft: '0.5rem',
-                      fontWeight: 'normal'
-                    }}>
-                      (Base: {move.masteryLevel} + Aqua Ring)
-                    </span>
-                  );
-                }
-                if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
-                  return (
-                    <span style={{
-                      fontSize: '0.875rem',
-                      color: '#8b5cf6',
-                      marginLeft: '0.5rem',
-                      fontWeight: 'normal'
-                    }}>
-                      (Base: {move.masteryLevel} + Air Ring)
-                    </span>
-                  );
-                }
-              }
-              return null;
+              const hit = findElementalAffinityRingForMove(move, equippedArtifacts);
+              if (!hit) return null;
+              const bonus = getElementalAffinityRingMasteryBonusFromArtifactLevel(hit.artifactLevel);
+              const label = affinityRingShortLabel(hit.ring);
+              return (
+                <span style={{
+                  fontSize: '0.875rem',
+                  color: '#f59e0b',
+                  marginLeft: '0.5rem',
+                  fontWeight: 'normal'
+                }}>
+                  (Base: {move.masteryLevel} + {label}: +{bonus})
+                </span>
+              );
             })()}
           </h3>
           {move.artifactGrant && move.category === 'system' && (
@@ -1109,6 +1090,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               let artifactMultiplier = 1.0;
               let ringLevel = 1;
               let manifestBoost = 1.0;
+              let affinityRingDamageMult = 1.0;
               
               if (move.category === 'elemental' && equippedArtifacts) {
                 // Check all ring slots for Elemental Ring
@@ -1128,6 +1110,14 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                     };
                     break; // Only apply once
                   }
+                }
+                affinityRingDamageMult = getElementalAffinityRingDamageMultiplierForMove(move, equippedArtifacts);
+                if (affinityRingDamageMult > 1.001) {
+                  damageRange = {
+                    min: Math.floor(damageRange.min * affinityRingDamageMult),
+                    max: Math.floor(damageRange.max * affinityRingDamageMult),
+                    average: Math.floor(damageRange.average * affinityRingDamageMult),
+                  };
                 }
               }
               
@@ -1186,6 +1176,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               const baseRangeString = formatDamageRange(baseDamageRange);
               const hasArtifactBoost =
                 artifactMultiplier > 1.0 ||
+                affinityRingDamageMult > 1.001 ||
                 manifestBoost > 1.0 ||
                 manifestPerkMult > 1.001 ||
                 elementalPerkMult > 1.001 ||
@@ -1219,6 +1210,11 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                       💍 Elemental Ring (Level {ringLevel}) +{Math.round((artifactMultiplier - 1) * 100)}%
                     </div>
                   )}
+                  {affinityRingDamageMult > 1.001 && move.category === 'elemental' && (
+                    <div style={{ fontSize: '0.7rem', color: '#0ea5e9', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      💎 Affinity ring +{Math.round((affinityRingDamageMult - 1) * 100)}%
+                    </div>
+                  )}
                   {manifestBoost > 1.0 && move.category === 'manifest' && (
                     <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
                       🪖 Captain's Helmet +{Math.round((manifestBoost - 1) * 100)}%
@@ -1245,41 +1241,15 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                     </div>
                   )}
                   {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
-                    const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
-                    const moveElement = move.elementalAffinity?.toLowerCase();
-                    for (const slot of ringSlots) {
-                      const ring = equippedArtifacts[slot];
-                      if (!ring) continue;
-                      if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
-                        return (
-                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
-                            🔥 Blaze Ring: +1 Level (Effective Level {effectiveMasteryLevel})
-                          </div>
-                        );
-                      }
-                      if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
-                        return (
-                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
-                            🌍 Terra Ring: +1 Level (Effective Level {effectiveMasteryLevel})
-                          </div>
-                        );
-                      }
-                      if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
-                        return (
-                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
-                            💧 Aqua Ring: +1 Level (Effective Level {effectiveMasteryLevel})
-                          </div>
-                        );
-                      }
-                      if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
-                        return (
-                          <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
-                            💨 Air Ring: +1 Level (Effective Level {effectiveMasteryLevel})
-                          </div>
-                        );
-                      }
-                    }
-                    return null;
+                    const hit = findElementalAffinityRingForMove(move, equippedArtifacts);
+                    if (!hit) return null;
+                    const bonus = getElementalAffinityRingMasteryBonusFromArtifactLevel(hit.artifactLevel);
+                    const label = affinityRingShortLabel(hit.ring);
+                    return (
+                      <div style={{ fontSize: '0.7rem', color: '#8b5cf6', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                        📈 {label}: +{bonus} mastery level{bonus === 1 ? '' : 's'} (effective {effectiveMasteryLevel})
+                      </div>
+                    );
                   })()}
                   {moveOverrides[move.name] && (
                     <div style={{ fontSize: '0.6rem', color: '#10B981', marginTop: '0.25rem' }}>
@@ -1588,61 +1558,20 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             <span style={{ fontSize: '0.875rem', color: getMasteryColor(effectiveMasteryLevel), fontWeight: 'bold' }}>
               {getMasteryLabel(effectiveMasteryLevel)} ({effectiveMasteryLevel}/{effectiveMasteryLevel <= 5 ? 5 : 10})
               {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
-                const ringSlots = ['ring1', 'ring2', 'ring3', 'ring4'];
-                const moveElement = move.elementalAffinity?.toLowerCase();
-                for (const slot of ringSlots) {
-                  const ring = equippedArtifacts[slot];
-                  if (!ring) continue;
-                  if ((ring.id === 'blaze-ring' || (ring.name && ring.name.includes('Blaze Ring'))) && moveElement === 'fire') {
-                    return (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: '#8b5cf6',
-                        marginLeft: '0.5rem',
-                        fontWeight: 'normal'
-                      }}>
-                        (+1 Blaze Ring)
-                      </span>
-                    );
-                  }
-                  if ((ring.id === 'terra-ring' || (ring.name && ring.name.includes('Terra Ring'))) && moveElement === 'earth') {
-                    return (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: '#8b5cf6',
-                        marginLeft: '0.5rem',
-                        fontWeight: 'normal'
-                      }}>
-                        (+1 Terra Ring)
-                      </span>
-                    );
-                  }
-                  if ((ring.id === 'aqua-ring' || (ring.name && ring.name.includes('Aqua Ring'))) && moveElement === 'water') {
-                    return (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: '#8b5cf6',
-                        marginLeft: '0.5rem',
-                        fontWeight: 'normal'
-                      }}>
-                        (+1 Aqua Ring)
-                      </span>
-                    );
-                  }
-                  if ((ring.id === 'air-ring' || (ring.name && ring.name.includes('Air Ring'))) && moveElement === 'air') {
-                    return (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: '#8b5cf6',
-                        marginLeft: '0.5rem',
-                        fontWeight: 'normal'
-                      }}>
-                        (+1 Air Ring)
-                      </span>
-                    );
-                  }
-                }
-                return null;
+                const hit = findElementalAffinityRingForMove(move, equippedArtifacts);
+                if (!hit) return null;
+                const bonus = getElementalAffinityRingMasteryBonusFromArtifactLevel(hit.artifactLevel);
+                const label = affinityRingShortLabel(hit.ring);
+                return (
+                  <span style={{
+                    fontSize: '0.7rem',
+                    color: '#8b5cf6',
+                    marginLeft: '0.5rem',
+                    fontWeight: 'normal'
+                  }}>
+                    (+{bonus} {label})
+                  </span>
+                );
               })()}
             </span>
           </div>

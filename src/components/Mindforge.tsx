@@ -5,6 +5,7 @@ import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs, q
 import { db } from '../firebase';
 import BattleEngine from './BattleEngine';
 import { trackMoveUsage } from '../utils/manifestTracking';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface MindforgeProps {
   onBack: () => void;
@@ -795,6 +796,11 @@ const Mindforge: React.FC<MindforgeProps> = ({ onBack }) => {
             totalMatches: (userData.mindforgeStats?.totalMatches || 0) + 1
           }
         });
+
+        const mfXp = Math.max(0, Math.floor(Number(rewards.xp) || 0));
+        if (mfXp > 0) {
+          await awardBattlePassXpForDeployedSeason(currentUser.uid, mfXp);
+        }
         
         // Record battle
         await addDoc(collection(db, 'mindforgeBattles'), {

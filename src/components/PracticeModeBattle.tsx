@@ -9,6 +9,7 @@ import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { getLevelFromXP } from '../utils/leveling';
 import PracticeWaitingRoomModal from './PracticeWaitingRoomModal';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface CPUOpponent {
   id: string;
@@ -665,6 +666,11 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
                 }
                 
                 await updateDoc(userRef, updateData);
+
+                const practiceXp = Math.max(0, Math.floor(Number(selectedOpponent.rewards.xp) || 0));
+                if (practiceXp > 0) {
+                  await awardBattlePassXpForDeployedSeason(currentUser.uid, practiceXp);
+                }
                 
                 // Verify the update was successful
                 const verifyDoc = await getDoc(userRef);
