@@ -13,6 +13,7 @@ import RivalSelectionModal from './RivalSelectionModal';
 import CPUChallenger from './CPUChallenger';
 import PortalTutorial from './PortalTutorial';
 import LetterModal from './LetterModal';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 
 interface GoogleClassroomAssignment {
   id: string;
@@ -1052,6 +1053,7 @@ const ensureChaptersInitialized = async () => {
           xp: (studentData.xp || 0) + 20,
           powerPoints: (studentData.powerPoints || 0) + 10
         });
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, 20);
       }
 
       // Add notification

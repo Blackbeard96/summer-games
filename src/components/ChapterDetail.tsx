@@ -29,6 +29,7 @@ import StoryMissionsSection from './StoryMissionsSection';
 import { detectManifest, logManifestDetection } from '../utils/manifestDetection';
 import { updateProgressOnChallengeComplete } from '../utils/chapterProgression';
 import { grantChallengeRewards } from '../utils/challengeRewards';
+import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 import { mergeUserAndStudentForJourney } from '../utils/mergeChapterProgress';
 import { isChapter2ChallengeEffectivelyComplete } from '../utils/chapter2ProgressInference';
 import { isUidInSquad } from '../utils/squadMemberUtils';
@@ -1360,6 +1361,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             });
           }
 
+          if (xpGained > 0) {
+            await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpGained));
+          }
+
           // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
           if (challengeId === 'ep1-combat-drill') {
             try {
@@ -1447,6 +1452,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           xp: (studentDataRewards.xp || 0) + xpReward,
           powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
         });
+      }
+
+      if (xpReward > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
       }
 
       // Create notification for challenge completion
@@ -1547,6 +1556,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           xp: (studentDataRewards.xp || 0) + xpReward,
           powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
         });
+      }
+
+      if (xpReward > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
       }
 
       // Close the tutorial modal
@@ -1672,6 +1685,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           xp: (studentDataRewards.xp || 0) + xpReward,
           powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
         });
+      }
+
+      if (xpReward > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
       }
 
       // Close the modal
@@ -1961,6 +1978,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           xp: (studentDataRewards.xp || 0) + xpReward,
           powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
         });
+      }
+
+      if (xpReward > 0) {
+        await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
       }
 
       // Close the letter modal
@@ -2849,6 +2870,10 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             powerPoints: (studentData.powerPoints || 0) + ppReward,
             artifacts: updatedArtifacts
           });
+
+          if (xpReward > 0) {
+            await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
+          }
 
           // If Elemental Ring is granted, unlock elemental moves
           if (updatedArtifacts.elemental_ring_level_1) {

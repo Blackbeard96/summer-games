@@ -714,6 +714,7 @@ service cloud.firestore {
         allow read: if canReadInSessionRoomSession(sessionId);
         allow create, update: if request.auth != null && (
           isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
           (request.auth.uid == playerId && canReadInSessionRoomSession(sessionId))
         );
         allow delete: if isLiveEventStaff();

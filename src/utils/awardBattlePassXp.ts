@@ -5,7 +5,9 @@ import { mergeSeason1FromStudentData } from './season1PlayerHydration';
 
 /**
  * Adds XP toward the deployed Season 1+ battle pass (`students.season1.battlePass`).
- * Profile `xp` is separate; the home card reads battlePassXP when a season is active.
+ * Call this whenever **profile XP** is granted (`students`/`users` `xp` field) so the Battle Pass
+ * bar stays in sync — including any custom `updateDoc` paths that increment XP outside shared helpers.
+ * Profile `xp` and `season1.battlePass.battlePassXP` are stored separately; the Home deployed pass reads the latter.
  */
 export async function awardBattlePassXpForDeployedSeason(playerId: string, xpDelta: number): Promise<void> {
   if (!playerId || xpDelta <= 0) return;

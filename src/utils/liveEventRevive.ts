@@ -152,3 +152,89 @@ export async function clearLiveEventEliminationStats(sessionId: string, targetUi
     debugError('liveEventRevive', 'clearEliminationStats', e);
   }
 }
+
+export type HostLiveEventReviveScope = 'all' | 'selected';
+
+/**
+ * Session host / staff tool: clear elimination on room rows (and stats) without spending moves.
+ * Caller should only invoke from host UI; Firestore rules must allow the editor to update targets' stats docs.
+ */
+export async function hostReviveEliminatedPlayersInLiveEvent(
+  sessionId: string,
+  params: {
+    scope: HostLiveEventReviveScope;
+    /** Required when scope is `selected` — only these eliminated players are revived */
+    selectedUserIds?: string[];
+    hpPercent?: number;
+    hostDisplayName: string;
+  }
+): Promise<{ ok: boolean; error?: string; revived?: { userId: string; displayName: string }[] }> {
+  const hpPct = params.hpPercent != null ? Math.max(1, Math.min(100, Math.floor(params.hpPercent))) : 50;
+  const hostDisplayName = params.hostDisplayName.trim() || 'Host';
+
+  if (params.scope === 'selected') {
+    const ids = params.selectedUserIds || [];
+    if (ids.length === 0) {
+      return { ok: false, error: 'Select at least one eliminated player to revive.' };
+    }
+  }
+
+  try {
+    const revivedList = await runTransaction(db, async (transaction) => {
+      const sessionRef = doc(db, 'inSessionRooms', sessionId);
+      const sessionDoc = await transaction.get(sessionRef);
+      if (!sessionDoc.exists()) {
+        throw new Error('Session not found');
+      }
+      const data = sessionDoc.data();
+      const status = data.status;
+      if (status !== 'live' && status !== 'active') {
+        throw new Error('Session is not active');
+      }
+
+      const players = [...(data.players || [])] as SessionPlayerLike[];
+      const selectedSet =
+        params.scope === 'selected' && params.selectedUserIds?.length
+          ? new Set(params.selectedUserIds)
+          : null;
+
+      const revivedInTx: { userId: string; displayName: string }[] = [];
+
+      for (let i = 0; i < players.length; i++) {
+        const row = { ...(players[i] as Record<string, unknown>) } as SessionPlayerLike;
+        if (!row.eliminated) continue;
+        if (selectedSet && !selectedSet.has(row.userId)) continue;
+
+        reviveEliminatedSessionPlayerRow(row, hpPct);
+        players[i] = row as (typeof players)[number];
+        revivedInTx.push({ userId: row.userId, displayName: row.displayName || 'Player' });
+      }
+
+      if (revivedInTx.length === 0) {
+        return [];
+      }
+
+      const battleLog = [...(data.battleLog || [])];
+      const names = revivedInTx.map((r) => r.displayName).join(', ');
+      battleLog.push(
+        `💚 Host (${hostDisplayName}) revived ${revivedInTx.length} player${revivedInTx.length === 1 ? '' : 's'}: ${names}`
+      );
+
+      transaction.update(sessionRef, {
+        players,
+        battleLog,
+        updatedAt: serverTimestamp(),
+      });
+
+      return revivedInTx;
+    });
+
+    await Promise.all(revivedList.map((r) => clearLiveEventEliminationStats(sessionId, r.userId)));
+    debug('liveEventRevive', `Host revived ${revivedList.length} in ${sessionId}`);
+    return { ok: true, revived: revivedList };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    debugError('liveEventRevive', 'hostReviveEliminatedPlayersInLiveEvent', e);
+    return { ok: false, error: msg };
+  }
+}

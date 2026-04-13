@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, onSnapshot, doc, getDoc, Timestamp } from 'firebase/firestore';
@@ -28,6 +28,27 @@ interface LiveEvent {
   endedAt?: Timestamp | Date | null;
 }
 
+function liveEventMatchesSearch(event: LiveEvent, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  if (event.className.toLowerCase().includes(needle)) return true;
+  return event.players.some((p) => {
+    const name = (p.displayName || '').toLowerCase();
+    const uid = (p.userId || '').toLowerCase();
+    return name.includes(needle) || uid.includes(needle);
+  });
+}
+
+function matchingPlayersInEvent(event: LiveEvent, q: string): LiveEvent['players'] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return [];
+  return event.players.filter((p) => {
+    const name = (p.displayName || '').toLowerCase();
+    const uid = (p.userId || '').toLowerCase();
+    return name.includes(needle) || uid.includes(needle);
+  });
+}
+
 const LiveEvents: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
@@ -35,6 +56,8 @@ const LiveEvents: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [userClassrooms, setUserClassrooms] = useState<string[]>([]);
   const [joiningEventId, setJoiningEventId] = useState<string | null>(null);
+  /** Filter events by class name or any joined player's name / id */
+  const [playerSearch, setPlayerSearch] = useState('');
 
   // Get user's classrooms
   useEffect(() => {
@@ -309,6 +332,19 @@ const LiveEvents: React.FC = () => {
     return `Mode: ${m}${en}${g}`;
   };
 
+  const filteredLiveEvents = useMemo(() => {
+    const trimmed = playerSearch.trim();
+    if (!trimmed) return liveEvents;
+    const matched = liveEvents.filter((e) => liveEventMatchesSearch(e, trimmed));
+    const activeInRoom = currentUser
+      ? liveEvents.find((e) => e.players.some((p) => p.userId === currentUser.uid))
+      : undefined;
+    if (activeInRoom && !matched.some((e) => e.id === activeInRoom.id)) {
+      return [activeInRoom, ...matched];
+    }
+    return matched;
+  }, [liveEvents, playerSearch, currentUser]);
+
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
@@ -338,9 +374,12 @@ const LiveEvents: React.FC = () => {
     );
   }
 
-  // Separate events: user's active event first, then others
-  const userActiveEvent = liveEvents.find(e => isUserInEvent(e));
-  const otherEvents = liveEvents.filter(e => !isUserInEvent(e));
+  // Separate events: user's active event first, then others (respects search filter)
+  const userActiveEvent = filteredLiveEvents.find((e) => isUserInEvent(e));
+  const otherEvents = filteredLiveEvents.filter((e) => !isUserInEvent(e));
+  const searchTrimmed = playerSearch.trim();
+  const activePlayerMatches =
+    userActiveEvent && searchTrimmed ? matchingPlayersInEvent(userActiveEvent, searchTrimmed) : [];
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
@@ -357,6 +396,68 @@ const LiveEvents: React.FC = () => {
         <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
           Join active classroom battles and compete with your classmates!
         </p>
+      </div>
+
+      {/* Search: filter by player name, user id, or class name */}
+      <div
+        style={{
+          marginBottom: '1.5rem',
+          background: 'white',
+          border: '1px solid #e5e7eb',
+          borderRadius: '0.75rem',
+          padding: '1rem 1.25rem',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+        }}
+      >
+        <label
+          htmlFor="live-events-player-search"
+          style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '0.35rem' }}
+        >
+          Find event or player
+        </label>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            id="live-events-player-search"
+            type="search"
+            value={playerSearch}
+            onChange={(e) => setPlayerSearch(e.target.value)}
+            placeholder="Type a player name, ID, or class…"
+            autoComplete="off"
+            style={{
+              flex: '1 1 220px',
+              minWidth: 0,
+              padding: '0.6rem 0.85rem',
+              fontSize: '1rem',
+              border: '1px solid #cbd5e1',
+              borderRadius: '0.5rem',
+              outline: 'none',
+            }}
+          />
+          {searchTrimmed ? (
+            <button
+              type="button"
+              onClick={() => setPlayerSearch('')}
+              style={{
+                padding: '0.55rem 1rem',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: '#64748b',
+                background: '#f1f5f9',
+                border: '1px solid #e2e8f0',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+              }}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+        {searchTrimmed ? (
+          <p style={{ margin: '0.55rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+            Showing {filteredLiveEvents.length} of {liveEvents.length} event
+            {liveEvents.length !== 1 ? 's' : ''} matching &quot;{searchTrimmed}&quot;
+          </p>
+        ) : null}
       </div>
 
       {/* User's Active Event (if any) */}
@@ -391,6 +492,22 @@ const LiveEvents: React.FC = () => {
               <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
                 {userActiveEvent.players.length} player{userActiveEvent.players.length !== 1 ? 's' : ''} joined
               </div>
+              {searchTrimmed ? (
+                <div style={{ marginTop: '0.55rem', fontSize: '0.78rem', color: '#334155' }}>
+                  {activePlayerMatches.length > 0 ? (
+                    <>
+                      <strong style={{ color: '#0f172a' }}>Matches:</strong>{' '}
+                      {activePlayerMatches
+                        .slice(0, 8)
+                        .map((p) => p.displayName || p.userId)
+                        .join(', ')}
+                      {activePlayerMatches.length > 8 ? ` +${activePlayerMatches.length - 8} more` : ''}
+                    </>
+                  ) : (
+                    <span style={{ color: '#64748b' }}>Matched by class name — open event to see roster.</span>
+                  )}
+                </div>
+              ) : null}
               <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(userActiveEvent)}</div>
             </div>
             <button
@@ -417,6 +534,37 @@ const LiveEvents: React.FC = () => {
 
       {/* All Active Events */}
       {liveEvents.length > 0 ? (
+        filteredLiveEvents.length === 0 ? (
+          <div
+            style={{
+              background: 'white',
+              border: '2px solid #e5e7eb',
+              borderRadius: '1rem',
+              padding: '2rem',
+              textAlign: 'center',
+            }}
+          >
+            <h2 style={{ marginBottom: '0.75rem', color: '#1f2937' }}>No matching events</h2>
+            <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
+              No class or joined player matches &quot;{searchTrimmed}&quot;. Try another name or clear the search.
+            </p>
+            <button
+              type="button"
+              onClick={() => setPlayerSearch('')}
+              style={{
+                padding: '0.6rem 1.25rem',
+                fontWeight: 600,
+                color: 'white',
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+              }}
+            >
+              Clear search
+            </button>
+          </div>
+        ) : (
         <div>
           <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#1f2937' }}>
             {userActiveEvent ? 'Other Active Events' : 'Active Events'}
@@ -424,6 +572,7 @@ const LiveEvents: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem' }}>
             {otherEvents.map((event) => {
               const isJoined = isUserInEvent(event);
+              const rowMatches = searchTrimmed ? matchingPlayersInEvent(event, searchTrimmed) : [];
               return (
                 <div
                   key={event.id}
@@ -454,6 +603,22 @@ const LiveEvents: React.FC = () => {
                     <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
                       {event.players.length} player{event.players.length !== 1 ? 's' : ''} joined
                     </div>
+                    {searchTrimmed ? (
+                      <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: '#334155' }}>
+                        {rowMatches.length > 0 ? (
+                          <>
+                            <strong style={{ color: '#0f172a' }}>Matches:</strong>{' '}
+                            {rowMatches
+                              .slice(0, 8)
+                              .map((p) => p.displayName || p.userId)
+                              .join(', ')}
+                            {rowMatches.length > 8 ? ` +${rowMatches.length - 8} more` : ''}
+                          </>
+                        ) : (
+                          <span style={{ color: '#64748b' }}>Matched by class name.</span>
+                        )}
+                      </div>
+                    ) : null}
                     <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(event)}</div>
                   </div>
                   <button
@@ -485,6 +650,7 @@ const LiveEvents: React.FC = () => {
             })}
           </div>
         </div>
+        )
       ) : (
         <div style={{
           background: 'white',

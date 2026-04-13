@@ -102,6 +102,7 @@ import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
 import LiveEventEconomyHud from './liveEvent/LiveEventEconomyHud';
 import './liveEvent/flowState.css';
 import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
+import { hostReviveEliminatedPlayersInLiveEvent } from '../utils/liveEventRevive';
 import { parseClassFlowSprint } from '../utils/liveEventSprintService';
 import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
@@ -228,8 +229,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [roomSessionStatus, setRoomSessionStatus] = useState<string | undefined>(undefined);
   const [showMstMktModal, setShowMstMktModal] = useState(false);
   const [mstMktToggleLoading, setMstMktToggleLoading] = useState(false);
+  const [hostReviveModalOpen, setHostReviveModalOpen] = useState(false);
+  const [hostReviveHpPercent, setHostReviveHpPercent] = useState(50);
+  const [hostReviveSelectedUserIds, setHostReviveSelectedUserIds] = useState<string[]>([]);
+  const [hostReviveSubmitting, setHostReviveSubmitting] = useState(false);
   /** Sum of Truth Metal on `users` + `students` (same currency as Battle / Artifacts). */
   const [truthMetalShardsTotal, setTruthMetalShardsTotal] = useState(0);
+  /** When true, player side columns only list classmates who appear in the session `players` array. */
+  const [showOnlyJoinedPlayersInRoster, setShowOnlyJoinedPlayersInRoster] = useState(false);
   const [liveEventFloatToasts, setLiveEventFloatToasts] = useState<Array<{ id: string; text: string }>>([]);
   const prevMeResourcesRef = useRef<{
     seeded: boolean;
@@ -923,6 +930,44 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       debugError('inSessionBattle', 'appendBattleLog error', e);
     }
   }, [sessionId]);
+
+  const runHostRevive = useCallback(
+    async (scope: 'all' | 'selected') => {
+      if (!currentUser) return;
+      if (scope === 'selected' && hostReviveSelectedUserIds.length === 0) {
+        alert('Select at least one eliminated player.');
+        return;
+      }
+      setHostReviveSubmitting(true);
+      try {
+        const hostDisplayName =
+          currentUser.displayName || currentUser.email?.split('@')[0] || 'Host';
+        const res = await hostReviveEliminatedPlayersInLiveEvent(sessionId, {
+          scope,
+          selectedUserIds: scope === 'selected' ? hostReviveSelectedUserIds : undefined,
+          hpPercent: hostReviveHpPercent,
+          hostDisplayName,
+        });
+        if (!res.ok) {
+          alert(res.error || 'Could not revive players.');
+          return;
+        }
+        if (!res.revived || res.revived.length === 0) {
+          alert('No matching eliminated players to revive.');
+          return;
+        }
+        setHostReviveModalOpen(false);
+      } finally {
+        setHostReviveSubmitting(false);
+      }
+    },
+    [
+      currentUser,
+      sessionId,
+      hostReviveSelectedUserIds,
+      hostReviveHpPercent,
+    ]
+  );
 
   /** Grants placement rewards, battle log, and room snapshot when a live quiz completes (manual Next or auto-advance). */
   const runHostQuizCompletedFollowUp = useCallback(async () => {
@@ -2150,6 +2195,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     };
   });
 
+  const rosterForPlayerColumns = showOnlyJoinedPlayersInRoster
+    ? allClassStudents.filter((s) => s.isInSession)
+    : allClassStudents;
+  const notInSessionCount = allClassStudents.filter((s) => !s.isInSession).length;
+  const midPoint = Math.ceil(rosterForPlayerColumns.length / 2);
+  const leftStudents = rosterForPlayerColumns.slice(0, midPoint);
+  const rightStudents = rosterForPlayerColumns.slice(midPoint);
+
   const playerInspectRoster = useMemo(() => {
     if (!selectedInspectPlayerId) return null;
     const selectedStudent = allClassStudents.find((s) => s.id === selectedInspectPlayerId);
@@ -2170,11 +2223,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     setSelectedInspectPlayerId(playerId);
     setShowPlayerInspectModal(true);
   };
-
-  // Split all students evenly between left and right
-  const midPoint = Math.ceil(allClassStudents.length / 2);
-  const leftStudents = allClassStudents.slice(0, midPoint);
-  const rightStudents = allClassStudents.slice(midPoint);
 
   const renderSummonCard = (summon: {
     id: string;
@@ -3205,6 +3253,39 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 {mstMktToggleLoading ? '…' : mstMktOpen ? '🛒 Close MST MKT' : '🛒 Open MST MKT'}
               </button>
             )}
+          {permissionsChecked &&
+            (isSessionHost || isAdminUser) &&
+            !showSessionSummary &&
+            (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
+              <button
+                type="button"
+                disabled={!sessionPlayers.some((p) => p.eliminated === true)}
+                onClick={() => {
+                  const eliminated = sessionPlayers.filter((p) => p.eliminated === true);
+                  setHostReviveHpPercent(50);
+                  setHostReviveSelectedUserIds(eliminated.map((p) => p.userId));
+                  setHostReviveModalOpen(true);
+                }}
+                title={
+                  sessionPlayers.some((p) => p.eliminated === true)
+                    ? 'Restore eliminated players to the battle (host)'
+                    : 'No eliminated players right now'
+                }
+                style={{
+                  background: 'rgba(16, 185, 129, 0.92)',
+                  color: 'white',
+                  border: '2px solid white',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem 1.25rem',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  cursor: sessionPlayers.some((p) => p.eliminated === true) ? 'pointer' : 'not-allowed',
+                  opacity: sessionPlayers.some((p) => p.eliminated === true) ? 1 : 0.55,
+                }}
+              >
+                💚 Revive players
+              </button>
+            )}
           {isSessionHost && !quizSession && (
             <button
               onClick={() => {
@@ -4014,6 +4095,41 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         </div>
       )}
 
+      <>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+            marginBottom: '0.75rem',
+          }}
+        >
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              color: '#334155',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showOnlyJoinedPlayersInRoster}
+              onChange={(e) => setShowOnlyJoinedPlayersInRoster(e.target.checked)}
+            />
+            Hide classmates not in this event
+          </label>
+          {showOnlyJoinedPlayersInRoster && notInSessionCount > 0 ? (
+            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
+              Showing {rosterForPlayerColumns.length} joined · {notInSessionCount} hidden
+            </span>
+          ) : null}
+        </div>
       <div style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 200px)', minHeight: '600px' }}>
         {/* Left Side - Players (Scrollable) */}
         <div style={{
@@ -4035,6 +4151,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             gap: '0.75rem',
             paddingRight: '0.5rem'
           }}>
+            {rosterForPlayerColumns.length === 0 ? (
+              <div
+                style={{
+                  padding: '1rem 0.5rem',
+                  color: '#64748b',
+                  fontSize: '0.875rem',
+                  lineHeight: 1.45,
+                  textAlign: 'center',
+                }}
+              >
+                No one has joined this live event yet. Uncheck &quot;Hide classmates not in this event&quot; to see the
+                full class roster.
+              </div>
+            ) : null}
             {leftStudents.map((student) => (
               <React.Fragment key={student.id}>
                 <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'stretch', width: '100%' }}>
@@ -5116,9 +5246,178 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         </div>
       </div>
+      </>
 
 
       {/* Modals */}
+      {hostReviveModalOpen && (isSessionHost || isAdminUser) && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="host-revive-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001,
+            padding: '1rem',
+          }}
+          onClick={() => !hostReviveSubmitting && setHostReviveModalOpen(false)}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '440px',
+              width: '100%',
+              maxHeight: '85vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="host-revive-modal-title" style={{ margin: '0 0 0.75rem', fontSize: '1.25rem', color: '#111827' }}>
+              Revive players
+            </h2>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#64748b', lineHeight: 1.45 }}>
+              Restore eliminated players so they can fight again. HP is set as a percentage of their max HP (same idea
+              as a revive potion). This does not spend anyone&apos;s participation moves.
+            </p>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '0.35rem' }}>
+              HP after revive
+            </label>
+            <select
+              value={hostReviveHpPercent}
+              onChange={(e) => setHostReviveHpPercent(parseInt(e.target.value, 10))}
+              style={{
+                width: '100%',
+                marginBottom: '1rem',
+                padding: '0.5rem 0.65rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #cbd5e1',
+                fontSize: '0.95rem',
+              }}
+            >
+              {[25, 50, 75, 100].map((pct) => (
+                <option key={pct} value={pct}>
+                  {pct}% of max HP
+                </option>
+              ))}
+            </select>
+            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '0.5rem' }}>
+              Eliminated players — choose who to revive
+            </div>
+            <div
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: '0.65rem',
+                padding: '0.5rem',
+                maxHeight: '220px',
+                overflowY: 'auto',
+                marginBottom: '1rem',
+              }}
+            >
+              {sessionPlayers.filter((p) => p.eliminated === true).length === 0 ? (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#94a3b8', textAlign: 'center', padding: '0.75rem' }}>
+                  No eliminated players in this session.
+                </p>
+              ) : (
+                sessionPlayers
+                  .filter((p) => p.eliminated === true)
+                  .map((p) => (
+                    <label
+                      key={p.userId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.45rem 0.35rem',
+                        borderRadius: '0.35rem',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={hostReviveSelectedUserIds.includes(p.userId)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setHostReviveSelectedUserIds((prev) =>
+                              prev.includes(p.userId) ? prev : [...prev, p.userId]
+                            );
+                          } else {
+                            setHostReviveSelectedUserIds((prev) => prev.filter((id) => id !== p.userId));
+                          }
+                        }}
+                      />
+                      <span style={{ fontWeight: 600, color: '#1e293b' }}>{p.displayName || p.userId}</span>
+                    </label>
+                  ))
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <button
+                type="button"
+                disabled={
+                  hostReviveSubmitting ||
+                  hostReviveSelectedUserIds.length === 0 ||
+                  !sessionPlayers.some((pl) => pl.eliminated === true)
+                }
+                onClick={() => void runHostRevive('selected')}
+                style={{
+                  padding: '0.65rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: 'white',
+                  fontWeight: 700,
+                  cursor:
+                    hostReviveSubmitting || hostReviveSelectedUserIds.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: hostReviveSubmitting || hostReviveSelectedUserIds.length === 0 ? 0.65 : 1,
+                }}
+              >
+                {hostReviveSubmitting ? 'Working…' : 'Revive selected'}
+              </button>
+              <button
+                type="button"
+                disabled={hostReviveSubmitting || !sessionPlayers.some((pl) => pl.eliminated === true)}
+                onClick={() => void runHostRevive('all')}
+                style={{
+                  padding: '0.65rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #10b981',
+                  background: 'white',
+                  color: '#047857',
+                  fontWeight: 700,
+                  cursor: hostReviveSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Revive all eliminated
+              </button>
+              <button
+                type="button"
+                disabled={hostReviveSubmitting}
+                onClick={() => setHostReviveModalOpen(false)}
+                style={{
+                  padding: '0.55rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #e2e8f0',
+                  background: '#f8fafc',
+                  color: '#475569',
+                  fontWeight: 600,
+                  cursor: hostReviveSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <BagModal 
         isOpen={showBagModal} 
         onClose={() => setShowBagModal(false)}
