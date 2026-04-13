@@ -60,7 +60,7 @@ import {
 } from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
 import SessionSummaryModal from './SessionSummaryModal';
-import { SessionSummary } from '../types/inSessionStats';
+import { SessionSummary, type SessionStats } from '../types/inSessionStats';
 import LiveEventDebugOverlay from './LiveEventDebugOverlay';
 import {
   subscribeQuizSession,
@@ -107,6 +107,11 @@ import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
+import {
+  getPassiveParticipationUi,
+  formatPassiveParticipationCountdown,
+  tryCreditLiveEventPassiveParticipation,
+} from '../utils/liveEventPassiveParticipation';
 import PlayerBuildInspectModal from './PlayerBuildInspectModal';
 import { finitePowerLevel } from '../utils/playerBuildInspect';
 import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
@@ -163,6 +168,8 @@ interface SessionPlayer {
   flowStateActive?: boolean;
   flowStateActivatedAt?: number | null;
   flowStateNonce?: number;
+  /** Anchor for passive +1 Participation Power per minute (liveEventPassiveParticipation). */
+  participationPassiveStartedAtMs?: number;
 }
 
 const InSessionBattle: React.FC<InSessionBattleProps> = ({
@@ -176,6 +183,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const { currentUser } = useAuth();
   const { vault, refreshVaultData, moves, refreshInventory } = useBattle();
   const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
+  const sessionPlayersRef = useRef<SessionPlayer[]>([]);
+  sessionPlayersRef.current = sessionPlayers;
+  /** Bumps every second so passive participation countdown UI stays live. */
+  const [passiveUiTick, setPassiveUiTick] = useState(0);
+  /** Per-player session stats: Participation PP credited vs spent during this Live Event (stats subcollection). */
+  const [sessionPpStatsByPlayer, setSessionPpStatsByPlayer] = useState<
+    Record<string, { ppEarned: number; ppSpent: number }>
+  >({});
   const [battleLog, setBattleLog] = useState<string[]>(['📚 In Session Battle Started!']);
   const [selectedStudentForPP, setSelectedStudentForPP] = useState<string | null>(null);
   const [ppAdjustment, setPPAdjustment] = useState<number>(0);
@@ -640,7 +655,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           hp,
           maxHp,
           shield,
-          maxShield
+          maxShield,
+          participationPassiveStartedAtMs: Date.now(),
         };
         
         // Join session (idempotent - safe to call multiple times)
@@ -740,6 +756,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           rosterPl !== null
         ) {
           next = { ...next, powerLevel: rosterPl };
+        }
+        const rawPassive = (player as unknown as Record<string, unknown>).participationPassiveStartedAtMs;
+        if (typeof rawPassive === 'number' && Number.isFinite(rawPassive)) {
+          next = { ...next, participationPassiveStartedAtMs: rawPassive };
         }
         return next;
       });
@@ -842,6 +862,53 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     };
     // Intentionally omit userProfiles & students: including them re-subscribes on every profile snapshot and triggers Firestore INTERNAL ASSERTION (ca9).
   }, [sessionId, currentUser, showLiveEventSummaryIfEnded]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setPassiveUiTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  /** +1 movesEarned per minute per player; host credits everyone, students credit self if host tab absent. */
+  useEffect(() => {
+    if (!sessionId) return;
+    if (roomSessionStatus !== 'live' && roomSessionStatus !== 'active') return;
+
+    const run = async () => {
+      try {
+        if (isSessionHost) {
+          const list = sessionPlayersRef.current;
+          for (const p of list) {
+            await tryCreditLiveEventPassiveParticipation(sessionId, p.userId);
+          }
+        } else if (currentUser?.uid) {
+          await tryCreditLiveEventPassiveParticipation(sessionId, currentUser.uid);
+        }
+      } catch (e) {
+        console.warn('[InSessionBattle] passive participation tick', e);
+      }
+    };
+
+    const intervalId = window.setInterval(() => void run(), 12_000);
+    void run();
+    return () => window.clearInterval(intervalId);
+  }, [sessionId, roomSessionStatus, isSessionHost, currentUser?.uid]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const col = collection(db, 'inSessionRooms', sessionId, 'stats');
+    const unsub = onSnapshot(col, (snap) => {
+      const next: Record<string, { ppEarned: number; ppSpent: number }> = {};
+      snap.forEach((d) => {
+        const m = d.data() as SessionStats;
+        next[d.id] = {
+          ppEarned: Math.max(0, Math.floor(Number(m.ppEarned) || 0)),
+          ppSpent: Math.max(0, Math.floor(Number(m.ppSpent) || 0)),
+        };
+      });
+      setSessionPpStatsByPlayer(next);
+    });
+    return () => unsub();
+  }, [sessionId]);
 
   // Append entry to Live Event battle log
   const appendBattleLog = useCallback(async (entry: string) => {
@@ -2155,6 +2222,81 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     </div>
   );
 
+  /** Participation PP earned vs spent this Live Event (from `stats/{uid}` — same source as economy HUD). */
+  const renderLiveEventPpSidebar = useCallback(
+    (userId: string) => {
+      const row = sessionPpStatsByPlayer[userId];
+      const hasDoc = row !== undefined;
+      const earned = row?.ppEarned ?? 0;
+      const spent = row?.ppSpent ?? 0;
+      const net = earned - spent;
+      const tip = hasDoc
+        ? `This Live Event (session accounting)\nEarned: +${earned} PP — quiz, eliminations, participation awards, etc.\nSpent: −${spent} PP — skills and tracked actions\nNet: ${net >= 0 ? '+' : ''}${net} PP for the session so far`
+        : 'Session stats not initialized yet — appears after you join this Live Event.';
+
+      return (
+        <div
+          style={{
+            width: '76px',
+            flexShrink: 0,
+            borderRadius: '0.35rem',
+            border: '1px solid #e9d5ff',
+            background: 'linear-gradient(180deg, #faf5ff 0%, #f3e8ff 100%)',
+            padding: '0.35rem 0.3rem',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'stretch',
+            gap: '0.12rem',
+          }}
+          title={tip}
+        >
+          <div
+            style={{
+              fontSize: '0.55rem',
+              fontWeight: 800,
+              color: '#6b21a8',
+              textAlign: 'center',
+              letterSpacing: '0.04em',
+              lineHeight: 1.2,
+            }}
+          >
+            EVENT PP
+          </div>
+          {!hasDoc ? (
+            <div style={{ fontSize: '0.62rem', color: '#9ca3af', textAlign: 'center', fontWeight: 600 }}>…</div>
+          ) : (
+            <>
+              <div style={{ fontSize: '0.6rem', color: '#166534', textAlign: 'center', fontWeight: 700 }}>
+                +{earned}
+              </div>
+              <div style={{ fontSize: '0.58rem', color: '#64748b', textAlign: 'center', fontWeight: 600 }}>earned</div>
+              <div style={{ fontSize: '0.6rem', color: '#b91c1c', textAlign: 'center', fontWeight: 700 }}>
+                −{spent}
+              </div>
+              <div style={{ fontSize: '0.58rem', color: '#64748b', textAlign: 'center', fontWeight: 600 }}>spent</div>
+              <div
+                style={{
+                  marginTop: '0.08rem',
+                  paddingTop: '0.2rem',
+                  borderTop: '1px solid rgba(107,33,168,0.22)',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  textAlign: 'center',
+                  color: net > 0 ? '#15803d' : net < 0 ? '#c2410c' : '#64748b',
+                }}
+              >
+                {net > 0 ? `+${net}` : net < 0 ? `${net}` : '0'}
+              </div>
+              <div style={{ fontSize: '0.52rem', color: '#64748b', textAlign: 'center', fontWeight: 700 }}>net</div>
+            </>
+          )}
+        </div>
+      );
+    },
+    [sessionPpStatsByPlayer]
+  );
+
   // Helper function to render a player card
   const renderPlayerCard = (student: Student & { isInSession: boolean; sessionData: SessionPlayer | null }, isLeft: boolean) => {
     const player = student.sessionData;
@@ -2644,6 +2786,44 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: '500' }}>
               Moves Available: <span style={{ color: '#10b981', fontWeight: '600' }}>{player?.movesEarned || 0}</span>
             </div>
+            {(() => {
+              void passiveUiTick;
+              const now = Date.now();
+              const passiveUi = getPassiveParticipationUi(player?.participationPassiveStartedAtMs, now);
+              return (
+                <div style={{ marginTop: '0.35rem', paddingTop: '0.35rem', borderTop: '1px solid #e5e7eb' }}>
+                  <div style={{ fontSize: '0.62rem', color: '#4b5563', fontWeight: 700, marginBottom: '0.15rem' }}>
+                    Passive (+1 / min)
+                  </div>
+                  <div style={{ fontSize: '0.6rem', color: '#6b7280', marginBottom: '0.2rem', lineHeight: 1.35 }}>
+                    Stacks with host awards &amp; event rewards. Next free point in{' '}
+                    <strong style={{ color: '#7c3aed' }}>
+                      {passiveUi ? formatPassiveParticipationCountdown(passiveUi) : '—'}
+                    </strong>
+                    .
+                  </div>
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '6px',
+                      background: '#e5e7eb',
+                      borderRadius: '3px',
+                      overflow: 'hidden',
+                    }}
+                    title="Progress toward the next passive Participation Power point"
+                  >
+                    <div
+                      style={{
+                        width: `${passiveUi ? Math.min(100, passiveUi.fillPct) : 0}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #a78bfa 0%, #7c3aed 100%)',
+                        transition: 'width 0.3s linear',
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -3841,7 +4021,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           borderRadius: '0.75rem',
           padding: '1rem',
           border: '1px solid #e5e7eb',
-          width: '280px',
+          width: '348px',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden'
@@ -3857,7 +4037,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }}>
             {leftStudents.map((student) => (
               <React.Fragment key={student.id}>
-                {renderPlayerCard(student, true)}
+                <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'stretch', width: '100%' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>{renderPlayerCard(student, true)}</div>
+                  {renderLiveEventPpSidebar(student.id)}
+                </div>
                 {sessionSummons
                   .filter(summon => summon.summonerId === student.id)
                   .map(summon => renderSummonCard(summon))}
@@ -4905,7 +5088,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           borderRadius: '0.75rem',
           padding: '1rem',
           border: '1px solid #e5e7eb',
-          width: '280px',
+          width: '348px',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden'
@@ -4921,7 +5104,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }}>
             {rightStudents.map((student) => (
               <React.Fragment key={student.id}>
-                {renderPlayerCard(student, false)}
+                <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'stretch', width: '100%' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>{renderPlayerCard(student, false)}</div>
+                  {renderLiveEventPpSidebar(student.id)}
+                </div>
                 {sessionSummons
                   .filter(summon => summon.summonerId === student.id)
                   .map(summon => renderSummonCard(summon))}

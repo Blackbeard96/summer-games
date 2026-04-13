@@ -10,6 +10,10 @@ import { fetchActiveBattlePassSeason } from '../utils/activeBattlePassClient';
 import { computeHomeBattlePassDisplay } from '../utils/homeBattlePassDisplay';
 import { mergeSeason1FromStudentData } from '../utils/season1PlayerHydration';
 import { markBattlePassIntroSeenForSeason } from '../utils/awardBattlePassXp';
+import {
+  isBattlePassIntroDismissedLocally,
+  markBattlePassIntroDismissedLocally,
+} from '../utils/battlePassIntroClient';
 import type { Season } from '../types/season1';
 
 /**
@@ -54,7 +58,9 @@ const BattlePassSeasonPage: React.FC = () => {
       setBpXp(disp.battlePassXP);
       const s1 = mergeSeason1FromStudentData(data?.season1 as Record<string, unknown> | undefined);
       const sid = active.id?.trim();
-      setIntroSeenForSeason(!!(sid && s1.battlePass.introSeenSeasonId === sid));
+      setIntroSeenForSeason(
+        !!(sid && (s1.battlePass.introSeenSeasonId === sid || isBattlePassIntroDismissedLocally(currentUser.uid, sid)))
+      );
     } catch (e) {
       console.error('BattlePassSeasonPage load failed', e);
       setSeason(null);
@@ -86,8 +92,9 @@ const BattlePassSeasonPage: React.FC = () => {
   const closeSeasonIntro = async () => {
     setIntroOpen(false);
     if (currentUser?.uid && season?.id) {
-      await markBattlePassIntroSeenForSeason(currentUser.uid, season.id);
+      markBattlePassIntroDismissedLocally(currentUser.uid, season.id);
       setIntroSeenForSeason(true);
+      await markBattlePassIntroSeenForSeason(currentUser.uid, season.id);
     }
   };
 

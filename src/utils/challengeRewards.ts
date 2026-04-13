@@ -95,9 +95,15 @@ export async function grantChallengeRewards(
       r.type === 'truthMetal'
     );
     
-    const xpReward = supportedRewards.find(r => r.type === 'xp')?.value as number || 0;
-    const ppReward = supportedRewards.find(r => r.type === 'pp')?.value as number || 0;
-    const truthMetalReward = supportedRewards.find(r => r.type === 'truthMetal')?.value as number || 0;
+    const xpReward = supportedRewards
+      .filter((r) => r.type === 'xp')
+      .reduce((s, r) => s + Math.max(0, Math.floor(Number(r.value) || 0)), 0);
+    const ppReward = supportedRewards
+      .filter((r) => r.type === 'pp')
+      .reduce((s, r) => s + Math.max(0, Math.floor(Number(r.value) || 0)), 0);
+    const truthMetalReward = supportedRewards
+      .filter((r) => r.type === 'truthMetal')
+      .reduce((s, r) => s + Math.max(0, Math.floor(Number(r.value) || 0)), 0);
     const artifactRewards = supportedRewards.filter(r => r.type === 'artifact');
     const artifactIds = artifactRewards.map(r => String(r.value));
     const abilityRewards = supportedRewards.filter(r => r.type === 'ability');

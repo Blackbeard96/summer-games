@@ -45,6 +45,8 @@ export interface SessionPlayer {
   flowStateActivatedAt?: number | null;
   /** Bumps when entering Flow State; clients use for one-shot entry animation */
   flowStateNonce?: number;
+  /** Wall-clock ms anchor for passive +1 movesEarned / minute (liveEventPassiveParticipation). */
+  participationPassiveStartedAtMs?: number;
 }
 
 export interface InSessionRoom {

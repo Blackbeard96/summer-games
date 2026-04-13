@@ -6,7 +6,7 @@
  */
 
 import { db } from '../firebase';
-import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { computeLiveEventParticipationSkillCostServer } from './liveEventSkillCost';
 import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDebug';
 import { trackElimination } from './inSessionStatsService';
@@ -328,8 +328,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         }
       }
 
-      // Apply PP steal
-      if (ppStolen > 0) {
+      // Apply PP steal (no-op when actor and target are the same row — would double-apply wallet math)
+      if (ppStolen > 0 && actorUid !== targetUid) {
         // Steal PP from target to actor
         const actualSteal = Math.min(ppStolen, targetCopy.powerPoints || 0);
         targetCopy.powerPoints = Math.max(0, (targetCopy.powerPoints || 0) - actualSteal);
@@ -351,6 +351,24 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         if (DEBUG_IN_SESSION_MOVES) {
           debug('inSessionMove', `☠️ Target ${targetName} eliminated!`);
         }
+      }
+
+      // Same session row for actor + target (self heal / self buff / self-targeted effects): combat mutates
+      // `targetCopy` while participation mutates `actorCopy`. `players.map` returns actorCopy first for that
+      // index, which previously dropped all damage/healing — merge before writing.
+      if (actorIndex === targetIndex) {
+        const merged: Record<string, unknown> = { ...targetCopy };
+        merged.movesEarned = actorCopy.movesEarned;
+        merged.powerPoints = actorCopy.powerPoints;
+        // Self shield boost was applied to actorCopy (pre-damage shield). Re-apply boost to post-damage shield.
+        if (shieldBoost > 0 && targetUid === actorUid) {
+          merged.shield = Math.min(
+            (merged.maxShield as number) || 100,
+            (targetCopy.shield || 0) + shieldBoost
+          );
+        }
+        Object.assign(actorCopy, merged);
+        Object.assign(targetCopy, merged);
       }
 
       // Update players array
@@ -457,6 +475,17 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         battleLog: finalBattleLog,
         updatedAt: serverTimestamp()
       });
+
+      // Keep global vault in sync in the SAME transaction so BattleContext cannot briefly see stale
+      // vaultHealth/shieldStrength and write them back over the combat values (Live Event reset bug).
+      const targetVaultRef = doc(db, 'vaults', targetUid);
+      const targetVaultSnap = await transaction.get(targetVaultRef);
+      if (targetVaultSnap.exists()) {
+        transaction.update(targetVaultRef, {
+          vaultHealth: Math.max(0, Math.floor(Number(targetCopy.hp) || 0)),
+          shieldStrength: Math.max(0, Math.floor(Number(targetCopy.shield) || 0))
+        });
+      }
       
       // Log that transaction update was queued (will commit when transaction completes)
       if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
@@ -529,28 +558,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       const hpChange = result.stateChanges ? `${result.stateChanges.targetHpBefore} → ${result.stateChanges.targetHpAfter}` : 'N/A';
       const shieldChange = result.stateChanges ? `${result.stateChanges.targetShieldBefore} → ${result.stateChanges.targetShieldAfter}` : 'N/A';
       console.log('✅ [applyInSessionMove] ⚡ SUCCESS ⚡', targetName, '| HP:', hpChange, '| Shield:', shieldChange, '| Dmg:', result.damage, '| Subscription should update');
-
-      // Sync target's vault health and shield to their global vault so Live Event impact persists
-      const targetHp = result.stateChanges?.targetHpAfter;
-      const targetShield = result.stateChanges?.targetShieldAfter;
-      if (targetUid && (targetHp !== undefined || targetShield !== undefined)) {
-        Promise.resolve().then(async () => {
-          try {
-            const vaultRef = doc(db, 'vaults', targetUid);
-            const updates: { vaultHealth?: number; shieldStrength?: number } = {};
-            if (targetHp !== undefined) updates.vaultHealth = Math.max(0, targetHp);
-            if (targetShield !== undefined) updates.shieldStrength = Math.max(0, targetShield);
-            if (Object.keys(updates).length > 0) {
-              await updateDoc(vaultRef, updates);
-              if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
-                debug('inSessionMove', `Synced vault for ${targetName}: vaultHealth=${updates.vaultHealth ?? '—'}, shieldStrength=${updates.shieldStrength ?? '—'}`);
-              }
-            }
-          } catch (syncError) {
-            debugError('inSessionMove', 'Failed to sync target vault after move', syncError);
-          }
-        });
-      }
+      // Vault was updated inside the transaction (atomic with session players).
     } else {
       console.error('❌ [applyInSessionMove] ⚠️ FAILED', move.name, '→', targetName, '| Error:', result.message);
     }

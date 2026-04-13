@@ -1734,7 +1734,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           });
           const isMissionBattle = !!roomData.isMissionBattle;
           const missionRewards = roomData.rewards as
-            | { xp: number; pp: number; drops?: Array<{ type: string; refId?: string; qty?: number }> }
+            | {
+                xp: number;
+                pp: number;
+                truthMetal?: number;
+                drops?: Array<{ type: string; refId?: string; qty?: number }>;
+              }
             | undefined;
           setBattleLog(prev => [
             ...prev,
@@ -1752,7 +1757,11 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           let baseRewards: { pp: number; xp: number; truthMetal: number; elementalRing?: { id: string; name: string; image: string }; captainHelmet?: boolean; artifactIds?: string[] } = { pp: 0, xp: 0, truthMetal: 0 };
           
           if (isMissionBattle && missionRewards) {
-            baseRewards = { pp: missionRewards.pp ?? 0, xp: missionRewards.xp ?? 0, truthMetal: 0 };
+            baseRewards = {
+              pp: missionRewards.pp ?? 0,
+              xp: missionRewards.xp ?? 0,
+              truthMetal: Math.max(0, Math.floor(Number(missionRewards.truthMetal)) || 0),
+            };
           } else if (levelConfig?.rewards) {
             const r = levelConfig.rewards;
             baseRewards = { pp: r.pp ?? 0, xp: r.xp ?? 0, truthMetal: r.truthMetal ?? 0, captainHelmet: r.captainHelmet, artifactIds: r.artifactIds && r.artifactIds.length > 0 ? r.artifactIds : undefined };

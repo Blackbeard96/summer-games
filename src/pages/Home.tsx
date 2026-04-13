@@ -22,6 +22,10 @@ import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal
 import { consumeHomeHubMissionsHighlight } from '../utils/earnPowerPointsHomeIntent';
 import { mergeSeason1FromStudentData } from '../utils/season1PlayerHydration';
 import { markBattlePassIntroSeenForSeason } from '../utils/awardBattlePassXp';
+import {
+  isBattlePassIntroDismissedLocally,
+  markBattlePassIntroDismissedLocally,
+} from '../utils/battlePassIntroClient';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -176,7 +180,11 @@ const Home: React.FC = () => {
         const syncBpIntro = (userData: Record<string, unknown> | undefined) => {
           const s1 = mergeSeason1FromStudentData(userData?.season1 as Record<string, unknown> | undefined);
           setBpIntroSeasonId(seasonId);
-          setBpIntroSeen(!!(seasonId && s1.battlePass.introSeenSeasonId === seasonId));
+          const seen =
+            !!seasonId &&
+            (s1.battlePass.introSeenSeasonId === seasonId ||
+              isBattlePassIntroDismissedLocally(currentUser.uid, seasonId));
+          setBpIntroSeen(seen);
         };
 
         if (userDoc.exists()) {
@@ -260,8 +268,9 @@ const Home: React.FC = () => {
 
   const handleBattlePassIntroDismissed = useCallback(async () => {
     if (!currentUser || !bpIntroSeasonId) return;
-    await markBattlePassIntroSeenForSeason(currentUser.uid, bpIntroSeasonId);
+    markBattlePassIntroDismissedLocally(currentUser.uid, bpIntroSeasonId);
     setBpIntroSeen(true);
+    await markBattlePassIntroSeenForSeason(currentUser.uid, bpIntroSeasonId);
   }, [currentUser, bpIntroSeasonId]);
 
   return (

@@ -12,6 +12,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   MissionTemplate,
   type MissionRewardChoicePendingGroup,
+  type MissionSource,
   type PlayerMission,
   filterCpuAwakeningAnimationSteps,
 } from '../types/missions';
@@ -20,11 +21,13 @@ import { REWARD_TYPE_LABELS } from '../components/admin/battlePassAdminRewardUti
 import type { HabitDuration } from '../types/assessmentGoals';
 import { getMissionTemplate } from '../utils/missionsService';
 import {
+  acceptMission,
   claimMissionRewardChoices,
   completeMission,
   getPlayerMissions,
   setPlayerMissionSequencePlayheadIndex,
 } from '../utils/missionsService';
+import { computeMissionFixedRewardTotals } from '../utils/missionBattlePassRewards';
 import { normalizeMissionNavigateTo } from '../utils/missionStepNavigate';
 import IslandRaidBattle from '../components/IslandRaidBattle';
 import {
@@ -431,6 +434,11 @@ const MissionRunner: React.FC = () => {
 
   const l2BlocksNext = currentStep?.type === 'LEVEL2_MANIFEST' && !l2StepReady;
 
+  const missionPayoutTotals = useMemo(
+    () => (mission ? computeMissionFixedRewardTotals(mission) : { xp: 0, pp: 0, truthMetal: 0 }),
+    [mission]
+  );
+
   const handleNext = async () => {
     if (!mission?.sequence || !currentStep || !currentUser || !missionId) return;
 
@@ -637,9 +645,26 @@ const MissionRunner: React.FC = () => {
   };
 
   const handleStartBattle = async () => {
-    if (!currentUser || !currentStep || currentStep.type !== 'BATTLE') return;
+    if (!currentUser || !currentStep || currentStep.type !== 'BATTLE' || !mission || !missionId) return;
 
     try {
+      let effectivePlayerMissionId = playerMissionId;
+      if (!effectivePlayerMissionId) {
+        const missionSource: MissionSource =
+          Array.isArray(mission.deliveryChannels) && mission.deliveryChannels.includes('PLAYER_JOURNEY')
+            ? 'PLAYER_JOURNEY'
+            : 'HUB_NPC';
+        const acc = await acceptMission(currentUser.uid, missionId, missionSource);
+        if (acc.playerMissionId) {
+          effectivePlayerMissionId = acc.playerMissionId;
+          setPlayerMissionId(acc.playerMissionId);
+        }
+        if (!effectivePlayerMissionId) {
+          alert(acc.error || 'Could not start this mission. Try accepting it from the mission hub first.');
+          return;
+        }
+      }
+
       const mergedCpuOpponents = await loadMergedCpuOpponents();
       const opponentById = new Map(mergedCpuOpponents.map((o) => [o.id, o]));
 
@@ -879,16 +904,18 @@ const MissionRunner: React.FC = () => {
       }
 
       const rawRewards = battleConfig.rewards as { xp?: unknown; pp?: unknown; drops?: unknown } | undefined;
-      const missionRewards =
-        rawRewards && typeof rawRewards === 'object'
-          ? {
-              xp: Math.max(0, Math.floor(Number(rawRewards.xp)) || 0),
-              pp: Math.max(0, Math.floor(Number(rawRewards.pp)) || 0),
-              ...(Array.isArray(rawRewards.drops) && rawRewards.drops.length > 0
-                ? { drops: rawRewards.drops }
-                : {}),
-            }
-          : { xp: 0, pp: 0 };
+      const payoutTotals = computeMissionFixedRewardTotals(mission);
+      const missionRewards: { xp: number; pp: number; truthMetal: number; drops?: unknown[] } = {
+        xp: payoutTotals.xp,
+        pp: payoutTotals.pp,
+        truthMetal: payoutTotals.truthMetal,
+        ...(rawRewards &&
+        typeof rawRewards === 'object' &&
+        Array.isArray(rawRewards.drops) &&
+        rawRewards.drops.length > 0
+          ? { drops: rawRewards.drops as unknown[] }
+          : {}),
+      };
 
       const battleRoomData: any = {
         id: gameId,
@@ -903,6 +930,7 @@ const MissionRunner: React.FC = () => {
         isMissionBattle: true,
         missionId,
         stepId: currentStep.id,
+        playerMissionId: effectivePlayerMissionId,
         rewards: missionRewards,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1165,7 +1193,11 @@ const MissionRunner: React.FC = () => {
               <p><strong>Difficulty:</strong> {currentStep.battle.difficulty}</p>
               <p><strong>Enemy Types:</strong> {currentStep.battle.enemySet.join(', ')}</p>
               <p><strong>Waves:</strong> {currentStep.battle.waves || 3}</p>
-              <p><strong>Rewards:</strong> {currentStep.battle.rewards.xp} XP, {currentStep.battle.rewards.pp} PP</p>
+              <p>
+                <strong>Rewards (granted when you finish the mission):</strong>{' '}
+                {missionPayoutTotals.xp} XP, {missionPayoutTotals.pp} PP
+                {missionPayoutTotals.truthMetal > 0 ? `, ${missionPayoutTotals.truthMetal} Truth Metal` : ''}
+              </p>
             </div>
             <button
               onClick={handleStartBattle}

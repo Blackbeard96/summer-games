@@ -30,6 +30,8 @@ export interface InSessionPlayer {
   powerPoints: number;
   participationCount: number; // Participation points earned
   movesEarned: number; // Moves available from participation
+  /** Wall-clock ms anchor for passive +1 movesEarned / minute (see liveEventPassiveParticipation). */
+  participationPassiveStartedAtMs?: number;
   /** Live Event Flow State (mirrors stats consecutive participation on success path) */
   successStreak?: number;
   flowStateActive?: boolean;

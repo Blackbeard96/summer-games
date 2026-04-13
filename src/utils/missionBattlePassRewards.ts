@@ -199,6 +199,35 @@ export function mergeBattleStepRewardsIntoFlat(
   return [...fixedFlat, ...extra];
 }
 
+/** Totals for mission-level + all BATTLE-step legacy rewards (matches `completeMission` grant list). */
+export function computeMissionFixedRewardTotals(mission: MissionTemplate | null | undefined): {
+  xp: number;
+  pp: number;
+  truthMetal: number;
+} {
+  const { fixedFlat } = partitionMissionRewardEntries(mission);
+  const merged = mergeBattleStepRewardsIntoFlat(fixedFlat, mission);
+  let xp = 0;
+  let pp = 0;
+  let truthMetal = 0;
+  for (const r of merged) {
+    switch (r.rewardType) {
+      case 'xp':
+        xp += qty(r);
+        break;
+      case 'pp':
+        pp += qty(r);
+        break;
+      case 'truth_metal':
+        truthMetal += qty(r);
+        break;
+      default:
+        break;
+    }
+  }
+  return { xp, pp, truthMetal };
+}
+
 export function missionUsesRewardEntries(mission: MissionTemplate | null | undefined): boolean {
   const e = mission?.rewards?.entries;
   return Array.isArray(e) && e.length > 0;

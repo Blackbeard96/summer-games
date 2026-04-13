@@ -405,7 +405,7 @@ export async function acceptMission(
   userId: string,
   missionId: string,
   source: MissionSource
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; playerMissionId?: string }> {
   try {
     // Get mission template
     const mission = await getMissionTemplate(missionId);
@@ -419,7 +419,11 @@ export async function acceptMission(
     
     if (existingMission) {
       if (existingMission.status === 'active') {
-        return { success: false, error: 'Mission already active' };
+        return {
+          success: false,
+          error: 'Mission already active',
+          playerMissionId: existingMission.id,
+        };
       }
       if (existingMission.status === 'completed') {
         return { success: false, error: 'Mission already completed' };
@@ -497,7 +501,7 @@ export async function acceptMission(
       // Don't fail the mission accept if live feed logging fails
     }
     
-    return { success: true };
+    return { success: true, playerMissionId: playerMissionRef.id };
   } catch (error) {
     console.error('Error accepting mission:', error);
     return { success: false, error: 'Failed to accept mission' };
