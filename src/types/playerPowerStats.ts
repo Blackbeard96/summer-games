@@ -20,6 +20,8 @@ export type LiveEventPowerSourceType =
   | 'quiz'
   | 'reflection'
   | 'goal_setting'
+  /** Alias for goal-setting flows (same Spiritual progression). */
+  | 'goal_completion'
   | 'class_flow'
   | 'neutral_flow';
 

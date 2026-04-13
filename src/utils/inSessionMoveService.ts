@@ -217,6 +217,10 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         throw new Error(`Target ${targetName} (${targetUid}) not found in session`);
       }
 
+      // ALL Firestore reads must happen before ANY writes (session + vault updates below).
+      const targetVaultRef = doc(db, 'vaults', targetUid);
+      const targetVaultSnap = await transaction.get(targetVaultRef);
+
       const actor = players[actorIndex];
       const target = players[targetIndex];
       
@@ -476,10 +480,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         updatedAt: serverTimestamp()
       });
 
-      // Keep global vault in sync in the SAME transaction so BattleContext cannot briefly see stale
-      // vaultHealth/shieldStrength and write them back over the combat values (Live Event reset bug).
-      const targetVaultRef = doc(db, 'vaults', targetUid);
-      const targetVaultSnap = await transaction.get(targetVaultRef);
+      // Keep global vault in sync in the SAME transaction (vault doc was read at top of callback).
       if (targetVaultSnap.exists()) {
         transaction.update(targetVaultRef, {
           vaultHealth: Math.max(0, Math.floor(Number(targetCopy.hp) || 0)),

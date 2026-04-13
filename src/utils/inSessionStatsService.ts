@@ -648,6 +648,75 @@ export async function breakParticipationStreak(
   }
 }
 
+/** UIDs that should receive session-end Power XP (roster + optional co-op `participantRecords`). */
+function collectLiveEventRewardPlayerIds(sessionData: Record<string, unknown>, fallbackPlayerIds: string[]): string[] {
+  const fromPlayers = Array.isArray(sessionData.players)
+    ? (sessionData.players as { userId?: string }[])
+        .map((p) => p?.userId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : [];
+  const pr = sessionData.participantRecords as
+    | Record<string, { userId?: string; participantId?: string }>
+    | undefined;
+  const fromPr =
+    pr && typeof pr === 'object' && !Array.isArray(pr)
+      ? Object.values(pr)
+          .map((r) => (typeof r?.userId === 'string' ? r.userId : r?.participantId))
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of [...fromPlayers, ...fromPr, ...fallbackPlayerIds]) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out.length > 0 ? out : [...fallbackPlayerIds];
+}
+
+function buildSyntheticSessionStats(
+  playerId: string,
+  sessionId: string,
+  sessionData: Record<string, unknown>,
+  sessionStartTime: unknown,
+  sessionEndTime: unknown,
+  duration: number
+): SessionStats {
+  type PRow = {
+    userId?: string;
+    displayName?: string;
+    powerPoints?: number;
+    participationCount?: number;
+    movesEarned?: number;
+    eliminated?: boolean;
+  };
+  const players = (sessionData.players as PRow[] | undefined) || [];
+  const prow = players.find((p) => p?.userId === playerId);
+  return {
+    playerId,
+    playerName: prow?.displayName || 'Player',
+    startingPP: typeof prow?.powerPoints === 'number' ? prow.powerPoints : 0,
+    endingPP: typeof prow?.powerPoints === 'number' ? prow.powerPoints : 0,
+    netPPGained: 0,
+    ppSpent: 0,
+    ppEarned: 0,
+    participationEarned: typeof prow?.participationCount === 'number' ? prow.participationCount : 0,
+    movesEarned: typeof prow?.movesEarned === 'number' ? prow.movesEarned : 0,
+    eliminations: 0,
+    isEliminated: !!prow?.eliminated,
+    damageDealt: 0,
+    damageTaken: 0,
+    healingGiven: 0,
+    healingReceived: 0,
+    skillsUsed: [],
+    totalSkillsUsed: 0,
+    sessionId,
+    sessionStartTime,
+    sessionEndTime,
+    sessionDuration: duration,
+  };
+}
+
 /**
  * Finalize session stats when session ends
  */
@@ -664,57 +733,66 @@ export async function finalizeSessionStats(
       return null;
     }
     
-    const sessionData = sessionDoc.data();
+    const sessionData = sessionDoc.data() as Record<string, unknown>;
     const existingSummary = sessionData.sessionSummary as SessionSummary | undefined;
     if (sessionData.status === 'ended' && existingSummary) {
       return existingSummary;
     }
     const sessionStartTime = sessionData.startedAt || sessionData.createdAt;
+    const rewardPlayerIds = collectLiveEventRewardPlayerIds(sessionData, playerIds);
     const sessionEndTime = serverTimestamp();
     
     // Calculate duration
     let duration = 0;
     if (sessionStartTime) {
-      const start = sessionStartTime.toMillis ? sessionStartTime.toMillis() : new Date(sessionStartTime).getTime();
+      const st = sessionStartTime as { toMillis?: () => number };
+      const start = typeof st.toMillis === 'function' ? st.toMillis() : new Date(sessionStartTime as string | number | Date).getTime();
       const end = Date.now();
       duration = Math.floor((end - start) / 1000); // Duration in seconds
     }
     
-    // Get all player stats
+    // Get all player stats (include roster + co-op participants; synthesize missing stats docs for Power XP)
     const statsMap: { [playerId: string]: SessionStats } = {};
-    
-    for (const playerId of playerIds) {
+
+    for (const playerId of rewardPlayerIds) {
       const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
       const statsDoc = await getDoc(statsRef);
-      
+
       if (statsDoc.exists()) {
         const stats = statsDoc.data() as SessionStats;
-        
-        // Get current ending PP from session players
-        const player = (sessionData.players || []).find((p: any) => p.userId === playerId);
+
+        const player = ((sessionData.players || []) as Array<{ userId?: string; powerPoints?: number }>).find(
+          (p) => p.userId === playerId
+        );
         const endingPP = player?.powerPoints || stats.endingPP || stats.startingPP;
-        
-        // Calculate net PP gained
+
         const netPPGained = endingPP - stats.startingPP;
-        
-        // Finalize stats
+
         const finalizedStats: SessionStats = {
           ...stats,
           endingPP,
           netPPGained,
           sessionEndTime,
-          sessionDuration: duration
+          sessionDuration: duration,
         };
-        
-        // Update in Firestore
+
         await updateDoc(statsRef, {
           endingPP,
           netPPGained,
           sessionEndTime,
-          sessionDuration: duration
+          sessionDuration: duration,
         });
-        
+
         statsMap[playerId] = finalizedStats;
+      } else {
+        statsMap[playerId] = buildSyntheticSessionStats(
+          playerId,
+          sessionId,
+          sessionData,
+          sessionStartTime,
+          sessionEndTime,
+          duration
+        );
       }
     }
 
@@ -751,20 +829,26 @@ export async function finalizeSessionStats(
     }
 
     const roomPlayersList = (sessionData.players || []) as Array<{ userId: string }>;
-    const sortedByQuizScore = [...roomPlayersList].sort(
-      (a, b) => (leaderboard[b.userId] ?? 0) - (leaderboard[a.userId] ?? 0)
+    const quizScoreUids = new Set<string>();
+    roomPlayersList.forEach((p) => p?.userId && quizScoreUids.add(p.userId));
+    Object.keys(leaderboard).forEach((uid) => quizScoreUids.add(uid));
+    const sortedByQuizScore = Array.from(quizScoreUids).sort(
+      (a, b) => (leaderboard[b] ?? 0) - (leaderboard[a] ?? 0)
     );
     const rankByPlayer: Record<string, number> = {};
-    sortedByQuizScore.forEach((p, idx) => {
-      rankByPlayer[p.userId] = idx + 1;
+    sortedByQuizScore.forEach((uid, idx) => {
+      rankByPlayer[uid] = idx + 1;
     });
     const totalRanked = Math.max(1, sortedByQuizScore.length);
 
     const liveEventPowerGains: Record<string, LiveEventPowerGain> = {};
-    for (const playerId of Object.keys(statsMap)) {
+    const powerAwardPlayerIds = Array.from(new Set([...rewardPlayerIds, ...Object.keys(statsMap)]));
+    for (const playerId of powerAwardPlayerIds) {
+      const st = statsMap[playerId];
+      if (!st) continue;
       const { branch, amount } = computeSessionEndPowerXp({
         liveEventMode: sessionData.liveEventMode as string | undefined,
-        stats: statsMap[playerId],
+        stats: st,
         correctAnswers: correctByPlayer[playerId] ?? 0,
         leaderboardScore: leaderboard[playerId] ?? 0,
         rankByScore: rankByPlayer[playerId] ?? totalRanked,
@@ -789,7 +873,12 @@ export async function finalizeSessionStats(
     }
 
     // Sync each player's vault health and shield from session state so Live Event impact persists globally
-    const players = sessionData.players || [];
+    const players = (Array.isArray(sessionData.players) ? sessionData.players : []) as Array<{
+      userId?: string;
+      displayName?: string;
+      hp?: number;
+      shield?: number;
+    }>;
     for (const p of players) {
       const uid = p.userId;
       if (!uid) continue;
@@ -863,7 +952,12 @@ export async function finalizeSessionStats(
       if (badges.length > 0) {
         statsMap[playerId].badges = badges as any;
         const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
-        await updateDoc(statsRef, { badges });
+        try {
+          const snap = await getDoc(statsRef);
+          if (snap.exists()) await updateDoc(statsRef, { badges });
+        } catch {
+          /* synthetic-only roster row: no stats subdoc */
+        }
       }
     }
     
@@ -873,13 +967,13 @@ export async function finalizeSessionStats(
     /** Ranks for school leaderboard: only when quiz leaderboard had at least one positive score. */
     let liveEventQuizRankByPlayer: Record<string, number> | undefined;
     if (Object.keys(leaderboard).length > 0) {
-      const scores = sortedByQuizScore.map((p) => leaderboard[p.userId] ?? 0);
+      const scores = sortedByQuizScore.map((uid) => leaderboard[uid] ?? 0);
       const maxScore = scores.length > 0 ? Math.max(0, ...scores) : 0;
       if (maxScore > 0) {
         const byPlayer: Record<string, number> = {};
-        sortedByQuizScore.forEach((p, idx) => {
-          if (statsMap[p.userId]) {
-            byPlayer[p.userId] = idx + 1;
+        sortedByQuizScore.forEach((uid, idx) => {
+          if (statsMap[uid]) {
+            byPlayer[uid] = idx + 1;
           }
         });
         if (Object.keys(byPlayer).length > 0) {
@@ -891,17 +985,21 @@ export async function finalizeSessionStats(
     // Create session summary (include quiz awards if stored when a quiz completed)
     const summary: SessionSummary = {
       sessionId,
-      classId: sessionData.classId,
-      className: sessionData.className,
+      classId: String(sessionData.classId ?? ''),
+      className: String(sessionData.className ?? ''),
       startedAt: sessionStartTime,
       endedAt: sessionEndTime,
       duration,
-      totalPlayers: Math.max(playerIds.length, Object.keys(statsMap).length),
+      totalPlayers: Math.max(rewardPlayerIds.length, Object.keys(statsMap).length),
       stats: statsMap,
       mvpPlayerId,
       liveEventPowerApplied: true,
       ...(Object.keys(liveEventPowerGains).length > 0 && { liveEventPowerGains }),
-      ...(sessionData.lastQuizAwardsSnapshot && { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot }),
+      ...(sessionData.lastQuizAwardsSnapshot &&
+      typeof sessionData.lastQuizAwardsSnapshot === 'object' &&
+      sessionData.lastQuizAwardsSnapshot !== null
+        ? { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot as SessionSummary['quizAwardsSnapshot'] }
+        : {}),
       ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer }),
       ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer })
     };

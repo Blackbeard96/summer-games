@@ -1,5 +1,19 @@
 /**
  * Power stat progression (Physical / Mental / Emotional / Spiritual) from Live Events.
+ *
+ * ## Dev: where rewards run (Live Events / In Session)
+ *
+ * - **Session end** (`endSession` → `finalizeSessionStats` in `inSessionStatsService.ts`):
+ *   For each participant, calls `computeSessionEndPowerXp` then `awardLiveEventPowerGain` →
+ *   `awardPowerStatXp` (writes `students/{uid}.stats` via transaction). Also credits battle pass XP.
+ * - **Reflection submit** (`submitLiveEventReflectionToAssessment` in `assessmentGoalsFirestore.ts`):
+ *   `awardPowerXpForReflectionSubmission` → Emotional branch (min 20 XP on valid submit).
+ * - **Goal / habit milestones** (`assessmentGoalsFirestore.ts`): `awardPowerXpForGoalAchievement` → Spiritual.
+ * - **Mid-battle drip** (`awardPowerXpForLiveQuizCorrectAnswer`, `awardPowerXpForElimination`): gated by
+ *   `REACT_APP_LIVE_EVENT_POWER_DRIP === 'true'` to avoid double-counting with session-end totals.
+ *
+ * Event → stat mapping: `getPowerTypeForEvent` / `liveModeToPowerSource` (battle_royale → physical,
+ * quiz → mental, reflection → emotional, goal_setting / goal_completion → spiritual).
  */
 
 import { db } from '../firebase';
@@ -14,6 +28,17 @@ import type {
 } from '../types/playerPowerStats';
 
 export const POWER_STAT_MAX_LEVEL = 99;
+
+/** Minimum Power XP applied at **session end** per branch (rebalance here + in `computeSessionEndPowerXp`). */
+export const LIVE_EVENT_MIN_STAT_XP_AT_SESSION_END: Record<PowerStatBranch, number> = {
+  physical: 25,
+  mental: 25,
+  emotional: 20,
+  spiritual: 35,
+};
+
+/** Re-export: pure level-up / XP merge for tests and callers. */
+export { applyPowerXpToBranchPure as maybeLevelUpPowerStat };
 
 /** 0–100 fill for XP progress toward the next level (for UI bars). */
 export function getPowerStatBarFillPercent(st: PowerStatBranchState): number {
@@ -142,6 +167,7 @@ export function getPowerTypeForEvent(eventType: string): PowerStatBranch {
     case 'reflection':
       return 'emotional';
     case 'goal_setting':
+    case 'goal_completion':
       return 'spiritual';
     case 'class_flow':
     case 'neutral_flow':
@@ -160,6 +186,8 @@ function liveModeToPowerSource(mode: string | undefined): LiveEventPowerSourceTy
       return 'reflection';
     case 'goal_setting':
       return 'goal_setting';
+    case 'goal_completion':
+      return 'goal_completion';
     case 'class_flow':
       return 'class_flow';
     case 'neutral_flow':
@@ -215,26 +243,60 @@ export function computeSessionEndPowerXp(input: SessionPowerXpComputationInput):
     else if (rank <= 10) amount += 12;
     if (input.quizPlacementPp > 0) amount += 18;
   } else if (branch === 'emotional') {
-    amount += 28;
+    // Emotional bulk XP is granted on reflection submit. Session end adds participation-only slice.
     amount += Math.floor(part * 10);
-    if ((s.skillsUsed?.length || 0) > 0) amount += 12;
   } else {
     amount += 24;
     amount += Math.floor(part * 8);
   }
 
   amount = Math.max(0, Math.min(500, Math.round(amount)));
+  const modeNorm = liveModeToPowerSource(input.liveEventMode);
+  const skipSessionMinForReflectionEmotional =
+    branch === 'emotional' && (modeNorm === 'reflection' || input.liveEventMode === 'reflection');
+  if (!skipSessionMinForReflectionEmotional) {
+    const floorXp = LIVE_EVENT_MIN_STAT_XP_AT_SESSION_END[branch];
+    amount = Math.max(amount, floorXp);
+  }
+  amount = Math.min(500, amount);
   return { branch, amount };
 }
 
+/**
+ * High-level reward hint. Prefer `computeSessionEndPowerXp` inside `finalizeSessionStats` for live sessions.
+ */
+export function calculateLiveEventStatReward(params: {
+  eventType: string;
+  success: boolean;
+  performanceData?: SessionPowerXpComputationInput;
+}): { powerType: PowerStatBranch | null; amount: number } {
+  if (!params.success) return { powerType: null, amount: 0 };
+  if (!params.performanceData) {
+    const src = liveModeToPowerSource(params.eventType);
+    const branch = getPowerTypeForEvent(src);
+    return { powerType: branch, amount: LIVE_EVENT_MIN_STAT_XP_AT_SESSION_END[branch] };
+  }
+  const { branch, amount } = computeSessionEndPowerXp(params.performanceData);
+  return { powerType: branch, amount };
+}
+
 /** Persist XP to students/{uid}.stats — returns amount actually applied (same as input if success). */
-export async function awardPowerStatXp(uid: string, branch: PowerStatBranch, amount: number): Promise<number> {
+export async function awardPowerStatXp(
+  uid: string,
+  branch: PowerStatBranch,
+  amount: number,
+  source?: string,
+  metadata?: Record<string, unknown>
+): Promise<number> {
   if (!uid || amount <= 0) return 0;
   const studentRef = doc(db, 'students', uid);
   try {
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(studentRef);
-      if (!snap.exists()) return;
+      if (!snap.exists()) {
+        console.warn(`[STAT REWARD] skipped — students/${uid} does not exist (${branch} +${amount})`);
+        return;
+      }
       const data = snap.data();
       const statsRoot = normalizePlayerPowerStats(data?.stats);
       const prev = statsRoot[branch];
@@ -245,8 +307,13 @@ export async function awardPowerStatXp(uid: string, branch: PowerStatBranch, amo
         updatedAt: serverTimestamp(),
       });
     });
+    const meta = metadata && Object.keys(metadata).length ? ` ${JSON.stringify(metadata)}` : '';
+    console.info(
+      `[STAT REWARD] +${amount} ${branch} Power XP → ${uid}${source ? ` (${source})` : ''}${meta}`
+    );
     return amount;
-  } catch {
+  } catch (e) {
+    console.warn(`[STAT REWARD] FAILED +${amount} ${branch} for ${uid}:`, e);
     return 0;
   }
 }
@@ -260,7 +327,7 @@ export async function awardLiveEventPowerGain(uid: string, gain: LiveEventPowerG
     ['spiritual', gain.spiritual ?? 0],
   ];
   for (const [b, amt] of entries) {
-    if (amt > 0) await awardPowerStatXp(uid, b, amt);
+    if (amt > 0) await awardPowerStatXp(uid, b, amt, 'live_event_session_gain');
   }
 }
 
@@ -287,7 +354,10 @@ export async function awardPowerXpForLiveQuizCorrectAnswer(
   if (opts.speedRatio >= 0.95) amount += 3;
   if (isBattle && opts.pointsAwarded > 0) amount += Math.min(8, Math.floor(opts.pointsAwarded / 15));
   amount = Math.min(35, amount);
-  await awardPowerStatXp(uid, branch, amount);
+  await awardPowerStatXp(uid, branch, amount, 'live_quiz_correct_drip', {
+    sessionId,
+    gameMode: opts.gameMode,
+  });
 }
 
 export async function awardPowerXpForElimination(eliminatorId: string, sessionId: string): Promise<void> {
@@ -297,7 +367,7 @@ export async function awardPowerXpForElimination(eliminatorId: string, sessionId
   if (!roomSnap.exists()) return;
   const mode = roomSnap.data()?.liveEventMode as string | undefined;
   if (mode !== 'battle_royale') return;
-  await awardPowerStatXp(eliminatorId, 'physical', 14);
+  await awardPowerStatXp(eliminatorId, 'physical', 14, 'live_event_elimination_drip', { sessionId });
 }
 
 export async function awardPowerXpForReflectionSubmission(
@@ -309,7 +379,11 @@ export async function awardPowerXpForReflectionSubmission(
   if (opts?.goalLinked) amount += 12;
   if (opts?.qualityBonus) amount += 18;
   amount = Math.min(120, amount);
-  await awardPowerStatXp(uid, 'emotional', amount);
+  amount = Math.max(20, amount);
+  await awardPowerStatXp(uid, 'emotional', amount, 'live_event_reflection_submit', {
+    textLength,
+    goalLinked: !!opts?.goalLinked,
+  });
 }
 
 export async function awardPowerXpForGoalAchievement(
@@ -321,5 +395,6 @@ export async function awardPowerXpForGoalAchievement(
     tier === 'week' ? 40 : tier === 'three_day' ? 28 : tier === 'day' ? 18 : tier === 'class' ? 12 : 0;
   const base =
     kind === 'habit_completed' ? 35 : kind === 'assessment_applied' ? 45 : kind === 'story_goal' ? 38 : 30;
-  await awardPowerStatXp(uid, 'spiritual', Math.min(200, base + tierBonus));
+  const amt = Math.min(200, Math.max(35, base + tierBonus));
+  await awardPowerStatXp(uid, 'spiritual', amt, 'goal_completion', { kind, tier });
 }
