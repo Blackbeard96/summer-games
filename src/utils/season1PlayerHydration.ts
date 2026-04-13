@@ -31,6 +31,7 @@ export function defaultSeason1PlayerSlice(): Season1PlayerSlice {
       currentTier: 0,
       battlePassXP: 0,
       claimedRewardIds: [],
+      introSeenSeasonId: undefined,
     },
   };
 }
@@ -64,6 +65,10 @@ export function mergeSeason1FromStudentData(raw: Record<string, unknown> | null 
       claimedRewardIds: Array.isArray(s.battlePass?.claimedRewardIds)
         ? [...s.battlePass!.claimedRewardIds]
         : base.battlePass.claimedRewardIds,
+      introSeenSeasonId:
+        typeof s.battlePass?.introSeenSeasonId === 'string' && s.battlePass.introSeenSeasonId.trim()
+          ? s.battlePass.introSeenSeasonId.trim()
+          : base.battlePass.introSeenSeasonId,
     },
   };
 }

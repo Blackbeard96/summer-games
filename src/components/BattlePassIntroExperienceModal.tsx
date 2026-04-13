@@ -10,7 +10,9 @@ interface Props {
 }
 
 /**
- * Full-screen intro: optional hero video first, then story slides / video steps (mission-runner–style).
+ * Full-screen intro: story slides and video steps in admin order.
+ * Legacy `heroVideoUrl` (season trailer field) is used only when there is no `introSequence`,
+ * so slide-then-video flows are not duplicated by an extra opening video.
  */
 const BattlePassIntroExperienceModal: React.FC<Props> = ({
   open,
@@ -21,7 +23,7 @@ const BattlePassIntroExperienceModal: React.FC<Props> = ({
 }) => {
   const [idx, setIdx] = useState(0);
   const hero = heroVideoUrl?.trim();
-  const heroFirst = !!hero;
+  const heroFirst = !!hero && introSteps.length === 0;
   const total = (heroFirst ? 1 : 0) + introSteps.length;
 
   useEffect(() => {

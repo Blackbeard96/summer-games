@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -8,6 +8,8 @@ import BattlePassIntroExperienceModal from '../components/BattlePassIntroExperie
 import DeployedBattlePassTierTrack from '../components/DeployedBattlePassTierTrack';
 import { fetchActiveBattlePassSeason } from '../utils/activeBattlePassClient';
 import { computeHomeBattlePassDisplay } from '../utils/homeBattlePassDisplay';
+import { mergeSeason1FromStudentData } from '../utils/season1PlayerHydration';
+import { markBattlePassIntroSeenForSeason } from '../utils/awardBattlePassXp';
 import type { Season } from '../types/season1';
 
 /**
@@ -24,6 +26,8 @@ const BattlePassSeasonPage: React.FC = () => {
   const [tier, setTier] = useState(0);
   const [maxTier, setMaxTier] = useState(0);
   const [bpXp, setBpXp] = useState(0);
+  const [introSeenForSeason, setIntroSeenForSeason] = useState(true);
+  const introAutoOpenedRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -34,6 +38,7 @@ const BattlePassSeasonPage: React.FC = () => {
         setTier(0);
         setMaxTier(0);
         setBpXp(0);
+        setIntroSeenForSeason(true);
         return;
       }
       const snap = await getDoc(doc(db, 'students', currentUser.uid));
@@ -47,6 +52,9 @@ const BattlePassSeasonPage: React.FC = () => {
       setTier(disp.battlePassTier);
       setMaxTier(disp.maxTier);
       setBpXp(disp.battlePassXP);
+      const s1 = mergeSeason1FromStudentData(data?.season1 as Record<string, unknown> | undefined);
+      const sid = active.id?.trim();
+      setIntroSeenForSeason(!!(sid && s1.battlePass.introSeenSeasonId === sid));
     } catch (e) {
       console.error('BattlePassSeasonPage load failed', e);
       setSeason(null);
@@ -58,6 +66,30 @@ const BattlePassSeasonPage: React.FC = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    introAutoOpenedRef.current = false;
+  }, [season?.id]);
+
+  useEffect(() => {
+    if (loading || !season || !currentUser) return;
+    if (introSeenForSeason) return;
+    const hasIntro = !!(
+      season.seasonIntroVideoUrl?.trim() ||
+      (season.introSequence && season.introSequence.length > 0)
+    );
+    if (!hasIntro || introAutoOpenedRef.current) return;
+    introAutoOpenedRef.current = true;
+    setIntroOpen(true);
+  }, [loading, season, currentUser, introSeenForSeason]);
+
+  const closeSeasonIntro = async () => {
+    setIntroOpen(false);
+    if (currentUser?.uid && season?.id) {
+      await markBattlePassIntroSeenForSeason(currentUser.uid, season.id);
+      setIntroSeenForSeason(true);
+    }
+  };
 
   return (
     <div
@@ -114,7 +146,7 @@ const BattlePassSeasonPage: React.FC = () => {
                 Season intro
               </button>
               <p style={{ margin: '0.5rem 0 0', fontSize: '0.78rem', opacity: 0.75, maxWidth: 420 }}>
-                Watch the season video and step through slides your coaches configured.
+                Step through the intro your coaches configured (slides and videos in order).
               </p>
             </div>
           ) : null}
@@ -147,7 +179,7 @@ const BattlePassSeasonPage: React.FC = () => {
           <DeployedBattlePassTierTrack tiers={season.tiers} playerTier={tier} />
           <BattlePassIntroExperienceModal
             open={introOpen}
-            onClose={() => setIntroOpen(false)}
+            onClose={() => void closeSeasonIntro()}
             seasonTitle={season.name}
             heroVideoUrl={season.seasonIntroVideoUrl}
             introSteps={season.introSequence ?? []}

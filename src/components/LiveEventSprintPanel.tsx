@@ -7,12 +7,15 @@ import {
   clearClassFlowSprint,
   toggleClassFlowSprintMark,
   grantClassFlowSprintRewards,
+  applyClassFlowSprintIncompletePenalties,
 } from '../utils/liveEventSprintService';
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
   sprint: ClassFlowSprintState | null;
   sessionPlayers: { userId: string; displayName: string }[];
+  /** Room host — excluded from incomplete PP penalties */
+  sessionHostUid?: string;
   isSessionHost: boolean;
   currentUserId: string;
   userEmail?: string | null;
@@ -30,6 +33,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   sessionId,
   sprint,
   sessionPlayers,
+  sessionHostUid = '',
   isSessionHost,
   currentUserId,
   userEmail,
@@ -43,6 +47,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   const [rewardParticipationPoints, setRewardParticipationPoints] = useState(2);
   const [rewardVaultPP, setRewardVaultPP] = useState(25);
   const [rewardXP, setRewardXP] = useState(10);
+  const [incompletePenaltyVaultPP, setIncompletePenaltyVaultPP] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -82,6 +87,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
           rewardParticipationPoints,
           rewardVaultPP,
           rewardXP,
+          incompletePenaltyVaultPP,
         }
       );
       if (!res.ok) setMessage(res.error || 'Could not start sprint');
@@ -103,6 +109,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     rewardParticipationPoints,
     rewardVaultPP,
     rewardXP,
+    incompletePenaltyVaultPP,
   ]);
 
   const onToggle = useCallback(
@@ -156,6 +163,24 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     }
   }, [sessionId, currentUserId, userEmail, userDisplayName, playerNames]);
 
+  const onApplyIncompletePenalties = useCallback(async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await applyClassFlowSprintIncompletePenalties(
+        sessionId,
+        currentUserId,
+        userEmail ?? undefined,
+        userDisplayName ?? undefined
+      );
+      if (!res.ok) setMessage(res.error || 'Could not apply penalties');
+      else if (res.penalized === 0) setMessage('No unchecked players left to penalize (or penalty already applied).');
+      else setMessage(`Deducted vault PP from ${res.penalized} player(s) who were not marked complete.`);
+    } finally {
+      setBusy(false);
+    }
+  }, [sessionId, currentUserId, userEmail, userDisplayName]);
+
   const onClear = useCallback(async () => {
     if (!window.confirm('Remove this sprint from the room? Host can start a fresh sprint after.')) return;
     setBusy(true);
@@ -175,9 +200,22 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
 
   const marked = useMemo(() => new Set(sprint?.markedCompleteUids || []), [sprint?.markedCompleteUids]);
   const granted = useMemo(() => new Set(sprint?.rewardsGrantedUids || []), [sprint?.rewardsGrantedUids]);
+  const penaltiesGranted = useMemo(
+    () => new Set(sprint?.incompletePenaltiesGrantedUids || []),
+    [sprint?.incompletePenaltiesGrantedUids]
+  );
   const pendingGrant = sprint
     ? (sprint.markedCompleteUids || []).filter((u) => !granted.has(u)).length
     : 0;
+  const pendingPenaltyCount =
+    sprint && (sprint.incompletePenaltyVaultPP || 0) > 0
+      ? sessionPlayers.filter(
+          (p) =>
+            p.userId !== sessionHostUid &&
+            !marked.has(p.userId) &&
+            !penaltiesGranted.has(p.userId)
+        ).length
+      : 0;
 
   const fmt = (s: number) => {
     const m = Math.floor(s / 60);
@@ -204,7 +242,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         )}
       </div>
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
-        Host sets a timed goal and checks off students who finish on time. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award marked players” only to catch anyone who was marked before this update or if a grant failed.
+        Host sets a timed goal and checks off students who finish on time. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award pending” only to catch anyone who was marked before this update or if a grant failed. Optionally set an incomplete penalty: after the sprint, use “Apply incomplete penalty” to deduct vault PP from everyone in the session who is still unchecked (host excluded).
       </p>
 
       {message && (
@@ -279,6 +317,19 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
                 style={{ width: '100%', marginTop: 4, padding: '0.35rem', borderRadius: 6 }}
               />
             </label>
+            <label style={{ fontSize: '0.8rem' }}>
+              PP penalty if not checked (vault)
+              <input
+                type="number"
+                min={0}
+                max={5000}
+                value={incompletePenaltyVaultPP}
+                onChange={(e) =>
+                  setIncompletePenaltyVaultPP(Math.max(0, Math.min(5000, parseInt(e.target.value, 10) || 0)))
+                }
+                style={{ width: '100%', marginTop: 4, padding: '0.35rem', borderRadius: 6 }}
+              />
+            </label>
           </div>
           <p style={{ fontSize: '0.75rem', opacity: 0.85, margin: '8px 0 0' }}>
             Each participation point adds {LIVE_EVENT_PP_PER_PARTICIPATION_POINT} session PP and moves toward your live-event streak.
@@ -318,6 +369,9 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             {sprint.rewardParticipationPoints * LIVE_EVENT_PP_PER_PARTICIPATION_POINT} session PP)
             {sprint.rewardVaultPP > 0 ? ` · +${sprint.rewardVaultPP} vault PP` : ''}
             {sprint.rewardXP > 0 ? ` · +${sprint.rewardXP} XP` : ''}
+            {(sprint.incompletePenaltyVaultPP || 0) > 0
+              ? ` · Incomplete (unchecked): −${sprint.incompletePenaltyVaultPP} vault PP each (host applies manually)`
+              : ''}
           </div>
 
           {isSessionHost && (
@@ -355,6 +409,33 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
               >
                 Award pending ({pendingGrant})
               </button>
+              {(sprint.incompletePenaltyVaultPP || 0) > 0 && (
+                <button
+                  type="button"
+                  disabled={busy || pendingPenaltyCount === 0}
+                  onClick={() => {
+                    if (
+                      !window.confirm(
+                        `Deduct ${sprint.incompletePenaltyVaultPP} vault PP from ${pendingPenaltyCount} player(s) who are not checked? (Cannot undo. Each player is only charged once per sprint.)`
+                      )
+                    ) {
+                      return;
+                    }
+                    void onApplyIncompletePenalties();
+                  }}
+                  style={{
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: 8,
+                    border: '1px solid rgba(248,113,113,0.6)',
+                    background: 'rgba(127,29,29,0.45)',
+                    color: '#fecaca',
+                    fontWeight: 700,
+                    cursor: busy || pendingPenaltyCount === 0 ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Apply incomplete penalty ({pendingPenaltyCount})
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy}

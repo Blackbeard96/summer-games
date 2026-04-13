@@ -137,6 +137,17 @@ export const MARKETPLACE_STORE_ARTIFACTS: MarketplaceStoreArtifact[] = [
     rarity: 'rare'
   },
   {
+    id: 'assignment-pass',
+    name: 'Assignment Pass',
+    description:
+      'Use to instantly gain full credit on an assignment. Not usable for Written or Performance Assessments unless your teacher agrees.',
+    price: 3600,
+    icon: '🎟️',
+    image: '/images/Assignment Pass.png',
+    category: 'special',
+    rarity: 'epic'
+  },
+  {
     id: 'double-pp',
     name: 'Double PP Boost',
     description: 'Double any PP you receive for the next 4 hours',

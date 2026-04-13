@@ -27,6 +27,11 @@ import {
 } from '../utils/dailyChallengeShared';
 import { applyConsumableEffectToVault } from '../utils/consumableEffectResolver';
 import { resolveVaultBattleConsumable } from '../utils/vaultConsumablePlan';
+import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
+import {
+  artifactRequiresUxpStyleApproval,
+  markUserArtifactPendingStaffApproval,
+} from '../utils/artifactsRequiringStaffApproval';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { getLevelFromXP } from '../utils/leveling';
@@ -4042,36 +4047,25 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Helper function to award XP for battle actions
   const awardBattleXp = async (xpAmount: number, reason: string) => {
     if (!currentUser || xpAmount <= 0) return;
-    
+
     try {
       console.log(`🎯 AWARDING XP: ${xpAmount} XP for: ${reason}`);
-      
-      // Update student document XP
+
       const studentRef = doc(db, 'students', currentUser.uid);
-      const studentDoc = await getDoc(studentRef);
-      
+      const userRef = doc(db, 'users', currentUser.uid);
+      const [studentDoc, userDoc] = await Promise.all([getDoc(studentRef), getDoc(userRef)]);
+
       if (studentDoc.exists()) {
-        const studentData = studentDoc.data();
-        const currentXP = studentData.xp || 0;
-        const newXP = currentXP + xpAmount;
-        
-        console.log(`📊 XP UPDATE: ${currentXP} → ${newXP} (+${xpAmount})`);
-        
-        await updateDoc(studentRef, {
-          xp: newXP
-        });
-        
-        console.log('✅ Student document XP updated in database');
-        
-        // Verify the update by reading the document again
-        const verifyDoc = await getDoc(studentRef);
-        if (verifyDoc.exists()) {
-          const verifyData = verifyDoc.data();
-          console.log('🔍 Verification - XP in database after update:', verifyData.xp);
-          console.log('🔍 Verification - Full student data after update:', verifyData);
-        }
-        
-        // Create notification for XP gain
+        await updateDoc(studentRef, { xp: increment(xpAmount) });
+      }
+      if (userDoc.exists()) {
+        await updateDoc(userRef, { xp: increment(xpAmount) });
+      }
+
+      const { awardBattlePassXpForDeployedSeason } = await import('../utils/awardBattlePassXp');
+      await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpAmount));
+
+      if (studentDoc.exists()) {
         try {
           await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
             type: 'xp_gain',
@@ -4082,16 +4076,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             timestamp: serverTimestamp(),
             read: false
           });
-          console.log('📢 XP notification created');
         } catch (notificationError) {
           console.error('❌ Error creating XP notification:', notificationError);
         }
-        
-        console.log(`🎉 XP AWARD COMPLETE: ${currentXP} → ${newXP} (+${xpAmount})`);
-      } else {
-        console.error('❌ Student document not found for XP update');
       }
-      
     } catch (error) {
       console.error('❌ Error awarding battle XP:', error);
     }
@@ -5421,6 +5409,35 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Check if artifact exists in inventory
       if (!currentInventory.includes(artifactName)) {
         throw new Error(`You don't have ${artifactName} in your inventory`);
+      }
+
+      const catalogMatch = MARKETPLACE_STORE_ARTIFACTS.find((i) => i.name === artifactName);
+      const staffProbe = catalogMatch ?? {
+        name: artifactName,
+        id: artifactName.toLowerCase().replace(/\s+/g, '-'),
+      };
+      if (artifactRequiresUxpStyleApproval(staffProbe)) {
+        const res = await markUserArtifactPendingStaffApproval(currentUser.uid, {
+          id: catalogMatch?.id ?? staffProbe.id,
+          name: catalogMatch?.name ?? artifactName,
+          description: catalogMatch?.description,
+          icon: catalogMatch?.icon,
+          image: catalogMatch?.image,
+          category: catalogMatch?.category,
+          rarity: catalogMatch?.rarity,
+        });
+        if (!res.ok) {
+          throw new Error(res.error || 'Could not submit this artifact for staff approval.');
+        }
+        setSuccess(
+          artifactName.toLowerCase().includes('uxp')
+            ? 'Your UXP Credit request was sent for staff approval.'
+            : 'Your Assignment Pass request was sent for staff approval.'
+        );
+        if (onArtifactUsed) {
+          onArtifactUsed();
+        }
+        return;
       }
 
       const vaultConsumable = await resolveVaultBattleConsumable(artifactName);

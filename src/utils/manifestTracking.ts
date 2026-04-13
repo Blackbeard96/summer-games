@@ -1,6 +1,7 @@
 import { db } from '../firebase';
 import { doc, updateDoc, getDoc, increment, runTransaction } from 'firebase/firestore';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 
 /**
  * Track the usage of a manifest ability
@@ -459,7 +460,8 @@ export const claimMilestoneRewards = async (
     }
     
     let powerPoints = userData.powerPoints || 0;
-    let xp = userData.xp || 0;
+    const prevProfileXp = userData.xp || 0;
+    let xp = prevProfileXp;
     let truthMetal = Math.floor(userData.truthMetal || 0);
     
     console.log(`[claimMilestoneRewards] Current PP: ${powerPoints}, XP: ${xp}, Truth Metal: ${truthMetal}`);
@@ -571,6 +573,11 @@ export const claimMilestoneRewards = async (
       ...updateData,
       manifest: playerManifest
     });
+
+    const profileXpDelta = Math.max(0, Math.floor(xp - prevProfileXp));
+    if (profileXpDelta > 0) {
+      await awardBattlePassXpForDeployedSeason(userId, profileXpDelta);
+    }
     
     // Note: Milestone rewards don't directly change manifest.currentLevel, so we don't recalculate here.
     // If manifest.currentLevel is updated elsewhere, it should trigger recalculation there.

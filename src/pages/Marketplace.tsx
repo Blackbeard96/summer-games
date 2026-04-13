@@ -17,6 +17,10 @@ import { applyConsumableEffectToVault } from '../utils/consumableEffectResolver'
 import { resolveVaultBattleConsumable } from '../utils/vaultConsumablePlan';
 import { getEquippablePerkDisplayRows } from '../utils/marketplaceEquippablePerks';
 import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal';
+import {
+  artifactRequiresUxpStyleApproval,
+  markUserArtifactPendingStaffApproval,
+} from '../utils/artifactsRequiringStaffApproval';
 
 type Artifact = MarketplaceStoreArtifact;
 
@@ -818,6 +822,35 @@ const Marketplace = () => {
         alert(`🧪 ${applied.message}`);
         return;
       }
+
+      const catalogForStaff =
+        storeItems.find((i) => i.name === artifactName) ||
+        MARKETPLACE_STORE_ARTIFACTS.find((i) => i.name === artifactName);
+      const staffCheckArtifact = catalogForStaff
+        ? { id: catalogForStaff.id, name: catalogForStaff.name }
+        : { name: artifactName, id: artifactName.toLowerCase().replace(/\s+/g, '-') };
+      if (artifactRequiresUxpStyleApproval(staffCheckArtifact)) {
+        const submit = await markUserArtifactPendingStaffApproval(currentUser.uid, {
+          id: catalogForStaff?.id ?? staffCheckArtifact.id,
+          name: catalogForStaff?.name ?? artifactName,
+          description: catalogForStaff?.description,
+          icon: catalogForStaff?.icon,
+          image: catalogForStaff?.image,
+          category: catalogForStaff?.category,
+          rarity: catalogForStaff?.rarity,
+        });
+        if (!submit.ok) {
+          alert(submit.error || 'Could not submit for staff approval. Try again or refresh.');
+          return;
+        }
+        await updateAllArtifactCounts();
+        alert(
+          artifactName.toLowerCase().includes('uxp')
+            ? 'Your UXP Credit request has been sent to the admin for approval.'
+            : 'Your Assignment Pass request has been sent for staff approval. It will apply after approval (subject to assignment type rules).'
+        );
+        return;
+      }
       
       // Handle Shield artifact - check for active overshield before using
       if (artifactName === 'Shield') {
@@ -1229,8 +1262,10 @@ const Marketplace = () => {
         return;
       }
 
-      // Check if this is a UXP artifact
-      const isUXPArtifact = item.name.includes('UXP') || item.id.startsWith('uxp-credit');
+      const needsPurchaseStaffApproval = artifactRequiresUxpStyleApproval({
+        name: item.name,
+        id: item.id,
+      });
 
       // Create detailed artifact purchase record (no undefined fields — Firestore rejects them)
       const purchasedArtifact = deepOmitUndefined({
@@ -1245,7 +1280,7 @@ const Marketplace = () => {
         rarity: item.rarity,
         purchasedAt: new Date(),
         used: false,
-        ...(isUXPArtifact
+        ...(needsPurchaseStaffApproval
           ? { pendingApproval: true, approvalStatus: 'pending' as const }
           : {}),
       });
@@ -1296,10 +1331,11 @@ const Marketplace = () => {
         };
       }
 
-      // For UXP artifacts, show message about pending approval
-      if (isUXPArtifact) {
+      if (needsPurchaseStaffApproval) {
         alert(
-          'Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.'
+          item.name.toLowerCase().includes('uxp')
+            ? 'Your UXP Credit purchase requires admin approval. The artifact will be active once approved by an admin.'
+            : 'Your Assignment Pass purchase requires admin approval. It will be active once approved by an admin.'
         );
       }
 

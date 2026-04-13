@@ -49,3 +49,31 @@ export async function awardBattlePassXpForDeployedSeason(playerId: string, xpDel
 export async function awardBattlePassXpFromIslandRaid(playerId: string, xpDelta: number): Promise<void> {
   return awardBattlePassXpForDeployedSeason(playerId, xpDelta);
 }
+
+/** Persist that the player dismissed the deployed season intro (hero video / slide sequence). */
+export async function markBattlePassIntroSeenForSeason(playerId: string, seasonId: string): Promise<void> {
+  const sid = String(seasonId || '').trim();
+  if (!playerId || !sid) return;
+
+  const ref = doc(db, 'students', playerId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const raw = snap.data();
+  const s1 = mergeSeason1FromStudentData(raw.season1 as Record<string, unknown> | undefined);
+  const bp = s1.battlePass;
+
+  try {
+    await updateDoc(ref, {
+      season1: {
+        ...s1,
+        battlePass: {
+          ...bp,
+          introSeenSeasonId: sid,
+        },
+      },
+    });
+  } catch (e) {
+    console.warn('[battlePass] markBattlePassIntroSeenForSeason failed', e);
+  }
+}

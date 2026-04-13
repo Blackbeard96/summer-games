@@ -130,6 +130,7 @@ const artifactPrices: { [key: string]: number } = {
   'uxp-credit-1': 1000,
   'uxp-credit': 1800,
   'uxp-credit-4': 3420,
+  'assignment-pass': 3600,
   'double-pp': 75,
   'skip-the-line': 50,
   'work-extension': 250,

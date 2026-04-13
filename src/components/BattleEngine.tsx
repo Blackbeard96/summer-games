@@ -11,7 +11,7 @@ import {
   getManifestDamageBoost,
   getElementalAffinityRingDamageMultiplierForMove,
 } from '../utils/artifactUtils';
-import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp, onSnapshot, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { debug } from '../utils/debug';
 import { 
@@ -6735,24 +6735,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
       
-      // Award XP if applicable
+      // Award XP if applicable (keep users + students in sync; battle pass tracks profile XP)
       if (finalXPReward > 0 && currentUser) {
         try {
           const studentRef = doc(db, 'students', currentUser.uid);
-          const studentDoc = await getDoc(studentRef);
-          
+          const userRef = doc(db, 'users', currentUser.uid);
+          const [studentDoc, userDoc] = await Promise.all([getDoc(studentRef), getDoc(userRef)]);
+
           if (studentDoc.exists()) {
-            const studentData = studentDoc.data();
-            const currentXP = studentData.xp || 0;
-            const newXP = currentXP + finalXPReward;
-            
-            await updateDoc(studentRef, {
-              xp: newXP
-            });
-            
-            if (isRivalBonus) {
-              newLog.push(`⚔️ Rival defeated! XP doubled (+${finalXPReward} XP).`);
-            }
+            await updateDoc(studentRef, { xp: increment(finalXPReward) });
+          }
+          if (userDoc.exists()) {
+            await updateDoc(userRef, { xp: increment(finalXPReward) });
+          }
+
+          const { awardBattlePassXpForDeployedSeason } = await import('../utils/awardBattlePassXp');
+          await awardBattlePassXpForDeployedSeason(currentUser.uid, finalXPReward);
+
+          if (isRivalBonus) {
+            newLog.push(`⚔️ Rival defeated! XP doubled (+${finalXPReward} XP).`);
           }
         } catch (error) {
           console.error('Error awarding XP:', error);

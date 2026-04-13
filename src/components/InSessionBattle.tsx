@@ -349,10 +349,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     liveEventMode?: string;
     reflectionAssessmentId?: string;
     reflectionPrompt?: string;
+    reflectionCollectHabit?: boolean;
+    reflectionCollectEvidence?: boolean;
   }>({});
   const [roomClassFlowSprint, setRoomClassFlowSprint] = useState<ClassFlowSprintState | null>(null);
+  const [sessionRoomHostUid, setSessionRoomHostUid] = useState<string>('');
   const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
+  const [reflectionPickCollectHabit, setReflectionPickCollectHabit] = useState(true);
+  const [reflectionPickCollectEvidence, setReflectionPickCollectEvidence] = useState(true);
   const [reflectionModalAssessments, setReflectionModalAssessments] = useState<Assessment[]>([]);
   const [brHostConfig, setBrHostConfig] = useState<BattleRoyaleHostConfig>(() => ({
     ...DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
@@ -675,15 +680,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       if (!session) {
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
         setRoomClassFlowSprint(null);
+        setSessionRoomHostUid('');
         return;
       }
 
+      setSessionRoomHostUid(typeof session.hostUid === 'string' ? session.hostUid : '');
       const rawRoom = session as unknown as Record<string, unknown>;
       setRoomReflectionMeta({
         liveEventMode: typeof rawRoom.liveEventMode === 'string' ? rawRoom.liveEventMode : undefined,
         reflectionAssessmentId:
           typeof rawRoom.reflectionAssessmentId === 'string' ? rawRoom.reflectionAssessmentId : undefined,
         reflectionPrompt: typeof rawRoom.reflectionPrompt === 'string' ? rawRoom.reflectionPrompt : undefined,
+        reflectionCollectHabit: rawRoom.reflectionCollectHabit === false ? false : true,
+        reflectionCollectEvidence: rawRoom.reflectionCollectEvidence === false ? false : true,
       });
       setRoomSessionStatus(typeof session.status === 'string' ? session.status : undefined);
       setMstMktOpen(rawRoom.mstMktOpen === true);
@@ -3165,11 +3174,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </div>
         )}
 
-      {!quizSession && (isSessionHost || roomClassFlowSprint) && currentUser && (
+      {!quizSession &&
+        roomReflectionMeta.liveEventMode !== 'reflection' &&
+        (isSessionHost || roomClassFlowSprint) &&
+        currentUser && (
         <LiveEventSprintPanel
           sessionId={sessionId}
           sprint={roomClassFlowSprint}
           sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
+          sessionHostUid={sessionRoomHostUid}
           isSessionHost={isSessionHost}
           currentUserId={currentUser.uid}
           userEmail={currentUser.email}
@@ -3477,6 +3490,23 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     placeholder="Shown to students above the evidence box"
                     style={{ width: '100%', padding: '0.45rem', borderRadius: 8, resize: 'vertical' }}
                   />
+                  <div style={{ marginTop: '0.65rem', fontWeight: 700 }}>Student fields (habit assessments)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.82rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={reflectionPickCollectHabit}
+                      onChange={(e) => setReflectionPickCollectHabit(e.target.checked)}
+                    />
+                    Ask for habit commitment
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: '0.82rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={reflectionPickCollectEvidence}
+                      onChange={(e) => setReflectionPickCollectEvidence(e.target.checked)}
+                    />
+                    Ask for evidence / reflection
+                  </label>
                 </div>
               </div>
             )}
@@ -3657,7 +3687,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 disabled={
                   quizStartLoading ||
                   ((liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && !selectedQuizId) ||
-                  (liveEventLaunchMode === 'reflection' && !reflectionPickAssessmentId.trim())
+                  (liveEventLaunchMode === 'reflection' && !reflectionPickAssessmentId.trim()) ||
+                  (liveEventLaunchMode === 'reflection' &&
+                    !reflectionPickCollectHabit &&
+                    !reflectionPickCollectEvidence)
                 }
                 onClick={async () => {
                   if (!currentUser) return;
@@ -3683,6 +3716,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           ? {
                               reflectionAssessmentId: reflectionPickAssessmentId.trim(),
                               reflectionPrompt: reflectionPickPrompt.trim() || null,
+                              reflectionCollectHabit: reflectionPickCollectHabit,
+                              reflectionCollectEvidence: reflectionPickCollectEvidence,
                             }
                           : {}),
                         updatedAt: serverTimestamp(),
@@ -3847,6 +3882,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
               reflectionPrompt={roomReflectionMeta.reflectionPrompt}
               liveEventMode={roomReflectionMeta.liveEventMode}
+              reflectionCollectHabit={roomReflectionMeta.reflectionCollectHabit}
+              reflectionCollectEvidence={roomReflectionMeta.reflectionCollectEvidence}
               isSessionHost={isSessionHost}
               currentUserId={currentUser.uid}
               displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}

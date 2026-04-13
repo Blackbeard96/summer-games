@@ -32,8 +32,12 @@ export interface ClassFlowSprintState {
   /** Bonus vault PP (students + users + vault cap) */
   rewardVaultPP: number;
   rewardXP: number;
+  /** When positive, host can deduct this much vault PP from each session player not marked complete (tracked in incompletePenaltiesGrantedUids). */
+  incompletePenaltyVaultPP: number;
   markedCompleteUids: string[];
   rewardsGrantedUids: string[];
+  /** Players who already had incompletePenaltyVaultPP applied for this sprint (idempotent). */
+  incompletePenaltiesGrantedUids: string[];
 }
 
 export type EnergyType = 'kinetic' | 'mental' | 'emotional' | 'spiritual';
@@ -87,6 +91,8 @@ export interface Season1BattlePassProgress {
   currentTier: number;
   battlePassXP: number;
   claimedRewardIds: string[];
+  /** When set to the active season id, the auto season-intro modal will not open again for that season. */
+  introSeenSeasonId?: string;
 }
 
 /** Nested under students/{uid}.season1 */

@@ -16,6 +16,8 @@ import {
   computeSessionEndPowerXp,
 } from './liveEventPowerStatsService';
 import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { updateChallengeProgressByType } from './dailyChallengeTracker';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -287,6 +289,13 @@ export async function trackElimination(
         const cap = v?.capacity ?? 1000;
         await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppFromElimination) });
       }
+
+      void updateChallengeProgressByType(eliminatorId, 'earn_pp', ppFromElimination).catch((err) =>
+        console.error('[inSessionStats] earn_pp daily challenge after elimination:', err)
+      );
+      void updateChallengeProgressByType(eliminatorId, 'defeat_enemies', 1).catch((err) =>
+        console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
+      );
 
       // Update session players so eliminator's in-session PP display reflects the grant
       const sessionRef = doc(db, 'inSessionRooms', sessionId);
@@ -774,6 +783,9 @@ export async function finalizeSessionStats(
               : { spiritual: amount };
       await awardLiveEventPowerGain(playerId, gain);
       liveEventPowerGains[playerId] = gain;
+
+      // Power stats use `students.stats.*`; battle pass season XP is separate — credit the same performance there too.
+      await awardBattlePassXpForDeployedSeason(playerId, amount);
     }
 
     // Sync each player's vault health and shield from session state so Live Event impact persists globally

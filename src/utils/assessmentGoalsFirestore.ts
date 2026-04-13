@@ -1353,18 +1353,38 @@ async function appendEvidenceToAssessmentGoalDoc(
 /**
  * Student submits Live Event reflection text into the same Evidence field admins see
  * on Assessment Goals Dashboard (habits → habitSubmissions; other goals → assessmentGoals).
+ *
+ * For **habits** assessments, hosts can require **habit commitment** (habitText), **evidence**, or both
+ * via `collectHabit` / `collectEvidence` (default true when omitted). New habit rows are created with
+ * duration `1_week` when the student submits a commitment and had no submission yet.
  */
 export async function submitLiveEventReflectionToAssessment(params: {
   assessmentId: string;
   studentId: string;
   classId: string;
   sessionId: string;
-  reflectionText: string;
+  /** Non-habits: required. Habits: optional if structured fields are used. */
+  reflectionText?: string;
+  /** Habits: maps to Habit Commitment / habitText */
+  habitCommitmentText?: string;
+  /** Habits: merged into Evidence on the habit submission */
+  evidenceText?: string;
+  /** When false, habit commitment is not collected this session (habits only). */
+  collectHabit?: boolean;
+  /** When false, evidence is not collected this session (habits only). */
+  collectEvidence?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { assessmentId, studentId, classId, sessionId, reflectionText } = params;
-  const text = reflectionText.trim();
-  if (!text) return { ok: false, error: 'Reflection cannot be empty.' };
-  if (text.length > 4000) return { ok: false, error: 'Reflection is too long (max 4000 characters).' };
+  const {
+    assessmentId,
+    studentId,
+    classId,
+    sessionId,
+    reflectionText = '',
+    habitCommitmentText = '',
+    evidenceText = '',
+    collectHabit: collectHabitParam,
+    collectEvidence: collectEvidenceParam,
+  } = params;
 
   const assessment = await getAssessment(assessmentId);
   if (!assessment) return { ok: false, error: 'Assessment not found.' };
@@ -1374,29 +1394,97 @@ export async function submitLiveEventReflectionToAssessment(params: {
 
   const sessionLabel = sessionId.length > 10 ? `${sessionId.slice(0, 8)}…` : sessionId;
 
+  const awardReflectionXp = async (combinedForQuality: string) => {
+    const t = combinedForQuality.trim();
+    if (!t) return;
+    try {
+      const { awardPowerXpForReflectionSubmission } = await import('./liveEventPowerStatsService');
+      const goalLinked = /\bgoal\b/i.test(t) || /\bhabit\b/i.test(t);
+      await awardPowerXpForReflectionSubmission(studentId, t.length, {
+        goalLinked,
+        qualityBonus: t.length >= 200,
+      });
+    } catch (e) {
+      console.warn('Emotional Power XP (reflection) failed:', e);
+    }
+  };
+
   try {
     if (assessment.type === 'habits') {
+      const collectHabit = collectHabitParam !== false;
+      const collectEvidence = collectEvidenceParam !== false;
+      if (!collectHabit && !collectEvidence) {
+        return { ok: false, error: 'The host must enable at least one of habit or evidence for this reflection.' };
+      }
+
+      const habitIn = habitCommitmentText.trim();
+      const evidIn = (evidenceText.trim() || reflectionText.trim());
+
+      if (collectHabit) {
+        if (habitIn.length > 0 && (habitIn.length < 3 || habitIn.length > 180)) {
+          return { ok: false, error: 'Habit commitment must be between 3 and 180 characters.' };
+        }
+        if (habitIn.length === 0) {
+          return { ok: false, error: 'Enter the habit you are committing to.' };
+        }
+      }
+
+      if (collectEvidence) {
+        if (!evidIn) {
+          return { ok: false, error: 'Enter evidence of your commitment (what you did or will do).' };
+        }
+        if (evidIn.length > 4000) {
+          return { ok: false, error: 'Evidence is too long (max 4000 characters).' };
+        }
+      }
+
       const sub = await getHabitSubmission(assessmentId, studentId);
+
+      if (collectHabit && collectEvidence) {
+        const mergedEvid = mergeReflectionIntoEvidence(sub?.evidence ?? null, evidIn, sessionLabel);
+        if (!sub) {
+          await createHabitSubmission(
+            assessmentId,
+            studentId,
+            assessment.classId,
+            habitIn,
+            '1_week',
+            mergedEvid
+          );
+        } else {
+          await updateHabitSubmissionGoal(assessmentId, studentId, habitIn, sub.duration, mergedEvid);
+        }
+        await awardReflectionXp(`${habitIn}\n\n${evidIn}`);
+        return { ok: true };
+      }
+
+      if (collectHabit && !collectEvidence) {
+        if (!sub) {
+          await createHabitSubmission(assessmentId, studentId, assessment.classId, habitIn, '1_week', null);
+        } else {
+          await updateHabitSubmissionGoal(assessmentId, studentId, habitIn, sub.duration, undefined);
+        }
+        await awardReflectionXp(habitIn);
+        return { ok: true };
+      }
+
+      // Evidence only — requires an existing habit row (commitment was set elsewhere).
       if (!sub) {
         return {
           ok: false,
-          error: 'No habit goal found for this assessment. Set your goal under Assessment Goals first.',
+          error:
+            'No habit goal found for this assessment yet. Ask your teacher to enable the habit field for this reflection, or set your habit under Assessment Goals first.',
         };
       }
-      const merged = mergeReflectionIntoEvidence(sub.evidence ?? null, text, sessionLabel);
+      const merged = mergeReflectionIntoEvidence(sub.evidence ?? null, evidIn, sessionLabel);
       await updateHabitSubmission(assessmentId, studentId, { evidence: merged });
-      try {
-        const { awardPowerXpForReflectionSubmission } = await import('./liveEventPowerStatsService');
-        const goalLinked = /\bgoal\b/i.test(text) || merged.includes('goal');
-        await awardPowerXpForReflectionSubmission(studentId, text.length, {
-          goalLinked,
-          qualityBonus: text.length >= 200,
-        });
-      } catch (e) {
-        console.warn('Emotional Power XP (reflection) failed:', e);
-      }
+      await awardReflectionXp(evidIn);
       return { ok: true };
     }
+
+    const text = reflectionText.trim();
+    if (!text) return { ok: false, error: 'Reflection cannot be empty.' };
+    if (text.length > 4000) return { ok: false, error: 'Reflection is too long (max 4000 characters).' };
 
     const goal = await getAssessmentGoal(assessmentId, studentId);
     if (!goal) {
@@ -1407,16 +1495,7 @@ export async function submitLiveEventReflectionToAssessment(params: {
     }
     const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, text, sessionLabel);
     await appendEvidenceToAssessmentGoalDoc(assessmentId, studentId, merged);
-    try {
-      const { awardPowerXpForReflectionSubmission } = await import('./liveEventPowerStatsService');
-      const goalLinked = /\bgoal\b/i.test(text) || merged.includes('goal');
-      await awardPowerXpForReflectionSubmission(studentId, text.length, {
-        goalLinked,
-        qualityBonus: text.length >= 200,
-      });
-    } catch (e) {
-      console.warn('Emotional Power XP (reflection) failed:', e);
-    }
+    await awardReflectionXp(text);
     return { ok: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

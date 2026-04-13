@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
@@ -20,6 +20,8 @@ import {
 } from '../utils/missionsService';
 import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal';
 import { consumeHomeHubMissionsHighlight } from '../utils/earnPowerPointsHomeIntent';
+import { mergeSeason1FromStudentData } from '../utils/season1PlayerHydration';
+import { markBattlePassIntroSeenForSeason } from '../utils/awardBattlePassXp';
 
 // Season 0 Battle Pass Tiers - Each tier requires 1000 XP more than the previous
 const season0Tiers = [
@@ -79,6 +81,9 @@ const Home: React.FC = () => {
   );
   const [showWaysToEarnPp, setShowWaysToEarnPp] = useState(false);
   const [highlightHomeHubMissions, setHighlightHomeHubMissions] = useState(false);
+  const [bpIntroSeasonId, setBpIntroSeasonId] = useState<string | null>(null);
+  const [bpIntroSeen, setBpIntroSeen] = useState(false);
+  const [bpIntroStateReady, setBpIntroStateReady] = useState(false);
 
   // Use shared journey status hook
   const journeyStatus = useJourneyStatus(currentUser?.uid || null);
@@ -154,13 +159,25 @@ const Home: React.FC = () => {
   // Fetch user level, active deployed battle pass (seasons/), Season 0 claim doc, intro flags
   useEffect(() => {
     const fetchUserData = async () => {
-      if (!currentUser) return;
+      if (!currentUser) {
+        setBpIntroStateReady(false);
+        return;
+      }
+
+      setBpIntroStateReady(false);
 
       try {
         const [userDoc, activeSeason] = await Promise.all([
           getDoc(doc(db, 'students', currentUser.uid)),
           fetchActiveBattlePassSeason(),
         ]);
+
+        const seasonId = activeSeason?.id?.trim() || null;
+        const syncBpIntro = (userData: Record<string, unknown> | undefined) => {
+          const s1 = mergeSeason1FromStudentData(userData?.season1 as Record<string, unknown> | undefined);
+          setBpIntroSeasonId(seasonId);
+          setBpIntroSeen(!!(seasonId && s1.battlePass.introSeenSeasonId === seasonId));
+        };
 
         if (userDoc.exists()) {
           const userData = userDoc.data();
@@ -178,11 +195,13 @@ const Home: React.FC = () => {
             calculateTier
           );
           setBpDisplay(disp);
+          syncBpIntro(userData as Record<string, unknown>);
         } else {
           setShowSeason0Intro(true);
           setBpDisplay(
             computeHomeBattlePassDisplay(undefined, activeSeason, season0Tiers.length, calculateTier)
           );
+          syncBpIntro(undefined);
         }
 
         const battlePassRef = doc(db, 'battlePass', `${currentUser.uid}_season0`);
@@ -202,6 +221,8 @@ const Home: React.FC = () => {
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
+      } finally {
+        setBpIntroStateReady(true);
       }
     };
 
@@ -228,10 +249,20 @@ const Home: React.FC = () => {
           calculateTier
         )
       );
+      const sid = activeSeason?.id?.trim() || null;
+      const s1 = mergeSeason1FromStudentData(userData?.season1 as Record<string, unknown> | undefined);
+      setBpIntroSeasonId(sid);
+      setBpIntroSeen(!!(sid && s1.battlePass.introSeenSeasonId === sid));
     } catch (error) {
       console.error('Error refreshing Battle Pass progress:', error);
     }
   };
+
+  const handleBattlePassIntroDismissed = useCallback(async () => {
+    if (!currentUser || !bpIntroSeasonId) return;
+    await markBattlePassIntroSeenForSeason(currentUser.uid, bpIntroSeasonId);
+    setBpIntroSeen(true);
+  }, [currentUser, bpIntroSeasonId]);
 
   return (
     <>
@@ -344,6 +375,11 @@ const Home: React.FC = () => {
           battlePassFlowDescription="Redirect energy with intention, purpose, and focus — the way Kon teaches. Survive the Unveiled."
           onEnergyMastery={() => navigate('/energy-mastery')}
           onBattlePassRefresh={handleBattlePassRefresh}
+          deployedBattlePassSeasonId={bpIntroSeasonId}
+          battlePassIntroAlreadySeen={bpIntroSeen}
+          deferBattlePassIntroAuto={showSeason0Intro}
+          onBattlePassIntroDismissed={handleBattlePassIntroDismissed}
+          battlePassIntroStateReady={bpIntroStateReady}
         />
 
         {/* NPC Mission Modals */}

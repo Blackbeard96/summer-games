@@ -666,8 +666,9 @@ const BattlePassSeasonAdmin: React.FC = () => {
                   Season intro video (optional)
                 </div>
                 <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.45 }}>
-                  Upload or paste a URL for a single trailer-style video. Players see a “Season intro” control on the battle
-                  pass page when this or intro slides are set.
+                  Legacy fallback: used only when you have <strong>no</strong> intro sequence below. If you use slides + video
+                  steps, add your video there (e.g. slide first, then video) and clear this field so players do not see the
+                  same video twice.
                 </p>
                 <input
                   type="file"

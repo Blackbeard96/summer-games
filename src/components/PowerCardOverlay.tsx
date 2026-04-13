@@ -5,7 +5,7 @@
  * Contains tabs: Live Feed (default), Daily Challenges, Battle Pass
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LiveFeedCompact from './LiveFeedCompact';
 import DailyChallengesCompact from './DailyChallengesCompact';
@@ -41,6 +41,16 @@ interface PowerCardOverlayProps {
   battlePassFlowDescription?: string;
   onEnergyMastery?: () => void;
   onBattlePassRefresh: () => void;
+  /** Active deployed season id from `seasons/` — used for intro “seen” persistence */
+  deployedBattlePassSeasonId?: string | null;
+  /** True after `students.season1.battlePass.introSeenSeasonId` matches the active season */
+  battlePassIntroAlreadySeen?: boolean;
+  /** When true, delay auto-opening the season intro (e.g. Season 0 welcome modal is open) */
+  deferBattlePassIntroAuto?: boolean;
+  /** Called whenever the season intro modal closes (Done, Close, backdrop, Escape) so we can mark seen */
+  onBattlePassIntroDismissed?: () => void | Promise<void>;
+  /** When false, do not auto-open intro (wait until Home has loaded `students` + active season) */
+  battlePassIntroStateReady?: boolean;
 }
 
 const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
@@ -61,14 +71,50 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
   battlePassFlowDescription,
   onEnergyMastery,
   onBattlePassRefresh,
+  deployedBattlePassSeasonId,
+  battlePassIntroAlreadySeen,
+  deferBattlePassIntroAuto,
+  onBattlePassIntroDismissed,
+  battlePassIntroStateReady = false,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('live');
   const [showBattlePassModal, setShowBattlePassModal] = useState(false);
   const [showBattlePassIntroModal, setShowBattlePassIntroModal] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const battlePassIntroAutoOpenedRef = useRef(false);
 
   const navigate = useNavigate();
+
+  const closeBattlePassIntroModal = useCallback(() => {
+    setShowBattlePassIntroModal(false);
+    const p = onBattlePassIntroDismissed?.();
+    if (p && typeof (p as Promise<void>).then === 'function') {
+      void (p as Promise<void>).catch((e) => console.warn('[PowerCardOverlay] intro dismiss callback', e));
+    }
+  }, [onBattlePassIntroDismissed]);
+
+  useEffect(() => {
+    battlePassIntroAutoOpenedRef.current = false;
+  }, [deployedBattlePassSeasonId]);
+
+  useEffect(() => {
+    if (battlePassIntroStateReady !== true) return;
+    if (deferBattlePassIntroAuto) return;
+    if (!deployedBattlePassActive || !battlePassIntroAvailable) return;
+    if (!deployedBattlePassSeasonId?.trim()) return;
+    if (battlePassIntroAlreadySeen) return;
+    if (battlePassIntroAutoOpenedRef.current) return;
+    battlePassIntroAutoOpenedRef.current = true;
+    setShowBattlePassIntroModal(true);
+  }, [
+    battlePassIntroStateReady,
+    deferBattlePassIntroAuto,
+    deployedBattlePassActive,
+    battlePassIntroAvailable,
+    deployedBattlePassSeasonId,
+    battlePassIntroAlreadySeen,
+  ]);
 
   useEffect(() => {
     // Load last selected tab from localStorage
@@ -290,7 +336,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
         )}
         <BattlePassIntroExperienceModal
           open={showBattlePassIntroModal}
-          onClose={() => setShowBattlePassIntroModal(false)}
+          onClose={closeBattlePassIntroModal}
           seasonTitle={battlePassSeasonSubtitle?.trim() || 'Battle Pass'}
           heroVideoUrl={battlePassIntroVideoUrl}
           introSteps={battlePassIntroSequence ?? []}
@@ -505,7 +551,7 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
       )}
       <BattlePassIntroExperienceModal
         open={showBattlePassIntroModal}
-        onClose={() => setShowBattlePassIntroModal(false)}
+        onClose={closeBattlePassIntroModal}
         seasonTitle={battlePassSeasonSubtitle?.trim() || 'Battle Pass'}
         heroVideoUrl={battlePassIntroVideoUrl}
         introSteps={battlePassIntroSequence ?? []}

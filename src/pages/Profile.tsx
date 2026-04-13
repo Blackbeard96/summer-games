@@ -28,6 +28,10 @@ import { getMergedRRCandyStatus, getRRCandyStatus } from '../utils/rrCandyUtils'
 import { normalizePlayerPowerStats } from '../utils/liveEventPowerStatsService';
 import PowerStatProgressBar from '../components/PowerStatProgressBar';
 import WaysToEarnPowerPointsModal from '../components/WaysToEarnPowerPointsModal';
+import {
+  artifactRequiresUxpStyleApproval,
+  markUserArtifactPendingStaffApproval,
+} from '../utils/artifactsRequiringStaffApproval';
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -810,15 +814,12 @@ const Profile = () => {
     }
   };
 
-  // Helper function to check if an artifact is a UXP credit artifact
-  // UXP credits require admin approval before being applied to assignments
-  const isUXPArtifact = (artifact: any): boolean => {
-    if (!artifact) return false;
-    const name = artifact.name || '';
-    const id = artifact.id || '';
-    // Check by name (contains "UXP") or by ID (starts with "uxp-credit")
-    return name.includes('UXP') || id.startsWith('uxp-credit');
-  };
+  /** UXP credits and Assignment Pass stay out of “Available” while awaiting staff approval */
+  const isAwaitingStaffArtifactApproval = (artifact: any): boolean =>
+    artifactRequiresUxpStyleApproval(artifact) &&
+    (artifact.pendingApproval === true ||
+      artifact.approvalStatus === 'pending' ||
+      artifact.pending === true);
 
   // Function to handle admin approval/rejection of UXP artifacts
   // UXP credits are ONLY applied after admin approval - they are marked as "pending" when used
@@ -1915,10 +1916,10 @@ const Profile = () => {
               {/* Available Artifacts - 2 columns with vertical scroll (only consumable artifacts, equippable ones are on Artifacts page) */}
                 {Array.isArray(userData?.artifacts) && userData.artifacts.filter((artifact: any) => {
                   const enhanced = enhanceLegacyItem(artifact);
-                  // Filter out: used artifacts, equippable artifacts, and pending UXP artifacts
+                  // Filter out: used artifacts, equippable artifacts, and pending staff-approval artifacts
                   return !enhanced.used && 
                          !isEquippableArtifact(artifact) && 
-                         !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                         !isAwaitingStaffArtifactApproval(enhanced);
                 }).length > 0 && (
                   <div style={{ marginBottom: '2rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
@@ -1926,16 +1927,16 @@ const Profile = () => {
                         const enhanced = enhanceLegacyItem(a);
                         return !enhanced.used && 
                                !isEquippableArtifact(a) && 
-                               !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                               !isAwaitingStaffArtifactApproval(enhanced);
                       }).length : 0})
                     </h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                       {userData.artifacts.filter((artifact: any) => {
                         const enhanced = enhanceLegacyItem(artifact);
-                        // Filter out: used artifacts, equippable artifacts, and pending UXP artifacts
+                        // Filter out: used artifacts, equippable artifacts, and pending staff-approval artifacts
                         return !enhanced.used && 
                                !isEquippableArtifact(artifact) && 
-                               !(isUXPArtifact(enhanced) && (enhanced.pendingApproval === true || enhanced.approvalStatus === 'pending'));
+                               !isAwaitingStaffArtifactApproval(enhanced);
                       }).map((artifact: any, index: number) => {
                         const enhancedArtifact = enhanceLegacyItem(artifact);
                         const getRarityColor = (rarity: string) => {
@@ -2341,124 +2342,99 @@ const Profile = () => {
                                     console.error('Error using Double PP Boost:', error);
                                     alert('Error using Double PP Boost. Please try again.');
                                   }
+                                } else if (artifactRequiresUxpStyleApproval(enhancedArtifact)) {
+                                  const submit = await markUserArtifactPendingStaffApproval(currentUser.uid, {
+                                    id: enhancedArtifact.id,
+                                    name: enhancedArtifact.name,
+                                    description: enhancedArtifact.description,
+                                    icon: enhancedArtifact.icon,
+                                    image: enhancedArtifact.image,
+                                    category: enhancedArtifact.category,
+                                    rarity: enhancedArtifact.rarity,
+                                  });
+                                  if (!submit.ok) {
+                                    alert(submit.error || 'Could not submit this request. Try again or refresh the page.');
+                                    return;
+                                  }
+                                  const userRef = doc(db, 'users', currentUser.uid);
+                                  const updatedUserSnap = await getDoc(userRef);
+                                  if (updatedUserSnap.exists()) {
+                                    setUserData(updatedUserSnap.data());
+                                  }
+                                  const nm = String(enhancedArtifact.name ?? '').toLowerCase();
+                                  if (nm.includes('uxp')) {
+                                    alert(
+                                      'Your UXP Credit request has been sent to the admin for approval. The credit will be applied to your assignment after approval.'
+                                    );
+                                  } else {
+                                    alert(
+                                      'Your Assignment Pass request has been sent for staff approval. Full credit will apply after approval (subject to assignment type rules).'
+                                    );
+                                  }
                                 } else {
-                                  // Handle other artifacts - use immediately without admin approval
-                                  // Mark artifact as used directly
+                                  // Use immediately — mark one instance used and remove from students inventory
                                   const userRef = doc(db, 'users', currentUser.uid);
                                   const userSnap = await getDoc(userRef);
                                   if (userSnap.exists()) {
                                     const userData = userSnap.data();
-                                    // Only mark ONE instance as used, not all of them
                                     let foundOne = false;
-                                    const updatedArtifacts = Array.isArray(userData?.artifacts) ? userData.artifacts.map((artifact: any) => {
-                                      if (foundOne) return artifact;
-                                      
-                                      if (typeof artifact === 'string') {
-                                        if (artifact === enhancedArtifact.name) {
-                                          foundOne = true;
-                                          return { 
-                                            id: enhancedArtifact.id,
-                                            name: enhancedArtifact.name,
-                                            description: enhancedArtifact.description,
-                                            icon: enhancedArtifact.icon,
-                                            image: enhancedArtifact.image,
-                                            category: enhancedArtifact.category,
-                                            rarity: enhancedArtifact.rarity,
-                                            purchasedAt: null,
-                                            used: true,
-                                            isLegacy: true
-                                          };
-                                        }
-                                        return artifact;
-                                      } else {
-                                        // Only mark as used if it's not already used (check for used property explicitly)
-                                        const isNotUsed = artifact.used === false || artifact.used === undefined || artifact.used === null;
-                                        if ((artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) && isNotUsed) {
-                                          foundOne = true;
-                                          return { ...artifact, used: true, usedAt: new Date() };
-                                        }
-                                        return artifact;
-                                      }
-                                    }) : [];
-                                    
-                                    // CRITICAL: For UXP artifacts, mark as "pending" instead of "used"
-                                    // UXP credits require admin approval before being applied to assignments
-                                    // They are NOT applied automatically - they must be approved by an admin first
-                                    const isUXPArtifactCheck = isUXPArtifact(enhancedArtifact);
-                                    const artifactStatus = isUXPArtifactCheck ? 'pending' : 'used';
-                                    
-                                    const finalUpdatedArtifacts = updatedArtifacts.map((artifact: any) => {
-                                      // Handle both legacy artifacts (strings) and new artifacts (objects)
-                                      if (typeof artifact === 'string') {
-                                        // Legacy artifact stored as string - match by name
-                                        if (artifact === enhancedArtifact.name) {
-                                          return { 
-                                            id: enhancedArtifact.id,
-                                            name: enhancedArtifact.name,
-                                            description: enhancedArtifact.description,
-                                            icon: enhancedArtifact.icon,
-                                            image: enhancedArtifact.image,
-                                            category: enhancedArtifact.category,
-                                            rarity: enhancedArtifact.rarity,
-                                            purchasedAt: null,
-                                            used: artifactStatus === 'used',
-                                            pending: artifactStatus === 'pending',
-                                            submittedAt: new Date(),
-                                            isLegacy: true,
-                                            ...(artifactStatus === 'pending'
-                                              ? { pendingApproval: true, approvalStatus: 'pending' as const }
-                                              : {}),
-                                          };
-                                        }
-                                        return artifact;
-                                      } else {
-                                        // New artifact stored as object - match by ID or name
-                                        if (artifact.id === enhancedArtifact.id || artifact.name === enhancedArtifact.name) {
-                                          return { 
-                                            ...artifact, 
-                                            used: artifactStatus === 'used',
-                                            pending: artifactStatus === 'pending',
-                                            submittedAt: new Date(),
-                                            ...(artifactStatus === 'pending'
-                                              ? { pendingApproval: true, approvalStatus: 'pending' as const }
-                                              : {}),
-                                          };
-                                        }
-                                        return artifact;
-                                      }
-                                    });
-                                    
+                                    const finalUpdatedArtifacts = Array.isArray(userData?.artifacts)
+                                      ? userData.artifacts.map((artifact: any) => {
+                                          if (foundOne) return artifact;
+
+                                          if (typeof artifact === 'string') {
+                                            if (artifact === enhancedArtifact.name) {
+                                              foundOne = true;
+                                              return {
+                                                id: enhancedArtifact.id,
+                                                name: enhancedArtifact.name,
+                                                description: enhancedArtifact.description,
+                                                icon: enhancedArtifact.icon,
+                                                image: enhancedArtifact.image,
+                                                category: enhancedArtifact.category,
+                                                rarity: enhancedArtifact.rarity,
+                                                purchasedAt: null,
+                                                used: true,
+                                                isLegacy: true,
+                                              };
+                                            }
+                                            return artifact;
+                                          }
+                                          const isNotUsed =
+                                            artifact.used === false ||
+                                            artifact.used === undefined ||
+                                            artifact.used === null;
+                                          if (
+                                            (artifact.id === enhancedArtifact.id ||
+                                              artifact.name === enhancedArtifact.name) &&
+                                            isNotUsed
+                                          ) {
+                                            foundOne = true;
+                                            return { ...artifact, used: true, usedAt: new Date() };
+                                          }
+                                          return artifact;
+                                        })
+                                      : [];
+
                                     await updateDoc(userRef, {
-                                      artifacts: finalUpdatedArtifacts
+                                      artifacts: finalUpdatedArtifacts,
                                     });
-                                    
-                                    // For UXP artifacts, don't remove from students inventory yet (wait for admin approval)
-                                    // UXP credits are only removed from inventory after admin approval
-                                    if (!isUXPArtifactCheck) {
-                                      // Also update the students collection inventory for non-UXP artifacts
-                                      const studentsRef = doc(db, 'students', currentUser.uid);
-                                      const studentsSnap = await getDoc(studentsRef);
-                                      if (studentsSnap.exists()) {
-                                        const studentsData = studentsSnap.data();
-                                        const currentInventory = studentsData.inventory || [];
-                                        const updatedInventory = currentInventory.filter((item: string) => item !== enhancedArtifact.name);
-                                        
-                                        await updateDoc(studentsRef, {
-                                          inventory: updatedInventory
-                                        });
-                                        
-                                        console.log('✅ Students inventory updated for non-UXP artifact:', updatedInventory);
-                                      }
+
+                                    const studentsRef = doc(db, 'students', currentUser.uid);
+                                    const studentsSnap = await getDoc(studentsRef);
+                                    if (studentsSnap.exists()) {
+                                      const studentsData = studentsSnap.data();
+                                      const currentInventory = studentsData.inventory || [];
+                                      const updatedInventory = currentInventory.filter(
+                                        (item: string) => item !== enhancedArtifact.name
+                                      );
+
+                                      await updateDoc(studentsRef, {
+                                        inventory: updatedInventory,
+                                      });
                                     }
-                                    
-                                    console.log(`✅ Artifact marked as ${artifactStatus} for admin request:`, finalUpdatedArtifacts);
-                                    
-                                    // Show appropriate message based on artifact type
-                                    if (isUXPArtifactCheck) {
-                                      alert('Your UXP Credit request has been sent to the admin for approval. The credit will be applied to your assignment after approval.');
-                                    } else {
-                                      alert('Your request to use this artifact has been sent to the admin!');
-                                    }
+
+                                    alert('Your request to use this artifact has been sent to the admin!');
                                   }
                                 }
                               }}

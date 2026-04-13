@@ -7,6 +7,8 @@ import { collection, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import type { SessionStats } from '../../types/inSessionStats';
 
+const HUD_COLLAPSED_STORAGE_KEY = 'liveEventEconomyHudCollapsed';
+
 interface Props {
   sessionId: string;
   currentUserId: string | undefined;
@@ -29,6 +31,21 @@ const LiveEventEconomyHud: React.FC<Props> = ({
   const [ppReleasedTotal, setPpReleasedTotal] = useState(0);
   const [myStats, setMyStats] = useState<SessionStats | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage.getItem(HUD_COLLAPSED_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HUD_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [collapsed]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -65,6 +82,38 @@ const LiveEventEconomyHud: React.FC<Props> = ({
   const ppEarnedMe = myStats ? Math.max(0, Math.floor(Number(myStats.ppEarned) || 0)) : 0;
   const ppSpentMe = myStats ? Math.max(0, Math.floor(Number(myStats.ppSpent) || 0)) : 0;
 
+  if (collapsed) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 100,
+          left: 12,
+          zIndex: 55,
+          pointerEvents: 'auto',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          style={{
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: '1px solid rgba(56, 189, 248, 0.45)',
+            borderRadius: '0.5rem',
+            padding: '0.4rem 0.65rem',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            color: '#38bdf8',
+            cursor: 'pointer',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
+          }}
+        >
+          Show event info
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -79,6 +128,24 @@ const LiveEventEconomyHud: React.FC<Props> = ({
         pointerEvents: 'auto',
       }}
     >
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          style={{
+            background: 'rgba(51, 65, 85, 0.85)',
+            border: '1px solid #64748b',
+            color: '#e2e8f0',
+            borderRadius: '0.25rem',
+            fontSize: '0.65rem',
+            cursor: 'pointer',
+            padding: '0.15rem 0.45rem',
+            fontWeight: 600,
+          }}
+        >
+          Hide event info
+        </button>
+      </div>
       <div
         style={{
           background: 'rgba(15, 23, 42, 0.92)',

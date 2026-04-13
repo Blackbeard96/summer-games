@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, doc, updateDoc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { artifactRequiresUxpStyleApproval } from '../utils/artifactsRequiringStaffApproval';
 
 interface PendingUXPArtifact {
   userId: string;
@@ -24,13 +25,6 @@ function isPendingUxPRequest(artifact: Record<string, unknown> | null | undefine
     artifact.pending === true ||
     artifact.status === 'pending'
   );
-}
-
-function isUxPArtifactLike(artifact: { name?: string; id?: string } | null | undefined): boolean {
-  if (!artifact) return false;
-  const name = String(artifact.name ?? '');
-  const id = String(artifact.id ?? '');
-  return name.includes('UXP') || id.startsWith('uxp-credit');
 }
 
 const UXPApproval: React.FC = () => {
@@ -110,7 +104,7 @@ const UXPApproval: React.FC = () => {
         // Check if artifacts is an array
         if (Array.isArray(artifacts)) {
           artifacts.forEach((artifact: any, index: number) => {
-            if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+            if (artifactRequiresUxpStyleApproval(artifact) && isPendingUxPRequest(artifact)) {
               allPending.push({
                 userId: userDoc.id,
                 userDisplayName: userInfo.displayName,
@@ -129,7 +123,7 @@ const UXPApproval: React.FC = () => {
           Object.keys(artifacts).forEach(key => {
             if (key.includes('_purchase')) {
               const artifact = artifacts[key];
-              if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+              if (artifactRequiresUxpStyleApproval(artifact) && isPendingUxPRequest(artifact)) {
                 const baseId = key.replace(/_purchase$/i, '');
                 allPending.push({
                   userId: userDoc.id,
@@ -158,7 +152,7 @@ const UXPApproval: React.FC = () => {
 
         if (Array.isArray(artifacts)) {
           artifacts.forEach((artifact: any, index: number) => {
-            if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+            if (artifactRequiresUxpStyleApproval(artifact) && isPendingUxPRequest(artifact)) {
               const exists = allPending.some(
                 (p) => p.userId === studentDoc.id && p.artifactKey === `array_${index}`
               );
@@ -181,7 +175,7 @@ const UXPApproval: React.FC = () => {
           Object.keys(artifacts).forEach((key) => {
             if (key.includes('_purchase')) {
               const artifact = artifacts[key];
-              if (isUxPArtifactLike(artifact) && isPendingUxPRequest(artifact)) {
+              if (artifactRequiresUxpStyleApproval(artifact) && isPendingUxPRequest(artifact)) {
                 const baseId = key.replace(/_purchase$/i, '');
                 const exists = allPending.some(
                   (p) => p.userId === studentDoc.id && p.artifactKey === key
@@ -235,7 +229,7 @@ const UXPApproval: React.FC = () => {
           (art: any) =>
             !(
               art?.id === pending.artifactId &&
-              isUxPArtifactLike(art) &&
+              artifactRequiresUxpStyleApproval(art) &&
               isPendingUxPRequest(art)
             )
         );
@@ -253,8 +247,14 @@ const UXPApproval: React.FC = () => {
           batch.update(userRef, { artifacts: filterArrayApprove(artifacts) });
         } else {
           const updatedArtifacts = { ...artifacts };
-          delete updatedArtifacts[pending.artifactId];
-          delete updatedArtifacts[`${pending.artifactId}_purchase`];
+          if (typeof pending.artifactKey === 'string' && pending.artifactKey.endsWith('_purchase')) {
+            const base = pending.artifactKey.replace(/_purchase$/i, '');
+            delete updatedArtifacts[pending.artifactKey];
+            delete updatedArtifacts[base];
+          } else {
+            delete updatedArtifacts[pending.artifactId];
+            delete updatedArtifacts[`${pending.artifactId}_purchase`];
+          }
           batch.update(userRef, { artifacts: updatedArtifacts });
         }
       }
@@ -272,8 +272,14 @@ const UXPApproval: React.FC = () => {
           nextArtifacts = filterArrayApprove(artifacts);
         } else {
           const updatedArtifacts = { ...artifacts };
-          delete updatedArtifacts[pending.artifactId];
-          delete updatedArtifacts[`${pending.artifactId}_purchase`];
+          if (typeof pending.artifactKey === 'string' && pending.artifactKey.endsWith('_purchase')) {
+            const base = pending.artifactKey.replace(/_purchase$/i, '');
+            delete updatedArtifacts[pending.artifactKey];
+            delete updatedArtifacts[base];
+          } else {
+            delete updatedArtifacts[pending.artifactId];
+            delete updatedArtifacts[`${pending.artifactId}_purchase`];
+          }
           nextArtifacts = updatedArtifacts;
         }
         
@@ -317,9 +323,14 @@ const UXPApproval: React.FC = () => {
         
         if (Array.isArray(artifacts)) {
           const updatedArtifacts = artifacts.map((art: any) => {
-            if (art.id === pending.artifactId && (art.pendingApproval === true || art.approvalStatus === 'pending')) {
+            if (
+              art?.id === pending.artifactId &&
+              artifactRequiresUxpStyleApproval(art) &&
+              isPendingUxPRequest(art)
+            ) {
               return {
                 ...art,
+                pending: false,
                 pendingApproval: false,
                 approvalStatus: 'rejected',
                 rejectedAt: new Date(),
@@ -331,9 +342,14 @@ const UXPApproval: React.FC = () => {
           batch.update(userRef, { artifacts: updatedArtifacts });
         } else {
           const updatedArtifacts = { ...artifacts };
-          if (updatedArtifacts[`${pending.artifactId}_purchase`]) {
-            updatedArtifacts[`${pending.artifactId}_purchase`] = {
-              ...updatedArtifacts[`${pending.artifactId}_purchase`],
+          const purchaseKey =
+            typeof pending.artifactKey === 'string' && pending.artifactKey.endsWith('_purchase')
+              ? pending.artifactKey
+              : `${pending.artifactId}_purchase`;
+          if (updatedArtifacts[purchaseKey]) {
+            updatedArtifacts[purchaseKey] = {
+              ...updatedArtifacts[purchaseKey],
+              pending: false,
               pendingApproval: false,
               approvalStatus: 'rejected',
               rejectedAt: new Date(),
@@ -351,17 +367,43 @@ const UXPApproval: React.FC = () => {
       if (studentDoc.exists()) {
         const studentData = studentDoc.data();
         const artifacts = studentData.artifacts || {};
-        const updatedArtifacts = { ...artifacts };
-        if (updatedArtifacts[`${pending.artifactId}_purchase`]) {
-          updatedArtifacts[`${pending.artifactId}_purchase`] = {
-            ...updatedArtifacts[`${pending.artifactId}_purchase`],
-            pendingApproval: false,
-            approvalStatus: 'rejected',
-            rejectedAt: new Date(),
-            rejectedBy: currentUser.uid
-          };
+        if (Array.isArray(artifacts)) {
+          const updatedArtifacts = artifacts.map((art: any) => {
+            if (
+              art?.id === pending.artifactId &&
+              artifactRequiresUxpStyleApproval(art) &&
+              isPendingUxPRequest(art)
+            ) {
+              return {
+                ...art,
+                pending: false,
+                pendingApproval: false,
+                approvalStatus: 'rejected',
+                rejectedAt: new Date(),
+                rejectedBy: currentUser.uid
+              };
+            }
+            return art;
+          });
+          batch.update(studentRef, { artifacts: updatedArtifacts });
+        } else {
+          const updatedArtifacts = { ...artifacts };
+          const purchaseKey =
+            typeof pending.artifactKey === 'string' && pending.artifactKey.endsWith('_purchase')
+              ? pending.artifactKey
+              : `${pending.artifactId}_purchase`;
+          if (updatedArtifacts[purchaseKey]) {
+            updatedArtifacts[purchaseKey] = {
+              ...updatedArtifacts[purchaseKey],
+              pending: false,
+              pendingApproval: false,
+              approvalStatus: 'rejected',
+              rejectedAt: new Date(),
+              rejectedBy: currentUser.uid
+            };
+          }
+          batch.update(studentRef, { artifacts: updatedArtifacts });
         }
-        batch.update(studentRef, { artifacts: updatedArtifacts });
       }
 
       await batch.commit();
@@ -390,16 +432,17 @@ const UXPApproval: React.FC = () => {
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <p>Loading pending UXP artifacts...</p>
+        <p>Loading pending requests...</p>
       </div>
     );
   }
 
   return (
     <div style={{ padding: '2rem' }}>
-      <h2 style={{ marginBottom: '1.5rem' }}>UXP Credit Approval</h2>
+      <h2 style={{ marginBottom: '1.5rem' }}>UXP &amp; Assignment Pass approval</h2>
       <p style={{ marginBottom: '1.5rem', color: '#6b7280' }}>
-        Review and approve/reject pending UXP Credit purchases. Approved artifacts will be removed from player collections.
+        Review pending UXP Credit purchases and Assignment Pass uses. Approving removes the item from the player; rejecting
+        returns it to their inventory as not pending.
       </p>
 
       {pendingArtifacts.length === 0 ? (
@@ -410,7 +453,7 @@ const UXPApproval: React.FC = () => {
           borderRadius: '0.5rem',
           color: '#6b7280'
         }}>
-          <p>No pending UXP Credit artifacts to review.</p>
+          <p>No pending UXP Credit or Assignment Pass requests.</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
