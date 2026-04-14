@@ -30,16 +30,20 @@ export async function awardBattlePassXpForDeployedSeason(playerId: string, xpDel
   }
 
   try {
+    const nextBattlePass: Record<string, unknown> = {
+      ...bp,
+      currentSeasonId: activeId,
+      battlePassXP: nextXp,
+      currentTier: Math.max(0, Number(bp.currentTier) || 0),
+      claimedRewardIds: Array.isArray(bp.claimedRewardIds) ? bp.claimedRewardIds : [],
+    };
+    if (typeof bp.introSeenSeasonId === 'string' && bp.introSeenSeasonId.trim()) {
+      nextBattlePass.introSeenSeasonId = bp.introSeenSeasonId.trim();
+    }
     await updateDoc(ref, {
       season1: {
         ...s1,
-        battlePass: {
-          ...bp,
-          currentSeasonId: activeId,
-          battlePassXP: nextXp,
-          currentTier: Math.max(0, Number(bp.currentTier) || 0),
-          claimedRewardIds: Array.isArray(bp.claimedRewardIds) ? bp.claimedRewardIds : [],
-        },
+        battlePass: nextBattlePass,
       },
     });
   } catch (e) {

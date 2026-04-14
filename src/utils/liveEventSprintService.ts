@@ -19,6 +19,7 @@ import type { ClassFlowSprintState } from '../types/season1';
 import { trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { recordSprintMarkedCompleteForPlayer, recordSprintOpportunityForPlayers } from './weeklyGoalsService';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -264,6 +265,17 @@ export async function toggleClassFlowSprintMark(
         playerDisplayName || 'Player'
       );
       if (!g.ok) return { ok: false, error: g.error };
+
+      try {
+        const snap = await getDoc(ref);
+        const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
+        const startedMs = sprint ? tsToMillis(sprint.startedAt) : null;
+        if (startedMs != null) {
+          await recordSprintMarkedCompleteForPlayer(playerUid, startedMs, Date.now());
+        }
+      } catch (_) {
+        // best-effort weekly goals
+      }
     }
 
     return { ok: true };

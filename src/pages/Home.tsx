@@ -260,7 +260,13 @@ const Home: React.FC = () => {
       const sid = activeSeason?.id?.trim() || null;
       const s1 = mergeSeason1FromStudentData(userData?.season1 as Record<string, unknown> | undefined);
       setBpIntroSeasonId(sid);
-      setBpIntroSeen(!!(sid && s1.battlePass.introSeenSeasonId === sid));
+      setBpIntroSeen(
+        !!(
+          sid &&
+          currentUser &&
+          (s1.battlePass.introSeenSeasonId === sid || isBattlePassIntroDismissedLocally(currentUser.uid, sid))
+        )
+      );
     } catch (error) {
       console.error('Error refreshing Battle Pass progress:', error);
     }

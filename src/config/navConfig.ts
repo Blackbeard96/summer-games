@@ -124,6 +124,12 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
+              label: 'Weekly Goals',
+              path: '/weekly-goals',
+              icon: '📆',
+              visibility: 'all'
+            },
+            {
               label: 'Scorekeeper',
               path: '/scorekeeper',
               icon: '📊',

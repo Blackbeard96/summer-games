@@ -129,6 +129,16 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Weekly player goals (Live Event metrics + custom admin-verified)
+    match /students/{userId}/weeklyGoals/{goalId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId || isAdmin()
+      );
+      allow create, update, delete: if request.auth != null && (
+        request.auth.uid == userId || isAdmin()
+      );
+    }
+
     // Badge reward queue — RewardNotifier / BadgeRewardNotifier; BadgeManager creates docs for students.
     match /students/{userId}/badgeNotifications/{notificationId} {
       allow read: if request.auth != null && request.auth.uid == userId;

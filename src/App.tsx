@@ -173,6 +173,7 @@ const InSessionRoom = withRouteSplitting(() => import('./components/InSessionRoo
 const InSessionCreate = withRouteSplitting(() => import('./components/InSessionCreate'));
 const InSessionBattleView = withRouteSplitting(() => import('./components/InSessionBattleView'));
 const AssessmentGoalsStudent = withRouteSplitting(() => import('./components/AssessmentGoalsStudent'));
+const WeeklyGoalsPage = withRouteSplitting(() => import('./pages/WeeklyGoalsPage'));
 const TrainingGrounds = withRouteSplitting(() => import('./pages/TrainingGrounds'));
 const MissionRunner = withRouteSplitting(() => import('./pages/MissionRunner'));
 const Level2ManifestBuilderPage = withRouteSplitting(() => import('./pages/Level2ManifestBuilderPage'));
@@ -497,7 +498,8 @@ const AppContent = () => {
       '/squads': { title: 'Squads', description: 'Manage your team and collaborations' },
       '/admin': { title: "Sage's Chamber", description: 'Administrative panel' },
       '/scorekeeper': { title: 'Scorekeeper', description: 'Manage class power points' },
-      '/assessment-goals': { title: 'Assessment Goals', description: 'Set goals for tests and exams' }
+      '/assessment-goals': { title: 'Assessment Goals', description: 'Set goals for tests and exams' },
+      '/weekly-goals': { title: 'Weekly Goals', description: 'Live Event weekly goals and progress' }
     };
 
     const metadata = routeMetadata[path as keyof typeof routeMetadata];
@@ -618,6 +620,11 @@ const AppContent = () => {
             <Route path="/assessment-goals" element={
               <ProtectedRoute user={true}>
                 <AssessmentGoalsStudent />
+              </ProtectedRoute>
+            } />
+            <Route path="/weekly-goals" element={
+              <ProtectedRoute user={true}>
+                <WeeklyGoalsPage />
               </ProtectedRoute>
             } />
             <Route path="/island-raid" element={

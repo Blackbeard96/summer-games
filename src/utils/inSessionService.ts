@@ -21,6 +21,7 @@ import {
 import { debug, debugError } from './inSessionDebug';
 import { isUserAdmin } from './roleManagement';
 import { ensurePlayerStatsIfMissing, finalizeSessionStats, LIVE_EVENT_PP_BASE_PER_ELIMINATION, LIVE_EVENT_PP_PER_PARTICIPATION_POINT } from './inSessionStatsService';
+import { recordLiveEventParticipationForPlayer } from './weeklyGoalsService';
 
 export interface SessionPlayer {
   userId: string;
@@ -203,12 +204,12 @@ export async function getActiveSessionForClass(classId: string): Promise<InSessi
 /**
  * Join a session (idempotent - safe to call multiple times)
  * NOW TRANSACTION-SAFE: Uses Firestore transaction to prevent race conditions
- * Returns: { success: boolean, error?: string }
+ * Returns: { success: boolean, error?: string, isNewPlayer?: boolean }
  */
 export async function joinSession(
   sessionId: string,
   player: SessionPlayer
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; isNewPlayer?: boolean }> {
   const DEBUG_JOIN = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
                      process.env.REACT_APP_DEBUG === 'true';
   
@@ -263,7 +264,7 @@ export async function joinSession(
           } catch (_) {
             // stats heal is best-effort
           }
-          return { success: true };
+          return { success: true, isNewPlayer: false };
         }
       }
     } catch (quickCheckError) {
@@ -433,7 +434,7 @@ export async function joinSession(
                 startingPP: player.powerPoints
               });
             } catch (_) {}
-            return { success: true };
+            return { success: true, isNewPlayer: false };
           }
         }
       } catch (checkError) {

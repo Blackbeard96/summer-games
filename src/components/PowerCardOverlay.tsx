@@ -94,9 +94,11 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
     }
   }, [onBattlePassIntroDismissed]);
 
+  /** Only reset auto-open guard when the deployed season id changes and the user has not finished the intro yet. */
   useEffect(() => {
+    if (battlePassIntroAlreadySeen) return;
     battlePassIntroAutoOpenedRef.current = false;
-  }, [deployedBattlePassSeasonId]);
+  }, [deployedBattlePassSeasonId, battlePassIntroAlreadySeen]);
 
   useEffect(() => {
     if (battlePassIntroStateReady !== true) return;
