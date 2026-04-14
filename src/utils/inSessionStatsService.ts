@@ -17,7 +17,7 @@ import {
 } from './liveEventPowerStatsService';
 import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
-import { updateChallengeProgressByType } from './dailyChallengeTracker';
+import { trackPlayerAction } from './playerProgressionRewards';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -290,10 +290,10 @@ export async function trackElimination(
         await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppFromElimination) });
       }
 
-      void updateChallengeProgressByType(eliminatorId, 'earn_pp', ppFromElimination).catch((err) =>
+      void trackPlayerAction(eliminatorId, 'EARN_PP', ppFromElimination).catch((err) =>
         console.error('[inSessionStats] earn_pp daily challenge after elimination:', err)
       );
-      void updateChallengeProgressByType(eliminatorId, 'defeat_enemies', 1).catch((err) =>
+      void trackPlayerAction(eliminatorId, 'DEFEAT_ENEMY', 1).catch((err) =>
         console.error('[inSessionStats] defeat_enemies daily challenge after elimination:', err)
       );
 
@@ -870,6 +870,14 @@ export async function finalizeSessionStats(
 
       // Power stats use `students.stats.*`; battle pass season XP is separate — credit the same performance there too.
       await awardBattlePassXpForDeployedSeason(playerId, amount);
+    }
+
+    for (const playerId of Array.from(new Set(rewardPlayerIds))) {
+      try {
+        await trackPlayerAction(playerId, 'LIVE_EVENT_SESSION_FINALIZED', 1);
+      } catch (e) {
+        debugError('inSessionStats', 'LIVE_EVENT_SESSION_FINALIZED trackPlayerAction', e);
+      }
     }
 
     // Sync each player's vault health and shield from session state so Live Event impact persists globally

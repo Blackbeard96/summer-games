@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 interface TutorialStep {
   id: string;
@@ -357,38 +357,38 @@ const Tutorial: React.FC<TutorialProps> = ({ isOpen, onClose, tutorialId }) => {
     }
   };
 
-  const skipTutorial = async () => {
-    if (currentUser) {
-      try {
-        console.log(`Skipping tutorial: ${tutorialId}`);
-        const userRef = doc(db, 'users', currentUser.uid);
-        await updateDoc(userRef, {
-          [`tutorials.${tutorialId}.completed`]: true,
-          [`tutorials.${tutorialId}.skipped`]: true,
-          [`tutorials.${tutorialId}.completedAt`]: new Date()
-        });
-        console.log(`Tutorial ${tutorialId} marked as skipped`);
-      } catch (error) {
-        console.error('Error skipping tutorial:', error);
-      }
+  const persistTutorialOutcome = async (skipped: boolean) => {
+    if (!currentUser) return;
+    const uid = currentUser.uid;
+    const base: Record<string, unknown> = {
+      [`tutorials.${tutorialId}.completed`]: true,
+      [`tutorials.${tutorialId}.completedAt`]: serverTimestamp(),
+    };
+    if (skipped) {
+      base[`tutorials.${tutorialId}.skipped`] = true;
     }
+    try {
+      // setDoc+merge: works when users/students doc is missing; mirrors to students (primary player doc)
+      await setDoc(doc(db, 'users', uid), base, { merge: true });
+      await setDoc(doc(db, 'students', uid), base, { merge: true });
+      try {
+        localStorage.setItem(`xiotein_tutorial_done_${tutorialId}_${uid}`, '1');
+      } catch {
+        /* ignore */
+      }
+      console.log(`Tutorial ${tutorialId} persisted (${skipped ? 'skipped' : 'completed'})`);
+    } catch (error) {
+      console.error('Error persisting tutorial:', error);
+    }
+  };
+
+  const skipTutorial = async () => {
+    await persistTutorialOutcome(true);
     onClose();
   };
 
   const completeTutorial = async () => {
-    if (currentUser) {
-      try {
-        console.log(`Completing tutorial: ${tutorialId}`);
-        const userRef = doc(db, 'users', currentUser.uid);
-        await updateDoc(userRef, {
-          [`tutorials.${tutorialId}.completed`]: true,
-          [`tutorials.${tutorialId}.completedAt`]: new Date()
-        });
-        console.log(`Tutorial ${tutorialId} marked as completed`);
-      } catch (error) {
-        console.error('Error completing tutorial:', error);
-      }
-    }
+    await persistTutorialOutcome(false);
     onClose();
   };
 

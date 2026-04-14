@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Assessment, AssessmentGoal, HabitDuration, HabitSubmission } from '../types/assessmentGoals';
+import { Assessment, AssessmentGoal, HabitDuration, HabitEvidenceType, HabitSubmission } from '../types/assessmentGoals';
 import { setAssessmentGoal, createHabitSubmission, updateHabitSubmissionGoal } from '../utils/assessmentGoalsFirestore';
 import { validateGoalScore } from '../utils/assessmentGoals';
 import { useAuth } from '../context/AuthContext';
@@ -44,9 +44,12 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
     existingHabitSubmission?.duration || assessment.habitsConfig?.defaultDuration || '1_week'
   );
   
-  // Evidence field (for Story Goals and Habit Goals)
+  // Evidence field (for Story Goals and Habit Goals — `other` type only for habits)
   const [evidence, setEvidence] = useState<string>(
     existingGoal?.evidence || existingHabitSubmission?.evidence || ''
+  );
+  const [habitEvidenceType, setHabitEvidenceType] = useState<HabitEvidenceType>(
+    (existingHabitSubmission?.habitEvidenceType as HabitEvidenceType) || 'other'
   );
   
   // Update form when existingHabitSubmission or existingGoal changes
@@ -55,6 +58,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
       setHabitText(existingHabitSubmission.habitText);
       setDuration(existingHabitSubmission.duration);
       setEvidence(existingHabitSubmission.evidence || '');
+      setHabitEvidenceType((existingHabitSubmission.habitEvidenceType as HabitEvidenceType) || 'other');
     }
     if (existingGoal) {
       setTextGoal(existingGoal.textGoal || '');
@@ -75,6 +79,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
     habitText?: string;
     duration?: HabitDuration;
     evidence?: string;
+    habitEvidenceType?: HabitEvidenceType;
   } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -109,13 +114,16 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         }
         
         // Update existing habit submission or create new one
+        const evType: HabitEvidenceType = habitEvidenceType;
+        const evText = evType === 'other' ? evidence.trim() || null : null;
         if (existingHabitSubmission) {
           await updateHabitSubmissionGoal(
             assessment.id,
             currentUser.uid,
             trimmedText,
             duration,
-            evidence.trim() || null
+            evText,
+            evType
           );
         } else {
           await createHabitSubmission(
@@ -124,7 +132,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             assessment.classId,
             trimmedText,
             duration,
-            evidence.trim() || null
+            evText,
+            evType
           );
         }
         
@@ -133,7 +142,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           type: 'habit',
           habitText: trimmedText,
           duration,
-          evidence: evidence.trim() || undefined
+          evidence: evText || undefined,
+          habitEvidenceType: evType,
         });
       } else if (isStoryGoal) {
         // Story Goal (text-based, similar to habits)
@@ -286,15 +296,28 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                     {savedGoalData.duration ? getDurationLabel(savedGoalData.duration) : 'N/A'}
                   </p>
                 </div>
-                {savedGoalData.evidence && (
+                {savedGoalData.habitEvidenceType && savedGoalData.habitEvidenceType !== 'other' ? (
                   <div style={{ marginTop: '1rem' }}>
                     <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
-                      Area of Consistency:
+                      Evidence type:
                     </p>
-                    <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic' }}>
-                      "{savedGoalData.evidence}"
+                    <p style={{ margin: 0, color: '#6b7280' }}>
+                      {savedGoalData.habitEvidenceType === 'live_event_sprint_rate'
+                        ? 'Live Event — sprint completion rate (tracked automatically)'
+                        : 'Live Event — consistency by day (tracked automatically)'}
                     </p>
                   </div>
+                ) : (
+                  savedGoalData.evidence && (
+                    <div style={{ marginTop: '1rem' }}>
+                      <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                        Evidence:
+                      </p>
+                      <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic' }}>
+                        "{savedGoalData.evidence}"
+                      </p>
+                    </div>
+                  )
                 )}
               </div>
             ) : savedGoalData.type === 'story-goal' ? (
@@ -621,7 +644,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             </div>
           )}
 
-          {/* Area of Consistency field for Habit Goals */}
+          {/* Evidence — habit goals: type + optional text for "Other" */}
           {isHabits && (
             <div style={{ 
               marginBottom: '1.5rem', 
@@ -630,33 +653,87 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
               borderRadius: '0.5rem', 
               border: '2px solid #3b82f6' 
             }}>
-              <label
-                htmlFor="evidence"
-                style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e40af' }}
-              >
-                Area of Consistency (Optional):
-              </label>
-              <textarea
-                id="evidence"
-                value={evidence}
-                onChange={(e) => setEvidence(e.target.value)}
-                disabled={assessment.isLocked || saving}
-                placeholder="Describe how you've been consistent with your habit and what evidence you have..."
-                rows={4}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  borderRadius: '0.5rem',
-                  border: '1px solid #3b82f6',
-                  fontSize: '1rem',
-                  fontFamily: 'inherit',
-                  resize: 'vertical',
-                  background: 'white'
-                }}
-              />
-              <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
-                Share evidence of how you've been maintaining your habit consistently.
+              <div style={{ display: 'block', marginBottom: '0.75rem', fontWeight: 'bold', color: '#1e40af' }}>
+                2 — Evidence
+              </div>
+              <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#475569' }}>
+                Choose how you want evidence recorded. Live Event options use Class Flow sprints when you join a session.
               </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="habitEvidenceType"
+                    checked={habitEvidenceType === 'live_event_sprint_rate'}
+                    onChange={() => setHabitEvidenceType('live_event_sprint_rate')}
+                    disabled={assessment.isLocked || saving}
+                  />
+                  <span>
+                    <strong>Live Event — sprint completion rate</strong>
+                    <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b' }}>
+                      Counts sprints offered vs. sprints where you were marked complete (per session).
+                    </span>
+                  </span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="habitEvidenceType"
+                    checked={habitEvidenceType === 'live_event_consistency'}
+                    onChange={() => setHabitEvidenceType('live_event_consistency')}
+                    disabled={assessment.isLocked || saving}
+                  />
+                  <span>
+                    <strong>Live Event — consistency</strong>
+                    <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b' }}>
+                      Tracks calendar days where you completed at least one sprint (submitted work in the session).
+                    </span>
+                  </span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="habitEvidenceType"
+                    checked={habitEvidenceType === 'other'}
+                    onChange={() => setHabitEvidenceType('other')}
+                    disabled={assessment.isLocked || saving}
+                  />
+                  <span>
+                    <strong>Other</strong>
+                    <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b' }}>
+                      Type your own reflection or proof (same as before).
+                    </span>
+                  </span>
+                </label>
+              </div>
+              {habitEvidenceType === 'other' && (
+                <>
+                  <label
+                    htmlFor="evidence"
+                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#1e40af' }}
+                  >
+                    Reflection or proof (optional)
+                  </label>
+                  <textarea
+                    id="evidence"
+                    value={evidence}
+                    onChange={(e) => setEvidence(e.target.value)}
+                    disabled={assessment.isLocked || saving}
+                    placeholder="Reflection or proof of your commitment..."
+                    rows={4}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem',
+                      borderRadius: '0.5rem',
+                      border: '1px solid #3b82f6',
+                      fontSize: '1rem',
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                      background: 'white'
+                    }}
+                  />
+                </>
+              )}
             </div>
           )}
 

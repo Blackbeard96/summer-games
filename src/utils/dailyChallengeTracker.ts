@@ -24,7 +24,7 @@ interface PlayerChallengeProgress {
  */
 export const updateDailyChallengeProgress = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'earn_xp' | 'participate_live_event' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
   amount: number = 1
 ) => {
   try {
@@ -129,7 +129,7 @@ export const updateChallengeProgressById = async (
  */
 export const updateChallengeProgressByType = async (
   userId: string,
-  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
+  challengeType: 'defeat_enemies' | 'use_elemental_move' | 'attack_vault' | 'use_action_card' | 'win_battle' | 'earn_pp' | 'earn_xp' | 'participate_live_event' | 'use_manifest_ability' | 'use_health_potion' | 'custom',
   amount: number = 1
 ) => {
   // ALWAYS log event trigger (critical for debugging)

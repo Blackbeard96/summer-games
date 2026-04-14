@@ -145,6 +145,24 @@ export type HabitDuration = '1_class' | '1_day' | '3_days' | '1_week';
 export type HabitSubmissionStatus = 'IN_PROGRESS' | 'COMPLETED' | 'BROKEN' | 'DISPUTED' | 'active' | 'completed' | 'failed'; // Legacy statuses kept for compatibility
 export type HabitVerification = 'VERIFIED' | 'NOT_VERIFIED' | 'TRUST_ACCEPTED';
 
+/** How habit “evidence” is shown: tracked live-event stats vs free text. */
+export type HabitEvidenceType =
+  | 'live_event_sprint_rate'
+  | 'live_event_consistency'
+  | 'other';
+
+/** Stored at habitSubmissions/{submissionId}/liveEventSessions/{sessionId} */
+export interface HabitLiveEventSessionEvidence {
+  sessionId: string;
+  studentId: string;
+  sessionTitle?: string;
+  sprintsOffered: number;
+  sprintsCompleted: number;
+  /** UTC calendar days (YYYY-MM-DD) where the player completed ≥1 sprint */
+  daysWithCompletedSprint?: string[];
+  updatedAt?: Timestamp;
+}
+
 export interface HabitSubmission {
   id: string; // Format: ${assessmentId}_${studentId}
   assessmentId: string;
@@ -155,6 +173,9 @@ export interface HabitSubmission {
   startAt: Timestamp;
   endAt: Timestamp;
   status: HabitSubmissionStatus; // IN_PROGRESS | COMPLETED | BROKEN | DISPUTED
+
+  /** Defaults to `other` when missing (legacy). */
+  habitEvidenceType?: HabitEvidenceType;
   
   // Check-in tracking (legacy, may be deprecated)
   checkIns?: { [dateKey: string]: Timestamp }; // dateKey format: YYYY-MM-DD
@@ -162,7 +183,7 @@ export interface HabitSubmission {
   checkInCount?: number; // Current count of unique check-ins
   
   // New status-based tracking
-  evidence?: string | null; // Optional reflection/evidence text
+  evidence?: string | null; // Optional reflection/evidence text (used when habitEvidenceType is `other`)
   verification?: HabitVerification; // VERIFIED | NOT_VERIFIED | TRUST_ACCEPTED
   ppImpact?: number; // Computed PP change (+25 for COMPLETED, -15 for BROKEN, etc.)
   

@@ -4,11 +4,11 @@ import { mergeSeason1FromStudentData } from './season1PlayerHydration';
 import { compactCardProgress, season0CompactSegment } from './battlePassTierMath';
 
 /**
- * XP that unlocks deployed-pass tiers only — reads `students/{uid}.season1.battlePass`.
- * Profile XP is not used (prevents instant max tier from unrelated progression).
+ * XP shown on the deployed battle pass bar — only `season1.battlePass.battlePassXP`.
+ * That counter is incremented by `awardBattlePassXpForDeployedSeason` when profile XP is earned
+ * while Season 1+ is active, so progress reflects **season battle pass XP**, not lifetime profile XP.
  */
-export function deployedBattlePassXpForSeason(activeSeasonId: string, bp: Season1BattlePassProgress): number {
-  if (bp.currentSeasonId !== activeSeasonId) return 0;
+export function effectiveDeployedBattlePassXp(bp: Season1BattlePassProgress): number {
   return Math.max(0, Math.floor(Number(bp.battlePassXP) || 0));
 }
 
@@ -40,7 +40,7 @@ export function computeHomeBattlePassDisplay(
   const bp = s1.battlePass;
 
   if (activeSeason && Array.isArray(activeSeason.tiers) && activeSeason.tiers.length > 0) {
-    const xp = deployedBattlePassXpForSeason(activeSeason.id, bp);
+    const xp = effectiveDeployedBattlePassXp(bp);
     const r = compactCardProgress(xp, activeSeason.tiers);
     const introVideo = activeSeason.seasonIntroVideoUrl?.trim();
     const introSteps = activeSeason.introSequence;

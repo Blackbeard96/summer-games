@@ -607,11 +607,30 @@ export async function getUserUnlockedSkillsForBattle(
     }
 
     if (!userManifest) {
-      console.warn(`[battleSkillsService] No valid manifest for user ${userId}; returning non-manifest + artifact skills`);
+      console.warn(`[battleSkillsService] No valid manifest for user ${userId}; returning non-manifest + artifact skills (+ RR Candy when unlocked)`);
       const base = allMoves.filter(move => move.category !== 'manifest');
       const uniqueSkills = new Map<string, Move>();
       base.forEach(s => uniqueSkills.set(s.id, s));
       artifactSkillMoves.forEach(s => uniqueSkills.set(s.id, s));
+      let rrCandySkills: Move[] = [];
+      if (rrCandyUnlocked && rrCandyType) {
+        try {
+          rrCandySkills = await getUserRRCandySkills(userId, allMoves);
+          rrCandySkills = rrCandySkills.filter((skill) => {
+            const id = (skill.id || '').toLowerCase();
+            if (!id.startsWith('rr-candy-')) return false;
+            const userT = rrCandyType.toLowerCase().replace(/_/g, '-');
+            if (userT === 'config') return id.includes('konfig');
+            const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
+            const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
+            const normalizedSkillType = skillCandyType?.toLowerCase().replace(/_/g, '-');
+            return normalizedSkillType === userT;
+          });
+        } catch (e) {
+          console.warn('[battleSkillsService] RR Candy merge failed (no manifest branch):', e);
+        }
+      }
+      rrCandySkills.forEach(s => uniqueSkills.set(s.id, s));
       const finalSkills = Array.from(uniqueSkills.values());
       sortBattlePoolSkills(finalSkills);
       return finalSkills;

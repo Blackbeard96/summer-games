@@ -17,7 +17,7 @@ import { debug } from '../utils/debug';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { grantArtifactToPlayer } from '../utils/artifactCompensation';
-import { awardBattlePassXpFromIslandRaid } from '../utils/awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
 import CoopBattleRosterPanel from './coop/CoopBattleRosterPanel';
 import { transactionLeaveIslandRaidBattleRoom } from '../services/coopBattleRoomService';
 
@@ -1895,7 +1895,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
                 }
                 if (!isMissionBattle) {
                   await updateDoc(studentRef, updates);
-                  await awardBattlePassXpFromIslandRaid(playerId, rewards.xp);
+                  await mirrorProfileXpToProgressionSystems(playerId, rewards.xp, 'island_raid');
 
                   const userRef = doc(db, 'users', playerId);
                   const userDoc = await getDoc(userRef);

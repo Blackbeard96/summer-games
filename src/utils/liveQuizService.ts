@@ -33,7 +33,7 @@ import type {
   LiveQuizPerQuestionResultEntry,
 } from '../types/liveQuiz';
 import { getQuizSet, getQuestions } from './trainingGroundsService';
-import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
 import { trackParticipation, trackElimination, breakParticipationStreak } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
@@ -331,7 +331,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
           if (studentDoc.exists()) {
             await updateDoc(studentRef, studentUpdates);
             if (config.rewardTypes.xp && config.xpAmount > 0) {
-              await awardBattlePassXpForDeployedSeason(uid, config.xpAmount);
+              await mirrorProfileXpToProgressionSystems(uid, config.xpAmount, 'live_quiz');
             }
           }
         }
@@ -414,7 +414,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         if (studentDoc.exists()) {
           await updateDoc(studentRef, studentUpdates);
           if (xpAmount > 0) {
-            await awardBattlePassXpForDeployedSeason(uid, xpAmount);
+            await mirrorProfileXpToProgressionSystems(uid, xpAmount, 'live_quiz');
           }
         }
       }

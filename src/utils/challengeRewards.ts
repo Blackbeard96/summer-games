@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ChallengeReward } from '../types/chapters';
-import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 
 export interface RewardGrantResult {
   success: boolean;
@@ -394,7 +394,7 @@ export async function grantChallengeRewards(
     if (result.success && !result.alreadyClaimed) {
       const bpXp = Math.max(0, Math.floor(Number(result.rewardsGranted?.xp) || 0));
       if (bpXp > 0) {
-        await awardBattlePassXpForDeployedSeason(userId, bpXp);
+        await mirrorProfileXpToProgressionSystems(userId, bpXp, 'other');
       }
     }
 

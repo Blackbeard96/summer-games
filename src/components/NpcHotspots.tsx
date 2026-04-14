@@ -168,11 +168,11 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
                   boxShadow:
                     npcMissionAttention[npc.id] === true
                       ? `0 0 16px ${npc.glowColor}, 0 2px 8px rgba(0,0,0,0.25)`
-                      : '0 2px 6px rgba(0,0,0,0.2)',
+                      : `0 0 10px ${npc.glowColor}, 0 2px 6px rgba(0,0,0,0.2)`,
                   animation:
                     npcMissionAttention[npc.id] === true
                       ? `npcAttentionPulse_${npc.id} 2.2s ease-in-out infinite`
-                      : 'none',
+                      : `npcIdleGlow_${npc.id} 4s ease-in-out infinite`,
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateX(4px)';
@@ -182,7 +182,7 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
                 }}
               >
                 <span style={{ fontSize: '1.25rem' }}>{npc.icon}</span>
-                <span>{npc.name}</span>
+                <span style={{ textShadow: `0 0 8px ${npc.glowColor}` }}>{npc.name}</span>
               </button>
             ))}
           </div>
@@ -201,6 +201,14 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
             50% {
               box-shadow: 0 0 22px ${npc.glowColor}, 0 0 40px ${npc.glowColor}, 0 2px 10px rgba(0, 0, 0, 0.28);
             }
+          }
+          @keyframes npcIdleGlow_${npc.id} {
+            0%, 100% {
+              box-shadow: 0 0 8px ${npc.glowColor}, 0 0 18px ${npc.glowColor}, 0 2px 8px rgba(0, 0, 0, 0.2);
+            }
+            50% {
+              box-shadow: 0 0 14px ${npc.glowColor}, 0 0 28px ${npc.glowColor}, 0 2px 9px rgba(0, 0, 0, 0.22);
+            }
           }`
           ).join('')}
         `}</style>
@@ -214,9 +222,10 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
       {NPC_HOTSPOTS.map((npc) => {
         const hasMissionAttention = npcMissionAttention[npc.id] === true;
         const isHovered = hoveredNpc === npc.id;
+        // Always show a soft color-matched glow so names read as interactive; stronger when missions need attention.
         const idleShadow = hasMissionAttention
           ? `0 0 18px ${npc.glowColor}, 0 0 36px ${npc.glowColor}, 0 2px 8px rgba(0, 0, 0, 0.25)`
-          : '0 2px 8px rgba(0, 0, 0, 0.2)';
+          : `0 0 10px ${npc.glowColor}, 0 0 22px ${npc.glowColor}, 0 2px 8px rgba(0, 0, 0, 0.2)`;
         const hoverShadow = `0 0 20px ${npc.glowColor}, 0 4px 12px rgba(0, 0, 0, 0.3)`;
         return (
         <button
@@ -240,7 +249,7 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
                 ? npc.color
                 : hasMissionAttention
                   ? npc.color
-                  : 'rgba(255, 255, 255, 0.2)'
+                  : `${npc.color}66`
             }`,
             borderRadius: '2rem',
             padding: '0.5rem 1rem',
@@ -258,11 +267,17 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
               ? 'pulse 2s infinite'
               : hasMissionAttention
                 ? `npcAttentionPulse_${npc.id} 2.2s ease-in-out infinite`
-                : 'none'
+                : `npcIdleGlow_${npc.id} 4s ease-in-out infinite`
           }}
         >
           <span style={{ fontSize: '1.25rem' }}>{npc.icon}</span>
-          <span>{npc.name}</span>
+          <span
+            style={{
+              textShadow: `0 0 10px ${npc.glowColor}, 0 0 18px ${npc.glowColor}`,
+            }}
+          >
+            {npc.name}
+          </span>
           {isHovered && (
             <span style={{ fontSize: '0.75rem', opacity: 0.8, marginLeft: '0.25rem' }}>
               Talk
@@ -288,6 +303,14 @@ const NpcHotspots: React.FC<NpcHotspotsProps> = ({
           }
           50% {
             box-shadow: 0 0 22px ${npc.glowColor}, 0 0 40px ${npc.glowColor}, 0 2px 10px rgba(0, 0, 0, 0.28);
+          }
+        }
+        @keyframes npcIdleGlow_${npc.id} {
+          0%, 100% {
+            box-shadow: 0 0 8px ${npc.glowColor}, 0 0 18px ${npc.glowColor}, 0 2px 8px rgba(0, 0, 0, 0.2);
+          }
+          50% {
+            box-shadow: 0 0 14px ${npc.glowColor}, 0 0 28px ${npc.glowColor}, 0 2px 9px rgba(0, 0, 0, 0.22);
           }
         }`
         ).join('')}

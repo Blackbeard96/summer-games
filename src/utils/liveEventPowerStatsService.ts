@@ -7,8 +7,8 @@
  *   For each participant, calls `computeSessionEndPowerXp` then `awardLiveEventPowerGain` →
  *   `awardPowerStatXp` (writes `students/{uid}.stats` via transaction). Also credits battle pass XP.
  * - **Reflection submit** (`submitLiveEventReflectionToAssessment` in `assessmentGoalsFirestore.ts`):
- *   `awardPowerXpForReflectionSubmission` → Emotional branch (min 20 XP on valid submit).
- * - **Goal / habit milestones** (`assessmentGoalsFirestore.ts`): `awardPowerXpForGoalAchievement` → Spiritual.
+ *   `awardPowerXpForReflectionSubmission` → Emotional Power XP + same amount to deployed battle pass (`battlePassXP`).
+ * - **Goal / habit milestones** (`assessmentGoalsFirestore.ts`): `awardPowerXpForGoalAchievement` → Spiritual + battle pass.
  * - **Mid-battle drip** (`awardPowerXpForLiveQuizCorrectAnswer`, `awardPowerXpForElimination`): gated by
  *   `REACT_APP_LIVE_EVENT_POWER_DRIP === 'true'` to avoid double-counting with session-end totals.
  *
@@ -18,6 +18,7 @@
 
 import { db } from '../firebase';
 import { doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 import type { SessionStats } from '../types/inSessionStats';
 import type {
   PowerStatBranch,
@@ -380,10 +381,13 @@ export async function awardPowerXpForReflectionSubmission(
   if (opts?.qualityBonus) amount += 18;
   amount = Math.min(120, amount);
   amount = Math.max(20, amount);
-  await awardPowerStatXp(uid, 'emotional', amount, 'live_event_reflection_submit', {
+  const applied = await awardPowerStatXp(uid, 'emotional', amount, 'live_event_reflection_submit', {
     textLength,
     goalLinked: !!opts?.goalLinked,
   });
+  if (applied > 0) {
+    await awardBattlePassXpForDeployedSeason(uid, applied);
+  }
 }
 
 export async function awardPowerXpForGoalAchievement(
@@ -396,5 +400,8 @@ export async function awardPowerXpForGoalAchievement(
   const base =
     kind === 'habit_completed' ? 35 : kind === 'assessment_applied' ? 45 : kind === 'story_goal' ? 38 : 30;
   const amt = Math.min(200, Math.max(35, base + tierBonus));
-  await awardPowerStatXp(uid, 'spiritual', amt, 'goal_completion', { kind, tier });
+  const applied = await awardPowerStatXp(uid, 'spiritual', amt, 'goal_completion', { kind, tier });
+  if (applied > 0) {
+    await awardBattlePassXpForDeployedSeason(uid, applied);
+  }
 }

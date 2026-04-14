@@ -6,6 +6,52 @@ import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import Tutorial from './Tutorial';
 import TutorialReviewModal from './TutorialReviewModal';
 
+const TUTORIAL_IDS = [
+  'welcome',
+  'navigation',
+  'profile',
+  'manifest',
+  'chapter1',
+  'marketplace',
+  'skillLoadoutV1',
+] as const;
+
+function mergeTutorialMaps(
+  a: Record<string, any> | undefined,
+  b: Record<string, any> | undefined
+): TutorialState {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  const out: TutorialState = {};
+  keys.forEach((k) => {
+    const ta = a?.[k];
+    const tb = b?.[k];
+    out[k] = {
+      completed: !!(ta?.completed || tb?.completed),
+      skipped: !!(ta?.skipped || tb?.skipped),
+      completedAt: ta?.completedAt || tb?.completedAt,
+    };
+  });
+  return out;
+}
+
+function applyLocalTutorialFallback(uid: string, merged: TutorialState): TutorialState {
+  const out = { ...merged };
+  try {
+    for (const id of TUTORIAL_IDS) {
+      if (localStorage.getItem(`xiotein_tutorial_done_${id}_${uid}`) === '1') {
+        out[id] = {
+          ...(out[id] || {}),
+          completed: true,
+          skipped: out[id]?.skipped,
+        };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
 interface TutorialState {
   [key: string]: {
     completed: boolean;
@@ -23,46 +69,50 @@ const TutorialManager: React.FC = () => {
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isTutorialStateLoaded, setIsTutorialStateLoaded] = useState(false);
   const [hasTriggeredTutorial, setHasTriggeredTutorial] = useState(false);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Listen to tutorial state changes
+  // Listen to tutorial state on both users and students (completions were historically only written to users
+  // or failed when users/{uid} was missing; students is the canonical gameplay doc).
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setTutorialState({});
+      setIsTutorialStateLoaded(false);
+      setHasTriggeredTutorial(false);
+      return;
+    }
+
+    let usersTutorials: Record<string, any> = {};
+    let studentsTutorials: Record<string, any> = {};
+
+    const applyMerged = () => {
+      const merged = mergeTutorialMaps(usersTutorials, studentsTutorials);
+      const withLocal = applyLocalTutorialFallback(currentUser.uid, merged);
+      console.log('Tutorial state (merged):', withLocal);
+
+      if (Object.values(withLocal).some((tutorial: any) => tutorial?.completed || tutorial?.skipped)) {
+        setHasTriggeredTutorial(true);
+      }
+
+      setTutorialState(withLocal);
+      setIsTutorialStateLoaded(true);
+    };
 
     const userRef = doc(db, 'users', currentUser.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
-      if (doc.exists()) {
-        const userData = doc.data();
-        const tutorials = userData.tutorials || {};
-        console.log('Tutorial state loaded:', tutorials);
-        
-        // Check if this is the first load and if any tutorials are completed
-        if (isInitialLoad) {
-          const hasCompletedTutorials = Object.values(tutorials).some(
-            (tutorial: any) => tutorial.completed || tutorial.skipped
-          );
-          
-          if (hasCompletedTutorials) {
-            // User has seen tutorials before, mark as triggered to prevent auto-showing
-            setHasTriggeredTutorial(true);
-            console.log('User has completed tutorials before, preventing auto-trigger');
-          }
-          setIsInitialLoad(false);
-        }
-        
-        setTutorialState(tutorials);
-        setIsTutorialStateLoaded(true);
-      } else {
-        // If user document doesn't exist, create it with empty tutorial state
-        console.log('Creating new user document with empty tutorial state');
-        setTutorialState({});
-        setIsTutorialStateLoaded(true);
-        setIsInitialLoad(false);
-      }
+    const studentRef = doc(db, 'students', currentUser.uid);
+
+    const unsubUser = onSnapshot(userRef, (snap) => {
+      usersTutorials = snap.exists() ? snap.data().tutorials || {} : {};
+      applyMerged();
+    });
+    const unsubStudent = onSnapshot(studentRef, (snap) => {
+      studentsTutorials = snap.exists() ? snap.data().tutorials || {} : {};
+      applyMerged();
     });
 
-    return () => unsubscribe();
-  }, [currentUser, isInitialLoad]);
+    return () => {
+      unsubUser();
+      unsubStudent();
+    };
+  }, [currentUser]);
 
     // Check if tutorial should be triggered based on current page and state
   useEffect(() => {

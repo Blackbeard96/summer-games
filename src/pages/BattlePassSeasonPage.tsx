@@ -221,8 +221,11 @@ const BattlePassSeasonPage: React.FC = () => {
             >
               Season 1
             </div>
-            <div style={{ fontSize: '2.25rem', fontWeight: 800, lineHeight: 1.2, marginBottom: '0.75rem' }}>Coming Soon</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 700, lineHeight: 1.3, marginBottom: '0.75rem' }}>
+              No active season in Firestore yet
+            </div>
             <p style={{ margin: 0, fontSize: '0.95rem', opacity: 0.88, lineHeight: 1.55 }}>
+              Season 1 Flow &amp; Energy is live in the app. Deploy a pass in Sage&apos;s Chamber to show tier tracks here.
               Legacy Season 0 rewards and claims stay available below.
             </p>
           </div>

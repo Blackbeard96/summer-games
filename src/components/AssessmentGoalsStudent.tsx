@@ -22,6 +22,8 @@ import {
 import { validateGoalScore } from '../utils/assessmentGoals';
 import { formatOutcome, formatPPChange } from '../utils/assessmentGoals';
 import SetGoalModal from './SetGoalModal';
+import HabitLiveEventEvidencePanel from './HabitLiveEventEvidencePanel';
+import { habitEvidenceTracksLiveEvents } from '../utils/habitLiveEventEvidenceService';
 import ResultsSummaryCard from './ResultsSummaryCard';
 import AssessmentResultModal from './AssessmentResultModal';
 
@@ -317,6 +319,28 @@ const AssessmentGoalsStudent: React.FC = () => {
                   <p style={{ margin: 0, fontSize: '0.875rem', color: '#6b7280' }}>
                     Duration: {getDurationLabel(habitSubmissions.get(assessment.id)!.duration)}
                   </p>
+                  {habitEvidenceTracksLiveEvents(habitSubmissions.get(assessment.id)!.habitEvidenceType) ? (
+                    <div style={{ marginTop: '0.75rem' }}>
+                      <p style={{ margin: '0 0 0.35rem', fontSize: '0.875rem', fontWeight: 'bold', color: '#0f766e' }}>
+                        Evidence (Live Events — automatic)
+                      </p>
+                      <HabitLiveEventEvidencePanel
+                        submissionId={habitSubmissions.get(assessment.id)!.id}
+                        habitEvidenceType={habitSubmissions.get(assessment.id)!.habitEvidenceType}
+                      />
+                    </div>
+                  ) : (
+                    habitSubmissions.get(assessment.id)!.evidence && (
+                      <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #d1fae5' }}>
+                        <p style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#047857', marginBottom: '0.25rem' }}>
+                          Evidence:
+                        </p>
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#374151', fontStyle: 'italic' }}>
+                          "{habitSubmissions.get(assessment.id)!.evidence}"
+                        </p>
+                      </div>
+                    )
+                  )}
                 </div>
               ) : assessment.goal ? (
                 <div style={{ marginBottom: '1rem', padding: '1rem', background: assessment.type === 'story-goal' ? '#fef3c7' : '#f9fafb', borderRadius: '0.5rem', border: `2px solid ${assessment.type === 'story-goal' ? '#fbbf24' : '#3b82f6'}` }}>

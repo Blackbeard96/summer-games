@@ -12,7 +12,7 @@ import {
 } from '../utils/dailyChallengeShared';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { getLevelFromXP } from '../utils/leveling';
-import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
 
 interface DailyChallenge {
   id: string;
@@ -363,7 +363,7 @@ const DailyChallengesCompact: React.FC = () => {
         return xpGrant;
       });
       if (grantedXp > 0) {
-        await awardBattlePassXpForDeployedSeason(currentUser.uid, grantedXp);
+        await mirrorProfileXpToProgressionSystems(currentUser.uid, grantedXp, 'daily_challenge');
       }
     } catch (error) {
       console.error('Error auto-granting rewards:', error);
@@ -428,7 +428,7 @@ const DailyChallengesCompact: React.FC = () => {
       });
 
       if (claimXp > 0) {
-        await awardBattlePassXpForDeployedSeason(currentUser.uid, claimXp);
+        await mirrorProfileXpToProgressionSystems(currentUser.uid, claimXp, 'daily_challenge');
       }
 
       // Create milestone event after successful claim

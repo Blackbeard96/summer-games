@@ -18,8 +18,12 @@ import type { UpdateData, DocumentData } from 'firebase/firestore';
 import type { ClassFlowSprintState } from '../types/season1';
 import { trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
-import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { recordSprintMarkedCompleteForPlayer, recordSprintOpportunityForPlayers } from './weeklyGoalsService';
+import {
+  recordHabitLiveEventSprintCompletion,
+  recordHabitLiveEventSprintOpportunity,
+} from './habitLiveEventEvidenceService';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -115,6 +119,10 @@ export async function startClassFlowSprint(
     const ref = roomRef(sessionId);
     const snap = await getDoc(ref);
     if (!snap.exists()) return { ok: false, error: 'Session not found' };
+    const players = (snap.data()?.players as { userId?: string }[]) || [];
+    const playerUidsForSprints = players
+      .map((p) => p.userId)
+      .filter((x): x is string => typeof x === 'string' && !!x);
     const hostUid = snap.data()?.hostUid;
     if (!canActAsRoomHost(hostUid, actingUid, actingEmail, actingDisplayName)) {
       return { ok: false, error: 'Only the session host can start a sprint' };
@@ -158,6 +166,13 @@ export async function startClassFlowSprint(
       battleLog: arrayUnion(
         `🏃 Sprint started: "${title}" — ${formatSprintDurationForLog(durationSeconds)} to complete the goal.`
       ),
+    });
+
+    void recordSprintOpportunityForPlayers(playerUidsForSprints, sessionId).catch(() => {
+      /* best-effort weekly goals */
+    });
+    void recordHabitLiveEventSprintOpportunity(sessionId, title, playerUidsForSprints).catch(() => {
+      /* best-effort habit live-event evidence */
     });
 
     return { ok: true };
@@ -265,17 +280,6 @@ export async function toggleClassFlowSprintMark(
         playerDisplayName || 'Player'
       );
       if (!g.ok) return { ok: false, error: g.error };
-
-      try {
-        const snap = await getDoc(ref);
-        const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
-        const startedMs = sprint ? tsToMillis(sprint.startedAt) : null;
-        if (startedMs != null) {
-          await recordSprintMarkedCompleteForPlayer(playerUid, startedMs, Date.now());
-        }
-      } catch (_) {
-        // best-effort weekly goals
-      }
     }
 
     return { ok: true };
@@ -423,7 +427,7 @@ export async function grantSprintRewardForSinglePlayer(
         if (studentDoc.exists()) {
           await updateDoc(studentRef, studentUpdates);
           if (xpAmt > 0) {
-            await awardBattlePassXpForDeployedSeason(playerUid, xpAmt);
+            await mirrorProfileXpToProgressionSystems(playerUid, xpAmt, 'live_event_sprint');
           }
         }
       }
@@ -456,6 +460,16 @@ export async function grantSprintRewardForSinglePlayer(
           }${xpAmt > 0 ? `, +${xpAmt} XP` : ''}).`
         ),
       });
+    }
+
+    try {
+      const startedMs = tsToMillis(sprint.startedAt);
+      if (startedMs != null) {
+        await recordSprintMarkedCompleteForPlayer(playerUid, startedMs, Date.now());
+      }
+      await recordHabitLiveEventSprintCompletion(sessionId, playerUid, Date.now());
+    } catch (_) {
+      /* best-effort weekly goals + habit evidence */
     }
 
     return { ok: true, granted: true };

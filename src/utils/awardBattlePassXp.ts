@@ -21,13 +21,9 @@ export async function awardBattlePassXpForDeployedSeason(playerId: string, xpDel
   const raw = snap.data();
   const s1 = mergeSeason1FromStudentData(raw.season1 as Record<string, unknown> | undefined);
   const bp = s1.battlePass;
-  const prevSeason = bp.currentSeasonId;
-  let nextXp: number;
-  if (prevSeason !== activeId) {
-    nextXp = xpDelta;
-  } else {
-    nextXp = Math.max(0, Math.floor(Number(bp.battlePassXP) || 0) + xpDelta);
-  }
+  // Always accumulate — never replace with only this delta when the active season id changes
+  // (that previously wiped progress whenever admins deployed a new season).
+  const nextXp = Math.max(0, Math.floor(Number(bp.battlePassXP) || 0) + xpDelta);
 
   try {
     const nextBattlePass: Record<string, unknown> = {

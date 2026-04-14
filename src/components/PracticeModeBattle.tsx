@@ -8,8 +8,7 @@ import BattleModeSelector from './BattleModeSelector';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import { getLevelFromXP } from '../utils/leveling';
 import PracticeWaitingRoomModal from './PracticeWaitingRoomModal';
-import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
-import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems, trackPlayerAction } from '../utils/playerProgressionRewards';
 
 interface CPUOpponent {
   id: string;
@@ -572,12 +571,12 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
         if (currentUser) {
           if (result === 'victory') {
             // Track: Defeat Enemies (1 enemy defeated)
-            updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err => 
+            trackPlayerAction(currentUser.uid, 'DEFEAT_ENEMY', 1).catch(err => 
               console.error('[PracticeMode] Error tracking defeat_enemies:', err)
             );
             
             // Track: Win Battle (1 battle won)
-            updateChallengeProgressByType(currentUser.uid, 'win_battle', 1).catch(err => 
+            trackPlayerAction(currentUser.uid, 'BATTLE_WON', 1).catch(err => 
               console.error('[PracticeMode] Error tracking win_battle:', err)
             );
             
@@ -669,7 +668,7 @@ const PracticeModeBattle: React.FC<PracticeModeBattleProps> = ({ onBack }) => {
 
                 const practiceXp = Math.max(0, Math.floor(Number(selectedOpponent.rewards.xp) || 0));
                 if (practiceXp > 0) {
-                  await awardBattlePassXpForDeployedSeason(currentUser.uid, practiceXp);
+                  await mirrorProfileXpToProgressionSystems(currentUser.uid, practiceXp, 'practice');
                 }
                 
                 // Verify the update was successful

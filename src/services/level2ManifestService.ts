@@ -20,6 +20,7 @@ import {
 } from '../data/level2ManifestSkillConfig';
 import { applyLevel2PerkModifiers } from '../utils/level2ManifestModifiers';
 import { buildLevel2SkillDescription } from '../utils/level2ManifestSkillCodec';
+import { level2RecordToLiveEventLegacyFields, level2RecordToSkillEffectPayloads } from '../utils/level2ManifestSkillEffects';
 import type { Move } from '../types/battle';
 const COL = 'students';
 
@@ -245,7 +246,10 @@ export async function getActiveLevel2ManifestMove(userId: string): Promise<Move 
     const l2 = await getLevel2ManifestState(userId);
     const sk = l2.skills?.find((s) => s.id === l2.activeSkillId);
     if (!sk) return null;
-    return level2SkillToMove(sk, sk.manifestId);
+    const base = level2SkillToMove(sk, sk.manifestId);
+    const legacy = level2RecordToLiveEventLegacyFields(sk);
+    const fx = level2RecordToSkillEffectPayloads(sk);
+    return { ...base, ...legacy, skillEffects: fx.length ? fx : undefined };
   } catch {
     return null;
   }

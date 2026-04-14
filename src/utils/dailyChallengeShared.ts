@@ -93,6 +93,24 @@ const EVENT_CHALLENGE_SYNONYMS: Record<string, string[]> = {
   use_action_card: ['use_action_cards', 'action_card', 'action_cards'],
   win_battle: ['win_battles', 'win_a_battle', 'battle_win'],
   earn_pp: ['earn_power_points', 'earn_pp_total', 'gain_pp'],
+  /** Profile XP (`students.xp`) — see `playerProgressionRewards.grantPlayerProfileXp` / `mirrorProfileXpToProgressionSystems`. */
+  earn_xp: [
+    'earn_experience',
+    'gain_xp',
+    'gain_experience',
+    'earn_profile_xp',
+    'xp_earned',
+    'collect_xp',
+  ],
+  /** Counts once per finalized Live Event session for roster participants (see `finalizeSessionStats`). */
+  participate_live_event: [
+    'live_event',
+    'live_events',
+    'join_live_event',
+    'live_session',
+    'in_session',
+    'class_session',
+  ],
   use_health_potion: ['use_health_potions', 'health_potion', 'use_potion'],
 };
 

@@ -6,8 +6,6 @@ interface BattlePassCompactCardProps {
   maxTier: number;
   totalXP: number;
   onViewRewards: () => void;
-  /** Season 1: open full-screen battle pass / Flow hub */
-  onOpenSeason1Hub?: () => void;
   /** e.g. deployed season name from Firestore */
   seasonSubtitle?: string;
   /** Bar fill from `computeHomeBattlePassDisplay` (Season 0 + deployed) */
@@ -16,7 +14,7 @@ interface BattlePassCompactCardProps {
   xpInSegment: number;
   xpSegmentSpan: number;
   xpSegmentComplete: boolean;
-  /** Admin deployed active pass — replaces "Coming Soon" CTA */
+  /** Admin deployed active pass */
   deployedSeasonActive?: boolean;
   /** Season doc has intro video and/or slides */
   seasonIntroAvailable?: boolean;
@@ -35,7 +33,6 @@ const BattlePassCompactCard: React.FC<BattlePassCompactCardProps> = ({
   maxTier,
   totalXP,
   onViewRewards,
-  onOpenSeason1Hub,
   seasonSubtitle,
   progressPercentOverride,
   xpInSegment,
@@ -280,26 +277,6 @@ const BattlePassCompactCard: React.FC<BattlePassCompactCardProps> = ({
             }}
           >
             Energy Mastery
-          </button>
-        ) : null}
-        {onOpenSeason1Hub && !deployedSeasonActive ? (
-          <button
-            type="button"
-            onClick={onOpenSeason1Hub}
-            style={{
-              width: '100%',
-              marginTop: '0.5rem',
-              padding: '0.65rem',
-              background: 'linear-gradient(90deg, rgba(99,102,241,0.35), rgba(168,85,247,0.35))',
-              border: '1px solid rgba(165,180,252,0.55)',
-              borderRadius: '0.5rem',
-              color: 'white',
-              fontSize: '0.8rem',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-            }}
-          >
-            Season 1 — Coming Soon
           </button>
         ) : null}
       </div>

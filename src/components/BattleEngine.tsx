@@ -29,7 +29,8 @@ import BattleAnimations from './BattleAnimations';
 import { resolveSkillVfxConfig, getStoredVfxQuality } from '../skillAnimation';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
-import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
+import { grantPlayerProfileXp, trackPlayerAction } from '../utils/playerProgressionRewards';
+import { isSelfDirectedBattleMove } from '../utils/battleSkillTargetResolution';
 import {
   moveCountsForDailyElementalChallenge,
   moveCountsForDailyManifestChallenge,
@@ -181,6 +182,13 @@ function maybeApplyCpuAwakenedPhase(opp: Opponent, isCpu: boolean): Opponent {
   if (hp > 0) {
     const pct = maxHp > 0 ? (hp / maxHp) * 100 : 100;
     if (pct > threshold) return opp;
+    /**
+     * Max HP already matches configured awakened cap but `isAwakened` was lost (e.g. Firestore merge).
+     * Below threshold would re-run the full awaken transform and refill HP/shields + spam the battle log.
+     */
+    if (ahTarget > 0 && maxHpCur === ahTarget) {
+      return { ...o, isAwakened: true };
+    }
   }
   // hp <= 0: still enter awakened second phase (lethal hit while awaken is configured), instead of staying dead
   const ahConfigured = o.awakenedHealth != null && Number.isFinite(o.awakenedHealth) && Number(o.awakenedHealth) > 0;
@@ -234,6 +242,96 @@ function buildCpuAwakenedAnnouncementLines(rawName: string): string[] {
   ];
 }
 
+function primaryCpuEnemyHp(o: Opponent): number {
+  if (o.vaultHealth !== undefined) return Math.max(0, Math.floor(Number(o.vaultHealth)));
+  const h = (o as { health?: number }).health;
+  if (h !== undefined && h !== null) return Math.max(0, Math.floor(Number(h)));
+  return Math.max(0, Math.floor(Number(o.currentPP ?? 0)));
+}
+
+/**
+ * Firestore opponent snapshots often omit `isAwakened` (optional field). We still merge **health/shields**
+ * defensively: taking props alone revived enemies whenever Firestore lagged behind the local lethal hit.
+ * Mirrors IslandRaidBattle listener: `min` for normal enemies; capped `max` only for awakened + alive.
+ */
+function mergeFirestoreOpponentWithLocalAwakenState(propOpp: Opponent, existing: Opponent): Opponent {
+  const pH = primaryCpuEnemyHp(propOpp);
+  const pS = Math.max(0, Math.floor(Number(propOpp.shieldStrength ?? 0)));
+  const eH = primaryCpuEnemyHp(existing);
+  const eS = Math.max(0, Math.floor(Number(existing.shieldStrength ?? 0)));
+
+  const eitherDefeated =
+    existing.isDefeated === true ||
+    propOpp.isDefeated === true ||
+    (eH <= 0 && eS <= 0) ||
+    (pH <= 0 && pS <= 0);
+
+  let mergedH: number;
+  let mergedS: number;
+  if (eitherDefeated) {
+    mergedH = 0;
+    mergedS = 0;
+  } else if (existing.isAwakened === true) {
+    const capH = Math.max(
+      Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0)),
+      Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0))
+    );
+    const capS = Math.max(
+      Math.floor(Number(propOpp.maxShieldStrength ?? 0)),
+      Math.floor(Number(existing.maxShieldStrength ?? 0))
+    );
+    const rawH = Math.max(pH, eH);
+    const rawS = Math.max(pS, eS);
+    mergedH = capH > 0 ? Math.min(rawH, capH) : rawH;
+    mergedS = capS > 0 ? Math.min(rawS, capS) : rawS;
+  } else {
+    mergedH = Math.min(pH, eH);
+    mergedS = Math.min(pS, eS);
+  }
+
+  const defeated = mergedH <= 0 && mergedS <= 0;
+
+  const base = {
+    ...propOpp,
+    vaultHealth: mergedH,
+    currentPP: mergedH,
+    shieldStrength: mergedS,
+    isDefeated: defeated,
+    defeatedAt: defeated
+      ? ((existing as { defeatedAt?: Date }).defeatedAt ??
+          (propOpp as { defeatedAt?: Date }).defeatedAt ??
+          new Date())
+      : undefined,
+    /** IslandRaid / mission enemy rows use `health` alongside vault fields */
+    health: mergedH,
+  } as Opponent;
+
+  if (existing.isAwakened !== true) return base;
+
+  const propMaxH = Math.floor(Number(propOpp.maxVaultHealth ?? propOpp.maxPP ?? 0));
+  const exMaxH = Math.floor(Number(existing.maxVaultHealth ?? existing.maxPP ?? 0));
+  const propMaxS = Math.floor(Number(propOpp.maxShieldStrength ?? 0));
+  const exMaxS = Math.floor(Number(existing.maxShieldStrength ?? 0));
+
+  return {
+    ...base,
+    isAwakened: true,
+    maxPP: Math.max(propMaxH, exMaxH) || base.maxPP,
+    maxVaultHealth: Math.max(propMaxH, exMaxH) || base.maxVaultHealth,
+    maxShieldStrength: Math.max(propMaxS, exMaxS) || base.maxShieldStrength,
+    moves:
+      Array.isArray(existing.moves) && existing.moves.length > 0 ? existing.moves : propOpp.moves,
+    image: existing.image ?? propOpp.image,
+    ...(typeof (existing as { photoURL?: string }).photoURL === 'string'
+      ? { photoURL: (existing as { photoURL: string }).photoURL }
+      : {}),
+    enemyType: existing.enemyType !== undefined ? existing.enemyType : propOpp.enemyType,
+    awakeningAnimation:
+      (existing as { awakeningAnimation?: MissionMediaSequenceStep[] }).awakeningAnimation ??
+      (propOpp as { awakeningAnimation?: MissionMediaSequenceStep[] }).awakeningAnimation,
+  };
+}
+
 /** Human allies for turn / "single player + AI" logic. Summons are never human (avoids treating constructs as a second human in Island Raid). */
 function countHumanAlliesForTurnRules(allies: Opponent[], currentUserId: string | undefined): number {
   return allies.filter((ally) => {
@@ -246,11 +344,7 @@ function countHumanAlliesForTurnRules(allies: Opponent[], currentUserId: string 
 
 /** Self-targeted / defensive / summon skills do not require an enemy target id. */
 function moveNeedsSelfTargetFallback(move: Move | null | undefined): boolean {
-  if (!move) return false;
-  const hasSummon =
-    Array.isArray((move as { statusEffects?: Array<{ type?: string }> }).statusEffects) &&
-    (move as { statusEffects?: Array<{ type?: string }> }).statusEffects!.some((e) => e?.type === 'summon');
-  return !!(move.shieldBoost || move.healing || move.targetType === 'self' || hasSummon);
+  return isSelfDirectedBattleMove(move);
 }
 
 function isStrokeOfCreationLikeMove(move: Move | null | undefined): boolean {
@@ -1713,11 +1807,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             const existing = prev.find(p => p.id === propOpp.id);
             if (existing) {
               // Use props for health/shield (Firestore is authoritative), but preserve other battle state
-              return {
-                ...propOpp,
-                isDefeated: existing.isDefeated,
-                defeatedAt: existing.defeatedAt
-              };
+              return mergeFirestoreOpponentWithLocalAwakenState(propOpp, existing);
             }
             return propOpp;
           });
@@ -3977,7 +4067,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 const wasAlreadyDefeated = current.isDefeated === true;
                 console.log(`💀 [BattleEngine] Enemy ${targetName} (${targetId}) is now defeated - health=${finalHealth}, shield=${finalShield}`);
                 if (!wasAlreadyDefeated && currentUser) {
-                  updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err =>
+                  trackPlayerAction(currentUser.uid, 'DEFEAT_ENEMY', 1).catch(err =>
                     console.error('Error updating daily challenge progress for enemy defeat:', err)
                   );
                 }
@@ -4379,7 +4469,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                     // This works for both single-wave and multi-wave battles (Island Raid)
                     if (!wasAlreadyDefeated && currentUser) {
                       console.log(`🎯 [Daily Challenge] Tracking enemy defeat: ${opp.name}`);
-                      updateChallengeProgressByType(currentUser.uid, 'defeat_enemies', 1).catch(err => 
+                      trackPlayerAction(currentUser.uid, 'DEFEAT_ENEMY', 1).catch(err => 
                         console.error('Error updating daily challenge progress for enemy defeat:', err)
                       );
                     }
@@ -4808,8 +4898,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       );
       return;
     }
-    const hasSummonEffect = Array.isArray(moveForTarget?.statusEffects) && moveForTarget.statusEffects.some((e) => e?.type === 'summon');
-    const isDefensiveMove = !!(moveForTarget?.shieldBoost || moveForTarget?.healing || moveForTarget?.targetType === 'self' || hasSummonEffect);
+    const isDefensiveMove = isSelfDirectedBattleMove(moveForTarget);
 
     // Find the target opponent based on selectedTarget ID
     // Defensive moves (shield boost, healing) ALWAYS target the player - ignore any enemy selection
@@ -5053,12 +5142,12 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     
     if (currentUser) {
       if (moveCountsForDailyElementalChallenge(move)) {
-        updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
+        trackPlayerAction(currentUser.uid, 'ELEMENTAL_MOVE_USED', 1).catch(err =>
           console.error('Error updating daily challenge progress:', err)
         );
       }
       if (moveCountsForDailyManifestChallenge({ ...move, name: moveName })) {
-        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
+        trackPlayerAction(currentUser.uid, 'MANIFEST_SKILL_USED', 1).catch(err =>
           console.error('Error updating daily challenge progress for manifest ability:', err)
         );
       }
@@ -6726,7 +6815,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           
           // Track daily challenge: Earn PP
           if (currentUser) {
-            updateChallengeProgressByType(currentUser.uid, 'earn_pp', finalPPReward).catch(err => 
+            trackPlayerAction(currentUser.uid, 'EARN_PP', finalPPReward).catch(err => 
               console.error('Error updating daily challenge progress:', err)
             );
           }
@@ -6735,23 +6824,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
       }
       
-      // Award XP if applicable (keep users + students in sync; battle pass tracks profile XP)
+      // Award XP (profile + battle pass + earn_xp daily) via canonical progression helper
       if (finalXPReward > 0 && currentUser) {
         try {
-          const studentRef = doc(db, 'students', currentUser.uid);
-          const userRef = doc(db, 'users', currentUser.uid);
-          const [studentDoc, userDoc] = await Promise.all([getDoc(studentRef), getDoc(userRef)]);
-
-          if (studentDoc.exists()) {
-            await updateDoc(studentRef, { xp: increment(finalXPReward) });
-          }
-          if (userDoc.exists()) {
-            await updateDoc(userRef, { xp: increment(finalXPReward) });
-          }
-
-          const { awardBattlePassXpForDeployedSeason } = await import('../utils/awardBattlePassXp');
-          await awardBattlePassXpForDeployedSeason(currentUser.uid, finalXPReward);
-
+          await grantPlayerProfileXp(currentUser.uid, finalXPReward, 'battle_win');
           if (isRivalBonus) {
             newLog.push(`⚔️ Rival defeated! XP doubled (+${finalXPReward} XP).`);
           }
@@ -6765,7 +6841,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       
       // Track daily challenge: Win Battle
       if (currentUser) {
-        updateChallengeProgressByType(currentUser.uid, 'win_battle', 1).catch(err => 
+        trackPlayerAction(currentUser.uid, 'BATTLE_WON', 1).catch(err => 
           console.error('Error updating daily challenge progress:', err)
         );
       }
@@ -7992,8 +8068,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       });
     })();
     
-    const hasSummonEffect = move != null && Array.isArray(move.statusEffects) && move.statusEffects.some((e) => e?.type === 'summon');
-    const isDefensiveMove = !!(move?.shieldBoost || move?.healing || move?.targetType === 'self' || hasSummonEffect);
+    const isDefensiveMove = isSelfDirectedBattleMove(move);
     const isIslandRaidOrSession = !!gameId && !isInSession || !!sessionId;
     setBattleState(prev => ({
       ...prev,
@@ -8067,10 +8142,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     });
 
     // Validate target ID exists in current opponents or allies
-    // Defensive / self-directed moves (shield boost, healing, targetType === 'self', summon) ONLY target self
+    // Defensive / self-directed moves (incl. L2 self-target) ONLY target self
     const selectedMove = battleState.selectedMove;
-    const hasSummonEffect = selectedMove != null && Array.isArray(selectedMove.statusEffects) && selectedMove.statusEffects.some((e) => e?.type === 'summon');
-    const isDefensiveMove = !!(battleState.selectedMove?.shieldBoost || battleState.selectedMove?.healing || battleState.selectedMove?.targetType === 'self' || hasSummonEffect);
+    const isDefensiveMove = isSelfDirectedBattleMove(selectedMove);
     const isSelfTarget = targetId === 'self' || targetId === currentUser?.uid;
     const isValidTarget = isDefensiveMove
       ? isSelfTarget

@@ -14,6 +14,8 @@ import {
 import { computePPChange } from '../utils/assessmentGoals';
 import { formatPPChange } from '../utils/assessmentGoals';
 import { computeHabitImpact, canApplyHabitPP } from '../utils/habitRewards';
+import HabitLiveEventEvidencePanel from './HabitLiveEventEvidencePanel';
+import { habitEvidenceTracksLiveEvents } from '../utils/habitLiveEventEvidenceService';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import AssessmentResultsSummaryModal from './AssessmentResultsSummaryModal';
@@ -517,26 +519,45 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                       ) : '—'}
                     </td>
                     {/* Evidence column */}
-                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>
+                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', maxWidth: 320 }}>
                       {(row as any).habitSubmission ? (
-                        <textarea
-                          value={(row as any).habitSubmission.evidence || ''}
-                          onChange={(e) => handleHabitStatusChange(row.studentId, 'evidence', e.target.value)}
-                          disabled={saving[row.studentId] || (row as any).habitSubmission.applied}
-                          placeholder="Optional reflection/evidence..."
-                          style={{
-                            width: '100%',
-                            minWidth: '200px',
-                            padding: '0.5rem',
-                            borderRadius: '0.25rem',
-                            border: '1px solid #d1d5db',
-                            fontFamily: 'inherit',
-                            fontSize: '0.875rem',
-                            resize: 'vertical'
-                          }}
-                          rows={2}
-                        />
-                      ) : '—'}
+                        <div>
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: 6 }}>
+                            {(() => {
+                              const t = (row as any).habitSubmission.habitEvidenceType;
+                              if (t === 'live_event_sprint_rate') return 'Evidence: Live Event — sprint completion rate (auto)';
+                              if (t === 'live_event_consistency') return 'Evidence: Live Event — consistency by day (auto)';
+                              return 'Evidence: Other / typed notes';
+                            })()}
+                          </div>
+                          <HabitLiveEventEvidencePanel
+                            submissionId={(row as any).habitSubmission.id}
+                            habitEvidenceType={(row as any).habitSubmission.habitEvidenceType}
+                          />
+                          {!habitEvidenceTracksLiveEvents((row as any).habitSubmission.habitEvidenceType) && (
+                            <textarea
+                              value={(row as any).habitSubmission.evidence || ''}
+                              onChange={(e) => handleHabitStatusChange(row.studentId, 'evidence', e.target.value)}
+                              disabled={saving[row.studentId] || (row as any).habitSubmission.applied}
+                              placeholder="Optional reflection/evidence..."
+                              style={{
+                                width: '100%',
+                                minWidth: '200px',
+                                padding: '0.5rem',
+                                borderRadius: '0.25rem',
+                                border: '1px solid #d1d5db',
+                                fontFamily: 'inherit',
+                                fontSize: '0.875rem',
+                                resize: 'vertical',
+                                marginTop: 8,
+                              }}
+                              rows={2}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     {/* Verification column */}
                     <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>

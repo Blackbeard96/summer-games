@@ -78,7 +78,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   npcName,
   npcImage
 }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [sideMissions, setSideMissions] = useState<MissionTemplate[]>([]);
   const [storyMissions, setStoryMissions] = useState<MissionTemplate[]>([]);
@@ -93,7 +93,18 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const [acceptingMissionId, setAcceptingMissionId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !currentUser) return;
+    if (!isOpen) return;
+
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+    if (!currentUser) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
 
     const loadMissions = async () => {
       setLoading(true);
@@ -156,12 +167,15 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
       } catch (error) {
         console.error('Error loading missions:', error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadMissions();
-  }, [isOpen, currentUser, npc]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, currentUser, npc, authLoading]);
 
   const handleAcceptMission = async (missionId: string) => {
     if (!currentUser || acceptingMissionId) return;
@@ -295,9 +309,31 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
           </h2>
         </div>
 
-        {loading ? (
+        {authLoading || (currentUser && loading) ? (
           <div style={{ textAlign: 'center', color: 'white', padding: '2rem' }}>
-            Loading missions...
+            {authLoading ? 'Checking sign-in…' : 'Loading missions...'}
+          </div>
+        ) : !currentUser ? (
+          <div style={{ textAlign: 'center', color: '#e5e7eb', padding: '2rem' }}>
+            <p style={{ marginBottom: '1rem' }}>Sign in to view and accept missions from this guide.</p>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                navigate('/login');
+              }}
+              style={{
+                background: '#4f46e5',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                padding: '0.6rem 1.25rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Go to Login
+            </button>
           </div>
         ) : (
           <>

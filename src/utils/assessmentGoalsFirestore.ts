@@ -26,7 +26,8 @@ import {
   HabitSubmission,
   HabitDuration,
   HabitSubmissionStatus,
-  HabitVerification
+  HabitVerification,
+  HabitEvidenceType,
 } from '../types/assessmentGoals';
 import {
   generateGoalId,
@@ -927,7 +928,8 @@ export async function createHabitSubmission(
   classId: string,
   habitText: string,
   duration: HabitDuration,
-  evidence?: string | null
+  evidence?: string | null,
+  habitEvidenceType?: HabitEvidenceType
 ): Promise<void> {
   const submissionId = generateHabitSubmissionId(assessmentId, studentId);
   const submissionRef = doc(db, 'habitSubmissions', submissionId);
@@ -940,6 +942,9 @@ export async function createHabitSubmission(
   const endDate = calculateEndDate(startDate, duration);
   const endAt = Timestamp.fromDate(endDate);
   const requiredCheckIns = getRequiredCheckIns(duration);
+
+  const evType: HabitEvidenceType = habitEvidenceType ?? 'other';
+  const evidenceStored = evType === 'other' ? evidence || null : null;
   
   const submissionData: any = {
     id: submissionId,
@@ -948,6 +953,7 @@ export async function createHabitSubmission(
     studentId,
     habitText: habitText.trim(),
     duration,
+    habitEvidenceType: evType,
     startAt,
     endAt,
     status: 'IN_PROGRESS', // Default status when created
@@ -958,7 +964,7 @@ export async function createHabitSubmission(
     rewardApplied: false,
     consequenceApplied: false,
     // New status-based fields
-    evidence: evidence || null,
+    evidence: evidenceStored,
     // verification is optional and should not be included if undefined
     ppImpact: 0, // Will be computed when status changes
     applied: false,
@@ -1008,7 +1014,8 @@ export async function updateHabitSubmissionGoal(
   studentId: string,
   habitText: string,
   duration: HabitDuration,
-  evidence?: string | null
+  evidence?: string | null,
+  habitEvidenceType?: HabitEvidenceType
 ): Promise<void> {
   const submissionId = generateHabitSubmissionId(assessmentId, studentId);
   const submissionRef = doc(db, 'habitSubmissions', submissionId);
@@ -1019,6 +1026,14 @@ export async function updateHabitSubmissionGoal(
   }
   
   const existingSubmission = submissionDoc.data() as HabitSubmission;
+  const nextType: HabitEvidenceType =
+    habitEvidenceType !== undefined ? habitEvidenceType : (existingSubmission.habitEvidenceType ?? 'other');
+  const nextEvidence: string | null =
+    nextType === 'other'
+      ? evidence !== undefined
+        ? evidence
+        : existingSubmission.evidence ?? null
+      : null;
   
   // Recalculate end date and required check-ins if duration changed
   let endAt = existingSubmission.endAt;
@@ -1037,7 +1052,8 @@ export async function updateHabitSubmissionGoal(
     duration,
     endAt,
     requiredCheckIns,
-    evidence: evidence !== undefined ? evidence : existingSubmission.evidence,
+    habitEvidenceType: nextType,
+    evidence: nextEvidence,
     updatedAt: Timestamp.now()
   });
 }
@@ -1560,7 +1576,12 @@ export async function submitMissionReflectionForSequence(params: {
   stepId: string;
   missionTitle?: string;
   reflectionText: string;
-  habitCommitment?: { habitText: string; duration: HabitDuration; evidence: string | null };
+  habitCommitment?: {
+    habitText: string;
+    duration: HabitDuration;
+    evidence: string | null;
+    habitEvidenceType?: HabitEvidenceType;
+  };
   storyCommitment?: { textGoal: string; evidence: string | null };
 }): Promise<{ stored: 'assessmentGoal' | 'habitSubmission' | 'standalone' }> {
   const {
@@ -1604,6 +1625,10 @@ export async function submitMissionReflectionForSequence(params: {
       }
       let ev: string | null = habitCommitment.evidence?.trim() || null;
       if (text) ev = mergeReflectionIntoEvidence(ev, text, sessionLabel);
+      const htType = habitCommitment.habitEvidenceType ?? 'other';
+      if (htType !== 'other') {
+        ev = null;
+      }
       const sub = await getHabitSubmission(assessmentId, studentId);
       if (!sub) {
         await createHabitSubmission(
@@ -1612,10 +1637,11 @@ export async function submitMissionReflectionForSequence(params: {
           assessment.classId,
           ht,
           habitCommitment.duration,
-          ev
+          ev,
+          htType
         );
       } else {
-        await updateHabitSubmissionGoal(assessmentId, studentId, ht, habitCommitment.duration, ev);
+        await updateHabitSubmissionGoal(assessmentId, studentId, ht, habitCommitment.duration, ev, htType);
       }
       return { stored: 'habitSubmission' };
     }

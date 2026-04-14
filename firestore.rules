@@ -444,6 +444,23 @@ service cloud.firestore {
          request.auth.uid in get(/databases/$(database)/documents/classrooms/$(request.resource.data.classId)).data.students)
       );
       allow delete: if isLiveEventStaff();
+
+      // Class Flow sprint stats for habit goals (written by session host; read by student + staff).
+      match /liveEventSessions/{sessionId} {
+        allow get: if request.auth != null && (
+          isAssessmentDashboardStaff() ||
+          get(/databases/$(database)/documents/habitSubmissions/$(submissionId)).data.studentId == request.auth.uid
+        );
+        allow list: if request.auth != null && (
+          isAssessmentDashboardStaff() ||
+          get(/databases/$(database)/documents/habitSubmissions/$(submissionId)).data.studentId == request.auth.uid
+        );
+        allow create, update: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId)
+        );
+        allow delete: if false;
+      }
     }
     
     // PP Ledger collection - students can read their own entries, admins can read all

@@ -9,7 +9,7 @@ import {
   scaledDailyChallengeRewardTruthMetal,
   scaledDailyChallengeRewardXP,
 } from '../utils/dailyChallengeShared';
-import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
+import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
 
 interface DailyChallenge {
   id: string;
@@ -119,19 +119,19 @@ const DailyChallenges: React.FC = () => {
       const studentRef = doc(db, 'students', currentUser.uid);
       
       // Use transaction to ensure idempotency
-      await runTransaction(db, async (transaction) => {
+      const grantedXp = await runTransaction(db, async (transaction) => {
         // Re-read within transaction
         const challengeDoc = await transaction.get(doc(db, 'adminSettings', 'dailyChallenges', 'challenges', challengeId));
         if (!challengeDoc.exists()) {
           console.error('[Daily Challenges] Challenge not found:', challengeId);
-          return;
+          return 0;
         }
         const challengeData = challengeDoc.data() as DailyChallenge;
 
         const progressDoc = await transaction.get(playerChallengesRef);
         if (!progressDoc.exists()) {
           console.warn('[Daily Challenges] Progress document not found');
-          return;
+          return 0;
         }
 
         const progressData = progressDoc.data();
@@ -141,7 +141,10 @@ const DailyChallenges: React.FC = () => {
         // IDEMPOTENCY CHECK: If already claimed, do nothing
         if (!challengeProgress || challengeProgress.claimed) {
           console.log(`[Daily Challenges] Rewards already claimed for challenge ${challengeId}`);
-          return;
+          return 0;
+        }
+        if (!challengeProgress.completed) {
+          return 0;
         }
 
         const ppGrant = scaledDailyChallengeRewardPP(challengeData.rewardPP);
@@ -169,7 +172,11 @@ const DailyChallenges: React.FC = () => {
         });
         
         console.log(`[Daily Challenges] ✅ Auto-granted rewards for challenge "${challengeData.title}": ${challengeData.rewardPP} PP, ${challengeData.rewardXP} XP${challengeData.rewardTruthMetal ? `, ${challengeData.rewardTruthMetal} Truth Metal` : ''}`);
+        return xpGrant;
       });
+      if (grantedXp > 0) {
+        await mirrorProfileXpToProgressionSystems(currentUser.uid, grantedXp, 'daily_challenge');
+      }
     } catch (error) {
       console.error('[Daily Challenges] Error auto-granting rewards:', error);
     }
@@ -306,7 +313,7 @@ const DailyChallenges: React.FC = () => {
       });
 
       if (xpGrant > 0) {
-        await awardBattlePassXpForDeployedSeason(currentUser.uid, xpGrant);
+        await mirrorProfileXpToProgressionSystems(currentUser.uid, xpGrant, 'daily_challenge');
       }
 
       // Mark as claimed

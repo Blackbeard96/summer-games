@@ -28,6 +28,16 @@ describe('dailyChallengeShared', () => {
     expect(dailyChallengeStoredTypeMatchesEvent('win_battle', 'earn_pp')).toBe(false);
   });
 
+  test('earn_xp challenge type synonyms', () => {
+    expect(dailyChallengeStoredTypeMatchesEvent('Earn XP', 'earn_xp')).toBe(true);
+    expect(dailyChallengeStoredTypeMatchesEvent('gain_xp', 'earn_xp')).toBe(true);
+  });
+
+  test('participate_live_event challenge type synonyms', () => {
+    expect(dailyChallengeStoredTypeMatchesEvent('Live Event', 'participate_live_event')).toBe(true);
+    expect(dailyChallengeStoredTypeMatchesEvent('join_live_event', 'participate_live_event')).toBe(true);
+  });
+
   test('scaledDailyChallengeRewardPP multiplies by 10', () => {
     expect(scaledDailyChallengeRewardPP(50)).toBe(500);
   });

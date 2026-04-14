@@ -106,6 +106,7 @@ import { hostReviveEliminatedPlayersInLiveEvent } from '../utils/liveEventRevive
 import { parseClassFlowSprint } from '../utils/liveEventSprintService';
 import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
+import { isSelfDirectedBattleMove, isValidLiveEventRosterTarget } from '../utils/battleSkillTargetResolution';
 import { computeLiveEventParticipationSkillCost } from '../utils/liveEventSkillCost';
 import { FLOW_STATE_SUCCESS_THRESHOLD } from '../utils/liveEventFlowState';
 import {
@@ -2450,6 +2451,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
     const inFlowState = player?.flowStateActive === true;
 
+    const canPickThisLiveEventTarget =
+      !!selectedMove &&
+      !!currentUser?.uid &&
+      isValidLiveEventRosterTarget({
+        actorUid: currentUser.uid,
+        candidateUid: student.id,
+        move: selectedMove,
+      });
+
     return (
       <div
         key={student.id}
@@ -2457,7 +2467,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         onClick={async (e) => {
           // If a move is selected, use this player as target
           // Allow targeting ALL players (including those not in session)
-          if (selectedMove && student.id !== currentUser?.uid) {
+          if (canPickThisLiveEventTarget) {
             // ALWAYS log target click (critical - must see this)
             console.log('🎯 [InSessionBattle] ⚡ TARGET CLICKED ⚡', student.displayName, '| Move:', selectedMove?.name, '| TraceId:', currentTraceId || 'NEW');
             
@@ -2582,27 +2592,27 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           background: isActiveInSession ? 'white' : '#f9fafb',
           borderRadius: '0.5rem',
           padding: '0.75rem',
-          border: selectedMove && student.id !== currentUser?.uid
+          border: canPickThisLiveEventTarget
             ? '3px solid #fbbf24'
             : (isCurrentPlayer ? '2px solid #3b82f6' : (isPresent ? '2px solid #10b981' : (isActiveInSession ? '2px solid #ef4444' : '1px solid #e5e7eb'))),
-          boxShadow: selectedMove && student.id !== currentUser?.uid
+          boxShadow: canPickThisLiveEventTarget
             ? '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2)'
             : (isCurrentPlayer ? '0 2px 8px rgba(59, 130, 246, 0.2)' : (isPresent ? '0 2px 8px rgba(16, 185, 129, 0.2)' : (isActiveInSession ? '0 2px 8px rgba(239, 68, 68, 0.2)' : '0 1px 3px rgba(0, 0, 0, 0.1)'))),
           opacity: isActiveInSession ? 1 : (selectedMove ? 1 : 0.7), // Full opacity when move is selected
           position: 'relative',
-          cursor: selectedMove && student.id !== currentUser?.uid ? 'pointer' : 'default',
-          transform: selectedMove && student.id !== currentUser?.uid ? 'scale(1.05)' : 'scale(1)',
+          cursor: canPickThisLiveEventTarget ? 'pointer' : 'default',
+          transform: canPickThisLiveEventTarget ? 'scale(1.05)' : 'scale(1)',
           transition: 'all 0.2s',
-          zIndex: selectedMove && student.id !== currentUser?.uid ? 1000 : 'auto'
+          zIndex: canPickThisLiveEventTarget ? 1000 : 'auto'
         }}
         onMouseEnter={(e) => {
-          if (selectedMove && student.id !== currentUser?.uid) {
+          if (canPickThisLiveEventTarget) {
             e.currentTarget.style.transform = 'scale(1.08)';
             e.currentTarget.style.boxShadow = '0 0 25px rgba(251, 191, 36, 1), 0 6px 16px rgba(0, 0, 0, 0.3)';
           }
         }}
         onMouseLeave={(e) => {
-          if (selectedMove && student.id !== currentUser?.uid) {
+          if (canPickThisLiveEventTarget) {
             e.currentTarget.style.transform = 'scale(1.05)';
             e.currentTarget.style.boxShadow = '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2)';
           } else {
@@ -5484,7 +5494,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           border: '3px solid #f59e0b'
         }}>
           <span>🎯</span>
-          <span>Selected: {selectedMove.name} - Click on a player card to select target</span>
+          <span>
+            Selected: {selectedMove.name} —{' '}
+            {isSelfDirectedBattleMove(selectedMove)
+              ? 'Click your player card to apply this skill.'
+              : 'Click another player’s card to select target.'}
+          </span>
           <button
             onClick={() => {
               setSelectedMove(null);
@@ -5733,7 +5748,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 </div>
                 <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', border: '2px solid #fbbf24' }}>
                   <div style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: 'bold', textAlign: 'center' }}>
-                    🎯 Click on a player card to select target
+                    🎯{' '}
+                    {selectedMove && isSelfDirectedBattleMove(selectedMove)
+                      ? 'Click your player card to apply this skill.'
+                      : 'Click a player card to select target.'}
                   </div>
                 </div>
               </div>

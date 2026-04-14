@@ -18,7 +18,7 @@ import {
 } from '../types/missions';
 import type { BattlePassReward } from '../types/season1';
 import { REWARD_TYPE_LABELS } from '../components/admin/battlePassAdminRewardUtils';
-import type { HabitDuration } from '../types/assessmentGoals';
+import type { HabitDuration, HabitEvidenceType } from '../types/assessmentGoals';
 import { getMissionTemplate } from '../utils/missionsService';
 import {
   acceptMission,
@@ -111,6 +111,7 @@ const MissionRunner: React.FC = () => {
   const [reflectionHabitText, setReflectionHabitText] = useState('');
   const [reflectionDuration, setReflectionDuration] = useState<HabitDuration>('1_week');
   const [reflectionHabitEvidence, setReflectionHabitEvidence] = useState('');
+  const [reflectionHabitEvidenceType, setReflectionHabitEvidenceType] = useState<HabitEvidenceType>('other');
   const [reflectionStoryTextGoal, setReflectionStoryTextGoal] = useState('');
   const [reflectionStoryEvidence, setReflectionStoryEvidence] = useState('');
   const [reflectionLinkCtx, setReflectionLinkCtx] = useState<{
@@ -339,10 +340,12 @@ const MissionRunner: React.FC = () => {
             setReflectionHabitText(sub.habitText || '');
             setReflectionDuration((sub.duration as HabitDuration) || dur);
             setReflectionHabitEvidence(sub.evidence || '');
+            setReflectionHabitEvidenceType((sub.habitEvidenceType as HabitEvidenceType) || 'other');
           } else {
             setReflectionHabitText('');
             setReflectionDuration(dur);
             setReflectionHabitEvidence('');
+            setReflectionHabitEvidenceType('other');
           }
         } else if (a.type === 'story-goal') {
           const g = await getAssessmentGoal(aid, currentUser.uid);
@@ -493,6 +496,7 @@ const MissionRunner: React.FC = () => {
                       habitText: reflectionHabitText.trim(),
                       duration: reflectionDuration,
                       evidence: reflectionHabitEvidence.trim() || null,
+                      habitEvidenceType: reflectionHabitEvidenceType,
                     },
                   }
                 : {}),
@@ -1360,29 +1364,75 @@ const MissionRunner: React.FC = () => {
                     border: '2px solid #3b82f6',
                   }}
                 >
-                  <label
-                    htmlFor="mission-habit-evidence"
-                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e40af' }}
-                  >
-                    Area of Consistency (optional)
-                  </label>
-                  <textarea
-                    id="mission-habit-evidence"
-                    value={reflectionHabitEvidence}
-                    onChange={(e) => setReflectionHabitEvidence(e.target.value)}
-                    disabled={reflectionSaving}
-                    placeholder="Share evidence of how you've been maintaining your habit consistently."
-                    rows={4}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #3b82f6',
-                      fontSize: '1rem',
-                      fontFamily: 'inherit',
-                      resize: 'vertical',
-                    }}
-                  />
+                  <div style={{ fontWeight: 'bold', color: '#1e40af', marginBottom: '0.5rem' }}>2 — Evidence</div>
+                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#475569' }}>
+                    Live Event options track Class Flow sprints when you join a session.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="mission-habit-evidence-type"
+                        checked={reflectionHabitEvidenceType === 'live_event_sprint_rate'}
+                        onChange={() => setReflectionHabitEvidenceType('live_event_sprint_rate')}
+                        disabled={reflectionSaving}
+                      />
+                      <span style={{ fontSize: '0.9rem' }}>
+                        <strong>Sprint completion rate</strong> (offered vs. completed per session)
+                      </span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="mission-habit-evidence-type"
+                        checked={reflectionHabitEvidenceType === 'live_event_consistency'}
+                        onChange={() => setReflectionHabitEvidenceType('live_event_consistency')}
+                        disabled={reflectionSaving}
+                      />
+                      <span style={{ fontSize: '0.9rem' }}>
+                        <strong>Consistency</strong> (days with a completed sprint)
+                      </span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="mission-habit-evidence-type"
+                        checked={reflectionHabitEvidenceType === 'other'}
+                        onChange={() => setReflectionHabitEvidenceType('other')}
+                        disabled={reflectionSaving}
+                      />
+                      <span style={{ fontSize: '0.9rem' }}>
+                        <strong>Other</strong> (type your own)
+                      </span>
+                    </label>
+                  </div>
+                  {reflectionHabitEvidenceType === 'other' && (
+                    <>
+                      <label
+                        htmlFor="mission-habit-evidence"
+                        style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#1e40af' }}
+                      >
+                        Reflection or proof (optional)
+                      </label>
+                      <textarea
+                        id="mission-habit-evidence"
+                        value={reflectionHabitEvidence}
+                        onChange={(e) => setReflectionHabitEvidence(e.target.value)}
+                        disabled={reflectionSaving}
+                        placeholder="Share evidence of how you've been maintaining your habit consistently."
+                        rows={4}
+                        style={{
+                          width: '100%',
+                          padding: '0.75rem',
+                          borderRadius: '0.5rem',
+                          border: '1px solid #3b82f6',
+                          fontSize: '1rem',
+                          fontFamily: 'inherit',
+                          resize: 'vertical',
+                        }}
+                      />
+                    </>
+                  )}
                 </div>
               </>
             )}

@@ -291,7 +291,6 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                       }
                       setShowBattlePassModal(true);
                     }}
-                    onOpenSeason1Hub={() => navigate('/battle-pass')}
                     onGoToSeasonBattlePass={
                       deployedBattlePassActive ? () => navigate('/battle-pass') : undefined
                     }
@@ -506,7 +505,6 @@ const PowerCardOverlay: React.FC<PowerCardOverlayProps> = ({
                     }
                     setShowBattlePassModal(true);
                   }}
-                  onOpenSeason1Hub={() => navigate('/battle-pass')}
                   onGoToSeasonBattlePass={
                     deployedBattlePassActive ? () => navigate('/battle-pass') : undefined
                   }

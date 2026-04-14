@@ -4051,19 +4051,11 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       console.log(`🎯 AWARDING XP: ${xpAmount} XP for: ${reason}`);
 
+      const { grantPlayerProfileXp } = await import('../utils/playerProgressionRewards');
+      await grantPlayerProfileXp(currentUser.uid, Math.floor(xpAmount), 'battle_context');
+
       const studentRef = doc(db, 'students', currentUser.uid);
-      const userRef = doc(db, 'users', currentUser.uid);
-      const [studentDoc, userDoc] = await Promise.all([getDoc(studentRef), getDoc(userRef)]);
-
-      if (studentDoc.exists()) {
-        await updateDoc(studentRef, { xp: increment(xpAmount) });
-      }
-      if (userDoc.exists()) {
-        await updateDoc(userRef, { xp: increment(xpAmount) });
-      }
-
-      const { awardBattlePassXpForDeployedSeason } = await import('../utils/awardBattlePassXp');
-      await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpAmount));
+      const studentDoc = await getDoc(studentRef);
 
       if (studentDoc.exists()) {
         try {
