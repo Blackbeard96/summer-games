@@ -37,7 +37,11 @@ import {
 } from '../utils/cpuOpponentMovesService';
 import type { ElementType } from '../types/elementTypes';
 import { normalizeElementType } from '../types/elementTypes';
-import { getQuizSet, userMetMissionTrainingRequirement } from '../utils/trainingGroundsService';
+import {
+  getQuizSet,
+  userMetMissionTrainingRequirement,
+  isTrainingQuizAcceptingSoloCompletions,
+} from '../utils/trainingGroundsService';
 import {
   getAssessment,
   getAssessmentGoal,
@@ -106,6 +110,8 @@ const MissionRunner: React.FC = () => {
     requiredPercent: number;
   } | null>(null);
   const [trainingQuizTitle, setTrainingQuizTitle] = useState<string | null>(null);
+  /** When false, mission step still shows the quiz but the student cannot open the CFU until staff reopens completions. */
+  const [trainingQuizSoloOpen, setTrainingQuizSoloOpen] = useState(true);
   const [reflectionDraft, setReflectionDraft] = useState('');
   const [reflectionSaving, setReflectionSaving] = useState(false);
   const [reflectionHabitText, setReflectionHabitText] = useState('');
@@ -250,11 +256,14 @@ const MissionRunner: React.FC = () => {
   useEffect(() => {
     if (!trainingQuizSetId) {
       setTrainingQuizTitle(null);
+      setTrainingQuizSoloOpen(true);
       return;
     }
     let cancelled = false;
     getQuizSet(trainingQuizSetId).then((q) => {
-      if (!cancelled) setTrainingQuizTitle(q?.title ?? null);
+      if (cancelled) return;
+      setTrainingQuizTitle(q?.title ?? null);
+      setTrainingQuizSoloOpen(q ? isTrainingQuizAcceptingSoloCompletions(q) : false);
     });
     return () => {
       cancelled = true;
@@ -1151,10 +1160,31 @@ const MissionRunner: React.FC = () => {
                 </p>
               )}
             </div>
+            {!trainingQuizSoloOpen && (
+              <p
+                style={{
+                  marginTop: '0.75rem',
+                  padding: '0.75rem',
+                  background: '#fef3c7',
+                  border: '1px solid #fbbf24',
+                  borderRadius: '0.5rem',
+                  color: '#92400e',
+                  fontSize: '0.95rem',
+                }}
+              >
+                This CFU is temporarily <strong>closed for completions</strong>. You can see the assignment here, but your teacher must turn completions back on before you can take the quiz.
+              </p>
+            )}
             <button
               type="button"
+              disabled={!trainingQuizSoloOpen}
+              title={
+                !trainingQuizSoloOpen
+                  ? 'This CFU is closed for completions until your teacher turns it back on.'
+                  : undefined
+              }
               onClick={() => {
-                if (!missionId) return;
+                if (!trainingQuizSoloOpen || !missionId) return;
                 const returnPath = `/mission/${missionId}/play`;
                 navigate(
                   `/training-grounds/quiz/${currentStep.training.quizSetId}?returnMission=${encodeURIComponent(returnPath)}`
@@ -1163,16 +1193,17 @@ const MissionRunner: React.FC = () => {
               style={{
                 width: '100%',
                 padding: '1rem',
-                background: '#7c3aed',
+                marginTop: '0.75rem',
+                background: trainingQuizSoloOpen ? '#7c3aed' : '#9ca3af',
                 color: 'white',
                 border: 'none',
                 borderRadius: '0.5rem',
                 fontSize: '1.1rem',
                 fontWeight: 'bold',
-                cursor: 'pointer',
+                cursor: trainingQuizSoloOpen ? 'pointer' : 'not-allowed',
               }}
             >
-              Open quiz in Training Grounds (CFUs)
+              {trainingQuizSoloOpen ? 'Open quiz in Training Grounds (CFUs)' : 'Quiz closed for completions'}
             </button>
           </div>
         )}

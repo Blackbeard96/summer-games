@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getAttempt, getQuizSet, getQuestions } from '../utils/trainingGroundsService';
-import { TrainingAttempt, TrainingQuestion } from '../types/trainingGrounds';
+import { getAttempt, getQuizSet, getQuestions, isTrainingQuizAcceptingSoloCompletions } from '../utils/trainingGroundsService';
+import { TrainingAttempt, TrainingQuestion, TrainingQuizSet } from '../types/trainingGrounds';
 import TrainingQuizSummaryModal from '../components/TrainingQuizSummaryModal';
 
 const QuizResults: React.FC = () => {
@@ -19,7 +19,7 @@ const QuizResults: React.FC = () => {
       : null;
   
   const [attempt, setAttempt] = useState<TrainingAttempt | null>(null);
-  const [quizSet, setQuizSet] = useState<any>(null);
+  const [quizSet, setQuizSet] = useState<TrainingQuizSet | null>(null);
   const [questions, setQuestions] = useState<TrainingQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
@@ -78,6 +78,7 @@ const QuizResults: React.FC = () => {
 
   const scoreColor = attempt.percent >= 70 ? '#10b981' : attempt.percent >= 50 ? '#f59e0b' : '#ef4444';
   const playerName = currentUser?.displayName ?? currentUser?.email ?? 'You';
+  const canRetrySolo = isTrainingQuizAcceptingSoloCompletions(quizSet);
 
   return (
     <>
@@ -339,22 +340,30 @@ const QuizResults: React.FC = () => {
             </button>
           )}
           <button
+            type="button"
+            disabled={!canRetrySolo}
+            title={
+              !canRetrySolo
+                ? 'This CFU is temporarily closed for completions. Your teacher can turn it back on.'
+                : undefined
+            }
             onClick={() => {
+              if (!canRetrySolo) return;
               const base = `/training-grounds/quiz/${attempt.quizSetId}`;
               navigate(returnMission ? `${base}?returnMission=${encodeURIComponent(returnMission)}` : base);
             }}
             style={{
               padding: '0.75rem 2rem',
-              background: '#4f46e5',
+              background: canRetrySolo ? '#4f46e5' : '#9ca3af',
               color: 'white',
               border: 'none',
               borderRadius: '0.5rem',
               fontSize: '1rem',
               fontWeight: '600',
-              cursor: 'pointer',
+              cursor: canRetrySolo ? 'pointer' : 'not-allowed',
             }}
           >
-            Retry Quiz
+            {canRetrySolo ? 'Retry Quiz' : 'Retry unavailable'}
           </button>
           <button
             onClick={() => navigate('/training-grounds')}

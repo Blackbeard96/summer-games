@@ -74,6 +74,11 @@ export function isTrainingQuizVisibleToStudentClasses(
   return assigned.some((id) => studentClassIds.includes(id));
 }
 
+/** Solo Training Grounds attempts allowed (admin can pause without unpublishing). Default: true. */
+export function isTrainingQuizAcceptingSoloCompletions(quiz: TrainingQuizSet): boolean {
+  return quiz.playerCompletionsEnabled !== false;
+}
+
 function quizCreatedAtMs(quiz: TrainingQuizSet): number {
   const ts = quiz.createdAt as { toMillis?: () => number } | number | undefined;
   if (ts && typeof (ts as { toMillis?: () => number }).toMillis === 'function') {

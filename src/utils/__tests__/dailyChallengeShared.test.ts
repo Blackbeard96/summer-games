@@ -47,6 +47,26 @@ describe('dailyChallengeShared', () => {
     expect(moveCountsForDailyElementalChallenge(m)).toBe(true);
   });
 
+  test('manifest template slot move_N still counts as manifest when category was stripped', () => {
+    expect(
+      moveCountsForDailyManifestChallenge({
+        id: 'move_1',
+        category: undefined as unknown as Move['category'],
+        name: 'Read the Room',
+      } as Move)
+    ).toBe(true);
+  });
+
+  test('manifest template rows are not counted as elemental when category is missing but affinity exists', () => {
+    expect(
+      moveCountsForDailyElementalChallenge({
+        id: 'move_1',
+        category: undefined as unknown as Move['category'],
+        elementalAffinity: 'fire' as const,
+      } as Move)
+    ).toBe(false);
+  });
+
   test('moveCountsForDailyManifestChallenge counts RR Candy ids', () => {
     expect(
       moveCountsForDailyManifestChallenge({

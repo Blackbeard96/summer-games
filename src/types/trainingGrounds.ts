@@ -29,6 +29,11 @@ export interface TrainingQuizSet {
   classIds?: string[];
   groupIds?: string[]; // Array of group IDs (optional)
   isPublished: boolean;
+  /**
+   * When false, students still see this published CFU but cannot start or submit solo attempts.
+   * Missing or true = accepting completions (backward compatible).
+   */
+  playerCompletionsEnabled?: boolean;
   questionCount: number; // Denormalized count
   tags?: string[];
   /** If true, quiz can be launched in Live Event Quiz Mode. Default true when undefined. */

@@ -1,5 +1,31 @@
 import type { Move } from '../types/battle';
+import { MOVE_TEMPLATES } from '../types/battle';
 import { getMoveNameSync } from './moveOverrides';
+
+/**
+ * `battleMoves` documents use stable ids `move_1` … `move_N` aligned with `MOVE_TEMPLATES` indices.
+ * When `category` / `manifestType` are missing on a row (legacy writes, partial merges), we can still
+ * tell manifest vs elemental from the template slot.
+ */
+export function templateIndexFromMoveStableId(moveId?: string): number | null {
+  if (!moveId || typeof moveId !== 'string') return null;
+  const m = /^move_(\d+)$/i.exec(moveId.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n - 1;
+}
+
+export function moveMatchesKnownManifestTemplate(
+  move: Pick<Move, 'id' | 'category' | 'manifestType'>
+): boolean {
+  if (move.category === 'manifest') return true;
+  if (move.manifestType) return true;
+  const idx = templateIndexFromMoveStableId(move.id);
+  if (idx === null) return false;
+  const template = MOVE_TEMPLATES[idx];
+  return !!template && template.category === 'manifest';
+}
 
 /** Applied to stored challenge rewardPP / rewardXP / rewardTruthMetal for display and grants. */
 export const DAILY_CHALLENGE_REWARD_MULTIPLIER = 10;
@@ -185,10 +211,15 @@ const MANIFEST_NAME_SNIPPETS = [
 ];
 
 export function moveCountsForDailyElementalChallenge(
-  move: Pick<Move, 'category' | 'elementalAffinity'>
+  move: Pick<Move, 'category' | 'elementalAffinity' | 'manifestType' | 'id' | 'effectKey'>
 ): boolean {
+  if (move.effectKey === 'level2_manifest') return false;
+  if (moveMatchesKnownManifestTemplate(move)) return false;
+
   if (move.category === 'elemental') return true;
-  if (move.elementalAffinity && move.category !== 'manifest') return true;
+  // Only when category is explicitly set: `undefined !== 'manifest'` was always true and mis-counted
+  // stripped manifest rows (with elementalAffinity injected) as elemental-only.
+  if (move.elementalAffinity && move.category && move.category !== 'manifest') return true;
   return false;
 }
 
@@ -200,6 +231,7 @@ export function moveCountsForDailyManifestChallenge(
 ): boolean {
   if (move.category === 'manifest') return true;
   if (move.manifestType) return true;
+  if (moveMatchesKnownManifestTemplate(move)) return true;
   if (move.rrCandySkillId || move.rrCandyNodeId) return true;
   const id = move.id || '';
   if (id.startsWith('rr-candy') || id.startsWith('rrCandy')) return true;

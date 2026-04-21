@@ -1026,8 +1026,13 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return; // Don't set error state
         }
         
-        setError('Failed to initialize battle data. Please refresh the page or try again later.');
-        
+        // Initialization hit an error but we recover below with DB/fallback data — avoid setError here
+        // so Battle.tsx does not show a blocking window.alert for this path.
+        console.warn(
+          'BattleContext: Failed to initialize battle data cleanly; using recovery fallbacks. User may refresh if something looks wrong.',
+          err
+        );
+
         // Protection: never replace existing battleMoves with level-1 defaults; re-fetch and use if available
         let fallbackMoves: Move[] = [];
         try {

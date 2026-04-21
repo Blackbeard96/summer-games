@@ -997,8 +997,13 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid ||
         isLiveEventStaff()
       );
+      // Solo CFU completions respect trainingQuizSets.playerCompletionsEnabled (default open when unset).
       allow create: if request.auth != null &&
-        request.resource.data.userId == request.auth.uid;
+        request.resource.data.userId == request.auth.uid &&
+        (
+          request.resource.data.mode == 'live' ||
+          get(/databases/$(database)/documents/trainingQuizSets/$(request.resource.data.quizSetId)).data.playerCompletionsEnabled != false
+        );
       allow update, delete: if isLiveEventStaff();
     }
 

@@ -93,6 +93,7 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [editClassIds, setEditClassIds] = useState<string[]>([]);
   const [savingClassIds, setSavingClassIds] = useState(false);
+  const [savingPlayerCompletions, setSavingPlayerCompletions] = useState(false);
 
   // Form state
   const [quizSetForm, setQuizSetForm] = useState({
@@ -288,6 +289,7 @@ const TrainingGroundsAdmin: React.FC = () => {
         classIds: quizSetForm.classIds,
         isPublished: quizSetForm.isPublished,
         tags: quizSetForm.tags,
+        playerCompletionsEnabled: true,
       });
 
       alert('Quiz set created successfully!');
@@ -347,6 +349,24 @@ const TrainingGroundsAdmin: React.FC = () => {
       alert('Failed to save class assignment');
     } finally {
       setSavingClassIds(false);
+    }
+  };
+
+  const handleSetPlayerCompletionsEnabled = async (enabled: boolean) => {
+    if (!selectedQuizSet || savingPlayerCompletions) return;
+    setSavingPlayerCompletions(true);
+    try {
+      await updateQuizSet(selectedQuizSet.id, { playerCompletionsEnabled: enabled });
+      await loadQuizSets();
+      const refreshed = await getDoc(doc(db, 'trainingQuizSets', selectedQuizSet.id));
+      if (refreshed.exists()) {
+        setSelectedQuizSet({ id: refreshed.id, ...refreshed.data() } as TrainingQuizSet);
+      }
+    } catch (error) {
+      console.error('Error updating completions toggle:', error);
+      alert('Failed to update student completion setting');
+    } finally {
+      setSavingPlayerCompletions(false);
     }
   };
 
@@ -983,6 +1003,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                     <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                       {quizSet.questionCount} questions
                       {quizSet.isPublished ? ' • Published' : ' • Draft'}
+                      {quizSet.playerCompletionsEnabled === false ? ' • Completions off' : ''}
                     </div>
                   </div>
                 );
@@ -1049,6 +1070,45 @@ const TrainingGroundsAdmin: React.FC = () => {
                   >
                     {savingClassIds ? 'Saving…' : 'Save class assignment'}
                   </button>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: '#fffbeb',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #fcd34d',
+                  }}
+                >
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.35rem', color: '#78350f' }}>
+                    Student completions (Training Grounds)
+                  </div>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.5rem',
+                      fontSize: '0.85rem',
+                      color: '#374151',
+                      cursor: savingPlayerCompletions ? 'wait' : 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedQuizSet.playerCompletionsEnabled !== false}
+                      disabled={savingPlayerCompletions}
+                      onChange={(e) => void handleSetPlayerCompletionsEnabled(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>
+                      <strong>Accept solo quiz completions</strong> — students still see this CFU when published, but
+                      cannot start or retry until this is checked again.
+                    </span>
+                  </label>
+                  {savingPlayerCompletions && (
+                    <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.35rem' }}>Saving…</div>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>

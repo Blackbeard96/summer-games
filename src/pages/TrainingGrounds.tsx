@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getPublishedQuizSets, getLastAttempt } from '../utils/trainingGroundsService';
+import {
+  getPublishedQuizSets,
+  getLastAttempt,
+  isTrainingQuizAcceptingSoloCompletions,
+} from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingAttempt } from '../types/trainingGrounds';
 import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 
@@ -50,6 +54,8 @@ const TrainingGrounds: React.FC = () => {
   const handleStartQuiz = (quizSetId: string) => {
     navigate(`/training-grounds/quiz/${quizSetId}`);
   };
+
+  const canSubmitQuiz = (quiz: TrainingQuizSet) => isTrainingQuizAcceptingSoloCompletions(quiz);
 
   if (loading) {
     return (
@@ -107,6 +113,7 @@ const TrainingGrounds: React.FC = () => {
             {quizSets.map(quizSet => {
               const lastAttempt = lastAttempts[quizSet.id];
               const estimatedMinutes = Math.ceil(quizSet.questionCount * 0.5); // ~30 seconds per question
+              const openForCompletions = canSubmitQuiz(quizSet);
               
               return (
                 <div
@@ -117,9 +124,10 @@ const TrainingGrounds: React.FC = () => {
                     padding: '1.5rem',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
                     transition: 'transform 0.2s, box-shadow 0.2s',
-                    cursor: 'pointer'
+                    cursor: openForCompletions ? 'pointer' : 'default'
                   }}
                   onMouseEnter={(e) => {
+                    if (!openForCompletions) return;
                     e.currentTarget.style.transform = 'translateY(-4px)';
                     e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
                   }}
@@ -127,7 +135,9 @@ const TrainingGrounds: React.FC = () => {
                     e.currentTarget.style.transform = 'translateY(0)';
                     e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
                   }}
-                  onClick={() => handleStartQuiz(quizSet.id)}
+                  onClick={() => {
+                    if (openForCompletions) handleStartQuiz(quizSet.id);
+                  }}
                 >
                   <div style={{ marginBottom: '1rem' }}>
                     <h3 style={{ 
@@ -160,6 +170,23 @@ const TrainingGrounds: React.FC = () => {
                     <div>📝 {quizSet.questionCount} questions</div>
                     <div>⏱️ ~{estimatedMinutes} min</div>
                   </div>
+
+                  {!openForCompletions && (
+                    <div
+                      style={{
+                        background: '#fef3c7',
+                        border: '1px solid #fbbf24',
+                        borderRadius: '0.5rem',
+                        padding: '0.65rem 0.75rem',
+                        marginBottom: '1rem',
+                        fontSize: '0.8125rem',
+                        color: '#92400e',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      This CFU is visible but <strong>temporarily closed</strong> for completions. Check back when your teacher reopens it.
+                    </div>
+                  )}
 
                   {lastAttempt && (
                     <div style={{
@@ -202,22 +229,38 @@ const TrainingGrounds: React.FC = () => {
                   )}
 
                   <button
+                    type="button"
+                    disabled={!openForCompletions}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (openForCompletions) handleStartQuiz(quizSet.id);
+                    }}
                     style={{
                       width: '100%',
-                      background: '#4f46e5',
+                      background: openForCompletions ? '#4f46e5' : '#9ca3af',
                       color: 'white',
                       border: 'none',
                       borderRadius: '0.5rem',
                       padding: '0.75rem',
                       fontSize: '1rem',
                       fontWeight: '600',
-                      cursor: 'pointer',
+                      cursor: openForCompletions ? 'pointer' : 'not-allowed',
                       transition: 'background 0.2s'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#4338ca'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = '#4f46e5'}
+                    onMouseEnter={(e) => {
+                      if (!openForCompletions) return;
+                      e.currentTarget.style.background = '#4338ca';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!openForCompletions) return;
+                      e.currentTarget.style.background = '#4f46e5';
+                    }}
                   >
-                    {lastAttempt ? 'Retry Quiz' : 'Start Quiz'}
+                    {!openForCompletions
+                      ? 'Not accepting completions'
+                      : lastAttempt
+                        ? 'Retry Quiz'
+                        : 'Start Quiz'}
                   </button>
                 </div>
               );

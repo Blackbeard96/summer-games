@@ -7,6 +7,7 @@ import {
   createAttempt,
   updateTrainingStats,
   isTrainingQuizVisibleToStudentClasses,
+  isTrainingQuizAcceptingSoloCompletions,
 } from '../utils/trainingGroundsService';
 import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 import { calculateQuizRewards, grantQuizRewards } from '../utils/trainingGroundsRewards';
@@ -56,6 +57,13 @@ const QuizPlayer: React.FC = () => {
           navigate('/training-grounds');
           return;
         }
+        if (!isTrainingQuizAcceptingSoloCompletions(quiz)) {
+          alert(
+            'This CFU is temporarily closed for completions. You can still see it on Training Grounds, but your teacher needs to turn completions back on before you can take it.'
+          );
+          navigate(returnMission || '/training-grounds');
+          return;
+        }
 
         setQuizSet(quiz);
 
@@ -76,7 +84,7 @@ const QuizPlayer: React.FC = () => {
     };
     
     loadQuiz();
-  }, [quizSetId, currentUser, navigate]);
+  }, [quizSetId, currentUser, navigate, returnMission]);
 
   const handleAnswerSelect = (index: number) => {
     if (showFeedback) return; // Prevent changing answer after feedback
