@@ -12,7 +12,7 @@ export const MISSION_STEP_NAVIGATE_OPTIONS: { path: string; label: string }[] = 
   { path: '/artifacts', label: 'Artifacts' },
   { path: '/marketplace', label: 'Marketplace' },
   { path: '/battle-pass', label: 'Battle pass' },
-  { path: '/training-grounds', label: 'Training grounds' },
+  { path: '/training-grounds', label: 'Training Grounds (CFUs)' },
   { path: '/assessment-goals', label: 'Assessment goals' },
   { path: '/island-raid', label: 'Island raid' },
   { path: '/island-run', label: 'Island run' },

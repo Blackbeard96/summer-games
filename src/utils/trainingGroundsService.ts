@@ -50,34 +50,84 @@ export async function getQuizSet(quizSetId: string): Promise<TrainingQuizSet | n
   return { id: quizSetDoc.id, ...quizSetDoc.data() } as TrainingQuizSet;
 }
 
-export async function getPublishedQuizSets(classIds?: string[]): Promise<TrainingQuizSet[]> {
-  // Query only by isPublished to avoid index requirement
-  // We'll sort and filter in memory
+/** Non-empty class IDs assigned to a quiz set (for visibility + admin sorting). */
+export function assignedClassIdsForQuiz(quiz: TrainingQuizSet): string[] {
+  if (!quiz.classIds || !Array.isArray(quiz.classIds)) return [];
+  const seen = new Set<string>();
+  for (const id of quiz.classIds) {
+    if (typeof id === 'string' && id.trim()) seen.add(id.trim());
+  }
+  return Array.from(seen);
+}
+
+/**
+ * Player Training Grounds: show only if the quiz is assigned to at least one class
+ * and the student is enrolled in one of those classes.
+ */
+export function isTrainingQuizVisibleToStudentClasses(
+  quiz: TrainingQuizSet,
+  studentClassIds: string[]
+): boolean {
+  const assigned = assignedClassIdsForQuiz(quiz);
+  if (assigned.length === 0) return false;
+  if (!studentClassIds.length) return false;
+  return assigned.some((id) => studentClassIds.includes(id));
+}
+
+function quizCreatedAtMs(quiz: TrainingQuizSet): number {
+  const ts = quiz.createdAt as { toMillis?: () => number } | number | undefined;
+  if (ts && typeof (ts as { toMillis?: () => number }).toMillis === 'function') {
+    return (ts as { toMillis: () => number }).toMillis();
+  }
+  if (typeof ts === 'number') return ts;
+  return 0;
+}
+
+/** Admin list: group order by assigned class names (unassigned last), then newest first within a group. */
+export function sortQuizSetsForAdminByClass(
+  sets: TrainingQuizSet[],
+  classrooms: Array<{ id: string; name: string }>
+): TrainingQuizSet[] {
+  const nameForId = (id: string) => classrooms.find((c) => c.id === id)?.name?.trim() || id;
+  return [...sets].sort((a, b) => {
+    const aAssigned = assignedClassIdsForQuiz(a);
+    const bAssigned = assignedClassIdsForQuiz(b);
+    const aKey =
+      aAssigned.length === 0 ? '\uFFFF__unassigned' : [...aAssigned].sort().map(nameForId).join(' | ');
+    const bKey =
+      bAssigned.length === 0 ? '\uFFFF__unassigned' : [...bAssigned].sort().map(nameForId).join(' | ');
+    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    return quizCreatedAtMs(b) - quizCreatedAtMs(a);
+  });
+}
+
+/**
+ * Published quiz sets. Pass `studentClassIds` to restrict to quizzes assigned to those classes (Training Grounds player page).
+ * Call with no arguments (or `undefined`) to list all published sets (e.g. live event host picker).
+ */
+export async function getPublishedQuizSets(studentClassIds?: string[]): Promise<TrainingQuizSet[]> {
   let q = query(
     collection(db, 'trainingQuizSets'),
     where('isPublished', '==', true)
   );
-  
+
   const snapshot = await getDocs(q);
   const quizSets: TrainingQuizSet[] = [];
-  
-  snapshot.forEach(doc => {
-    const data = { id: doc.id, ...doc.data() } as TrainingQuizSet;
-    
-    // Show ALL published quiz sets to ALL players
-    // Class filtering is optional - if classIds are assigned, still show to everyone
-    // (Future: can add class-based filtering if needed)
-    quizSets.push(data);
+
+  snapshot.forEach((docSnap) => {
+    quizSets.push({ id: docSnap.id, ...docSnap.data() } as TrainingQuizSet);
   });
-  
-  // Sort by createdAt descending (in memory, no index needed)
-  quizSets.sort((a, b) => {
-    const aTime = a.createdAt?.toMillis?.() || a.createdAt || 0;
-    const bTime = b.createdAt?.toMillis?.() || b.createdAt || 0;
-    return bTime - aTime;
-  });
-  
-  return quizSets;
+
+  const restrict = studentClassIds !== undefined;
+  let filtered = quizSets;
+  if (restrict) {
+    const ids = studentClassIds ?? [];
+    filtered = quizSets.filter((quiz) => isTrainingQuizVisibleToStudentClasses(quiz, ids));
+  }
+
+  filtered.sort((a, b) => quizCreatedAtMs(b) - quizCreatedAtMs(a));
+
+  return filtered;
 }
 
 export async function getAllQuizSets(includeUnpublished: boolean = false): Promise<TrainingQuizSet[]> {

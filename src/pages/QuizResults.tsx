@@ -369,7 +369,7 @@ const QuizResults: React.FC = () => {
               cursor: 'pointer',
             }}
           >
-            Back to Training Grounds
+            Back to Training Grounds (CFUs)
           </button>
         </div>
       </div>

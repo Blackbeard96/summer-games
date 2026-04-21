@@ -3,7 +3,7 @@
  * 
  * Allows admins to:
  * - Create/edit missions
- * - Designate missions as STORY or SIDE
+ * - Designate missions as STORY, SIDE, Sovereign (SOVEREIGN), or PROFILE
  * - Set chapter metadata for story missions
  * - Assign NPCs and delivery channels
  */
@@ -11,7 +11,16 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, deleteField, query, orderBy, serverTimestamp, writeBatch, getDoc as getDocFn } from 'firebase/firestore';
 import { db } from '../firebase';
-import { MissionTemplate, MissionCategory, DeliveryChannel, PlayerJourneyLink, MissionSequenceStep, ProfileMetadata, ProfileJourneyStageId } from '../types/missions';
+import {
+  MissionTemplate,
+  MissionCategory,
+  DeliveryChannel,
+  PlayerJourneyLink,
+  MissionSequenceStep,
+  ProfileMetadata,
+  ProfileJourneyStageId,
+  normalizeMissionCategory,
+} from '../types/missions';
 import { CHAPTERS, ChapterChallenge } from '../types/chapters';
 import MissionSequenceBuilder from './MissionSequenceBuilder';
 import { stripUndefinedDeep } from '../utils/firestoreSanitize';
@@ -33,6 +42,52 @@ const PROFILE_JOURNEY_STAGE_OPTIONS: Array<{ value: ProfileJourneyStageId; label
   { value: 'road-back', label: '7. The Road Back' },
   { value: 'resurrection', label: '8. Resurrection' },
 ];
+
+function usesHubDisplayOrder(category: MissionCategory): boolean {
+  return category === 'SIDE' || category === 'SOVEREIGN';
+}
+
+function missionCategoryListChrome(category: MissionCategory): {
+  panelBg: string;
+  borderColor: string;
+  badgeBg: string;
+  badgeColor: string;
+} {
+  switch (category) {
+    case 'STORY':
+      return {
+        panelBg: 'rgba(251, 191, 36, 0.1)',
+        borderColor: '#fbbf24',
+        badgeBg: '#fbbf24',
+        badgeColor: '#1f2937',
+      };
+    case 'PROFILE':
+      return {
+        panelBg: 'rgba(16, 185, 129, 0.1)',
+        borderColor: '#10b981',
+        badgeBg: '#10b981',
+        badgeColor: 'white',
+      };
+    case 'SOVEREIGN':
+      return {
+        panelBg: 'rgba(139, 92, 246, 0.12)',
+        borderColor: '#8b5cf6',
+        badgeBg: '#7c3aed',
+        badgeColor: 'white',
+      };
+    default:
+      return {
+        panelBg: 'rgba(59, 130, 246, 0.1)',
+        borderColor: '#3b82f6',
+        badgeBg: '#3b82f6',
+        badgeColor: 'white',
+      };
+  }
+}
+
+function missionCategoryBadgeLabel(category: MissionCategory): string {
+  return category === 'SOVEREIGN' ? 'Sovereign' : category;
+}
 
 const MissionAdmin: React.FC = () => {
   const [missions, setMissions] = useState<MissionTemplate[]>([]);
@@ -61,7 +116,7 @@ const MissionAdmin: React.FC = () => {
           title: data.title || 'Untitled Mission',
           description: data.description || '',
           npc: data.npc || null,
-          missionCategory: data.missionCategory || 'SIDE',
+          missionCategory: normalizeMissionCategory(data.missionCategory),
           deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
           story: data.story || undefined,
           profile: data.profile || undefined,
@@ -236,14 +291,16 @@ const MissionAdmin: React.FC = () => {
 
       {/* Mission List */}
       <div style={{ display: 'grid', gap: '1rem', marginBottom: '2rem' }}>
-        {missions.map((mission) => (
+        {missions.map((mission) => {
+          const chrome = missionCategoryListChrome(mission.missionCategory);
+          return (
           <div
             key={mission.id}
             onClick={() => setSelectedMission(mission)}
             style={{
               padding: '1rem',
-              background: mission.missionCategory === 'STORY' ? 'rgba(251, 191, 36, 0.1)' : mission.missionCategory === 'PROFILE' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-              border: `2px solid ${mission.missionCategory === 'STORY' ? '#fbbf24' : mission.missionCategory === 'PROFILE' ? '#10b981' : '#3b82f6'}`,
+              background: chrome.panelBg,
+              border: `2px solid ${chrome.borderColor}`,
               borderRadius: '0.5rem',
               cursor: 'pointer',
               transition: 'transform 0.2s'
@@ -262,14 +319,14 @@ const MissionAdmin: React.FC = () => {
                     {mission.title}
                   </h3>
                   <span style={{
-                    backgroundColor: mission.missionCategory === 'STORY' ? '#fbbf24' : mission.missionCategory === 'PROFILE' ? '#10b981' : '#3b82f6',
-                    color: mission.missionCategory === 'STORY' ? '#1f2937' : 'white',
+                    backgroundColor: chrome.badgeBg,
+                    color: chrome.badgeColor,
                     padding: '0.25rem 0.5rem',
                     borderRadius: '0.25rem',
                     fontSize: '0.75rem',
                     fontWeight: 'bold'
                   }}>
-                    {mission.missionCategory}
+                    {missionCategoryBadgeLabel(mission.missionCategory)}
                   </span>
                 </div>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>
@@ -288,7 +345,8 @@ const MissionAdmin: React.FC = () => {
               </div>
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
 
       {/* Edit Modal */}
@@ -367,7 +425,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
       deliveryChannels: formData.deliveryChannels
     };
 
-    if (formData.missionCategory === 'SIDE') {
+    if (usesHubDisplayOrder(formData.missionCategory)) {
       const raw = formData.hubDisplayOrder.trim();
       if (raw === '') {
         if (mission.hubDisplayOrder != null) {
@@ -577,11 +635,12 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
             >
               <option value="SIDE">SIDE</option>
               <option value="STORY">STORY</option>
+              <option value="SOVEREIGN">Sovereign Missions</option>
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
 
-          {formData.missionCategory === 'SIDE' && (
+          {usesHubDisplayOrder(formData.missionCategory) && (
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
                 Hub list order (optional)
@@ -596,8 +655,8 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ mission, onSave, on
                 style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
               />
               <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
-                Lower numbers appear first in this NPC&apos;s Side Missions list. Leave blank to sort by creation time
-                (oldest first). Players still see numbered steps 1, 2, 3… in that order.
+                Lower numbers appear first in this NPC&apos;s Side / Sovereign Missions list. Leave blank to sort by
+                creation time (oldest first). Players still see numbered steps 1, 2, 3… in that order.
               </p>
             </div>
           )}
@@ -976,7 +1035,7 @@ const MissionCreateModal: React.FC<{
       deliveryChannels: formData.deliveryChannels
     };
 
-    if (formData.missionCategory === 'SIDE') {
+    if (usesHubDisplayOrder(formData.missionCategory)) {
       const raw = formData.hubDisplayOrder.trim();
       if (raw !== '') {
         const n = parseInt(raw, 10);
@@ -1177,11 +1236,12 @@ const MissionCreateModal: React.FC<{
             >
               <option value="SIDE">SIDE</option>
               <option value="STORY">STORY</option>
+              <option value="SOVEREIGN">Sovereign Missions</option>
               <option value="PROFILE">PROFILE</option>
             </select>
           </div>
 
-          {formData.missionCategory === 'SIDE' && (
+          {usesHubDisplayOrder(formData.missionCategory) && (
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
                 Hub list order (optional)
@@ -1196,8 +1256,8 @@ const MissionCreateModal: React.FC<{
                 style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
               />
               <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
-                Lower numbers appear first in this NPC&apos;s Side Missions list. Leave blank to sort by creation time
-                (oldest first). Players still see numbered steps 1, 2, 3… in that order.
+                Lower numbers appear first in this NPC&apos;s Side / Sovereign Missions list. Leave blank to sort by
+                creation time (oldest first). Players still see numbered steps 1, 2, 3… in that order.
               </p>
             </div>
           )}

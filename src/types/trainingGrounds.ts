@@ -25,7 +25,8 @@ export interface TrainingQuizSet {
   title: string;
   description?: string;
   createdBy: string; // Admin UID
-  classIds?: string[]; // Array of class IDs who can see this
+  /** Class (classroom) IDs this CFU is for. Students only see published quizzes assigned to a class they are in. */
+  classIds?: string[];
   groupIds?: string[]; // Array of group IDs (optional)
   isPublished: boolean;
   questionCount: number; // Denormalized count

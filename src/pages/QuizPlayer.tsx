@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getQuizSet, getQuestions } from '../utils/trainingGroundsService';
-import { createAttempt, updateTrainingStats } from '../utils/trainingGroundsService';
+import {
+  getQuizSet,
+  getQuestions,
+  createAttempt,
+  updateTrainingStats,
+  isTrainingQuizVisibleToStudentClasses,
+} from '../utils/trainingGroundsService';
+import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 import { calculateQuizRewards, grantQuizRewards } from '../utils/trainingGroundsRewards';
 import { TrainingQuizSet, TrainingQuestion, TrainingAnswer, TrainingAttempt } from '../types/trainingGrounds';
 import { serverTimestamp } from 'firebase/firestore';
@@ -43,8 +49,16 @@ const QuizPlayer: React.FC = () => {
           navigate('/training-grounds');
           return;
         }
+        const studentClasses = await getClassesByStudent(currentUser.uid);
+        const studentClassIds = studentClasses.map((c) => c.id);
+        if (!isTrainingQuizVisibleToStudentClasses(quiz, studentClassIds)) {
+          alert('This CFU quiz is not assigned to your class.');
+          navigate('/training-grounds');
+          return;
+        }
+
         setQuizSet(quiz);
-        
+
         const quizQuestions = await getQuestions(quizSetId);
         if (quizQuestions.length === 0) {
           alert('Quiz has no questions');

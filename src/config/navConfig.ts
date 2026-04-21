@@ -110,7 +110,7 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               visibility: 'all'
             },
             {
-              label: 'Training Grounds',
+              label: 'Training Grounds (CFUs)',
               path: '/training-grounds',
               icon: '🎯',
               visibility: 'all'

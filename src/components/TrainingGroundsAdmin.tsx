@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, getDocs, doc, getDoc, deleteField } from 'firebase/firestore';
@@ -15,6 +15,8 @@ import {
   uploadQuestionImage,
   deleteQuestionImage,
   getQuizSetAttempts,
+  assignedClassIdsForQuiz,
+  sortQuizSetsForAdminByClass,
 } from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
@@ -89,6 +91,8 @@ const TrainingGroundsAdmin: React.FC = () => {
     latestScore: number;
   }>>([]);
   const [loadingStats, setLoadingStats] = useState(false);
+  const [editClassIds, setEditClassIds] = useState<string[]>([]);
+  const [savingClassIds, setSavingClassIds] = useState(false);
 
   // Form state
   const [quizSetForm, setQuizSetForm] = useState({
@@ -130,6 +134,37 @@ const TrainingGroundsAdmin: React.FC = () => {
       loadQuestions(selectedQuizSet.id);
     }
   }, [selectedQuizSet]);
+
+  useEffect(() => {
+    if (selectedQuizSet) {
+      setEditClassIds(assignedClassIdsForQuiz(selectedQuizSet));
+    } else {
+      setEditClassIds([]);
+    }
+  }, [selectedQuizSet?.id, (selectedQuizSet?.classIds || []).join(',')]);
+
+  const sortedQuizSetsForAdmin = useMemo(
+    () => sortQuizSetsForAdminByClass(quizSets, classrooms),
+    [quizSets, classrooms]
+  );
+
+  const classLabelsForQuiz = (quiz: TrainingQuizSet): string => {
+    const ids = assignedClassIdsForQuiz(quiz);
+    if (ids.length === 0) return 'Unassigned';
+    return ids
+      .map((id) => classrooms.find((c) => c.id === id)?.name?.trim() || id)
+      .sort((a, b) => a.localeCompare(b))
+      .join(' · ');
+  };
+
+  const sectionHeaderKeyForQuiz = (quiz: TrainingQuizSet): string => {
+    const ids = assignedClassIdsForQuiz(quiz);
+    if (ids.length === 0) return '__unassigned';
+    return [...ids]
+      .sort()
+      .map((id) => classrooms.find((c) => c.id === id)?.name?.trim() || id)
+      .join(' | ');
+  };
 
   const loadQuizSets = async () => {
     try {
@@ -240,6 +275,10 @@ const TrainingGroundsAdmin: React.FC = () => {
       alert('Please enter a title');
       return;
     }
+    if (quizSetForm.isPublished && quizSetForm.classIds.length === 0) {
+      alert('Choose at least one class before publishing. Students only see CFUs assigned to their class.');
+      return;
+    }
 
     try {
       const quizSetId = await createQuizSet({
@@ -293,12 +332,46 @@ const TrainingGroundsAdmin: React.FC = () => {
     }
   };
 
-  const handleTogglePublish = async (quizSet: TrainingQuizSet) => {
+  const handleSaveQuizSetClasses = async () => {
+    if (!selectedQuizSet) return;
+    setSavingClassIds(true);
     try {
-      await updateQuizSet(quizSet.id, { isPublished: !quizSet.isPublished });
+      await updateQuizSet(selectedQuizSet.id, { classIds: editClassIds });
+      await loadQuizSets();
+      const refreshed = await getDoc(doc(db, 'trainingQuizSets', selectedQuizSet.id));
+      if (refreshed.exists()) {
+        setSelectedQuizSet({ id: refreshed.id, ...refreshed.data() } as TrainingQuizSet);
+      }
+    } catch (error) {
+      console.error('Error updating class assignment:', error);
+      alert('Failed to save class assignment');
+    } finally {
+      setSavingClassIds(false);
+    }
+  };
+
+  const handleTogglePublish = async (quizSet: TrainingQuizSet) => {
+    const turningOn = !quizSet.isPublished;
+    const effectiveClassIds =
+      selectedQuizSet?.id === quizSet.id ? editClassIds : assignedClassIdsForQuiz(quizSet);
+    if (turningOn && effectiveClassIds.length === 0) {
+      alert('Assign this quiz to at least one class before publishing. Students only see CFUs for their class.');
+      return;
+    }
+    try {
+      const payload: Partial<TrainingQuizSet> = { isPublished: turningOn };
+      if (turningOn && selectedQuizSet?.id === quizSet.id) {
+        payload.classIds = editClassIds;
+      }
+      await updateQuizSet(quizSet.id, payload);
       await loadQuizSets();
       if (selectedQuizSet?.id === quizSet.id) {
-        setSelectedQuizSet({ ...selectedQuizSet, isPublished: !quizSet.isPublished });
+        const refreshed = await getDoc(doc(db, 'trainingQuizSets', quizSet.id));
+        if (refreshed.exists()) {
+          setSelectedQuizSet({ id: refreshed.id, ...refreshed.data() } as TrainingQuizSet);
+        } else {
+          setSelectedQuizSet({ ...selectedQuizSet, isPublished: turningOn });
+        }
       }
     } catch (error) {
       console.error('Error updating quiz set:', error);
@@ -724,7 +797,7 @@ const TrainingGroundsAdmin: React.FC = () => {
   return (
     <div style={{ padding: '2rem' }}>
       <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Training Grounds Management</h2>
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Training Grounds (CFUs) Management</h2>
         <button
           onClick={() => setShowCreateForm(true)}
           style={{
@@ -816,7 +889,7 @@ const TrainingGroundsAdmin: React.FC = () => {
                   checked={quizSetForm.isPublished}
                   onChange={(e) => setQuizSetForm({ ...quizSetForm, isPublished: e.target.checked })}
                 />
-                Published (visible to students)
+                Published (only students in the selected classes will see this CFU)
               </label>
             </div>
 
@@ -859,26 +932,63 @@ const TrainingGroundsAdmin: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '2rem' }}>
         <div>
           <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold', marginBottom: '1rem' }}>Quiz Sets</h3>
+          <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '-0.5rem 0 0.75rem' }}>
+            Sorted by assigned class. Students only see published sets for classes they are enrolled in.
+          </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {quizSets.map(quizSet => (
-              <div
-                key={quizSet.id}
-                onClick={() => setSelectedQuizSet(quizSet)}
-                style={{
-                  padding: '1rem',
-                  background: selectedQuizSet?.id === quizSet.id ? '#eef2ff' : 'white',
-                  border: `2px solid ${selectedQuizSet?.id === quizSet.id ? '#4f46e5' : '#e5e7eb'}`,
-                  borderRadius: '0.5rem',
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{quizSet.title}</div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                  {quizSet.questionCount} questions
-                  {quizSet.isPublished ? ' • Published' : ' • Draft'}
-                </div>
-              </div>
-            ))}
+            {(() => {
+              let lastSection = '';
+              const nodes: React.ReactNode[] = [];
+              sortedQuizSetsForAdmin.forEach((quizSet) => {
+                const section = sectionHeaderKeyForQuiz(quizSet);
+                if (section !== lastSection) {
+                  lastSection = section;
+                  const label =
+                    assignedClassIdsForQuiz(quizSet).length === 0
+                      ? 'Unassigned (not visible to students)'
+                      : section;
+                  nodes.push(
+                    <div
+                      key={`section-${section}`}
+                      style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.05em',
+                        textTransform: 'uppercase',
+                        color: '#6b7280',
+                        marginTop: nodes.length ? '0.65rem' : 0,
+                        marginBottom: '0.2rem',
+                      }}
+                    >
+                      {label}
+                    </div>
+                  );
+                }
+                nodes.push(
+                  <div
+                    key={quizSet.id}
+                    onClick={() => setSelectedQuizSet(quizSet)}
+                    style={{
+                      padding: '1rem',
+                      background: selectedQuizSet?.id === quizSet.id ? '#eef2ff' : 'white',
+                      border: `2px solid ${selectedQuizSet?.id === quizSet.id ? '#4f46e5' : '#e5e7eb'}`,
+                      borderRadius: '0.5rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{quizSet.title}</div>
+                    <div style={{ fontSize: '0.72rem', color: '#4f46e6', marginBottom: '0.25rem' }}>
+                      {classLabelsForQuiz(quizSet)}
+                    </div>
+                    <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                      {quizSet.questionCount} questions
+                      {quizSet.isPublished ? ' • Published' : ' • Draft'}
+                    </div>
+                  </div>
+                );
+              });
+              return nodes;
+            })()}
           </div>
         </div>
 
@@ -890,6 +1000,55 @@ const TrainingGroundsAdmin: React.FC = () => {
                 <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold' }}>{selectedQuizSet.title}</h3>
                 <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
                   {selectedQuizSet.questionCount} questions
+                </div>
+                <div
+                  style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: '#f9fafb',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #e5e7eb',
+                  }}
+                >
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.35rem', color: '#374151' }}>
+                    Classes (who can see this CFU when published)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                    {classrooms.map((classroom) => (
+                      <label key={classroom.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={editClassIds.includes(classroom.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditClassIds([...editClassIds, classroom.id]);
+                            } else {
+                              setEditClassIds(editClassIds.filter((id) => id !== classroom.id));
+                            }
+                          }}
+                        />
+                        {classroom.name}
+                      </label>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveQuizSetClasses()}
+                    disabled={savingClassIds}
+                    style={{
+                      padding: '0.35rem 0.75rem',
+                      background: '#4f46e5',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.35rem',
+                      cursor: savingClassIds ? 'not-allowed' : 'pointer',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      opacity: savingClassIds ? 0.7 : 1,
+                    }}
+                  >
+                    {savingClassIds ? 'Saving…' : 'Save class assignment'}
+                  </button>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>

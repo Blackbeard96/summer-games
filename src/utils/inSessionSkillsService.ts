@@ -6,7 +6,10 @@
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
-import { computeLiveEventParticipationSkillCost } from './liveEventSkillCost';
+import {
+  computeLiveEventParticipationSkillCost,
+  logLiveEventSkillCostAttempt,
+} from './liveEventSkillCost';
 import { getPlayerUniversalLawEffects } from './universalLawBoons';
 import { defaultEnergies } from './season1PlayerHydration';
 import { resolveSeason1SkillCost } from './season1SkillCost';
@@ -174,6 +177,20 @@ export async function validateSkillUsage(
         }
       );
       if (!res.canUse) {
+        logLiveEventSkillCostAttempt({
+          actorId: userId,
+          skillId: skill.id,
+          skillName: skill.name,
+          detectedCategory: res.breakdown.category,
+          detectedLevel: res.breakdown.elementalMoveTier,
+          baseCost: res.breakdown.baseCost,
+          reduction: res.breakdown.reductionFromArtifacts + res.breakdown.reductionFromEffects,
+          finalCost: res.breakdown.finalCost,
+          playerCurrentPP: participationPointsAvailable,
+          validationResult: res.reason?.includes('Participation')
+            ? 'blocked_insufficient_pp'
+            : 'blocked_other',
+        });
         return { valid: false, reason: res.reason };
       }
       if (
@@ -181,8 +198,32 @@ export async function validateSkillUsage(
         skill.currentCooldown &&
         skill.currentCooldown > 0
       ) {
+        logLiveEventSkillCostAttempt({
+          actorId: userId,
+          skillId: skill.id,
+          skillName: skill.name,
+          detectedCategory: res.breakdown.category,
+          detectedLevel: res.breakdown.elementalMoveTier,
+          baseCost: res.breakdown.baseCost,
+          reduction: res.breakdown.reductionFromArtifacts + res.breakdown.reductionFromEffects,
+          finalCost: res.breakdown.finalCost,
+          playerCurrentPP: participationPointsAvailable,
+          validationResult: 'blocked_other',
+        });
         return { valid: false, reason: `Skill is on cooldown (${skill.currentCooldown} turns remaining)` };
       }
+      logLiveEventSkillCostAttempt({
+        actorId: userId,
+        skillId: skill.id,
+        skillName: skill.name,
+        detectedCategory: res.breakdown.category,
+        detectedLevel: res.breakdown.elementalMoveTier,
+        baseCost: res.breakdown.baseCost,
+        reduction: res.breakdown.reductionFromArtifacts + res.breakdown.reductionFromEffects,
+        finalCost: res.breakdown.finalCost,
+        playerCurrentPP: participationPointsAvailable,
+        validationResult: 'ok',
+      });
       return { valid: true, spendSummary: res.spendSummary };
     }
     
@@ -194,6 +235,18 @@ export async function validateSkillUsage(
       lawFx
     );
     if (participationPointsAvailable < breakdown.finalCost) {
+      logLiveEventSkillCostAttempt({
+        actorId: userId,
+        skillId: skill.id,
+        skillName: skill.name,
+        detectedCategory: breakdown.category,
+        detectedLevel: breakdown.elementalMoveTier,
+        baseCost: breakdown.baseCost,
+        reduction: breakdown.reductionFromArtifacts + breakdown.reductionFromEffects,
+        finalCost: breakdown.finalCost,
+        playerCurrentPP: participationPointsAvailable,
+        validationResult: 'blocked_insufficient_pp',
+      });
       return {
         valid: false,
         reason: `Need ${breakdown.finalCost} Participation Points to use this skill (have ${participationPointsAvailable})`,
@@ -205,9 +258,33 @@ export async function validateSkillUsage(
       skill.currentCooldown &&
       skill.currentCooldown > 0
     ) {
+      logLiveEventSkillCostAttempt({
+        actorId: userId,
+        skillId: skill.id,
+        skillName: skill.name,
+        detectedCategory: breakdown.category,
+        detectedLevel: breakdown.elementalMoveTier,
+        baseCost: breakdown.baseCost,
+        reduction: breakdown.reductionFromArtifacts + breakdown.reductionFromEffects,
+        finalCost: breakdown.finalCost,
+        playerCurrentPP: participationPointsAvailable,
+        validationResult: 'blocked_other',
+      });
       return { valid: false, reason: `Skill is on cooldown (${skill.currentCooldown} turns remaining)` };
     }
     
+    logLiveEventSkillCostAttempt({
+      actorId: userId,
+      skillId: skill.id,
+      skillName: skill.name,
+      detectedCategory: breakdown.category,
+      detectedLevel: breakdown.elementalMoveTier,
+      baseCost: breakdown.baseCost,
+      reduction: breakdown.reductionFromArtifacts + breakdown.reductionFromEffects,
+      finalCost: breakdown.finalCost,
+      playerCurrentPP: participationPointsAvailable,
+      validationResult: 'ok',
+    });
     return { valid: true };
   } catch (error) {
     debugError('inSessionSkills', `Error validating skill usage for ${userId}`, error);

@@ -32,7 +32,8 @@ import {
 import {
   generateGoalId,
   generateResultId,
-  computePPChange
+  computePPChange,
+  validateGoalScore,
 } from './assessmentGoals';
 import { arrayUnion, runTransaction } from 'firebase/firestore';
 import { updateHeroJourneyProgress } from './heroJourneyProgress';
@@ -1367,12 +1368,116 @@ async function appendEvidenceToAssessmentGoalDoc(
 }
 
 /**
- * Student submits Live Event reflection text into the same Evidence field admins see
- * on Assessment Goals Dashboard (habits → habitSubmissions; other goals → assessmentGoals).
+ * Live Event **Goal Setting** mode: create or update the student row on Assessment Goals
+ * (numeric goal, story-goal text, or habit submission) — same writes as Set Goal on `/assessment-goals`.
+ */
+export async function submitLiveEventGoalSettingToAssessment(params: {
+  assessmentId: string;
+  studentId: string;
+  classId: string;
+  sessionId: string;
+  /** Regular numeric assessments */
+  goalScore?: number;
+  /** story-goal */
+  textGoal?: string;
+  /** habits */
+  habitText?: string;
+  duration?: HabitDuration;
+  /** Optional habit evidence when type is `other` */
+  habitEvidence?: string | null;
+  /** story-goal / optional context */
+  evidence?: string | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const {
+    assessmentId,
+    studentId,
+    classId,
+    sessionId: _sessionId,
+    goalScore: goalScoreRaw,
+    textGoal: textGoalRaw,
+    habitText: habitTextRaw,
+    duration = '1_week',
+    habitEvidence = null,
+    evidence: evidenceRaw = null,
+  } = params;
+
+  const assessment = await getAssessment(assessmentId);
+  if (!assessment) return { ok: false, error: 'Assessment not found.' };
+  if (assessment.classId !== classId) {
+    return { ok: false, error: 'This assessment does not belong to this class.' };
+  }
+  if (assessment.isLocked) {
+    return { ok: false, error: 'This assessment is locked. You cannot change your goal here.' };
+  }
+
+  const awardGoalSettingXp = async (combined: string) => {
+    const t = combined.trim();
+    if (!t) return;
+    try {
+      const { awardPowerXpForGoalSettingSubmission } = await import('./liveEventPowerStatsService');
+      await awardPowerXpForGoalSettingSubmission(studentId, t.length, {
+        qualityBonus: t.length >= 160,
+      });
+    } catch (e) {
+      console.warn('Spiritual Power XP (goal setting) failed:', e);
+    }
+  };
+
+  try {
+    if (assessment.type === 'habits') {
+      const habitText = (habitTextRaw || '').trim();
+      if (habitText.length < 3 || habitText.length > 180) {
+        return { ok: false, error: 'Habit commitment must be between 3 and 180 characters.' };
+      }
+      const ev = typeof habitEvidence === 'string' ? habitEvidence.trim() || null : null;
+      const sub = await getHabitSubmission(assessmentId, studentId);
+      if (sub) {
+        await updateHabitSubmissionGoal(assessmentId, studentId, habitText, duration, ev, 'other');
+      } else {
+        await createHabitSubmission(assessmentId, studentId, classId, habitText, duration, ev, 'other');
+      }
+      await awardGoalSettingXp(`${habitText}${ev ? `\n${ev}` : ''}`);
+      return { ok: true };
+    }
+
+    if (assessment.type === 'story-goal') {
+      const textGoal = (textGoalRaw || '').trim();
+      if (textGoal.length < 3) {
+        return { ok: false, error: 'Goal description must be at least 3 characters.' };
+      }
+      if (textGoal.length > 500) {
+        return { ok: false, error: 'Goal description must be 500 characters or less.' };
+      }
+      const evidence = typeof evidenceRaw === 'string' ? evidenceRaw.trim() || null : null;
+      await setAssessmentGoal(assessmentId, studentId, undefined, classId, evidence, textGoal);
+      await awardGoalSettingXp(`${textGoal}${evidence ? `\n${evidence}` : ''}`);
+      return { ok: true };
+    }
+
+    if (goalScoreRaw === undefined || goalScoreRaw === null || Number.isNaN(Number(goalScoreRaw))) {
+      return { ok: false, error: 'Enter a valid goal score.' };
+    }
+    const score = Number(goalScoreRaw);
+    const minGoalScore = assessment.minGoalScore || 0;
+    const validation = validateGoalScore(score, assessment.maxScore, minGoalScore);
+    if (!validation.valid) {
+      return { ok: false, error: validation.error || 'Invalid goal score.' };
+    }
+    await setAssessmentGoal(assessmentId, studentId, score, classId);
+    await awardGoalSettingXp(String(score));
+    return { ok: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg || 'Failed to save goal.' };
+  }
+}
+
+/**
+ * Student submits Live Event **reflection** text as **evidence** they are meeting their goal
+ * (habits → Evidence on habit submission; numeric / story → Evidence on assessmentGoals row).
  *
- * For **habits** assessments, hosts can require **habit commitment** (habitText), **evidence**, or both
- * via `collectHabit` / `collectEvidence` (default true when omitted). New habit rows are created with
- * duration `1_week` when the student submits a commitment and had no submission yet.
+ * Habits: only **evidence** is collected in the Live Event UI; students should set their habit commitment
+ * in **Goal Setting** mode first when starting a new habit cycle.
  */
 export async function submitLiveEventReflectionToAssessment(params: {
   assessmentId: string;

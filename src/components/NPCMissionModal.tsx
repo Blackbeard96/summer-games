@@ -2,7 +2,7 @@
  * NPC Mission Modal
  * 
  * Shows missions available from a specific NPC (Sonido, Zeke, Luz, Kon)
- * Displays STORY missions pinned at top, then SIDE missions below
+ * Displays STORY missions pinned at top, then Sovereign lore, Profile, and Side missions below
  */
 
 import React, { useState, useEffect } from 'react';
@@ -81,6 +81,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const { currentUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [sideMissions, setSideMissions] = useState<MissionTemplate[]>([]);
+  const [sovereignMissions, setSovereignMissions] = useState<MissionTemplate[]>([]);
   const [storyMissions, setStoryMissions] = useState<MissionTemplate[]>([]);
   const [profileMissions, setProfileMissions] = useState<MissionTemplate[]>([]);
   const [playerMissions, setPlayerMissions] = useState<PlayerMission[]>([]);
@@ -128,13 +129,16 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
         setPlayerMissions(playerMissionsData);
 
-        // Fetch all HUB_NPC missions for this NPC (SIDE, STORY, PROFILE) in one query
+        // Fetch all HUB_NPC missions for this NPC (SIDE, SOVEREIGN, STORY, PROFILE) in one query
         const allMissionsData = await getMissionTemplates({
           npc,
           deliveryChannel: 'HUB_NPC'
         });
         setSideMissions(
           sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SIDE'))
+        );
+        setSovereignMissions(
+          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SOVEREIGN'))
         );
         const profileList = allMissionsData.filter(m => m.missionCategory === 'PROFILE');
         setProfileMissions(profileList);
@@ -255,6 +259,12 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
     if (playerMission.status === 'completed') return 'completed';
     return 'active';
   };
+
+  const noNpcMissionsAvailable =
+    storyMissions.length === 0 &&
+    sovereignMissions.length === 0 &&
+    sideMissions.length === 0 &&
+    profileMissions.length === 0;
 
   if (!isOpen) return null;
 
@@ -487,6 +497,139 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                             </button>
                           )}
                         </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Sovereign Missions — optional lore for Home Page heroes in The Sovereign */}
+            {sovereignMissions.length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{ color: '#c4b5fd', marginBottom: '0.35rem', fontSize: '1.25rem' }}>
+                  Sovereign Missions
+                </h3>
+                <p style={{ color: '#9ca3af', fontSize: '0.8rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
+                  Background stories for the Home Page heroes in The Sovereign.
+                </p>
+                {sovereignMissions.map((mission, sovereignIndex) => {
+                  const status = getMissionPlayerStatus(mission.id);
+                  const displayNum = sovereignIndex + 1;
+                  return (
+                    <div
+                      key={mission.id}
+                      style={{
+                        backgroundColor: 'rgba(139, 92, 246, 0.12)',
+                        border: '2px solid #8b5cf6',
+                        borderRadius: '0.5rem',
+                        padding: '1rem',
+                        marginBottom: '1rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                        <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                          <span style={{ color: '#ddd6fe', fontWeight: 800, marginRight: '0.35rem' }}>
+                            {displayNum}.
+                          </span>
+                          {mission.title}
+                        </h4>
+                        {status === 'active' && (
+                          <span style={{
+                            backgroundColor: '#8b5cf6',
+                            color: 'white',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ACTIVE
+                          </span>
+                        )}
+                        {status === 'completed' && (
+                          <span style={{
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ✓ COMPLETED
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                        {mission.description}
+                      </p>
+                      <MissionRewardsPreview mission={mission} />
+                      {status === 'available' && (
+                        <button
+                          onClick={() => handleAcceptMission(mission.id)}
+                          disabled={acceptingMissionId === mission.id}
+                          style={{
+                            backgroundColor: '#7c3aed',
+                            color: 'white',
+                            border: 'none',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor: acceptingMissionId === mission.id ? 'not-allowed' : 'pointer',
+                            fontWeight: 'bold',
+                            opacity: acceptingMissionId === mission.id ? 0.5 : 1
+                          }}
+                        >
+                          {acceptingMissionId === mission.id ? 'Accepting...' : 'Accept Mission'}
+                        </button>
+                      )}
+                      {status === 'active' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+                              }}
+                              style={{
+                                backgroundColor: '#a78bfa',
+                                color: '#1f2937',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Continue mission →
+                            </button>
+                          ) : mission.playerJourneyLink ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate('/chapters');
+                              }}
+                              style={{
+                                backgroundColor: '#a78bfa',
+                                color: '#1f2937',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Open Player Journey
+                            </button>
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#9ca3af' }}>
+                              This mission has no playable steps yet. Check back later or contact an admin.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {status === 'completed' && (
+                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
                       )}
                     </div>
                   );
@@ -742,14 +885,14 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
               </div>
             )}
 
-            {storyMissions.length === 0 && sideMissions.length === 0 && profileMissions.length === 0 && (
+            {noNpcMissionsAvailable && (
               <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', lineHeight: 1.55 }}>
                 <p style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', color: '#d1d5db' }}>
                   No missions are available from {npcName} yet.
                 </p>
                 <p style={{ margin: 0, fontSize: '0.8rem' }}>
                   In Mission Admin, set <strong style={{ color: '#e5e7eb' }}>NPC</strong> to {npcName},{' '}
-                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, SIDE, and
+                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, Sovereign, SIDE, and
                   Profile missions all appear here once assigned.
                 </p>
               </div>

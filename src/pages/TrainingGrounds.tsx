@@ -11,6 +11,7 @@ const TrainingGrounds: React.FC = () => {
   const [quizSets, setQuizSets] = useState<TrainingQuizSet[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastAttempts, setLastAttempts] = useState<Record<string, TrainingAttempt>>({});
+  const [enrolledClassIds, setEnrolledClassIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -22,7 +23,8 @@ const TrainingGrounds: React.FC = () => {
         // Get user's classrooms from the classrooms collection
         const userClasses = await getClassesByStudent(currentUser.uid);
         const classIds = userClasses.map(c => c.id);
-        
+        setEnrolledClassIds(classIds);
+
         const published = await getPublishedQuizSets(classIds);
         setQuizSets(published);
         
@@ -52,7 +54,7 @@ const TrainingGrounds: React.FC = () => {
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div>Loading Training Grounds...</div>
+        <div>Loading Training Grounds (CFUs)...</div>
       </div>
     );
   }
@@ -71,7 +73,7 @@ const TrainingGrounds: React.FC = () => {
             color: '#1f2937',
             marginBottom: '0.5rem'
           }}>
-            🎯 Training Grounds
+            🎯 Training Grounds (CFUs)
           </h1>
           <p style={{ fontSize: '1.125rem', color: '#6b7280' }}>
             Practice quizzes to review assignments and earn rewards
@@ -91,7 +93,9 @@ const TrainingGrounds: React.FC = () => {
               No quizzes available
             </h2>
             <p style={{ color: '#6b7280' }}>
-              Check back later for new training quizzes
+              {enrolledClassIds.length === 0
+                ? 'You need to be enrolled in a class to see CFU quizzes. Ask your teacher if you believe this is a mistake.'
+                : 'There are no published CFU quizzes for your class yet. Check back later.'}
             </p>
           </div>
         ) : (

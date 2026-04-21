@@ -16,6 +16,14 @@ export interface InSessionRoom {
   startedAt?: Date | any; // Firestore Timestamp
   endedAt?: Date | any; // Firestore Timestamp
   updatedAt?: any; // Firestore Timestamp
+  /** When true, non-host players cannot use Fight / skills (host can still act). */
+  liveEventFightNegated?: boolean;
+  reflectionAssessmentId?: string;
+  reflectionPrompt?: string | null;
+  reflectionCollectHabit?: boolean;
+  reflectionCollectEvidence?: boolean;
+  goalSettingAssessmentId?: string;
+  goalSettingPrompt?: string | null;
 }
 
 export interface InSessionPlayer {

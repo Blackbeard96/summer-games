@@ -428,6 +428,8 @@ interface BattleEngineProps {
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
   isInSession?: boolean; // Whether this is an In Session battle (no CPU moves, no turn order)
   sessionId?: string; // Session ID for In-Session mode (required if isInSession is true)
+  /** Passed to applyInSessionMove for global-host checks when Fight is negated. */
+  inSessionActorEmail?: string;
   battleName?: string; // Battle name for invitations
   onInviteClick?: () => void; // Callback when invite button is clicked
   allowInvites?: boolean; // Whether to show invite buttons (for Chapter 2-3+)
@@ -483,6 +485,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   onArtifactUsed,
   isInSession = false,
   sessionId,
+  inSessionActorEmail,
   battleName,
   onInviteClick,
   allowInvites = false,
@@ -6015,6 +6018,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           sessionId,
           actorUid: currentUser.uid,
           actorName: playerName,
+          actorEmail: inSessionActorEmail,
           targetUid: effectiveTargetUid,
           targetName: effectiveTargetName,
           move,

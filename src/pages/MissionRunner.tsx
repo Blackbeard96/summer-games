@@ -1129,7 +1129,7 @@ const MissionRunner: React.FC = () => {
                 border: '1px solid #ddd6fe',
               }}
             >
-              <h3 style={{ marginTop: 0 }}>Training Grounds assignment</h3>
+              <h3 style={{ marginTop: 0 }}>Training Grounds (CFUs) assignment</h3>
               <p style={{ margin: '0.25rem 0' }}>
                 <strong>Quiz:</strong> {trainingQuizTitle || currentStep.training.quizSetId}
               </p>
@@ -1172,7 +1172,7 @@ const MissionRunner: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Open quiz in Training Grounds
+              Open quiz in Training Grounds (CFUs)
             </button>
           </div>
         )}

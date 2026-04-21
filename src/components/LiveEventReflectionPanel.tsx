@@ -15,10 +15,6 @@ export interface LiveEventReflectionPanelProps {
   reflectionAssessmentId?: string;
   reflectionPrompt?: string;
   liveEventMode?: string;
-  /** Habits assessments: when false, students are not asked for habit commitment (Habit Commitment column). */
-  reflectionCollectHabit?: boolean;
-  /** Habits assessments: when false, students are not asked for evidence text. */
-  reflectionCollectEvidence?: boolean;
   isSessionHost: boolean;
   currentUserId: string;
   displayName: string;
@@ -27,8 +23,8 @@ export interface LiveEventReflectionPanelProps {
 }
 
 /**
- * Reflection live mode: students submit evidence text into Assessment Goals / habit submissions
- * so admins can verify on the Assessment Dashboard.
+ * Reflection live mode: students submit **evidence** that they are meeting their goal
+ * (merged into Assessment Goals / habit submission Evidence).
  */
 const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   sessionId,
@@ -36,8 +32,6 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   reflectionAssessmentId,
   reflectionPrompt,
   liveEventMode,
-  reflectionCollectHabit,
-  reflectionCollectEvidence,
   isSessionHost,
   currentUserId,
   displayName,
@@ -47,10 +41,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   const [hostAssessments, setHostAssessments] = useState<Assessment[]>([]);
   const [hostAssessmentId, setHostAssessmentId] = useState(reflectionAssessmentId || '');
   const [hostPrompt, setHostPrompt] = useState(reflectionPrompt || '');
-  const [hostCollectHabit, setHostCollectHabit] = useState(reflectionCollectHabit !== false);
-  const [hostCollectEvidence, setHostCollectEvidence] = useState(reflectionCollectEvidence !== false);
   const [reflectionText, setReflectionText] = useState('');
-  const [habitCommitmentText, setHabitCommitmentText] = useState('');
   const [evidenceText, setEvidenceText] = useState('');
   const [loading, setLoading] = useState(false);
   const [hostSaving, setHostSaving] = useState(false);
@@ -60,12 +51,6 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
 
   const isReflection = liveEventMode === 'reflection';
 
-  const collectHabitEffective = reflectionCollectHabit !== false;
-  const collectEvidenceEffective = reflectionCollectEvidence !== false;
-  const habitsHostMisconfig = !collectHabitEffective && !collectEvidenceEffective;
-  const askHabit = assessment?.type === 'habits' && collectHabitEffective && !habitsHostMisconfig;
-  const askEvidence = assessment?.type === 'habits' && collectEvidenceEffective && !habitsHostMisconfig;
-
   useEffect(() => {
     setHostAssessmentId(reflectionAssessmentId || '');
   }, [reflectionAssessmentId]);
@@ -73,11 +58,6 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   useEffect(() => {
     setHostPrompt(reflectionPrompt || '');
   }, [reflectionPrompt]);
-
-  useEffect(() => {
-    setHostCollectHabit(reflectionCollectHabit !== false);
-    setHostCollectEvidence(reflectionCollectEvidence !== false);
-  }, [reflectionCollectHabit, reflectionCollectEvidence]);
 
   useEffect(() => {
     if (!isReflection || !reflectionAssessmentId) {
@@ -122,10 +102,6 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
       setError('Choose an assessment to link.');
       return;
     }
-    if (!hostCollectHabit && !hostCollectEvidence) {
-      setError('Turn on at least one: habit commitment and/or evidence.');
-      return;
-    }
     setHostSaving(true);
     setError(null);
     setMessage(null);
@@ -133,8 +109,8 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
       await updateDoc(doc(db, 'inSessionRooms', sessionId), {
         reflectionAssessmentId: hostAssessmentId.trim(),
         reflectionPrompt: hostPrompt.trim() || null,
-        reflectionCollectHabit: hostCollectHabit,
-        reflectionCollectEvidence: hostCollectEvidence,
+        reflectionCollectHabit: false,
+        reflectionCollectEvidence: true,
         updatedAt: serverTimestamp(),
       });
       setMessage('Linked assessment updated for this session.');
@@ -150,15 +126,11 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
     } finally {
       setHostSaving(false);
     }
-  }, [sessionId, hostAssessmentId, hostPrompt, hostCollectHabit, hostCollectEvidence, onAppendBattleLog]);
+  }, [sessionId, hostAssessmentId, hostPrompt, onAppendBattleLog]);
 
   const submitReflection = async () => {
     if (!reflectionAssessmentId) {
       setError('The host has not linked an assessment yet.');
-      return;
-    }
-    if (habitsHostMisconfig) {
-      setError('The host needs to enable habit and/or evidence in Reflection settings.');
       return;
     }
     setLoading(true);
@@ -172,10 +144,10 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             studentId: currentUserId,
             classId,
             sessionId,
-            habitCommitmentText: askHabit ? habitCommitmentText : undefined,
-            evidenceText: askEvidence ? evidenceText : undefined,
-            collectHabit: collectHabitEffective,
-            collectEvidence: collectEvidenceEffective,
+            habitCommitmentText: '',
+            evidenceText,
+            collectHabit: false,
+            collectEvidence: true,
           }
         : {
             assessmentId: reflectionAssessmentId,
@@ -191,20 +163,14 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
       return;
     }
     setReflectionText('');
-    setHabitCommitmentText('');
     setEvidenceText('');
-    setMessage('Saved to Assessment Goals. Your teacher can review it on the dashboard.');
+    setMessage('Evidence saved to Assessment Goals. Your teacher can review it on the dashboard.');
     if (onAppendBattleLog) {
-      await onAppendBattleLog(`📝 ${displayName} submitted reflection (Assessment Goals).`);
+      await onAppendBattleLog(`📝 ${displayName} submitted reflection evidence (Assessment Goals).`);
     }
   };
 
-  const habitsSubmitDisabled =
-    assessment?.type === 'habits' &&
-    (habitsHostMisconfig ||
-      (askHabit && habitCommitmentText.trim().length < 3) ||
-      (askEvidence && !evidenceText.trim()));
-
+  const habitsSubmitDisabled = assessment?.type === 'habits' && !evidenceText.trim();
   const genericSubmitDisabled = assessment?.type !== 'habits' && !reflectionText.trim();
 
   if (!isReflection) return null;
@@ -212,6 +178,8 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   return (
     <div
       style={{
+        position: 'relative',
+        zIndex: 25,
         marginBottom: '1rem',
         padding: '1rem 1.25rem',
         borderRadius: '0.75rem',
@@ -220,20 +188,21 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
         color: '#064e3b',
       }}
     >
-      <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.05rem' }}>🪞 Reflection → Assessment Goals</h3>
+      <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.05rem' }}>🪞 Reflection — evidence for your goal</h3>
       <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
         {assessment?.type === 'habits' ? (
           <>
-            For <strong>habit</strong> assessments, your answers map to the dashboard columns{' '}
-            <strong>Habit commitment</strong> and <strong>Evidence</strong> (your teacher chooses which fields to collect).
+            Submit <strong>evidence</strong> that you are following through on your habit (merged into the{' '}
+            <strong>Evidence</strong> column). Set or change your habit commitment in <strong>Goal setting</strong> mode
+            first if you do not have one yet.
           </>
         ) : assessment ? (
           <>
-            Your text is saved to the <strong>Evidence</strong> field for the linked assessment so admins can verify it on
-            the Assessment Goals dashboard (same row as Habit / Story goals).
+            Your text is appended to <strong>Evidence</strong> on your goal row for this assessment so your teacher can
+            verify progress.
           </>
         ) : (
-          <>Link an assessment below, then use <strong>Your response</strong> to submit.</>
+          <>The host links an assessment below; then use <strong>Your evidence</strong> to submit.</>
         )}
       </p>
 
@@ -270,26 +239,13 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             value={hostPrompt}
             onChange={(e) => setHostPrompt(e.target.value)}
             rows={2}
-            placeholder="e.g. What strategy helped you most this week?"
+            placeholder="e.g. What evidence shows you met this week’s goal?"
             style={{ width: '100%', padding: '0.45rem', borderRadius: 6, marginBottom: 8, resize: 'vertical' }}
           />
-          <div style={{ fontWeight: 700, marginBottom: 6, fontSize: '0.85rem' }}>Student fields (habit assessments)</div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: '0.82rem' }}>
-            <input
-              type="checkbox"
-              checked={hostCollectHabit}
-              onChange={(e) => setHostCollectHabit(e.target.checked)}
-            />
-            Ask for <strong>habit commitment</strong> (what they will practice)
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: '0.82rem' }}>
-            <input
-              type="checkbox"
-              checked={hostCollectEvidence}
-              onChange={(e) => setHostCollectEvidence(e.target.checked)}
-            />
-            Ask for <strong>evidence</strong> (reflection / proof of commitment)
-          </label>
+          <p style={{ margin: '0 0 8px 0', fontSize: '0.78rem', opacity: 0.9 }}>
+            Students only submit <strong>evidence</strong> here. Use <strong>Goal setting</strong> mode for new habit /
+            numeric / story goals.
+          </p>
           <button
             type="button"
             onClick={() => void saveHostReflectionSettings()}
@@ -335,7 +291,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
 
       {!reflectionAssessmentId && isSessionHost && (
         <p style={{ fontSize: '0.85rem', margin: '0 0 0.75rem 0', color: '#047857', fontWeight: 600 }}>
-          Link an assessment above, then <strong>Your response</strong> will appear here for you and your class.
+          Link an assessment above, then <strong>Your evidence</strong> will appear here for you and your class.
         </p>
       )}
 
@@ -350,11 +306,9 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             boxShadow: '0 2px 12px rgba(4, 120, 87, 0.12)',
           }}
         >
-          <h4 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', color: '#064e3b' }}>Your response</h4>
+          <h4 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', color: '#064e3b' }}>Your evidence</h4>
           <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', opacity: 0.9, lineHeight: 1.45 }}>
-            {isSessionHost
-              ? 'Students enter habit and/or evidence here (same fields for you if you want to demo or submit as a participant).'
-              : 'Type below and submit. Your answers go to Assessment Goals for your teacher to review.'}
+            Describe how you met (or are meeting) your goal. You can submit again to add more detail.
           </p>
 
           {assessmentLoading ? (
@@ -363,75 +317,39 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             </p>
           ) : assessment?.type === 'habits' ? (
             <>
-              {habitsHostMisconfig ? (
-                <p style={{ fontSize: '0.85rem', margin: 0, color: '#b45309' }}>
-                  The host must enable at least one field (habit commitment and/or evidence). Ask them to save Reflection
-                  settings.
-                </p>
-              ) : null}
-              {askHabit ? (
-                <>
-                  <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
-                    1 — Habit commitment
-                  </label>
-                  <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', opacity: 0.9 }}>
-                    What will you practice? (3–180 characters — appears as <strong>Habit commitment</strong> on the teacher
-                    dashboard.)
-                  </p>
-                  <textarea
-                    value={habitCommitmentText}
-                    onChange={(e) => setHabitCommitmentText(e.target.value)}
-                    rows={3}
-                    placeholder="e.g. I will review notes for 10 minutes before each class."
-                    style={{
-                      width: '100%',
-                      padding: '0.65rem',
-                      borderRadius: 8,
-                      border: '2px solid #34d399',
-                      marginBottom: 14,
-                      fontSize: '0.95rem',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </>
-              ) : null}
-              {askEvidence ? (
-                <>
-                  <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
-                    {askHabit ? '2 — Evidence' : '1 — Evidence'}
-                  </label>
-                  <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', opacity: 0.9 }}>
-                    Reflection or proof of your commitment (appears as <strong>Evidence</strong>. You can submit again to
-                    add more.)
-                  </p>
-                  <textarea
-                    value={evidenceText}
-                    onChange={(e) => setEvidenceText(e.target.value)}
-                    rows={5}
-                    placeholder="Describe what you did, what you will do, or how you are following through."
-                    style={{
-                      width: '100%',
-                      padding: '0.65rem',
-                      borderRadius: 8,
-                      border: '2px solid #34d399',
-                      marginBottom: 10,
-                      fontSize: '0.95rem',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </>
-              ) : null}
+              <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+                Evidence for your habit goal
+              </label>
+              <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', opacity: 0.9 }}>
+                Merged into <strong>Evidence</strong> on your habit row. If you see an error about no habit goal yet, use{' '}
+                <strong>Goal setting</strong> mode first to set your commitment.
+              </p>
+              <textarea
+                value={evidenceText}
+                onChange={(e) => setEvidenceText(e.target.value)}
+                rows={6}
+                placeholder="What did you do? What progress can your teacher verify?"
+                style={{
+                  width: '100%',
+                  padding: '0.65rem',
+                  borderRadius: 8,
+                  border: '2px solid #34d399',
+                  marginBottom: 10,
+                  fontSize: '0.95rem',
+                  boxSizing: 'border-box',
+                }}
+              />
             </>
           ) : assessment ? (
             <>
               <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
-                Your evidence / reflection
+                Evidence / reflection
               </label>
               <textarea
                 value={reflectionText}
                 onChange={(e) => setReflectionText(e.target.value)}
-                rows={5}
-                placeholder="Type your reflection. This goes to Assessment Goals → Evidence for verification."
+                rows={6}
+                placeholder="Evidence that you met your goal for this assessment…"
                 style={{
                   width: '100%',
                   padding: '0.65rem',
@@ -474,7 +392,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
                   : 'pointer',
             }}
           >
-            {loading ? 'Saving…' : 'Submit to Assessment Goals'}
+            {loading ? 'Saving…' : 'Submit evidence'}
           </button>
         </div>
       )}

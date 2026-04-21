@@ -1947,7 +1947,7 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Training Grounds quiz *</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Training Grounds (CFUs) quiz *</label>
             <select
               value={editedStep.training.quizSetId}
               onChange={(e) =>

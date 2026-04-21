@@ -8,6 +8,8 @@
  *   `awardPowerStatXp` (writes `students/{uid}.stats` via transaction). Also credits battle pass XP.
  * - **Reflection submit** (`submitLiveEventReflectionToAssessment` in `assessmentGoalsFirestore.ts`):
  *   `awardPowerXpForReflectionSubmission` → Emotional Power XP + same amount to deployed battle pass (`battlePassXP`).
+ * - **Goal setting submit** (`submitLiveEventGoalSettingToAssessment` in `assessmentGoalsFirestore.ts`):
+ *   `awardPowerXpForGoalSettingSubmission` → Spiritual Power XP + battle pass.
  * - **Goal / habit milestones** (`assessmentGoalsFirestore.ts`): `awardPowerXpForGoalAchievement` → Spiritual + battle pass.
  * - **Mid-battle drip** (`awardPowerXpForLiveQuizCorrectAnswer`, `awardPowerXpForElimination`): gated by
  *   `REACT_APP_LIVE_EVENT_POWER_DRIP === 'true'` to avoid double-counting with session-end totals.
@@ -384,6 +386,24 @@ export async function awardPowerXpForReflectionSubmission(
   const applied = await awardPowerStatXp(uid, 'emotional', amount, 'live_event_reflection_submit', {
     textLength,
     goalLinked: !!opts?.goalLinked,
+  });
+  if (applied > 0) {
+    await awardBattlePassXpForDeployedSeason(uid, applied);
+  }
+}
+
+/** Live Event Goal Setting mode — student sets/updates Assessment Goals (spiritual branch). */
+export async function awardPowerXpForGoalSettingSubmission(
+  uid: string,
+  textLength: number,
+  opts?: { qualityBonus?: boolean }
+): Promise<void> {
+  let amount = 12 + Math.min(36, Math.floor(textLength / 90));
+  if (opts?.qualityBonus) amount += 14;
+  amount = Math.min(100, amount);
+  amount = Math.max(18, amount);
+  const applied = await awardPowerStatXp(uid, 'spiritual', amount, 'live_event_goal_setting_submit', {
+    textLength,
   });
   if (applied > 0) {
     await awardBattlePassXpForDeployedSeason(uid, applied);

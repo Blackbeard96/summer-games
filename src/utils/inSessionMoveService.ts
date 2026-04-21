@@ -7,7 +7,11 @@
 
 import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { computeLiveEventParticipationSkillCostServer } from './liveEventSkillCost';
+import { isGlobalHost } from './inSessionService';
+import {
+  computeLiveEventParticipationSkillCostServer,
+  logLiveEventSkillCostAttempt,
+} from './liveEventSkillCost';
 import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDebug';
 import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
@@ -62,6 +66,8 @@ export interface ApplyMoveParams {
   eventId?: string; // Optional eventId for debug mirror
   /** When true, skill cost is taken from session movesEarned (authoritative); vault powerPoints is not reduced for that cost */
   useLiveEventParticipationForSkillCost?: boolean;
+  /** Actor email for global-host exemption when Fight is negated (optional). */
+  actorEmail?: string;
 }
 
 /**
@@ -87,7 +93,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     traceId,
     classId,
     eventId,
-    useLiveEventParticipationForSkillCost = false
+    useLiveEventParticipationForSkillCost = false,
+    actorEmail
   } = params;
 
   const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -193,6 +200,21 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }
 
       const sessionData = sessionDoc.data();
+      const sessionHostUid =
+        typeof sessionData.hostUid === 'string' && sessionData.hostUid
+          ? sessionData.hostUid
+          : typeof sessionData.teacherId === 'string'
+            ? sessionData.teacherId
+            : '';
+      const exemptFromFightNegation =
+        actorUid === sessionHostUid ||
+        isGlobalHost(actorUid, actorEmail, actorName);
+      if (sessionData.liveEventFightNegated === true && !exemptFromFightNegation) {
+        throw new Error(
+          'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
+        );
+      }
+
       const players: any[] = sessionData.players || [];
       const battleLog: string[] = sessionData.battleLog || [];
       
@@ -255,6 +277,20 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         const movesEarned = Math.max(0, Math.floor(Number(actorCopy.movesEarned) || 0));
 
         if (finalParticipationCost > movesEarned) {
+          logLiveEventSkillCostAttempt({
+            actorId: actorUid,
+            skillId: move.id,
+            skillName: move.name,
+            detectedCategory: costBreakdown.category,
+            detectedLevel: costBreakdown.elementalMoveTier,
+            baseCost: costBreakdown.baseCost,
+            reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
+            finalCost: finalParticipationCost,
+            playerCurrentPP: movesEarned,
+            validationResult: 'blocked_insufficient_pp',
+            ppBefore: movesEarned,
+            ppAfter: movesEarned,
+          });
           throw new Error(
             `Need ${finalParticipationCost} Participation Points to use this skill (have ${movesEarned})`
           );
@@ -262,6 +298,20 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
         actorCopy.movesEarned = movesEarned - finalParticipationCost;
         participationPointsSpent = finalParticipationCost;
+        logLiveEventSkillCostAttempt({
+          actorId: actorUid,
+          skillId: move.id,
+          skillName: move.name,
+          detectedCategory: costBreakdown.category,
+          detectedLevel: costBreakdown.elementalMoveTier,
+          baseCost: costBreakdown.baseCost,
+          reduction: costBreakdown.reductionFromArtifacts + costBreakdown.reductionFromEffects,
+          finalCost: finalParticipationCost,
+          playerCurrentPP: movesEarned,
+          validationResult: 'ok',
+          ppBefore: movesEarned,
+          ppAfter: actorCopy.movesEarned,
+        });
       }
 
       // Initialize target vault data if missing (based on level if available)
@@ -688,7 +738,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
         errorMessage.includes('not found in session') ||
         errorMessage.startsWith('Session ') ||
         errorMessage.startsWith('Actor ') ||
-        errorMessage.startsWith('Target '));
+        errorMessage.startsWith('Target ') ||
+        errorMessage.includes('paused the Fight phase'));
     const userMessage = isOurMessage
       ? errorMessage
       : errorCode === 'permission-denied'

@@ -96,6 +96,7 @@ import { getEnergyTypeForMode } from '../utils/season1Energy';
 import { getAssessmentsByClass } from '../utils/assessmentGoalsFirestore';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
 import LiveEventReflectionPanel from './LiveEventReflectionPanel';
+import LiveEventGoalSettingPanel from './LiveEventGoalSettingPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
@@ -230,6 +231,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [roomSessionStatus, setRoomSessionStatus] = useState<string | undefined>(undefined);
   const [showMstMktModal, setShowMstMktModal] = useState(false);
   const [mstMktToggleLoading, setMstMktToggleLoading] = useState(false);
+  const [liveEventFightNegated, setLiveEventFightNegated] = useState(false);
+  const [fightNegateToggleLoading, setFightNegateToggleLoading] = useState(false);
   const [hostReviveModalOpen, setHostReviveModalOpen] = useState(false);
   const [hostReviveHpPercent, setHostReviveHpPercent] = useState(50);
   const [hostReviveSelectedUserIds, setHostReviveSelectedUserIds] = useState<string[]>([]);
@@ -374,13 +377,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     reflectionPrompt?: string;
     reflectionCollectHabit?: boolean;
     reflectionCollectEvidence?: boolean;
+    goalSettingAssessmentId?: string;
+    goalSettingPrompt?: string;
   }>({});
   const [roomClassFlowSprint, setRoomClassFlowSprint] = useState<ClassFlowSprintState | null>(null);
   const [sessionRoomHostUid, setSessionRoomHostUid] = useState<string>('');
   const [reflectionPickAssessmentId, setReflectionPickAssessmentId] = useState('');
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
-  const [reflectionPickCollectHabit, setReflectionPickCollectHabit] = useState(true);
-  const [reflectionPickCollectEvidence, setReflectionPickCollectEvidence] = useState(true);
+  const [goalSettingPickAssessmentId, setGoalSettingPickAssessmentId] = useState('');
+  const [goalSettingPickPrompt, setGoalSettingPickPrompt] = useState('');
   const [reflectionModalAssessments, setReflectionModalAssessments] = useState<Assessment[]>([]);
   const [brHostConfig, setBrHostConfig] = useState<BattleRoyaleHostConfig>(() => ({
     ...DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
@@ -410,7 +415,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
 
   useEffect(() => {
-    if (!quizModalOpen || liveEventLaunchMode !== 'reflection' || !classId) return;
+    if (
+      !quizModalOpen ||
+      (liveEventLaunchMode !== 'reflection' && liveEventLaunchMode !== 'goal_setting') ||
+      !classId
+    )
+      return;
     let cancelled = false;
     getAssessmentsByClass(classId)
       .then((list) => {
@@ -419,7 +429,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           list.filter((a) => a.gradingStatus === 'open' || a.gradingStatus === 'draft')
         );
       })
-      .catch((e) => console.error('Reflection modal: failed to load assessments', e));
+      .catch((e) => console.error('Live Event modal: failed to load assessments', e));
     return () => {
       cancelled = true;
     };
@@ -705,6 +715,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         debug('inSessionBattle', `Session ${sessionId} does not exist`);
         setRoomClassFlowSprint(null);
         setSessionRoomHostUid('');
+        setLiveEventFightNegated(false);
         return;
       }
 
@@ -717,9 +728,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         reflectionPrompt: typeof rawRoom.reflectionPrompt === 'string' ? rawRoom.reflectionPrompt : undefined,
         reflectionCollectHabit: rawRoom.reflectionCollectHabit === false ? false : true,
         reflectionCollectEvidence: rawRoom.reflectionCollectEvidence === false ? false : true,
+        goalSettingAssessmentId:
+          typeof rawRoom.goalSettingAssessmentId === 'string' ? rawRoom.goalSettingAssessmentId : undefined,
+        goalSettingPrompt: typeof rawRoom.goalSettingPrompt === 'string' ? rawRoom.goalSettingPrompt : undefined,
       });
       setRoomSessionStatus(typeof session.status === 'string' ? session.status : undefined);
       setMstMktOpen(rawRoom.mstMktOpen === true);
+      setLiveEventFightNegated(rawRoom.liveEventFightNegated === true);
       setRoomClassFlowSprint(parseClassFlowSprint(rawRoom.classFlowSprint));
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -2346,6 +2361,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     [sessionPpStatsByPlayer]
   );
 
+  const playerLiveEventSkillsLocked = useMemo(
+    () => liveEventFightNegated && permissionsChecked && !isSessionHost,
+    [liveEventFightNegated, permissionsChecked, isSessionHost]
+  );
+
+  useEffect(() => {
+    if (!playerLiveEventSkillsLocked) return;
+    setShowMoveMenu(false);
+    setSelectedMove(null);
+    setSelectedTarget(null);
+  }, [playerLiveEventSkillsLocked]);
+
   // Helper function to render a player card
   const renderPlayerCard = (student: Student & { isInSession: boolean; sessionData: SessionPlayer | null }, isLeft: boolean) => {
     const player = student.sessionData;
@@ -2454,6 +2481,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const canPickThisLiveEventTarget =
       !!selectedMove &&
       !!currentUser?.uid &&
+      !playerLiveEventSkillsLocked &&
       isValidLiveEventRosterTarget({
         actorUid: currentUser.uid,
         candidateUid: student.id,
@@ -3296,6 +3324,53 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 💚 Revive players
               </button>
             )}
+          {permissionsChecked &&
+            (isSessionHost || isAdminUser) &&
+            !showSessionSummary &&
+            (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
+              <button
+                type="button"
+                disabled={fightNegateToggleLoading}
+                onClick={async () => {
+                  if (!sessionId) return;
+                  const next = !liveEventFightNegated;
+                  setFightNegateToggleLoading(true);
+                  try {
+                    await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+                      liveEventFightNegated: next,
+                    });
+                    await appendBattleLog(
+                      next
+                        ? '🛑 Host paused the Fight phase — player skills are locked until Fight is allowed again.'
+                        : '✅ Host allowed the Fight phase again — players may use skills.'
+                    );
+                  } catch (e) {
+                    debugError('inSessionBattle', 'toggle liveEventFightNegated', e);
+                    alert('Could not update Fight setting for this session.');
+                  } finally {
+                    setFightNegateToggleLoading(false);
+                  }
+                }}
+                style={{
+                  background: liveEventFightNegated ? 'rgba(239, 68, 68, 0.95)' : 'rgba(59, 130, 246, 0.95)',
+                  color: 'white',
+                  border: '2px solid white',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem 1.25rem',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  cursor: fightNegateToggleLoading ? 'wait' : 'pointer',
+                  opacity: fightNegateToggleLoading ? 0.75 : 1,
+                }}
+                title={
+                  liveEventFightNegated
+                    ? 'Let players open Fight and use skills again'
+                    : 'Lock player Fight and skills until you turn this off'
+                }
+              >
+                {fightNegateToggleLoading ? '…' : liveEventFightNegated ? '✅ Allow Fight' : '🛑 Negate Fight'}
+              </button>
+            )}
           {isSessionHost && !quizSession && (
             <button
               onClick={() => {
@@ -3491,8 +3566,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>📋 Live Event</h3>
             <p style={{ marginBottom: '1rem', color: '#64748b', fontSize: '0.9rem' }}>
               Pick a mode for this session. <strong>Class Flow</strong> is for timed sprints and participation (use the Sprint panel in the room).
-              <strong> Quiz</strong> and <strong>Battle Royale</strong> use a Training Grounds question bank.
-              <strong> Reflection</strong> and <strong>Goal setting</strong> activate the room for prompts and goals (no quiz launch).
+              <strong> Quiz</strong> and <strong>Battle Royale</strong> use a Training Grounds (CFUs) question bank.
+              <strong> Goal setting</strong> lets students set or update goals on a linked assessment;{' '}
+              <strong>Reflection</strong> is for evidence that they met those goals (no quiz launch for either).
             </p>
             <div style={{ marginBottom: '1rem' }}>
               <span style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Mode</span>
@@ -3737,8 +3813,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   lineHeight: 1.5,
                 }}
               >
-                <strong>Reflection</strong> — student writing is saved to the linked assessment&apos;s{' '}
-                <strong>Evidence</strong> column (Assessment Goals → Dashboard) for you to verify.
+                <strong>Reflection</strong> — students submit <strong>evidence</strong> that they met their goal. Text is
+                merged into the <strong>Evidence</strong> field on Assessment Goals (habits: habit row evidence; other types:
+                goal row evidence). Habit <em>commitments</em> are set in <strong>Goal setting</strong> mode.
                 <div style={{ marginTop: '0.75rem' }}>
                   <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>Link assessment *</label>
                   <select
@@ -3758,26 +3835,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     value={reflectionPickPrompt}
                     onChange={(e) => setReflectionPickPrompt(e.target.value)}
                     rows={2}
-                    placeholder="Shown to students above the evidence box"
+                    placeholder="Shown above the evidence box in the live room"
                     style={{ width: '100%', padding: '0.45rem', borderRadius: 8, resize: 'vertical' }}
                   />
-                  <div style={{ marginTop: '0.65rem', fontWeight: 700 }}>Student fields (habit assessments)</div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.82rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={reflectionPickCollectHabit}
-                      onChange={(e) => setReflectionPickCollectHabit(e.target.checked)}
-                    />
-                    Ask for habit commitment
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: '0.82rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={reflectionPickCollectEvidence}
-                      onChange={(e) => setReflectionPickCollectEvidence(e.target.checked)}
-                    />
-                    Ask for evidence / reflection
-                  </label>
                 </div>
               </div>
             )}
@@ -3786,15 +3846,38 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 style={{
                   marginBottom: '1rem',
                   padding: '0.85rem',
-                  background: '#f0fdf4',
+                  background: '#f5f3ff',
                   borderRadius: '0.5rem',
                   fontSize: '0.875rem',
-                  color: '#166534',
+                  color: '#4c1d95',
                   lineHeight: 1.5,
                 }}
               >
-                <strong>Goal setting</strong> — spiritual-energy focus. Students set or update timeframe goals in Assessment
-                Goals; Season 1 linking remains on for this session.
+                <strong>Goal setting</strong> — students set or update their goal on the linked assessment (numeric target,
+                story-goal text, or habit commitment). Same data as the Assessment Goals page.
+                <div style={{ marginTop: '0.75rem' }}>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>Link assessment *</label>
+                  <select
+                    value={goalSettingPickAssessmentId}
+                    onChange={(e) => setGoalSettingPickAssessmentId(e.target.value)}
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8, marginBottom: 10 }}
+                  >
+                    <option value="">Select assessment…</option>
+                    {reflectionModalAssessments.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title} ({a.type})
+                      </option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>Class prompt (optional)</label>
+                  <textarea
+                    value={goalSettingPickPrompt}
+                    onChange={(e) => setGoalSettingPickPrompt(e.target.value)}
+                    rows={2}
+                    placeholder="Shown above the goal form in the live room"
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8, resize: 'vertical' }}
+                  />
+                </div>
               </div>
             )}
             {liveEventLaunchMode === 'class_flow' && (
@@ -3959,9 +4042,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   quizStartLoading ||
                   ((liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && !selectedQuizId) ||
                   (liveEventLaunchMode === 'reflection' && !reflectionPickAssessmentId.trim()) ||
-                  (liveEventLaunchMode === 'reflection' &&
-                    !reflectionPickCollectHabit &&
-                    !reflectionPickCollectEvidence)
+                  (liveEventLaunchMode === 'goal_setting' && !goalSettingPickAssessmentId.trim())
                 }
                 onClick={async () => {
                   if (!currentUser) return;
@@ -3978,6 +4059,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         setQuizStartLoading(false);
                         return;
                       }
+                      if (mode === 'goal_setting' && !goalSettingPickAssessmentId.trim()) {
+                        alert('Choose an assessment — students will set goals on that Assessment Goals row.');
+                        setQuizStartLoading(false);
+                        return;
+                      }
                       const energyTypeAwarded = getEnergyTypeForMode(mode);
                       await updateDoc(doc(db, 'inSessionRooms', sessionId), {
                         liveEventMode: mode,
@@ -3987,8 +4073,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           ? {
                               reflectionAssessmentId: reflectionPickAssessmentId.trim(),
                               reflectionPrompt: reflectionPickPrompt.trim() || null,
-                              reflectionCollectHabit: reflectionPickCollectHabit,
-                              reflectionCollectEvidence: reflectionPickCollectEvidence,
+                              reflectionCollectHabit: false,
+                              reflectionCollectEvidence: true,
+                            }
+                          : {}),
+                        ...(mode === 'goal_setting'
+                          ? {
+                              goalSettingAssessmentId: goalSettingPickAssessmentId.trim(),
+                              goalSettingPrompt: goalSettingPickPrompt.trim() || null,
                             }
                           : {}),
                         updatedAt: serverTimestamp(),
@@ -4004,6 +4096,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         const linked = reflectionModalAssessments.find((a) => a.id === reflectionPickAssessmentId.trim());
                         await appendBattleLog(
                           `🪞 Reflection evidence → Assessment: ${linked?.title ?? reflectionPickAssessmentId.trim()}`
+                        );
+                      }
+                      if (mode === 'goal_setting') {
+                        const linked = reflectionModalAssessments.find(
+                          (a) => a.id === goalSettingPickAssessmentId.trim()
+                        );
+                        await appendBattleLog(
+                          `🎯 Goal setting → Assessment: ${linked?.title ?? goalSettingPickAssessmentId.trim()}`
                         );
                       }
                       setQuizModalOpen(false);
@@ -4199,19 +4299,30 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           position: 'relative'
         }}>
           {currentUser && (
-            <LiveEventReflectionPanel
-              sessionId={sessionId}
-              classId={classId}
-              reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
-              reflectionPrompt={roomReflectionMeta.reflectionPrompt}
-              liveEventMode={roomReflectionMeta.liveEventMode}
-              reflectionCollectHabit={roomReflectionMeta.reflectionCollectHabit}
-              reflectionCollectEvidence={roomReflectionMeta.reflectionCollectEvidence}
-              isSessionHost={isSessionHost}
-              currentUserId={currentUser.uid}
-              displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
-              onAppendBattleLog={appendBattleLog}
-            />
+            <>
+              <LiveEventReflectionPanel
+                sessionId={sessionId}
+                classId={classId}
+                reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
+                reflectionPrompt={roomReflectionMeta.reflectionPrompt}
+                liveEventMode={roomReflectionMeta.liveEventMode}
+                isSessionHost={isSessionHost}
+                currentUserId={currentUser.uid}
+                displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+                onAppendBattleLog={appendBattleLog}
+              />
+              <LiveEventGoalSettingPanel
+                sessionId={sessionId}
+                classId={classId}
+                goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
+                goalSettingPrompt={roomReflectionMeta.goalSettingPrompt}
+                liveEventMode={roomReflectionMeta.liveEventMode}
+                isSessionHost={isSessionHost}
+                currentUserId={currentUser.uid}
+                displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+                onAppendBattleLog={appendBattleLog}
+              />
+            </>
           )}
           {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky, high z-index so always clickable */}
           {quizSession && (
@@ -4402,8 +4513,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const myStreak = quizSession.battleRoyaleState?.streaks?.[currentUser?.uid ?? ''] ?? 0;
                 const myEnergy = quizSession.battleRoyaleState?.energy?.[currentUser?.uid ?? ''] ?? 0;
                 const myStrong = quizSession.battleRoyaleState?.strongUnlocked?.[currentUser?.uid ?? ''] ?? false;
-                const canBrCombat = isBattle && currentUser && !currentPlayer?.eliminated;
+                const canBrCombat =
+                  isBattle && currentUser && !currentPlayer?.eliminated && !playerLiveEventSkillsLocked;
                 const runBrAction = async (action: BrQuickActionId) => {
+                  if (playerLiveEventSkillsLocked) {
+                    alert('The host has paused Fight — combat skills are locked until Fight is allowed again.');
+                    return;
+                  }
                   if (!currentUser || !brQuickTargetUid) {
                     alert('Select a target player first (or yourself for Shield).');
                     return;
@@ -4969,6 +5085,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             gap: '0.75rem',
             zIndex: 2
           }}>
+            {playerLiveEventSkillsLocked ? (
+              <div
+                style={{
+                  padding: '0.65rem 0.75rem',
+                  borderRadius: '0.5rem',
+                  background: 'rgba(127, 29, 29, 0.25)',
+                  border: '1px solid rgba(248, 113, 113, 0.6)',
+                  color: '#fecaca',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  textAlign: 'center',
+                }}
+              >
+                Host paused Fight — skills are locked until the host allows Fight again.
+              </div>
+            ) : null}
             <button
               onClick={() => {
                 console.log('⚔️ [InSessionBattle] FIGHT button clicked', {
@@ -4976,6 +5108,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   movesEarned: currentPlayer?.movesEarned || 0,
                   willOpenMenu: !!(currentPlayer && (currentPlayer.movesEarned || 0) > 0)
                 });
+                if (playerLiveEventSkillsLocked) {
+                  alert('The host has paused Fight. Skills are locked until the host allows Fight again.');
+                  return;
+                }
                 if (currentPlayer?.eliminated) {
                   alert('You have been eliminated and cannot use skills.');
                   return;
@@ -4987,11 +5123,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   console.warn('⚠️ [InSessionBattle] Cannot open menu - no moves available');
                 }
               }}
-              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0 || currentPlayer.eliminated === true}
+              disabled={
+                !currentPlayer ||
+                (currentPlayer.movesEarned || 0) === 0 ||
+                currentPlayer.eliminated === true ||
+                playerLiveEventSkillsLocked
+              }
               style={{
                 width: '100%',
-                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && currentPlayer.eliminated !== true) 
-                  ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' 
+                background:
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  currentPlayer.eliminated !== true &&
+                  !playerLiveEventSkillsLocked
+                  ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
                   : '#9ca3af',
                 color: 'white',
                 border: '3px solid #8B4513',
@@ -4999,37 +5144,67 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 padding: '1rem',
                 fontSize: '1.125rem',
                 fontWeight: 'bold',
-                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 'pointer' : 'not-allowed',
+                cursor:
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayer.eliminated &&
+                  !playerLiveEventSkillsLocked
+                    ? 'pointer'
+                    : 'not-allowed',
                 transition: 'all 0.2s',
-                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
-                  ? '0 4px 12px rgba(239, 68, 68, 0.3)' 
+                boxShadow:
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayer.eliminated &&
+                  !playerLiveEventSkillsLocked
+                  ? '0 4px 12px rgba(239, 68, 68, 0.3)'
                   : 'none',
-                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 1 : 0.6
+                opacity:
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayer.eliminated &&
+                  !playerLiveEventSkillsLocked
+                    ? 1
+                    : 0.6
               }}
               onMouseEnter={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
+                if (
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayer.eliminated &&
+                  !playerLiveEventSkillsLocked
+                ) {
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 6px 16px rgba(239, 68, 68, 0.4)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
+                if (
+                  currentPlayer &&
+                  (currentPlayer.movesEarned || 0) > 0 &&
+                  !currentPlayer.eliminated &&
+                  !playerLiveEventSkillsLocked
+                ) {
                   e.currentTarget.style.transform = 'scale(1)';
                   e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.3)';
                 }
               }}
               title={
-                currentPlayer?.eliminated
-                  ? 'Eliminated — you cannot use skills'
-                  : (currentPlayer && (currentPlayer.movesEarned || 0) === 0)
-                    ? 'No moves available. Earn Par. Pt. to make moves!'
-                    : 'Select a move to attack'
+                playerLiveEventSkillsLocked
+                  ? 'Host paused Fight — skills locked'
+                  : currentPlayer?.eliminated
+                    ? 'Eliminated — you cannot use skills'
+                    : currentPlayer && (currentPlayer.movesEarned || 0) === 0
+                      ? 'No moves available. Earn Par. Pt. to make moves!'
+                      : 'Select a move to attack'
               }
             >
               ⚔️ FIGHT{' '}
-              {currentPlayer?.eliminated
-                ? '(Eliminated)'
-                : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
+              {playerLiveEventSkillsLocked
+                ? '(Paused)'
+                : currentPlayer?.eliminated
+                  ? '(Eliminated)'
+                  : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button
               onClick={() => {
@@ -5210,6 +5385,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 isPvP={true}
                 isInSession={true}
                 sessionId={sessionId}
+                inSessionActorEmail={currentUser?.email ?? undefined}
                 onArtifactUsed={() => {
                   // Handle artifact used - end turn
                   setShowBagModal(false);
@@ -5529,7 +5705,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       )}
 
       {/* Move Selection Modal - Only show when selecting a move, not when a move is selected */}
-      {showMoveMenu && !selectedMove && (
+      {showMoveMenu && !selectedMove && !playerLiveEventSkillsLocked && (
         <div style={{
           position: 'fixed',
           top: 0,

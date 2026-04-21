@@ -3036,7 +3036,7 @@ const AdminPanel: React.FC = () => {
             whiteSpace: 'nowrap'
           }}
         >
-          🎯 Training Grounds
+          🎯 Training Grounds (CFUs)
         </button>
         <button
           onClick={() => setActiveTab('rr-candies')}

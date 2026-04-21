@@ -30,7 +30,12 @@ import {
   mergeBattleStepRewardsIntoFlat,
   partitionMissionRewardEntries,
 } from './missionBattlePassRewards';
-import type { MissionTemplate, MissionTriggerType, PlayerMission } from '../types/missions';
+import {
+  normalizeMissionCategory,
+  type MissionTemplate,
+  type MissionTriggerType,
+  type PlayerMission,
+} from '../types/missions';
 
 export interface MissionEventPayload {
   /** Optional deduplication - if same eventId processed twice, second is ignored */
@@ -106,7 +111,7 @@ async function getMissionsByTrigger(triggerType: string): Promise<MissionTemplat
         id: docSnap.id,
         title: data.title || 'Untitled',
         description: data.description || '',
-        missionCategory: data.missionCategory || 'SIDE',
+        missionCategory: normalizeMissionCategory(data.missionCategory),
         deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
         triggerType: data.triggerType,
         progressType: data.progressType || 'count',

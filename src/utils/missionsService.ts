@@ -40,7 +40,8 @@ import {
   DeliveryChannel,
   MissionStatus,
   MissionSource,
-  ProfileJourneyStageId
+  ProfileJourneyStageId,
+  normalizeMissionCategory,
 } from '../types/missions';
 
 export function parseMissionRewardsFromDoc(raw: unknown): MissionTemplate['rewards'] {
@@ -79,8 +80,8 @@ export function missionChronologicalSortMs(m: MissionTemplate): number {
 }
 
 /**
- * Sort missions for NPC hub lists: explicit hubDisplayOrder first (lower first), then oldest-first by
- * created time (later-created missions get higher display numbers 2, 3, …), then stable id order.
+ * Sort missions for NPC hub lists (Side and Sovereign): explicit hubDisplayOrder first (lower first),
+ * then oldest-first by created time (later-created missions get higher display numbers 2, 3, …), then stable id order.
  */
 export function sortMissionsForHubList(missions: MissionTemplate[]): MissionTemplate[] {
   return [...missions].sort((a, b) => {
@@ -178,7 +179,7 @@ export async function getMissionTemplates(filters?: {
         title: data.title || 'Untitled Mission',
         description: data.description || '',
         npc: data.npc || null,
-        missionCategory: data.missionCategory || 'SIDE',
+        missionCategory: normalizeMissionCategory(data.missionCategory),
         deliveryChannels: data.deliveryChannels || ['HUB_NPC'],
         story: data.story || undefined,
         profile: data.profile || undefined,

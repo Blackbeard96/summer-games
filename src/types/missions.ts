@@ -5,13 +5,24 @@ import type { MissionBattleCoopConfig } from './coopBattle';
  * Mission System Types
  * 
  * Story Missions integrate with Home Hub NPCs and Player Journey tab.
+ * Sovereign Missions are optional hub lore for Home Page heroes in The Sovereign (background, not main story).
  * Profile Missions add information directly into the Player's Journey on their Power Card.
  * 
  * Extended for universal Challenge/Feat system (Ghost of Tsushima-style):
  * Event-driven missions can trigger from practice battles, skills, Mindforge, etc.
  */
 
-export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE';
+export type MissionCategory = 'SIDE' | 'STORY' | 'PROFILE' | 'SOVEREIGN';
+
+/** Maps Firestore `missionCategory` to `MissionCategory` (accepts legacy typo `SOVERIGN`). */
+export function normalizeMissionCategory(raw: unknown): MissionCategory {
+  if (raw === 'SOVERIGN') return 'SOVEREIGN';
+  if (raw === 'SIDE' || raw === 'STORY' || raw === 'PROFILE' || raw === 'SOVEREIGN') {
+    return raw;
+  }
+  return 'SIDE';
+}
+
 export type DeliveryChannel = 'HUB_NPC' | 'PLAYER_JOURNEY';
 export type MissionStatus = 'available' | 'active' | 'completed' | 'locked';
 export type MissionSource = 'HUB_NPC' | 'PLAYER_JOURNEY';
@@ -106,7 +117,7 @@ export interface MissionTemplate {
   title: string;
   description: string;
   npc?: string;               // "sonido" | "zeke" | "luz" | "kon" | undefined
-  missionCategory: MissionCategory;  // "SIDE" | "STORY" | "PROFILE"
+  missionCategory: MissionCategory;  // "SIDE" | "STORY" | "PROFILE" | "SOVEREIGN"
   deliveryChannels: DeliveryChannel[]; // ["HUB_NPC"] | ["PLAYER_JOURNEY"] | both
   story?: StoryMetadata;      // only for STORY missions
   profile?: ProfileMetadata;  // only for PROFILE missions — which journey stage to add content to
@@ -131,7 +142,7 @@ export interface MissionTemplate {
   }[];
   sequence?: MissionSequenceStep[];  // Optional sequence of steps
   sequenceVersion?: number;           // Version counter for sequence edits
-  /** Lower numbers appear first in NPC hub Side Missions; omit for automatic order (oldest created first). */
+  /** Lower numbers appear first in NPC hub Side / Sovereign lists; omit for automatic order (oldest created first). */
   hubDisplayOrder?: number;
   createdAt?: any;
   updatedAt?: any;

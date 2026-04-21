@@ -65,6 +65,11 @@ export interface InSessionRoom {
   battleLog: string[];
   /** Host opens MST MKT so players can spend session PP on heal / shield / revive items. */
   mstMktOpen?: boolean;
+  /** When true, non-host players cannot use Fight / skills until cleared. */
+  liveEventFightNegated?: boolean;
+  /** Goal setting mode: linked assessment for in-room goal forms. */
+  goalSettingAssessmentId?: string;
+  goalSettingPrompt?: string | null;
 }
 
 /**

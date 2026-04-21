@@ -38,6 +38,7 @@ import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liv
 import { trackParticipation, trackElimination, breakParticipationStreak } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
+import { isGlobalHost } from './inSessionService';
 import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
@@ -924,6 +925,18 @@ export async function submitBattleRoyaleQuickAction(
       if (!isBattleQuizMode(mode)) return { ok: false, error: 'Not a battle quiz mode' };
 
       const roomData = roomSnap.data();
+      const sessionHostUid =
+        typeof roomData.hostUid === 'string' && roomData.hostUid
+          ? roomData.hostUid
+          : typeof roomData.teacherId === 'string'
+            ? roomData.teacherId
+            : '';
+      const exemptFromFightNegation =
+        actorUid === sessionHostUid || isGlobalHost(actorUid, undefined, actorName);
+      if (roomData.liveEventFightNegated === true && !exemptFromFightNegation) {
+        return { ok: false, error: 'Host has paused combat skills. Wait until Fight is re-enabled.' };
+      }
+
       const players = [...((roomData?.players || []) as Record<string, unknown>[])];
       const battleLog: string[] = [...(roomData?.battleLog || [])];
 
