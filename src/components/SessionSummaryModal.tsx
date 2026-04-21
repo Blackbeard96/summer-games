@@ -4,7 +4,9 @@ import {
   LIVE_EVENT_PP_BASE_PER_ELIMINATION,
   LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
   LIVE_EVENT_ELIMINATED_PP_FRACTION,
-  mergeRoomEliminationsIntoSummary
+  mergeRoomEliminationsIntoSummary,
+  claimLiveEventSessionEndPendingPp,
+  claimLiveEventSessionEndPowerAndBattlePass,
 } from '../utils/inSessionStatsService';
 
 interface SessionSummaryModalProps {
@@ -43,6 +45,12 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isOpen]);
+
+  React.useEffect(() => {
+    if (!isOpen || !summary?.sessionId || !currentPlayerId) return;
+    void claimLiveEventSessionEndPendingPp(summary.sessionId, currentPlayerId);
+    void claimLiveEventSessionEndPowerAndBattlePass(summary.sessionId, currentPlayerId);
+  }, [isOpen, summary?.sessionId, currentPlayerId]);
 
   const displaySummary = React.useMemo(() => {
     if (!summary) return null;

@@ -4,8 +4,9 @@
  * ## Dev: where rewards run (Live Events / In Session)
  *
  * - **Session end** (`endSession` → `finalizeSessionStats` in `inSessionStatsService.ts`):
- *   For each participant, calls `computeSessionEndPowerXp` then `awardLiveEventPowerGain` →
- *   `awardPowerStatXp` (writes `students/{uid}.stats` via transaction). Also credits battle pass XP.
+ *   For each participant, calls `computeSessionEndPowerXp`, then queues Power + matching Battle Pass XP on
+ *   `inSessionRooms/{id}/stats/{uid}` (host cannot write other students' profiles). Each student claims via
+ *   `claimLiveEventSessionEndPowerAndBattlePass` → `applySessionEndBattlePassAndPowerToStudent`.
  * - **Reflection submit** (`submitLiveEventReflectionToAssessment` in `assessmentGoalsFirestore.ts`):
  *   `awardPowerXpForReflectionSubmission` → Emotional Power XP + same amount to deployed battle pass (`battlePassXP`).
  * - **Goal setting submit** (`submitLiveEventGoalSettingToAssessment` in `assessmentGoalsFirestore.ts`):
@@ -19,8 +20,10 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, runTransaction, serverTimestamp, type UpdateData, type DocumentData } from 'firebase/firestore';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { fetchActiveBattlePassSeasonId } from './activeBattlePassClient';
+import { mergeSeason1FromStudentData } from './season1PlayerHydration';
 import type { SessionStats } from '../types/inSessionStats';
 import type {
   PowerStatBranch,
@@ -332,6 +335,92 @@ export async function awardLiveEventPowerGain(uid: string, gain: LiveEventPowerG
   for (const [b, amt] of entries) {
     if (amt > 0) await awardPowerStatXp(uid, b, amt, 'live_event_session_gain');
   }
+}
+
+/** True if any branch has a positive amount (used for session-end pending claim). */
+export function liveEventPowerGainHasPositiveAmount(gain: LiveEventPowerGain | undefined): boolean {
+  if (!gain) return false;
+  return (
+    Math.max(0, Math.floor(Number(gain.physical) || 0)) > 0 ||
+    Math.max(0, Math.floor(Number(gain.mental) || 0)) > 0 ||
+    Math.max(0, Math.floor(Number(gain.emotional) || 0)) > 0 ||
+    Math.max(0, Math.floor(Number(gain.spiritual) || 0)) > 0
+  );
+}
+
+/**
+ * Apply session-end Power stat XP + Battle Pass XP in **one** `students/{uid}` transaction so we never
+ * leave half-applied rewards if one of the separate writes would fail after the other succeeded.
+ * Caller must be the student (Firestore rules).
+ */
+export async function applySessionEndBattlePassAndPowerToStudent(
+  playerId: string,
+  battlePassXpDelta: number,
+  gain: LiveEventPowerGain
+): Promise<void> {
+  const delta = Math.max(0, Math.floor(Number(battlePassXpDelta) || 0));
+  const branches: [PowerStatBranch, number][] = [
+    ['physical', Math.max(0, Math.floor(Number(gain.physical) || 0))],
+    ['mental', Math.max(0, Math.floor(Number(gain.mental) || 0))],
+    ['emotional', Math.max(0, Math.floor(Number(gain.emotional) || 0))],
+    ['spiritual', Math.max(0, Math.floor(Number(gain.spiritual) || 0))],
+  ];
+  const anyPower = branches.some(([, amt]) => amt > 0);
+  if (delta <= 0 && !anyPower) return;
+
+  let activeSeasonId: string | null = null;
+  if (delta > 0) {
+    activeSeasonId = await fetchActiveBattlePassSeasonId();
+    if (!activeSeasonId) {
+      console.warn(
+        `[liveEventPower] applySessionEndBattlePassAndPowerToStudent: no active battle pass season — skipping BP +${delta} for ${playerId}`
+      );
+    }
+  }
+
+  const studentRef = doc(db, 'students', playerId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(studentRef);
+    if (!snap.exists()) {
+      throw new Error(`students/${playerId} missing`);
+    }
+    const data = snap.data() as Record<string, unknown>;
+    const updates: Record<string, unknown> = {
+      updatedAt: serverTimestamp(),
+    };
+
+    if (anyPower) {
+      const statsRoot = normalizePlayerPowerStats(data.stats);
+      for (const [branch, amt] of branches) {
+        if (amt > 0) {
+          statsRoot[branch] = applyPowerXpToBranchPure(statsRoot[branch], amt, branch);
+        }
+      }
+      updates.stats = statsRoot;
+    }
+
+    if (delta > 0 && activeSeasonId) {
+      const s1 = mergeSeason1FromStudentData(data.season1 as Record<string, unknown> | undefined);
+      const bp = s1.battlePass;
+      const nextXp = Math.max(0, Math.floor(Number(bp.battlePassXP) || 0) + delta);
+      const nextBattlePass: Record<string, unknown> = {
+        ...bp,
+        currentSeasonId: activeSeasonId,
+        battlePassXP: nextXp,
+        currentTier: Math.max(0, Number(bp.currentTier) || 0),
+        claimedRewardIds: Array.isArray(bp.claimedRewardIds) ? bp.claimedRewardIds : [],
+      };
+      if (typeof bp.introSeenSeasonId === 'string' && bp.introSeenSeasonId.trim()) {
+        nextBattlePass.introSeenSeasonId = bp.introSeenSeasonId.trim();
+      }
+      updates.season1 = {
+        ...s1,
+        battlePass: nextBattlePass,
+      };
+    }
+
+    tx.update(studentRef, updates as UpdateData<DocumentData>);
+  });
 }
 
 /** Quiz correct-answer drip XP (during event). */

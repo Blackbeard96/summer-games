@@ -20,6 +20,8 @@ export interface LiveEventReflectionPanelProps {
   displayName: string;
   /** Append a line to the live battle log */
   onAppendBattleLog?: (line: string) => void | Promise<void>;
+  /** After a successful student reflection submit (not host link-save); parent can hide the form and show battle log. */
+  onStudentReflectionSaved?: () => void;
 }
 
 /**
@@ -36,6 +38,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   currentUserId,
   displayName,
   onAppendBattleLog,
+  onStudentReflectionSaved,
 }) => {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [hostAssessments, setHostAssessments] = useState<Assessment[]>([]);
@@ -166,7 +169,12 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
     setEvidenceText('');
     setMessage('Evidence saved to Assessment Goals. Your teacher can review it on the dashboard.');
     if (onAppendBattleLog) {
-      await onAppendBattleLog(`📝 ${displayName} submitted reflection evidence (Assessment Goals).`);
+      await onAppendBattleLog(
+        `📝 ${displayName} updated and submitted their reflection (Assessment Goals).`
+      );
+    }
+    if (!isSessionHost) {
+      onStudentReflectionSaved?.();
     }
   };
 

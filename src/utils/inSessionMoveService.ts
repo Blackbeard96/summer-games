@@ -7,7 +7,6 @@
 
 import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { isGlobalHost } from './inSessionService';
 import {
   computeLiveEventParticipationSkillCostServer,
   logLiveEventSkillCostAttempt,
@@ -200,16 +199,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }
 
       const sessionData = sessionDoc.data();
-      const sessionHostUid =
-        typeof sessionData.hostUid === 'string' && sessionData.hostUid
-          ? sessionData.hostUid
-          : typeof sessionData.teacherId === 'string'
-            ? sessionData.teacherId
-            : '';
-      const exemptFromFightNegation =
-        actorUid === sessionHostUid ||
-        isGlobalHost(actorUid, actorEmail, actorName);
-      if (sessionData.liveEventFightNegated === true && !exemptFromFightNegation) {
+      if (sessionData.liveEventFightNegated === true) {
         throw new Error(
           'The host has paused the Fight phase. Skills are locked until the host turns Fight back on.'
         );

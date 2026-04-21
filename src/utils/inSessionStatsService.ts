@@ -4,19 +4,29 @@
  */
 
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment, arrayUnion } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  setDoc,
+  serverTimestamp,
+  runTransaction,
+  increment,
+  arrayUnion,
+  deleteField,
+} from 'firebase/firestore';
 import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
 import { applyParticipationStreakAward, breakParticipationStreakMessage } from './participationStreak';
 import { evaluateFlowStateAfterSuccess, mergeFlowClearIntoRow } from './liveEventFlowState';
 import type { LiveEventPowerGain } from '../types/playerPowerStats';
 import {
-  awardLiveEventPowerGain,
   awardPowerXpForElimination,
   computeSessionEndPowerXp,
+  liveEventPowerGainHasPositiveAmount,
+  applySessionEndBattlePassAndPowerToStudent,
 } from './liveEventPowerStatsService';
 import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
-import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
 import { trackPlayerAction } from './playerProgressionRewards';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
@@ -47,6 +57,7 @@ export async function initializePlayerStats(
       netPPGained: 0,
       ppSpent: 0,
       ppEarned: 0,
+      vaultPpGrantedMidSession: 0,
       participationEarned: 0,
       movesEarned: 0,
       eliminations: 0,
@@ -254,7 +265,8 @@ export async function trackElimination(
         const eliminatorStats = eliminatorStatsDoc.data() as SessionStats;
         transaction.update(eliminatorStatsRef, {
           eliminations: (eliminatorStats.eliminations || 0) + 1,
-          ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination
+          ppEarned: (eliminatorStats.ppEarned || 0) + ppFromElimination,
+          vaultPpGrantedMidSession: increment(ppFromElimination),
         });
       }
 
@@ -270,25 +282,7 @@ export async function trackElimination(
 
     // Grant PP to eliminator's account (students, users, vault) so they actually receive +500 (and vault PP)
     try {
-      const studentRef = doc(db, 'students', eliminatorId);
-      const userRef = doc(db, 'users', eliminatorId);
-      const vaultRef = doc(db, 'vaults', eliminatorId);
-
-      const studentDoc = await getDoc(studentRef);
-      if (studentDoc.exists()) {
-        await updateDoc(studentRef, { powerPoints: increment(ppFromElimination) });
-      }
-      const userDoc = await getDoc(userRef);
-      if (userDoc.exists()) {
-        await updateDoc(userRef, { powerPoints: increment(ppFromElimination) });
-      }
-      const vaultDoc = await getDoc(vaultRef);
-      if (vaultDoc.exists()) {
-        const v = vaultDoc.data();
-        const cur = v?.currentPP ?? 0;
-        const cap = v?.capacity ?? 1000;
-        await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppFromElimination) });
-      }
+      await creditPPToStudentUserVault(eliminatorId, ppFromElimination);
 
       void trackPlayerAction(eliminatorId, 'EARN_PP', ppFromElimination).catch((err) =>
         console.error('[inSessionStats] earn_pp daily challenge after elimination:', err)
@@ -368,6 +362,7 @@ function mergeRoomEliminationsIntoStatsMap(
         netPPGained: 0,
         ppSpent: 0,
         ppEarned: 0,
+        vaultPpGrantedMidSession: 0,
         participationEarned: rp.participationCount ?? 0,
         movesEarned: rp.movesEarned ?? 0,
         eliminations: 0,
@@ -439,6 +434,54 @@ async function deductPPFromStudentUserVault(userId: string, amount: number): Pro
     debug('inSessionStats', `Elimination PP penalty: deducted ${amount} PP from accounts for ${userId}`);
   } catch (e) {
     debugError('inSessionStats', `deductPPFromStudentUserVault failed for ${userId}`, e);
+  }
+}
+
+/** Credits PP to students / users / vault (vault currentPP clamped to capacity). */
+async function creditPPToStudentUserVault(userId: string, amount: number): Promise<void> {
+  if (amount <= 0) return;
+  try {
+    const studentRef = doc(db, 'students', userId);
+    const userRef = doc(db, 'users', userId);
+    const vaultRef = doc(db, 'vaults', userId);
+
+    const studentDoc = await getDoc(studentRef);
+    if (studentDoc.exists()) {
+      await updateDoc(studentRef, { powerPoints: increment(amount) });
+    }
+    const userDoc = await getDoc(userRef);
+    if (userDoc.exists()) {
+      await updateDoc(userRef, { powerPoints: increment(amount) });
+    }
+    const vaultDoc = await getDoc(vaultRef);
+    if (vaultDoc.exists()) {
+      const v = vaultDoc.data();
+      const cur = v?.currentPP ?? 0;
+      const cap = v?.capacity ?? 1000;
+      await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + amount) });
+    }
+    debug('inSessionStats', `Credited ${amount} PP to accounts for ${userId}`);
+  } catch (e) {
+    debugError('inSessionStats', `creditPPToStudentUserVault failed for ${userId}`, e);
+    throw e;
+  }
+}
+
+/**
+ * Record PP already written to vault/students during the live session (elimination bounty, sprint vault bonus)
+ * so {@link finalizeSessionStats} can credit the remainder without double-counting.
+ */
+export async function addVaultPpGrantedMidSessionStat(
+  sessionId: string,
+  playerId: string,
+  amount: number
+): Promise<void> {
+  if (amount <= 0) return;
+  try {
+    const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+    await updateDoc(statsRef, { vaultPpGrantedMidSession: increment(amount) });
+  } catch (e) {
+    debugError('inSessionStats', `addVaultPpGrantedMidSessionStat failed for ${playerId}`, e);
   }
 }
 
@@ -700,6 +743,7 @@ function buildSyntheticSessionStats(
     netPPGained: 0,
     ppSpent: 0,
     ppEarned: 0,
+    vaultPpGrantedMidSession: 0,
     participationEarned: typeof prow?.participationCount === 'number' ? prow.participationCount : 0,
     movesEarned: typeof prow?.movesEarned === 'number' ? prow.movesEarned : 0,
     eliminations: 0,
@@ -812,6 +856,33 @@ export async function finalizeSessionStats(
       rawQuizPpByPlayer
     );
 
+    /**
+     * Host cannot write other users' `students`/`users` docs (Firestore rules). Write each player's owed PP on their
+     * stats subdoc; the player applies it via {@link claimLiveEventSessionEndPendingPp}.
+     * Same for session-end Power + Battle Pass XP: {@link claimLiveEventSessionEndPowerAndBattlePass}.
+     */
+    const sessionEndPayoutIds = Array.from(new Set([...rewardPlayerIds, ...Object.keys(statsMap)]));
+    for (const playerId of sessionEndPayoutIds) {
+      const st = statsMap[playerId];
+      if (!st) continue;
+      const alreadyVault = st.vaultPpGrantedMidSession ?? 0;
+      const net = st.netPPGained ?? 0;
+      const transfer = Math.max(0, net - alreadyVault);
+      if (transfer <= 0) continue;
+      try {
+        const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+        const snap = await getDoc(statsRef);
+        if (!snap.exists()) continue;
+        await updateDoc(statsRef, { sessionEndAccountPpPending: transfer });
+        debug(
+          'inSessionStats',
+          `Live event end: stored ${transfer} PP pending claim (net ${net} − mid-session vault ${alreadyVault}) for ${playerId}`
+        );
+      } catch (e) {
+        debugError('inSessionStats', `Live event end pending PP write failed for ${playerId}`, e);
+      }
+    }
+
     const quizSessionRef = doc(db, 'inSessionRooms', sessionId, 'quizSession', 'current');
     const quizSessionSnap = await getDoc(quizSessionRef);
     let correctByPlayer: Record<string, number> = {};
@@ -865,11 +936,30 @@ export async function finalizeSessionStats(
             : branch === 'emotional'
               ? { emotional: amount }
               : { spiritual: amount };
-      await awardLiveEventPowerGain(playerId, gain);
-      liveEventPowerGains[playerId] = gain;
 
-      // Power stats use `students.stats.*`; battle pass season XP is separate — credit the same performance there too.
-      await awardBattlePassXpForDeployedSeason(playerId, amount);
+      // Host cannot update other students' `students` docs — mirror PP: queue on stats for self-claim.
+      try {
+        const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+        const snap = await getDoc(statsRef);
+        if (!snap.exists()) {
+          debug(
+            'inSessionStats',
+            `Live event end: no stats subdoc for ${playerId}, cannot queue power/BP pending (synthetic roster?)`
+          );
+          continue;
+        }
+        await updateDoc(statsRef, {
+          sessionEndBattlePassXpPending: amount,
+          sessionEndPowerGainPending: gain,
+        });
+        liveEventPowerGains[playerId] = gain;
+        debug(
+          'inSessionStats',
+          `Live event end: queued ${amount} BP XP + power gain for ${playerId} (sessionEnd pending claim)`
+        );
+      } catch (e) {
+        debugError('inSessionStats', `Live event end pending power/BP write failed for ${playerId}`, e);
+      }
     }
 
     for (const playerId of Array.from(new Set(rewardPlayerIds))) {
@@ -1001,7 +1091,8 @@ export async function finalizeSessionStats(
       totalPlayers: Math.max(rewardPlayerIds.length, Object.keys(statsMap).length),
       stats: statsMap,
       mvpPlayerId,
-      liveEventPowerApplied: true,
+      /** False when session-end power/BP was queued for student claim (see `sessionEnd*Pending` on stats). */
+      liveEventPowerApplied: Object.keys(liveEventPowerGains).length === 0,
       ...(Object.keys(liveEventPowerGains).length > 0 && { liveEventPowerGains }),
       ...(sessionData.lastQuizAwardsSnapshot &&
       typeof sessionData.lastQuizAwardsSnapshot === 'object' &&
@@ -1045,6 +1136,119 @@ export async function finalizeSessionStats(
   } catch (error) {
     debugError('inSessionStats', `Error finalizing session stats`, error);
     return null;
+  }
+}
+
+/**
+ * Apply session-end PP owed to this player's account (students / users / vault).
+ * Host finalization stores the amount on `stats/{playerId}.sessionEndAccountPpPending` because only the signed-in
+ * player may update their own `students`/`users` docs under current Firestore rules.
+ */
+/**
+ * Apply session-end Power stat XP + matching Battle Pass XP from `stats/{playerId}` pending fields.
+ * Idempotent: repeats no-op after `sessionEndPowerBpClaimedAt` is set.
+ */
+export async function claimLiveEventSessionEndPowerAndBattlePass(
+  sessionId: string,
+  playerId: string
+): Promise<boolean> {
+  const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+  type Reserved = { bp: number; gain: LiveEventPowerGain };
+  let reserved: Reserved | null = null;
+  try {
+    reserved = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(statsRef);
+      if (!snap.exists()) return null;
+      const d = snap.data() as SessionStats;
+      if (d.sessionEndPowerBpClaimedAt) return null;
+      const bp = Math.max(0, Math.floor(Number(d.sessionEndBattlePassXpPending) || 0));
+      const gain = (d.sessionEndPowerGainPending || {}) as LiveEventPowerGain;
+      if (bp <= 0 && !liveEventPowerGainHasPositiveAmount(gain)) return null;
+      transaction.update(statsRef, {
+        sessionEndBattlePassXpPending: deleteField(),
+        sessionEndPowerGainPending: deleteField(),
+        sessionEndPowerBpClaimedAt: serverTimestamp(),
+      });
+      return { bp, gain };
+    });
+  } catch (e) {
+    debugError(
+      'inSessionStats',
+      `claimLiveEventSessionEndPowerAndBattlePass transaction failed for ${playerId}`,
+      e
+    );
+    return false;
+  }
+
+  if (!reserved) return false;
+
+  try {
+    await applySessionEndBattlePassAndPowerToStudent(playerId, reserved.bp, reserved.gain);
+    debug('inSessionStats', `Claimed session-end power/BP for ${playerId}`, reserved);
+    return true;
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndPowerAndBattlePass apply failed for ${playerId}`, e);
+    try {
+      await updateDoc(statsRef, {
+        ...(reserved.bp > 0 ? { sessionEndBattlePassXpPending: reserved.bp } : {}),
+        ...(liveEventPowerGainHasPositiveAmount(reserved.gain)
+          ? { sessionEndPowerGainPending: reserved.gain }
+          : {}),
+        sessionEndPowerBpClaimedAt: deleteField(),
+      });
+    } catch (restoreErr) {
+      debugError(
+        'inSessionStats',
+        `Failed to restore pending power/BP after apply error for ${playerId}`,
+        restoreErr
+      );
+    }
+    return false;
+  }
+}
+
+export async function claimLiveEventSessionEndPendingPp(sessionId: string, playerId: string): Promise<boolean> {
+  const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+  let reserved = 0;
+  try {
+    reserved = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(statsRef);
+      if (!snap.exists()) return 0;
+      const d = snap.data() as SessionStats;
+      if (d.sessionEndAccountPpClaimedAt) return 0;
+      const p = typeof d.sessionEndAccountPpPending === 'number' ? d.sessionEndAccountPpPending : 0;
+      if (p <= 0) return 0;
+      transaction.update(statsRef, {
+        sessionEndAccountPpPending: deleteField(),
+        sessionEndAccountPpClaimedAt: serverTimestamp(),
+      });
+      return p;
+    });
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndPendingPp transaction failed for ${playerId}`, e);
+    return false;
+  }
+
+  if (reserved <= 0) return false;
+
+  try {
+    await creditPPToStudentUserVault(playerId, reserved);
+    void trackPlayerAction(playerId, 'EARN_PP', reserved).catch((err) =>
+      console.error('[inSessionStats] earn_pp after live event session-end claim:', err)
+    );
+    debug('inSessionStats', `Claimed ${reserved} session-end live event PP for ${playerId}`);
+    return true;
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndPendingPp credit failed for ${playerId}`, e);
+    try {
+      await updateDoc(statsRef, {
+        sessionEndAccountPpPending: reserved,
+        sessionEndAccountPpClaimedAt: deleteField(),
+      });
+    } catch (restoreErr) {
+      debugError('inSessionStats', `Failed to restore pending PP after credit error for ${playerId}`, restoreErr);
+    }
+    return false;
   }
 }
 

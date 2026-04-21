@@ -3,7 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, onSnapshot, serverTimestamp, collection, query, where, getDocs, arrayUnion, arrayRemove } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  onSnapshot,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+  arrayUnion,
+  arrayRemove,
+  deleteField,
+} from 'firebase/firestore';
 import BattleEngine from './BattleEngine';
 import BagModal from './BagModal';
 import VaultModal from './VaultModal';
@@ -56,6 +69,8 @@ import {
   trackElimination,
   trackParticipation,
   getSessionSummary,
+  claimLiveEventSessionEndPendingPp,
+  claimLiveEventSessionEndPowerAndBattlePass,
   LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
 } from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
@@ -171,7 +186,7 @@ interface SessionPlayer {
   flowStateActive?: boolean;
   flowStateActivatedAt?: number | null;
   flowStateNonce?: number;
-  /** Anchor for passive +1 Participation Power per minute (liveEventPassiveParticipation). */
+  /** Anchor for passive +1 Participation Power every 2 minutes (liveEventPassiveParticipation). */
   participationPassiveStartedAtMs?: number;
 }
 
@@ -233,6 +248,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [mstMktToggleLoading, setMstMktToggleLoading] = useState(false);
   const [liveEventFightNegated, setLiveEventFightNegated] = useState(false);
   const [fightNegateToggleLoading, setFightNegateToggleLoading] = useState(false);
+  const [stopReflectionGoalModeLoading, setStopReflectionGoalModeLoading] = useState(false);
   const [hostReviveModalOpen, setHostReviveModalOpen] = useState(false);
   const [hostReviveHpPercent, setHostReviveHpPercent] = useState(50);
   const [hostReviveSelectedUserIds, setHostReviveSelectedUserIds] = useState<string[]>([]);
@@ -503,6 +519,53 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       return value;
     });
   }, [sessionId]);
+
+  /** Non-host: hide center Goal form after a successful save so Battle Log is visible again. */
+  const [liveEventGoalSettingStudentDismissed, setLiveEventGoalSettingStudentDismissed] = useState(false);
+  const prevGoalSettingAssessmentForDismissRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const mode = roomReflectionMeta.liveEventMode;
+    const aid = roomReflectionMeta.goalSettingAssessmentId;
+    if (mode !== 'goal_setting') {
+      setLiveEventGoalSettingStudentDismissed(false);
+      prevGoalSettingAssessmentForDismissRef.current = undefined;
+      return;
+    }
+    const prev = prevGoalSettingAssessmentForDismissRef.current;
+    if (prev !== undefined && prev !== aid) {
+      setLiveEventGoalSettingStudentDismissed(false);
+    }
+    prevGoalSettingAssessmentForDismissRef.current = aid;
+  }, [roomReflectionMeta.liveEventMode, roomReflectionMeta.goalSettingAssessmentId]);
+
+  const onStudentGoalSettingSavedDismiss = useCallback(() => {
+    setLiveEventGoalSettingStudentDismissed(true);
+    setCenterView('battleLog');
+  }, [setCenterView]);
+
+  /** Non-host: hide center Reflection form after a successful save so Battle Log is visible again. */
+  const [liveEventReflectionStudentDismissed, setLiveEventReflectionStudentDismissed] = useState(false);
+  const prevReflectionAssessmentForDismissRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const mode = roomReflectionMeta.liveEventMode;
+    const aid = roomReflectionMeta.reflectionAssessmentId;
+    if (mode !== 'reflection') {
+      setLiveEventReflectionStudentDismissed(false);
+      prevReflectionAssessmentForDismissRef.current = undefined;
+      return;
+    }
+    const prev = prevReflectionAssessmentForDismissRef.current;
+    if (prev !== undefined && prev !== aid) {
+      setLiveEventReflectionStudentDismissed(false);
+    }
+    prevReflectionAssessmentForDismissRef.current = aid;
+  }, [roomReflectionMeta.liveEventMode, roomReflectionMeta.reflectionAssessmentId]);
+
+  const onStudentReflectionSavedDismiss = useCallback(() => {
+    setLiveEventReflectionStudentDismissed(true);
+    setCenterView('battleLog');
+  }, [setCenterView]);
+
   // Restore tab choice from sessionStorage when sessionId or quiz appears (so toggling back to Quiz works after remount/navigation)
   useEffect(() => {
     if (typeof sessionStorage === 'undefined' || !sessionId) return;
@@ -876,6 +939,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       
       if (session.status === 'ended') {
         debug('inSessionBattle', `Session ${sessionId} ended, opening summary if needed...`);
+        if (currentUser?.uid) {
+          void claimLiveEventSessionEndPendingPp(sessionId, currentUser.uid);
+          void claimLiveEventSessionEndPowerAndBattlePass(sessionId, currentUser.uid);
+        }
         void showLiveEventSummaryIfEnded(session as { status?: string; sessionSummary?: SessionSummary });
       }
     });
@@ -891,7 +958,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     return () => window.clearInterval(id);
   }, []);
 
-  /** +1 movesEarned per minute per player; host credits everyone, students credit self if host tab absent. */
+  /** +1 movesEarned every 2 minutes per player; host credits everyone, students credit self if host tab absent. */
   useEffect(() => {
     if (!sessionId) return;
     if (roomSessionStatus !== 'live' && roomSessionStatus !== 'active') return;
@@ -2361,9 +2428,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     [sessionPpStatsByPlayer]
   );
 
+  /** When host pauses Fight, everyone (including host) sees skills / FIGHT locked until Fight is allowed again. */
   const playerLiveEventSkillsLocked = useMemo(
-    () => liveEventFightNegated && permissionsChecked && !isSessionHost,
-    [liveEventFightNegated, permissionsChecked, isSessionHost]
+    () => liveEventFightNegated && permissionsChecked,
+    [liveEventFightNegated, permissionsChecked]
   );
 
   useEffect(() => {
@@ -2879,7 +2947,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               return (
                 <div style={{ marginTop: '0.35rem', paddingTop: '0.35rem', borderTop: '1px solid #e5e7eb' }}>
                   <div style={{ fontSize: '0.62rem', color: '#4b5563', fontWeight: 700, marginBottom: '0.15rem' }}>
-                    Passive (+1 / min)
+                    Passive (+1 / 2 min)
                   </div>
                   <div style={{ fontSize: '0.6rem', color: '#6b7280', marginBottom: '0.2rem', lineHeight: 1.35 }}>
                     Stacks with host awards &amp; event rewards. Next free point in{' '}
@@ -3369,6 +3437,64 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 }
               >
                 {fightNegateToggleLoading ? '…' : liveEventFightNegated ? '✅ Allow Fight' : '🛑 Negate Fight'}
+              </button>
+            )}
+          {permissionsChecked &&
+            (isSessionHost || isAdminUser) &&
+            !showSessionSummary &&
+            (roomSessionStatus === 'live' || roomSessionStatus === 'active') &&
+            (roomReflectionMeta.liveEventMode === 'reflection' ||
+              roomReflectionMeta.liveEventMode === 'goal_setting') && (
+              <button
+                type="button"
+                disabled={stopReflectionGoalModeLoading}
+                onClick={async () => {
+                  if (!sessionId || !currentUser) return;
+                  const mode = roomReflectionMeta.liveEventMode;
+                  if (mode !== 'reflection' && mode !== 'goal_setting') return;
+                  setStopReflectionGoalModeLoading(true);
+                  try {
+                    await updateDoc(doc(db, 'inSessionRooms', sessionId), {
+                      liveEventMode: 'class_flow',
+                      energyTypeAwarded: getEnergyTypeForMode('class_flow'),
+                      reflectionAssessmentId: deleteField(),
+                      reflectionPrompt: deleteField(),
+                      reflectionCollectHabit: deleteField(),
+                      reflectionCollectEvidence: deleteField(),
+                      goalSettingAssessmentId: deleteField(),
+                      goalSettingPrompt: deleteField(),
+                      updatedAt: serverTimestamp(),
+                    });
+                    await appendBattleLog(
+                      mode === 'reflection'
+                        ? '📌 Reflection mode ended — Class Flow is active again.'
+                        : '📌 Goal setting mode ended — Class Flow is active again.'
+                    );
+                  } catch (e) {
+                    debugError('inSessionBattle', 'stop reflection/goal mode', e);
+                    alert('Could not end this mode. Check permissions and try again.');
+                  } finally {
+                    setStopReflectionGoalModeLoading(false);
+                  }
+                }}
+                style={{
+                  background: 'rgba(251, 191, 36, 0.95)',
+                  color: '#1c1917',
+                  border: '2px solid white',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem 1.25rem',
+                  fontSize: '1rem',
+                  fontWeight: '700',
+                  cursor: stopReflectionGoalModeLoading ? 'wait' : 'pointer',
+                  opacity: stopReflectionGoalModeLoading ? 0.75 : 1,
+                }}
+                title="Return the room to Class Flow and hide Reflection / Goal setting for everyone"
+              >
+                {stopReflectionGoalModeLoading
+                  ? '…'
+                  : roomReflectionMeta.liveEventMode === 'reflection'
+                    ? '🪞 End Reflection mode'
+                    : '🎯 End Goal setting mode'}
               </button>
             )}
           {isSessionHost && !quizSession && (
@@ -4300,28 +4426,34 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         }}>
           {currentUser && (
             <>
-              <LiveEventReflectionPanel
-                sessionId={sessionId}
-                classId={classId}
-                reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
-                reflectionPrompt={roomReflectionMeta.reflectionPrompt}
-                liveEventMode={roomReflectionMeta.liveEventMode}
-                isSessionHost={isSessionHost}
-                currentUserId={currentUser.uid}
-                displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
-                onAppendBattleLog={appendBattleLog}
-              />
-              <LiveEventGoalSettingPanel
-                sessionId={sessionId}
-                classId={classId}
-                goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
-                goalSettingPrompt={roomReflectionMeta.goalSettingPrompt}
-                liveEventMode={roomReflectionMeta.liveEventMode}
-                isSessionHost={isSessionHost}
-                currentUserId={currentUser.uid}
-                displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
-                onAppendBattleLog={appendBattleLog}
-              />
+              {(!liveEventReflectionStudentDismissed || isSessionHost) && (
+                <LiveEventReflectionPanel
+                  sessionId={sessionId}
+                  classId={classId}
+                  reflectionAssessmentId={roomReflectionMeta.reflectionAssessmentId}
+                  reflectionPrompt={roomReflectionMeta.reflectionPrompt}
+                  liveEventMode={roomReflectionMeta.liveEventMode}
+                  isSessionHost={isSessionHost}
+                  currentUserId={currentUser.uid}
+                  displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+                  onAppendBattleLog={appendBattleLog}
+                  onStudentReflectionSaved={onStudentReflectionSavedDismiss}
+                />
+              )}
+              {(!liveEventGoalSettingStudentDismissed || isSessionHost) && (
+                <LiveEventGoalSettingPanel
+                  sessionId={sessionId}
+                  classId={classId}
+                  goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
+                  goalSettingPrompt={roomReflectionMeta.goalSettingPrompt}
+                  liveEventMode={roomReflectionMeta.liveEventMode}
+                  isSessionHost={isSessionHost}
+                  currentUserId={currentUser.uid}
+                  displayName={currentUser.displayName || currentUser.email?.split('@')[0] || 'Player'}
+                  onAppendBattleLog={appendBattleLog}
+                  onStudentGoalSaved={onStudentGoalSettingSavedDismiss}
+                />
+              )}
             </>
           )}
           {/* Tab to swap between Quiz and Battle Log when a quiz is active - sticky, high z-index so always clickable */}
@@ -5160,12 +5292,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   ? '0 4px 12px rgba(239, 68, 68, 0.3)'
                   : 'none',
                 opacity:
-                  currentPlayer &&
-                  (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayer.eliminated &&
-                  !playerLiveEventSkillsLocked
-                    ? 1
-                    : 0.6
+                  playerLiveEventSkillsLocked
+                    ? 0.5
+                    : currentPlayer &&
+                        (currentPlayer.movesEarned || 0) > 0 &&
+                        !currentPlayer.eliminated
+                      ? 1
+                      : 0.6
               }}
               onMouseEnter={(e) => {
                 if (

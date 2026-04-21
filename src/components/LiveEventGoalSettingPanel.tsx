@@ -20,6 +20,8 @@ export interface LiveEventGoalSettingPanelProps {
   currentUserId: string;
   displayName: string;
   onAppendBattleLog?: (line: string) => void | Promise<void>;
+  /** Called after a successful student goal save (not host link-save); parent can hide the form and show battle log. */
+  onStudentGoalSaved?: () => void;
 }
 
 /**
@@ -35,6 +37,7 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
   currentUserId,
   displayName,
   onAppendBattleLog,
+  onStudentGoalSaved,
 }) => {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [hostAssessments, setHostAssessments] = useState<Assessment[]>([]);
@@ -196,7 +199,12 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
     }
     setMessage('Saved to Assessment Goals. Your teacher can review it on the dashboard.');
     if (onAppendBattleLog) {
-      await onAppendBattleLog(`🎯 ${displayName} updated their goal (Assessment Goals).`);
+      await onAppendBattleLog(
+        `🎯 ${displayName} updated and submitted their assessment goal (Assessment Goals).`
+      );
+    }
+    if (!isSessionHost) {
+      onStudentGoalSaved?.();
     }
   };
 

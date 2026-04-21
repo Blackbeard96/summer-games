@@ -16,7 +16,7 @@ import {
 } from 'firebase/firestore';
 import type { UpdateData, DocumentData } from 'firebase/firestore';
 import type { ClassFlowSprintState } from '../types/season1';
-import { trackParticipation } from './inSessionStatsService';
+import { addVaultPpGrantedMidSessionStat, trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { recordSprintMarkedCompleteForPlayer, recordSprintOpportunityForPlayers } from './weeklyGoalsService';
@@ -444,6 +444,7 @@ export async function grantSprintRewardForSinglePlayer(
           await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + vaultPP) });
         }
         await bumpSessionPlayerVaultPP(sessionId, playerUid, vaultPP);
+        await addVaultPpGrantedMidSessionStat(sessionId, playerUid, vaultPP);
       }
     }
 
