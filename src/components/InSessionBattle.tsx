@@ -1400,53 +1400,78 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     fetchSquadAbbreviations();
   }, [students]);
 
-  // Listen to user profile updates in real-time to ensure consistent display across all game modes
+  /**
+   * Stable roster identity: only when **membership** changes should we attach/detach `users/{id}` listeners.
+   * Depending on `students` (new array reference every parent render) caused rapid listener churn and
+   * Firestore watch-stream INTERNAL ASSERTION (ca9 / ve:-1).
+   */
+  const rosterStudentIdsKey = useMemo(() => {
+    const raw = students.map((s) => s.id).filter((id): id is string => Boolean(id));
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const id of raw) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        unique.push(id);
+      }
+    }
+    return unique.sort().join(',');
+  }, [students]);
+
+  // Listen to user profile updates in real-time (displayName / photoURL from `users` docs).
   useEffect(() => {
-    if (students.length === 0) return;
+    if (!rosterStudentIdsKey) {
+      setUserProfiles(new Map());
+      return;
+    }
 
-    const unsubscribes: (() => void)[] = [];
+    const ids = rosterStudentIdsKey.split(',').filter(Boolean);
     const profilesMap = new Map<string, { displayName: string; photoURL?: string }>();
-
-    // Set initial profiles from students array
-    students.forEach(student => {
-      profilesMap.set(student.id, {
-        displayName: student.displayName,
-        photoURL: student.photoURL
+    ids.forEach((id) => {
+      const student = studentsRef.current.find((s) => s.id === id);
+      profilesMap.set(id, {
+        displayName: student?.displayName || 'Unknown',
+        photoURL: student?.photoURL,
       });
     });
     setUserProfiles(profilesMap);
 
-    // Set up real-time listeners for each user's profile
-    students.forEach(student => {
-      const userRef = doc(db, 'users', student.id);
-      const unsubscribe = onSnapshot(userRef, (userDoc) => {
-        if (userDoc.exists()) {
+    const unsubscribes: Array<() => void> = [];
+    ids.forEach((id) => {
+      const userRef = doc(db, 'users', id);
+      const unsubscribe = onSnapshot(
+        userRef,
+        (userDoc) => {
+          if (!userDoc.exists()) return;
           const userData = userDoc.data();
-          setUserProfiles(prev => {
+          const roster = studentsRef.current.find((s) => s.id === id);
+          setUserProfiles((prev) => {
             const updated = new Map(prev);
-            updated.set(student.id, {
-              displayName: userData.displayName || student.displayName || 'Unknown',
-              photoURL: userData.photoURL || student.photoURL
+            updated.set(id, {
+              displayName: userData.displayName || roster?.displayName || 'Unknown',
+              photoURL: userData.photoURL || roster?.photoURL,
             });
             return updated;
           });
+        },
+        (error) => {
+          if (
+            error instanceof Error &&
+            (error.message?.includes('INTERNAL ASSERTION FAILED') ||
+              error.message?.includes('Unexpected state'))
+          ) {
+            return;
+          }
+          console.error(`Error listening to user profile ${id}:`, error);
         }
-      }, (error) => {
-        // Suppress Firestore internal assertion errors
-        if (error instanceof Error && 
-            (error.message?.includes('INTERNAL ASSERTION FAILED') || 
-             error.message?.includes('Unexpected state'))) {
-          return;
-        }
-        console.error(`Error listening to user profile ${student.id}:`, error);
-      });
+      );
       unsubscribes.push(unsubscribe);
     });
 
     return () => {
-      unsubscribes.forEach(unsubscribe => unsubscribe());
+      unsubscribes.forEach((u) => u());
     };
-  }, [students]);
+  }, [rosterStudentIdsKey]);
 
   // Keep sessionPlayers displayName/photoURL in sync with userProfiles (profile is source of truth)
   // Important: do NOT write back to Firestore here (avoid feedback loops). We only normalize for UI/BattleEngine rendering.

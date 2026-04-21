@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   isBattlePassChoiceGroup,
   type BattlePassReward,
@@ -7,6 +7,12 @@ import {
 } from '../types/season1';
 import { getArtifactDetails } from '../utils/artifactCompensation';
 import { sortBattlePassTiers } from '../utils/battlePassTierMath';
+import {
+  claimDeployedBattlePassReward,
+  countDeployedBattlePassClaimsInChoiceGroup,
+  deployedBattlePassChoiceClaimKey,
+  deployedBattlePassFlatClaimKey,
+} from '../utils/deployedBattlePassClaim';
 
 function iconForRewardType(rt: BattlePassReward['rewardType']): string {
   switch (rt) {
@@ -69,7 +75,13 @@ function rarityAccent(rarity?: BattlePassReward['rarity']): { border: string; gl
 const DeployedChoiceGroupBlock: React.FC<{
   group: BattlePassRewardChoiceGroup;
   locked: boolean;
-}> = ({ group, locked }) => {
+  seasonId?: string;
+  userId?: string;
+  tierNumber?: number;
+  playerTier?: number;
+  claimedRewardIds?: readonly string[];
+  onRewardClaimed?: () => void;
+}> = ({ group, locked, seasonId, userId, tierNumber, playerTier, claimedRewardIds, onRewardClaimed }) => {
   const pick = Math.max(1, Math.min(group.pickCount, group.options.length || 1));
   const title =
     group.displayName?.trim() ||
@@ -108,17 +120,93 @@ const DeployedChoiceGroupBlock: React.FC<{
         }}
       >
         {group.options.map((r) => (
-          <DeployedRewardTile key={r.id} reward={r} locked={locked} />
+          <DeployedRewardTile
+            key={r.id}
+            reward={r}
+            locked={locked}
+            seasonId={seasonId}
+            userId={userId}
+            tierNumber={tierNumber}
+            playerTier={playerTier}
+            claimedRewardIds={claimedRewardIds}
+            choiceGroupId={group.id}
+            choiceGroupPickCount={pick}
+            onClaimed={onRewardClaimed}
+          />
         ))}
       </div>
     </div>
   );
 };
 
-const DeployedRewardTile: React.FC<{ reward: BattlePassReward; locked: boolean }> = ({ reward, locked }) => {
+const DeployedRewardTile: React.FC<{
+  reward: BattlePassReward;
+  locked: boolean;
+  seasonId?: string;
+  userId?: string;
+  tierNumber?: number;
+  playerTier?: number;
+  claimedRewardIds?: readonly string[];
+  choiceGroupId?: string;
+  /** From choice group `pickCount` — limits how many options can be claimed. */
+  choiceGroupPickCount?: number;
+  onClaimed?: () => void;
+}> = ({
+  reward,
+  locked,
+  seasonId,
+  userId,
+  tierNumber,
+  playerTier,
+  claimedRewardIds,
+  choiceGroupId,
+  choiceGroupPickCount,
+  onClaimed,
+}) => {
   const acc = rarityAccent(reward.rarity);
   const qty = reward.quantity != null && !Number.isNaN(Number(reward.quantity)) ? Number(reward.quantity) : null;
   const [resolvedArtifactImage, setResolvedArtifactImage] = useState<string | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  /** True right after a successful claim so the control shows Claimed before parent `load()` finishes. */
+  const [locallyClaimed, setLocallyClaimed] = useState(false);
+
+  const claimKey = useMemo(() => {
+    if (!seasonId || tierNumber == null || !reward.id) return '';
+    return choiceGroupId
+      ? deployedBattlePassChoiceClaimKey(seasonId, tierNumber, choiceGroupId, reward.id)
+      : deployedBattlePassFlatClaimKey(seasonId, tierNumber, reward.id);
+  }, [seasonId, tierNumber, reward.id, choiceGroupId]);
+
+  const idsList = claimedRewardIds ?? [];
+  const claimed = claimKey ? idsList.includes(claimKey) : false;
+  const isRewardClaimed = claimed || locallyClaimed;
+
+  useEffect(() => {
+    setLocallyClaimed(false);
+  }, [claimKey]);
+
+  useEffect(() => {
+    if (claimed) setLocallyClaimed(false);
+  }, [claimed]);
+
+  const picksUsed =
+    choiceGroupId && seasonId != null && tierNumber != null && (choiceGroupPickCount ?? 0) > 0
+      ? countDeployedBattlePassClaimsInChoiceGroup(idsList, seasonId, tierNumber, choiceGroupId)
+      : 0;
+  const choiceGroupFull =
+    !!choiceGroupId &&
+    (choiceGroupPickCount ?? 0) > 0 &&
+    picksUsed >= (choiceGroupPickCount as number);
+
+  const showClaimUi =
+    !!seasonId &&
+    !!userId &&
+    tierNumber != null &&
+    playerTier != null &&
+    claimedRewardIds != null &&
+    !!claimKey;
+
+  const canClaim = !locked && showClaimUi && !isRewardClaimed && !(choiceGroupId && choiceGroupFull);
 
   useEffect(() => {
     if (reward.iconUrl?.trim()) {
@@ -141,6 +229,36 @@ const DeployedRewardTile: React.FC<{ reward: BattlePassReward; locked: boolean }
   }, [reward.iconUrl, reward.rewardRefId, reward.rewardType]);
 
   const imageSrc = reward.iconUrl?.trim() || resolvedArtifactImage || '';
+
+  const handleClaim = async () => {
+    if (!userId || !seasonId || tierNumber == null || playerTier == null || !claimKey) return;
+    setClaiming(true);
+    try {
+      const res = await claimDeployedBattlePassReward({
+        userId,
+        seasonId,
+        tierNumber,
+        playerTier,
+        reward,
+        claimId: claimKey,
+        claimedRewardIds: [...idsList],
+        ...(choiceGroupId
+          ? { choiceGroupId, choiceGroupPickCount: choiceGroupPickCount ?? 1 }
+          : {}),
+      });
+      if (!res.ok) {
+        alert(res.error);
+        return;
+      }
+      setLocallyClaimed(true);
+      onClaimed?.();
+    } catch (e) {
+      console.error(e);
+      alert('Could not claim reward. Please try again.');
+    } finally {
+      setClaiming(false);
+    }
+  };
 
   return (
     <div
@@ -225,6 +343,46 @@ const DeployedRewardTile: React.FC<{ reward: BattlePassReward; locked: boolean }
       </div>
       {locked ? (
         <div style={{ marginTop: 6, fontSize: '0.65rem', color: '#64748b', fontWeight: 700 }}>Locked</div>
+      ) : isRewardClaimed ? (
+        <button
+          type="button"
+          disabled
+          aria-disabled="true"
+          style={{
+            marginTop: 8,
+            padding: '6px 14px',
+            borderRadius: 8,
+            border: '1px solid rgba(148, 163, 184, 0.45)',
+            cursor: 'not-allowed',
+            fontWeight: 800,
+            fontSize: '0.72rem',
+            background: 'rgba(51, 65, 85, 0.65)',
+            color: '#94a3b8',
+            opacity: 1,
+          }}
+        >
+          Claimed
+        </button>
+      ) : canClaim ? (
+        <button
+          type="button"
+          onClick={() => void handleClaim()}
+          disabled={claiming}
+          style={{
+            marginTop: 8,
+            padding: '6px 14px',
+            borderRadius: 8,
+            border: 'none',
+            cursor: claiming ? 'wait' : 'pointer',
+            fontWeight: 800,
+            fontSize: '0.72rem',
+            background: 'linear-gradient(180deg, #22c55e 0%, #16a34a 100%)',
+            color: '#fff',
+            boxShadow: '0 2px 8px rgba(34,197,94,0.35)',
+          }}
+        >
+          {claiming ? 'Claiming…' : 'Claim'}
+        </button>
       ) : (
         <div style={{ marginTop: 6, fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>Unlocked</div>
       )}
@@ -236,12 +394,25 @@ export interface DeployedBattlePassTierTrackProps {
   tiers: BattlePassTier[];
   /** Highest tier number the player has reached (from XP thresholds). */
   playerTier: number;
+  /** Active season document id — required for claim keys and UI. */
+  seasonId?: string;
+  userId?: string;
+  /** From `students.season1.battlePass.claimedRewardIds`. */
+  claimedRewardIds?: readonly string[];
+  onRewardClaimed?: () => void;
 }
 
 /**
- * Visual tier list for Firestore-defined battle passes (mirrors Season 0 card density; no claim actions yet).
+ * Visual tier list for Firestore-defined battle passes (mirrors Season 0 card density) with per-reward Claim.
  */
-const DeployedBattlePassTierTrack: React.FC<DeployedBattlePassTierTrackProps> = ({ tiers, playerTier }) => {
+const DeployedBattlePassTierTrack: React.FC<DeployedBattlePassTierTrackProps> = ({
+  tiers,
+  playerTier,
+  seasonId,
+  userId,
+  claimedRewardIds = [],
+  onRewardClaimed,
+}) => {
   const sorted = sortBattlePassTiers(tiers);
 
   return (
@@ -333,9 +504,29 @@ const DeployedBattlePassTierTrack: React.FC<DeployedBattlePassTierTrackProps> = 
                 >
                   {t.rewards.map((entry) =>
                     isBattlePassChoiceGroup(entry) ? (
-                      <DeployedChoiceGroupBlock key={entry.id} group={entry} locked={!isUnlocked} />
+                      <DeployedChoiceGroupBlock
+                        key={entry.id}
+                        group={entry}
+                        locked={!isUnlocked}
+                        seasonId={seasonId}
+                        userId={userId}
+                        tierNumber={t.tierNumber}
+                        playerTier={playerTier}
+                        claimedRewardIds={claimedRewardIds}
+                        onRewardClaimed={onRewardClaimed}
+                      />
                     ) : (
-                      <DeployedRewardTile key={entry.id} reward={entry} locked={!isUnlocked} />
+                      <DeployedRewardTile
+                        key={entry.id}
+                        reward={entry}
+                        locked={!isUnlocked}
+                        seasonId={seasonId}
+                        userId={userId}
+                        tierNumber={t.tierNumber}
+                        playerTier={playerTier}
+                        claimedRewardIds={claimedRewardIds}
+                        onClaimed={onRewardClaimed}
+                      />
                     )
                   )}
                 </div>

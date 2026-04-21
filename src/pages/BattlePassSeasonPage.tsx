@@ -31,6 +31,7 @@ const BattlePassSeasonPage: React.FC = () => {
   const [maxTier, setMaxTier] = useState(0);
   const [bpXp, setBpXp] = useState(0);
   const [introSeenForSeason, setIntroSeenForSeason] = useState(true);
+  const [claimedRewardIds, setClaimedRewardIds] = useState<string[]>([]);
   const introAutoOpenedRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -42,6 +43,7 @@ const BattlePassSeasonPage: React.FC = () => {
         setTier(0);
         setMaxTier(0);
         setBpXp(0);
+        setClaimedRewardIds([]);
         setIntroSeenForSeason(true);
         return;
       }
@@ -57,6 +59,11 @@ const BattlePassSeasonPage: React.FC = () => {
       setMaxTier(disp.maxTier);
       setBpXp(disp.battlePassXP);
       const s1 = mergeSeason1FromStudentData(data?.season1 as Record<string, unknown> | undefined);
+      setClaimedRewardIds(
+        Array.isArray(s1.battlePass.claimedRewardIds)
+          ? s1.battlePass.claimedRewardIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
+          : []
+      );
       const sid = active.id?.trim();
       setIntroSeenForSeason(
         !!(sid && (s1.battlePass.introSeenSeasonId === sid || isBattlePassIntroDismissedLocally(currentUser.uid, sid)))
@@ -123,7 +130,7 @@ const BattlePassSeasonPage: React.FC = () => {
         ← Home
       </button>
 
-      {loading ? (
+      {loading && !season ? (
         <p style={{ opacity: 0.85 }}>Loading battle pass…</p>
       ) : season ? (
         <>
@@ -180,10 +187,17 @@ const BattlePassSeasonPage: React.FC = () => {
           </div>
           <h2 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Tiers &amp; rewards</h2>
           <p style={{ fontSize: '0.82rem', opacity: 0.78, maxWidth: 720, marginBottom: '1rem', lineHeight: 1.45 }}>
-            Same card style as Season 0 — icons, rarity, and names from your admin config. Claim buttons for this track will
-            arrive in a later update; use Season 0 below for claims today.
+            Same card style as Season 0 — icons, rarity, and names from your admin config. Claim each reward once you have
+            unlocked its tier. Choice groups let you pick one option per tier group.
           </p>
-          <DeployedBattlePassTierTrack tiers={season.tiers} playerTier={tier} />
+          <DeployedBattlePassTierTrack
+            tiers={season.tiers}
+            playerTier={tier}
+            seasonId={season.id}
+            userId={currentUser?.uid}
+            claimedRewardIds={claimedRewardIds}
+            onRewardClaimed={() => void load()}
+          />
           <BattlePassIntroExperienceModal
             open={introOpen}
             onClose={() => void closeSeasonIntro()}

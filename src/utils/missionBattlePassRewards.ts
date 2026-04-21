@@ -270,21 +270,25 @@ export async function grantPackedBattlePassMissionRewards(
   claimId: string,
   rewards: BattlePassReward[],
   challengeTitle?: string
-): Promise<{ xpGranted: number; grantOk: boolean }> {
+): Promise<{ xpGranted: number; grantOk: boolean; alreadyClaimed: boolean }> {
   if (rewards.length === 0) {
-    return { xpGranted: 0, grantOk: true };
+    return { xpGranted: 0, grantOk: true, alreadyClaimed: false };
   }
   const { challengeRewards, extras } = battlePassRewardsToChallengeAndExtras(rewards);
   let xpGranted = 0;
   let grantOk = true;
+  let alreadyClaimed = false;
 
   if (challengeRewards.length > 0) {
     const res = await grantChallengeRewards(userId, claimId, challengeRewards, challengeTitle);
     if (!res.success && !res.alreadyClaimed) {
       grantOk = false;
       console.error('[grantPackedBattlePassMissionRewards] grantChallengeRewards failed:', res.error);
-    } else if (res.success && !res.alreadyClaimed) {
-      xpGranted = res.rewardsGranted.xp || 0;
+    } else {
+      if (res.alreadyClaimed) alreadyClaimed = true;
+      if (res.success && !res.alreadyClaimed) {
+        xpGranted = res.rewardsGranted.xp || 0;
+      }
     }
   }
 
@@ -296,5 +300,5 @@ export async function grantPackedBattlePassMissionRewards(
     });
   }
 
-  return { xpGranted, grantOk };
+  return { xpGranted, grantOk, alreadyClaimed };
 }
