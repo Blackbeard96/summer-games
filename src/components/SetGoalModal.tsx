@@ -23,9 +23,6 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   const isHabits = assessment.type === 'habits';
   const isStoryGoal = assessment.type === 'story-goal';
   
-  // Debug logging
-  console.log('[SetGoalModal] Assessment type:', assessment.type, 'isHabits:', isHabits, 'isStoryGoal:', isStoryGoal);
-  
   // For regular assessments (numeric goals)
   const [goalScore, setGoalScore] = useState<string>(
     existingGoal ? (existingGoal.goalScore?.toString() || '') : ''
@@ -240,7 +237,10 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          padding: 'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
+          overflowY: 'auto',
+          boxSizing: 'border-box',
         }}
         onClick={handleClosePreview}
       >
@@ -250,8 +250,12 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             borderRadius: '0.5rem',
             padding: '2rem',
             maxWidth: '500px',
-            width: '90%',
-            boxShadow: '0 10px 25px rgba(0,0,0,0.2)'
+            width: 'min(500px, 100%)',
+            maxHeight: 'min(92vh, calc(100vh - 48px))',
+            overflowY: 'auto',
+            margin: 'auto',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
+            flexShrink: 0,
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -387,7 +391,10 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 1000
+        zIndex: 1000,
+        padding: 'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
+        overflowY: 'auto',
+        boxSizing: 'border-box',
       }}
       onClick={onClose}
     >
@@ -397,8 +404,12 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           borderRadius: '0.5rem',
           padding: '2rem',
           maxWidth: '500px',
-          width: '90%',
-          boxShadow: '0 10px 25px rgba(0,0,0,0.2)'
+          width: 'min(500px, 100%)',
+          maxHeight: 'min(92vh, calc(100vh - 48px))',
+          overflowY: 'auto',
+          margin: 'auto',
+          boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
+          flexShrink: 0,
         }}
         onClick={(e) => e.stopPropagation()}
       >
