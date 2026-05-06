@@ -172,6 +172,10 @@ const BagModal: React.FC<BagModalProps> = ({
       await handleUseRevive(artifactName);
       return;
     }
+    if (liveSessionId && selfEliminated) {
+      alert('While eliminated, only a Revive Potion can be used from your bag.');
+      return;
+    }
     if (
       !window.confirm(`Use ${artifactName}? This will count as your move and end your turn.`)
     ) {
@@ -360,6 +364,7 @@ const BagModal: React.FC<BagModalProps> = ({
                       onClick={() => handleUseArtifact(artifactName)}
                       disabled={
                         loading ||
+                        (selfEliminated && !isRevive) ||
                         (isRevive && reviveBlocked) ||
                         (isRevive && !selfEliminated && eliminatedOthers.length > 1 && !reviveTargetUid)
                       }

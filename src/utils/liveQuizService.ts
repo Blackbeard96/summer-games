@@ -73,6 +73,24 @@ function roomRef(sessionId: string) {
   return doc(db, 'inSessionRooms', sessionId);
 }
 
+function buildRankByScore(leaderboard: Record<string, number>): Record<string, number> {
+  const sorted = Object.entries(leaderboard)
+    .map(([uid, score]) => ({ uid, score: Number(score) || 0 }))
+    .sort((a, b) => b.score - a.score || a.uid.localeCompare(b.uid));
+  const rankByUid: Record<string, number> = {};
+  let lastScore: number | null = null;
+  let currentRank = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const row = sorted[i];
+    if (lastScore === null || row.score !== lastScore) {
+      currentRank = i + 1;
+      lastScore = row.score;
+    }
+    rankByUid[row.uid] = currentRank;
+  }
+  return rankByUid;
+}
+
 export const DEFAULT_BATTLE_ROYALE_HOST_CONFIG: BattleRoyaleHostConfig = {
   finalSurvivorsTarget: 1,
   shuffleAnswers: true,
@@ -281,16 +299,41 @@ function isLegacyConfig(config: LiveQuizRewardConfig | LegacyRewardConfig | unde
 /** Grant PP/XP/artifacts to players based on final leaderboard and session rewardConfig. Called when quiz completes. */
 export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted: number; error?: string }> {
   try {
+    const lock = await runTransaction(db, async (tx) => {
+      const ref = sessionRef(sessionId);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return { ok: false as const, reason: 'missing' as const };
+      const data = snap.data() as Record<string, unknown>;
+      if (data.rewardsGrantedAt) return { ok: false as const, reason: 'already_granted' as const };
+      tx.update(ref, {
+        rewardsGrantingAt: serverTimestamp(),
+        rewardsGrantingVersion: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+      return { ok: true as const };
+    });
+    if (!lock.ok) {
+      return { granted: 0 };
+    }
+
     const snap = await getDoc(sessionRef(sessionId));
     if (!snap.exists()) return { granted: 0 };
     const session = snap.data() as LiveQuizSession;
     const config = session.rewardConfig as LiveQuizRewardConfig | LegacyRewardConfig | undefined;
-    if (!config) return { granted: 0 };
+    if (!config) {
+      await updateDoc(sessionRef(sessionId), {
+        rewardsGrantedAt: serverTimestamp(),
+        rewardsGrantedCount: 0,
+        updatedAt: serverTimestamp(),
+      });
+      return { granted: 0 };
+    }
 
     const leaderboard = session.leaderboard ?? {};
     const sorted = Object.entries(leaderboard)
       .map(([uid, score]) => ({ uid, score }))
       .sort((a, b) => b.score - a.score);
+    const rankByUid = buildRankByScore(leaderboard);
 
     let grantedCount = 0;
 
@@ -303,7 +346,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       if (config.whoReceives.top5) for (let i = 1; i <= 5; i++) rewardRanks.add(i);
       if (config.whoReceives.top10) for (let i = 1; i <= 10; i++) rewardRanks.add(i);
       for (let i = 0; i < sorted.length; i++) {
-        const rank = i + 1;
+        const rank = rankByUid[sorted[i].uid] || i + 1;
         if (!rewardRanks.has(rank)) continue;
         const { uid } = sorted[i];
         const studentRef = doc(db, 'students', uid);
@@ -350,6 +393,11 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         }
         if (didGrant) grantedCount++;
       }
+      await updateDoc(sessionRef(sessionId), {
+        rewardsGrantedAt: serverTimestamp(),
+        rewardsGrantedCount: grantedCount,
+        updatedAt: serverTimestamp(),
+      });
       log('Live quiz rewards granted (legacy)', { sessionId, grantedCount });
       return { granted: grantedCount };
     }
@@ -358,7 +406,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
     const placements = (config as LiveQuizRewardConfig).placements;
 
     for (let i = 0; i < sorted.length; i++) {
-      const rank = i + 1;
+      const rank = rankByUid[sorted[i].uid] || i + 1;
       const reward = getPlacementRewardForRank(placements, rank);
       if (!reward) continue;
       const { uid } = sorted[i];
@@ -433,7 +481,12 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       }
       if (didGrant) grantedCount++;
     }
-    log('Live quiz rewards granted', { sessionId, grantedCount });
+    await updateDoc(sessionRef(sessionId), {
+      rewardsGrantedAt: serverTimestamp(),
+      rewardsGrantedCount: grantedCount,
+      updatedAt: serverTimestamp(),
+    });
+    log('Live quiz rewards granted', { sessionId, grantedCount, rankByUid });
     return { granted: grantedCount };
   } catch (e) {
     log('grantLiveQuizRewards error', e);
@@ -463,7 +516,7 @@ export async function launchFirstQuestion(sessionId: string, hostUid: string): P
       questionEndsAt: endsAt,
       updatedAt: serverTimestamp(),
     });
-    log('First question launched', { sessionId, questionId });
+    log('question served', { sessionId, questionId, round: 1 });
     return { ok: true };
   });
 }
@@ -601,12 +654,14 @@ export async function advanceQuiz(
     const nextIndex = session.questionIndex + 1;
     const orderLen = session.questionOrder.length;
     let nextQuestionIndex: number;
+    let nextQuestionOrder = session.questionOrder;
 
     if (nextIndex >= orderLen) {
       const repeat =
         (mode === 'battle_royale' && session.battleRoyaleConfig?.autoRepeatQuestions) ||
         (mode === 'team_battle_royale' && session.teamBattleRoyaleConfig?.autoRepeatQuestions);
       if (repeat) {
+        nextQuestionOrder = shuffleUids(session.questionOrder);
         nextQuestionIndex = 0;
       } else {
         tx.update(sessionRef(sessionId), {
@@ -625,7 +680,7 @@ export async function advanceQuiz(
       nextQuestionIndex = nextIndex;
     }
 
-    const nextQuestionId = session.questionOrder[nextQuestionIndex];
+    const nextQuestionId = nextQuestionOrder[nextQuestionIndex];
     const now = Date.now();
     const endsAt = now + session.timeLimitSeconds * 1000;
     const nextRound = activeRound + 1;
@@ -634,12 +689,19 @@ export async function advanceQuiz(
       ...baseUpdate,
       status: 'question_live',
       questionIndex: nextQuestionIndex,
+      questionOrder: nextQuestionOrder,
       currentQuestionId: nextQuestionId,
       quizRoundIndex: nextRound,
       questionStartedAt: now,
       questionEndsAt: endsAt,
     });
-    log('Advanced to question', { sessionId, nextQuestionIndex, nextQuestionId, nextRound });
+    log('question served', {
+      sessionId,
+      nextQuestionIndex,
+      nextQuestionId,
+      nextRound,
+      recycledQuestionBank: nextIndex >= orderLen,
+    });
     return { ok: true, completed: false };
   });
 }
@@ -677,9 +739,18 @@ export async function submitQuizResponse(
   uid: string,
   questionId: string,
   selectedIndices: number[],
-  correctIndices: number[],
   quizRoundIndexFromClient: number
 ): Promise<{ ok: boolean; error?: string; pointsAwarded?: number; isCorrect?: boolean }> {
+  const preSnap = await getDoc(sessionRef(sessionId));
+  if (!preSnap.exists()) return { ok: false, error: 'No quiz session' };
+  const preSession = preSnap.data() as LiveQuizSession;
+  const quizQuestions = await getQuestions(preSession.quizId);
+  const canonicalQuestion = quizQuestions.find((q) => q.id === questionId);
+  if (!canonicalQuestion) return { ok: false, error: 'Question not found' };
+  const authoritativeCorrectIndices = canonicalQuestion.correctIndices ?? (
+    canonicalQuestion.correctIndex !== undefined ? [canonicalQuestion.correctIndex] : []
+  );
+
   return runTransaction(db, async (tx): Promise<SubmitQuizTxResult> => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
     const roomSnap = await tx.get(roomRef(sessionId));
@@ -717,11 +788,11 @@ export async function submitQuizResponse(
       }
     }
 
-    const correctSet = new Set(correctIndices);
+    const correctSet = new Set(authoritativeCorrectIndices);
     const selectedSet = new Set(selectedIndices);
     const allCorrect =
-      correctIndices.length === selectedIndices.length &&
-      correctIndices.every((i) => selectedSet.has(i)) &&
+      authoritativeCorrectIndices.length === selectedIndices.length &&
+      authoritativeCorrectIndices.every((i) => selectedSet.has(i)) &&
       selectedIndices.every((i) => correctSet.has(i));
     const startedAt = session.questionStartedAt ?? now;
 
@@ -768,7 +839,16 @@ export async function submitQuizResponse(
     if (brPatch) {
       tx.update(sessionRef(sessionId), { ...brPatch, updatedAt: serverTimestamp() });
     }
-    log('Response submitted', { sessionId, uid, questionId, isCorrect: allCorrect, pointsAwarded, mode });
+    log('answer submitted', {
+      sessionId,
+      uid,
+      questionId,
+      selectedIndices,
+      authoritativeCorrectIndices,
+      isCorrect: allCorrect,
+      pointsAwarded,
+      mode,
+    });
     return { ok: true, pointsAwarded, isCorrect: allCorrect, gameMode: mode };
   }).then(async (result) => {
     if (!result.ok) return result;
@@ -913,7 +993,8 @@ export async function submitBattleRoyaleQuickAction(
   targetName: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    return await runTransaction(db, async (tx) => {
+    let eliminationAward: { eliminatorUid: string; eliminatedUid: string } | null = null;
+    const txResult = await runTransaction(db, async (tx) => {
       const qRef = sessionRef(sessionId);
       const rRef = roomRef(sessionId);
       const qSnap = await tx.get(qRef);
@@ -951,7 +1032,7 @@ export async function submitBattleRoyaleQuickAction(
       };
 
       if (actor.eliminated) return { ok: false, error: 'You are eliminated' };
-      if (target.eliminated && action !== 'heal') return { ok: false, error: 'Target eliminated' };
+      if (target.eliminated) return { ok: false, error: 'Target eliminated (use revive)' };
 
       if (action === 'heal' && mode === 'team_battle_royale' && quiz.teamBattleRoyaleConfig?.supportAlliesEnabled) {
         const map = quiz.teamBattleState?.playerTeamId || {};
@@ -1025,9 +1106,7 @@ export async function submitBattleRoyaleQuickAction(
             ? `☠️ ${targetName} eliminated by ${actorName}!`
             : `☠️ ${targetName} has been ELIMINATED!`
         );
-        Promise.resolve().then(() => {
-          trackElimination(sessionId, actorUid, targetUid).catch(() => {});
-        });
+        eliminationAward = actorUid !== targetUid ? { eliminatorUid: actorUid, eliminatedUid: targetUid } : null;
       }
 
       players[aIdx] = actor as Record<string, unknown>;
@@ -1044,8 +1123,24 @@ export async function submitBattleRoyaleQuickAction(
         updatedAt: serverTimestamp(),
       });
 
+      log('skill used', { sessionId, actorUid, actorName, action, targetUid, targetName, cost });
+      if (action === 'heal') {
+        log('item used', { sessionId, actorUid, actorName, action: 'heal_quick_action', targetUid, targetName });
+      }
       return { ok: true };
     });
+    const eliminationToAward = eliminationAward as
+      | { eliminatorUid: string; eliminatedUid: string }
+      | null;
+    if (txResult.ok && eliminationToAward) {
+      await trackElimination(sessionId, eliminationToAward.eliminatorUid, eliminationToAward.eliminatedUid);
+      log('elimination awarded', {
+        sessionId,
+        eliminatorUid: eliminationToAward.eliminatorUid,
+        eliminatedUid: eliminationToAward.eliminatedUid,
+      });
+    }
+    return txResult;
   } catch (e) {
     log('submitBattleRoyaleQuickAction error', e);
     return { ok: false, error: String(e) };

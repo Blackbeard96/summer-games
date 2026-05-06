@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import {
   collection,
   doc,
@@ -142,6 +142,10 @@ const ClassroomManagement: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showUniversalEventModal, setShowUniversalEventModal] = useState(false);
+  const [universalSelectedClassIds, setUniversalSelectedClassIds] = useState<string[]>([]);
+  const [universalInviteAllClasses, setUniversalInviteAllClasses] = useState(false);
+  const [isLaunchingUniversalEvent, setIsLaunchingUniversalEvent] = useState(false);
   const [showAddStudentsModal, setShowAddStudentsModal] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [newClassroom, setNewClassroom] = useState({ name: '', description: '', maxStudents: 30 });
@@ -449,6 +453,80 @@ const ClassroomManagement: React.FC = () => {
     } catch (error) {
       console.error('Error creating classroom:', error);
       alert('Failed to create classroom. Please try again.');
+    }
+  };
+
+  const openUniversalEventModal = () => {
+    setUniversalSelectedClassIds([]);
+    setUniversalInviteAllClasses(false);
+    setShowUniversalEventModal(true);
+  };
+
+  const launchUniversalEvent = async () => {
+    if (!currentUser || !isAdmin || isLaunchingUniversalEvent) return;
+    const authUid = auth.currentUser?.uid || currentUser.uid;
+    const authDisplayName = auth.currentUser?.displayName || currentUser.displayName;
+
+    const selectedClassIds = universalInviteAllClasses
+      ? classrooms.map((c) => c.id)
+      : universalSelectedClassIds;
+    const dedupedClassIds = Array.from(new Set(selectedClassIds));
+
+    if (dedupedClassIds.length === 0) {
+      alert('Select at least one class, or enable Invite All Classes.');
+      return;
+    }
+
+    setIsLaunchingUniversalEvent(true);
+    try {
+      const selectedClassrooms = classrooms.filter((c) => dedupedClassIds.includes(c.id));
+      const selectedClassNameList = selectedClassrooms.map((c) => c.name);
+      const withStudentsCount = selectedClassrooms.filter((c) => (c.students || []).length > 0).length;
+
+      const roomData = {
+        classId: null,
+        classIds: dedupedClassIds,
+        inviteAllClasses: universalInviteAllClasses,
+        eventType: 'universal_event' as const,
+        className: universalInviteAllClasses
+          ? 'Universal Event (All Classes)'
+          : `Universal Event (${dedupedClassIds.length} classes)`,
+        teacherId: authUid,
+        hostUid: authUid,
+        status: 'live' as const,
+        mode: 'in_session' as const,
+        players: [
+          {
+            userId: currentUser.uid,
+            displayName: authDisplayName || 'Host',
+            classId: null,
+            photoURL: currentUser.photoURL,
+            level: 1,
+            powerPoints: 0,
+            participationCount: 0,
+            movesEarned: 0,
+            isTeacher: true,
+          },
+        ],
+        battleLog: [
+          '🎉 Universal Live Event is now active! Join the battle in the arena.',
+          universalInviteAllClasses
+            ? '🌍 Invite scope: All classes'
+            : `🏫 Invite scope: ${selectedClassNameList.join(', ')}`,
+          `👥 Classes selected: ${dedupedClassIds.length} (${withStudentsCount} with enrolled students)`,
+        ],
+        createdAt: serverTimestamp(),
+        startedAt: serverTimestamp(),
+      };
+
+      const roomRef = await addDoc(collection(db, 'inSessionRooms'), roomData);
+      setShowUniversalEventModal(false);
+      navigate(`/live-events/${roomRef.id}`);
+    } catch (error) {
+      console.error('Error launching universal event:', error);
+      alert('Failed to launch Universal Event. Please try again.');
+    } finally {
+      setIsLaunchingUniversalEvent(false);
     }
   };
 
@@ -1148,6 +1226,29 @@ const ClassroomManagement: React.FC = () => {
         >
           ➕ Create Classroom
         </button>
+        <button
+          onClick={openUniversalEventModal}
+          disabled={!isAdmin}
+          style={{
+            background: isAdmin
+              ? 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)'
+              : 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: isAdmin ? 'pointer' : 'not-allowed',
+            fontSize: '0.875rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            opacity: isAdmin ? 1 : 0.6
+          }}
+          title={isAdmin ? 'Launch one Universal Event for multiple classes' : 'Only administrators can launch Universal Events'}
+        >
+          🌍 Launch Universal Event
+        </button>
       </div>
 
       {/* Classrooms Grid */}
@@ -1175,14 +1276,17 @@ const ClassroomManagement: React.FC = () => {
                 <button
                   onClick={async () => {
                     if (!currentUser) return;
+                    const authUid = auth.currentUser?.uid || currentUser.uid;
+                    const authEmail = auth.currentUser?.email || currentUser.email || undefined;
+                    const authDisplayName = auth.currentUser?.displayName || currentUser.displayName || undefined;
                     
                     // Check if user can host (admin or Yondaime)
                       const { canHostSession, isGlobalHost } = await import('../utils/inSessionService');
                       const canHost = await canHostSession(
-                        currentUser.uid, 
+                        authUid, 
                         classroom.id,
-                        currentUser.email || undefined,
-                        currentUser.displayName || undefined
+                        authEmail,
+                        authDisplayName
                       );
                     
                     if (!canHost) {
@@ -1206,7 +1310,7 @@ const ClassroomManagement: React.FC = () => {
                       const sessionId = await createSession(
                         classroom.id,
                         classroom.name,
-                        currentUser.uid
+                        authUid
                       );
                       
                       if (sessionId) {
@@ -1427,6 +1531,153 @@ const ClassroomManagement: React.FC = () => {
           <p style={{ fontSize: '1rem' }}>
             Create your first classroom to start organizing students.
           </p>
+        </div>
+      )}
+
+      {/* Universal Event Launch Modal */}
+      {showUniversalEventModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1200,
+          padding: '1rem'
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            maxWidth: '680px',
+            width: '100%',
+            maxHeight: '85vh',
+            overflow: 'auto',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)'
+          }}>
+            <h3 style={{ fontSize: '1.35rem', fontWeight: 'bold', margin: '0 0 0.5rem 0', color: '#111827' }}>
+              🌍 Launch Universal Event
+            </h3>
+            <p style={{ color: '#6b7280', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>
+              Select the classes to invite to one shared Live Event. Students in invited classes will see and join it.
+            </p>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', fontWeight: 600 }}>
+              <input
+                type="checkbox"
+                checked={universalInviteAllClasses}
+                onChange={(e) => setUniversalInviteAllClasses(e.target.checked)}
+              />
+              Invite All Classes
+            </label>
+
+            {!universalInviteAllClasses && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <div style={{ fontSize: '0.85rem', color: '#475569', fontWeight: 600 }}>
+                    Select classes ({universalSelectedClassIds.length} selected)
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUniversalSelectedClassIds(classrooms.map((c) => c.id))}
+                    style={{
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '0.4rem',
+                      background: '#f8fafc',
+                      color: '#334155',
+                      padding: '0.3rem 0.6rem',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Select all listed
+                  </button>
+                </div>
+                <div style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '0.5rem',
+                  maxHeight: '280px',
+                  overflowY: 'auto',
+                  padding: '0.75rem'
+                }}>
+                  {classrooms.length === 0 ? (
+                    <div style={{ color: '#9ca3af', fontSize: '0.875rem' }}>No classrooms available.</div>
+                  ) : (
+                    classrooms.map((classroom) => {
+                      const checked = universalSelectedClassIds.includes(classroom.id);
+                      return (
+                        <label
+                          key={classroom.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.65rem',
+                            padding: '0.45rem 0.25rem',
+                            borderBottom: '1px solid #f1f5f9'
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setUniversalSelectedClassIds((prev) => Array.from(new Set([...prev, classroom.id])));
+                              } else {
+                                setUniversalSelectedClassIds((prev) => prev.filter((id) => id !== classroom.id));
+                              }
+                            }}
+                          />
+                          <span style={{ fontWeight: 600, color: '#0f172a' }}>{classroom.name}</span>
+                          <span style={{ color: '#64748b', fontSize: '0.8rem' }}>
+                            ({classroom.students.length} students)
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                onClick={() => setShowUniversalEventModal(false)}
+                disabled={isLaunchingUniversalEvent}
+                style={{
+                  backgroundColor: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  padding: '0.7rem 1.2rem',
+                  fontWeight: 600,
+                  cursor: isLaunchingUniversalEvent ? 'not-allowed' : 'pointer',
+                  opacity: isLaunchingUniversalEvent ? 0.6 : 1
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={launchUniversalEvent}
+                disabled={isLaunchingUniversalEvent}
+                style={{
+                  background: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  padding: '0.7rem 1.2rem',
+                  fontWeight: 700,
+                  cursor: isLaunchingUniversalEvent ? 'not-allowed' : 'pointer',
+                  opacity: isLaunchingUniversalEvent ? 0.6 : 1
+                }}
+              >
+                {isLaunchingUniversalEvent ? 'Launching...' : 'Launch Universal Event'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

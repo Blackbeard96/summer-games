@@ -12,7 +12,14 @@ import {
   type SessionPlayerMutable,
 } from './consumableEffectResolver';
 import { syncLiveEventPlayerVault } from './liveEventMktService';
-import { debugError } from './inSessionDebug';
+import { debug, debugError } from './inSessionDebug';
+import { updateChallengeProgressByType } from './dailyChallengeTracker';
+
+function finiteNumber(v: unknown): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  const n = typeof v === 'string' ? parseFloat(v) : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 function sessionIsActive(status: unknown): boolean {
   return status === 'live' || status === 'active';
@@ -85,10 +92,12 @@ export async function applyLiveEventBagConsumable(
       const sessionRef = doc(db, 'inSessionRooms', sessionId);
       const studentRef = doc(db, 'students', userId);
       const usersRef = doc(db, 'users', userId);
+      const vaultRef = doc(db, 'vaults', userId);
 
       const sessionSnap = await transaction.get(sessionRef);
       const studentSnap = await transaction.get(studentRef);
       const usersSnap = await transaction.get(usersRef);
+      const vaultSnap = await transaction.get(vaultRef);
 
       if (!sessionSnap.exists()) throw new Error('Session not found');
       if (!studentSnap.exists()) throw new Error('Student profile not found');
@@ -107,6 +116,32 @@ export async function applyLiveEventBagConsumable(
       const row = { ...players[pIdx] } as unknown as SessionPlayerMutable;
       if (row.eliminated === true) {
         throw new Error('Eliminated players cannot use heal/shield items — use a Revive Potion.');
+      }
+
+      // Session rows sometimes omit `hp` / shields while the UI mirrors the vault — the resolver's
+      // `hp ?? maxHp` default yields +0 heal. Pull missing fields from `vaults/{uid}` when present.
+      if (vaultSnap.exists() && (effect.effectType === 'restore_health' || effect.effectType === 'restore_shields')) {
+        const vd = vaultSnap.data() as Record<string, unknown>;
+        if (effect.effectType === 'restore_health') {
+          if (finiteNumber(row.hp) === undefined) {
+            const vh = finiteNumber(vd.vaultHealth);
+            if (vh !== undefined) row.hp = vh;
+          }
+          if (finiteNumber(row.maxHp) === undefined) {
+            const vmh = finiteNumber(vd.maxVaultHealth);
+            if (vmh !== undefined) row.maxHp = vmh;
+          }
+        }
+        if (effect.effectType === 'restore_shields') {
+          if (finiteNumber(row.shield) === undefined) {
+            const vs = finiteNumber(vd.shieldStrength);
+            if (vs !== undefined) row.shield = vs;
+          }
+          if (finiteNumber(row.maxShield) === undefined) {
+            const vms = finiteNumber(vd.maxShieldStrength);
+            if (vms !== undefined) row.maxShield = vms;
+          }
+        }
       }
 
       const movesAvail = Math.max(0, Math.floor(Number(row.movesEarned) || 0));
@@ -155,6 +190,19 @@ export async function applyLiveEventBagConsumable(
     });
 
     await syncLiveEventPlayerVault(userId, hpAfter, shieldAfter);
+    debug('liveEventBag', 'item used', {
+      sessionId,
+      userId,
+      displayName,
+      itemName,
+      hpAfter,
+      shieldAfter,
+    });
+    if (effect.effectType === 'restore_health') {
+      updateChallengeProgressByType(userId, 'use_health_potion', 1).catch((err) =>
+        debugError('liveEventBag', 'use_health_potion daily challenge', err)
+      );
+    }
     return { ok: true, logLine: logLineOut };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

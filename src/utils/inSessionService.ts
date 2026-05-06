@@ -26,6 +26,8 @@ import { recordLiveEventParticipationForPlayer } from './weeklyGoalsService';
 export interface SessionPlayer {
   userId: string;
   displayName: string;
+  /** Player classroom for Universal Event reporting/aggregation. */
+  classId?: string | null;
   photoURL?: string;
   level: number;
   /** Total Power Level (PL) from profile / artifacts — optional for older session rows */
@@ -52,7 +54,10 @@ export interface SessionPlayer {
 
 export interface InSessionRoom {
   id: string;
-  classId: string;
+  classId: string | null;
+  classIds?: string[];
+  inviteAllClasses?: boolean;
+  eventType?: 'live_event' | 'universal_event';
   className: string;
   teacherId: string;
   hostUid: string; // UID of the host (admin who started session)

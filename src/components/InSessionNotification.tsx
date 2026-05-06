@@ -12,7 +12,10 @@ import {
 
 interface InSessionRoom {
   id: string;
-  classId: string;
+  classId: string | null;
+  classIds?: string[];
+  inviteAllClasses?: boolean;
+  eventType?: 'live_event' | 'universal_event';
   className: string;
   hostUid?: string;
   status: 'open' | 'active' | 'closed' | 'live' | 'ended';
@@ -403,6 +406,7 @@ const InSessionNotification: React.FC = () => {
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
+        classId: studentData.classId || studentData.class || null,
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerLevel,

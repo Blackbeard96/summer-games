@@ -246,20 +246,28 @@ export async function toggleClassFlowSprintMark(
       const snap = await tx.get(ref);
       if (!snap.exists()) throw new Error('Session not found');
       const hostUid = snap.data()?.hostUid;
-      if (!canActAsRoomHost(hostUid, actingUid, actingEmail, actingDisplayName)) {
-        throw new Error('Only the session host can mark completions');
-      }
+      const actingIsHost = canActAsRoomHost(hostUid, actingUid, actingEmail, actingDisplayName);
+      const actingSelf = actingUid === playerUid;
       const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
       if (!sprint) throw new Error('No sprint');
       if (sprint.status !== 'live' && sprint.status !== 'closed') {
         throw new Error('Sprint is not open for marking');
       }
+      if (!actingIsHost) {
+        if (!actingSelf) {
+          throw new Error('You can only check in yourself');
+        }
+        if (sprint.status !== 'live') {
+          throw new Error('Check-in is only allowed while the sprint window is live');
+        }
+      }
 
       const set = new Set(sprint.markedCompleteUids || []);
       const wasIn = set.has(playerUid);
-      if (wasIn) {
+      // Host can toggle marks; players can only self-check in (no uncheck).
+      if (wasIn && actingIsHost) {
         set.delete(playerUid);
-      } else {
+      } else if (!wasIn) {
         set.add(playerUid);
         addedMark = true;
       }
@@ -387,11 +395,14 @@ export async function grantSprintRewardForSinglePlayer(
     const ref = roomRef(sessionId);
     const snap = await getDoc(ref);
     if (!snap.exists()) return { ok: false, error: 'Session not found' };
-    if (!canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName)) {
-      return { ok: false, error: 'Only the session host can grant sprint rewards' };
-    }
     const sprint = parseClassFlowSprint(snap.data()?.classFlowSprint);
     if (!sprint) return { ok: false, error: 'No sprint data' };
+    const actingIsHost = canActAsRoomHost(snap.data()?.hostUid, actingUid, actingEmail, actingDisplayName);
+    const actingSelf = actingUid === playerUid;
+    const canSelfGrant = actingSelf && sprint.status === 'live';
+    if (!actingIsHost && !canSelfGrant) {
+      return { ok: false, error: 'Only the session host can grant sprint rewards' };
+    }
 
     const marked = new Set(sprint.markedCompleteUids || []);
     if (!marked.has(playerUid)) return { ok: false, error: 'Player is not marked complete for this sprint' };

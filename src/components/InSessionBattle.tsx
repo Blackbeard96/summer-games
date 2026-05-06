@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import {
   doc,
   getDoc,
@@ -71,6 +71,7 @@ import {
   getSessionSummary,
   claimLiveEventSessionEndPendingPp,
   claimLiveEventSessionEndPowerAndBattlePass,
+  claimLiveEventSessionEndWinChallenge,
   LIVE_EVENT_PP_PER_PARTICIPATION_POINT,
 } from '../utils/inSessionStatsService';
 import { debug, debugError, debugThrottle } from '../utils/inSessionDebug';
@@ -199,6 +200,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 }) => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const actorUid = auth.currentUser?.uid || currentUser?.uid || '';
+  const actorEmail = auth.currentUser?.email || currentUser?.email || undefined;
+  const actorDisplayName = auth.currentUser?.displayName || currentUser?.displayName || undefined;
   const { vault, refreshVaultData, moves, refreshInventory } = useBattle();
   const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
   const sessionPlayersRef = useRef<SessionPlayer[]>([]);
@@ -352,7 +356,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             else {
               summary = {
                 sessionId,
-                classId: room.classId,
+                classId: room.classId || '',
                 className: room.className,
                 startedAt: room.startedAt || room.createdAt,
                 endedAt: room.endedAt,
@@ -931,9 +935,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       }
       
       // Check if current user is the session host
-      if (currentUser) {
-        const isHost = session.hostUid === currentUser.uid || 
-                       isGlobalHost(currentUser.uid, currentUser.email || undefined, currentUser.displayName || undefined);
+      if (actorUid) {
+        const isHost = session.hostUid === actorUid ||
+                       isGlobalHost(actorUid, actorEmail, actorDisplayName);
         setIsSessionHost(isHost);
       }
       
@@ -942,6 +946,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         if (currentUser?.uid) {
           void claimLiveEventSessionEndPendingPp(sessionId, currentUser.uid);
           void claimLiveEventSessionEndPowerAndBattlePass(sessionId, currentUser.uid);
+          void claimLiveEventSessionEndWinChallenge(sessionId, currentUser.uid);
         }
         void showLiveEventSummaryIfEnded(session as { status?: string; sessionSummary?: SessionSummary });
       }
@@ -951,7 +956,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       unsubscribe();
     };
     // Intentionally omit userProfiles & students: including them re-subscribes on every profile snapshot and triggers Firestore INTERNAL ASSERTION (ca9).
-  }, [sessionId, currentUser, showLiveEventSummaryIfEnded]);
+  }, [sessionId, currentUser, actorUid, actorEmail, actorDisplayName, showLiveEventSummaryIfEnded]);
 
   useEffect(() => {
     const id = window.setInterval(() => setPassiveUiTick((n) => n + 1), 1000);
@@ -3553,11 +3558,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           )}
           <button
             onClick={async () => {
-              if (!currentUser || showSessionSummary) return;
+              if (!actorUid || showSessionSummary) return;
               try {
-                const left = await leaveSession(sessionId, currentUser.uid, currentUser.displayName || undefined);
+                const left = await leaveSession(sessionId, actorUid, actorDisplayName);
                 if (left) {
-                  debug('inSessionBattle', `User ${currentUser.uid} left session ${sessionId}`);
+                  debug('inSessionBattle', `User ${actorUid} left session ${sessionId}`);
                   navigate('/live-events');
                 } else {
                   alert('Failed to leave session. Please try again.');
@@ -3583,14 +3588,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           >
             Leave Live Event
           </button>
-          {permissionsChecked && (canEndLiveEventSession(currentUser?.email ?? null) || isSessionHost) && (
+          {permissionsChecked && (canEndLiveEventSession(actorEmail ?? null) || isSessionHost) && (
             <button
               onClick={async () => {
-                if (!currentUser || showSessionSummary) return;
+                if (!actorUid || showSessionSummary) return;
                 try {
-                  const ended = await endSession(sessionId, currentUser.uid, currentUser.email || undefined);
+                  const ended = await endSession(sessionId, actorUid, actorEmail);
                   if (ended) {
-                    debug('inSessionBattle', `Session ${sessionId} ended by ${currentUser.uid}`);
+                    debug('inSessionBattle', `Session ${sessionId} ended by ${actorUid}`);
                     const room = await getSession(sessionId);
                     await showLiveEventSummaryIfEnded(
                       room
@@ -4790,7 +4795,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             currentUser.uid,
                             quizSession.currentQuestionId!,
                             quizSelectedIndices.length ? quizSelectedIndices : [0],
-                            correctIndices,
                             quizSession.quizRoundIndex ?? 1
                           );
                           if (res.ok) {
@@ -5366,56 +5370,91 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </button>
             <button
               onClick={() => {
+                if (playerLiveEventSkillsLocked && !currentPlayer?.eliminated) {
+                  alert('The host has paused Fight. Items are locked until the host allows Fight again.');
+                  return;
+                }
+                // Eliminated players can still open the bag to use a Revive Potion on themselves.
                 if (currentPlayer?.eliminated) {
-                  alert('You have been eliminated and cannot use your bag.');
+                  setShowBagModal(true);
                   return;
                 }
                 if (currentPlayer && (currentPlayer.movesEarned || 0) > 0) {
                   setShowBagModal(true);
                 }
               }}
-              disabled={!currentPlayer || (currentPlayer.movesEarned || 0) === 0 || currentPlayer.eliminated === true}
+              disabled={
+                !currentPlayer ||
+                (playerLiveEventSkillsLocked && !currentPlayer.eliminated) ||
+                ((currentPlayer.movesEarned || 0) === 0 && !currentPlayer.eliminated)
+              }
               style={{
                 width: '100%',
-                background: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
-                  ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' 
-                  : '#9ca3af',
+                background:
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                    ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+                    : '#9ca3af',
                 color: 'white',
                 border: '3px solid #8B4513',
                 borderRadius: '0.5rem',
                 padding: '1rem',
                 fontSize: '1.125rem',
                 fontWeight: 'bold',
-                cursor: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 'pointer' : 'not-allowed',
+                cursor:
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                    ? 'pointer'
+                    : 'not-allowed',
                 transition: 'all 0.2s',
-                boxShadow: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) 
-                  ? '0 4px 12px rgba(245, 158, 11, 0.3)' 
-                  : 'none',
-                opacity: (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) ? 1 : 0.6
+                boxShadow:
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                    ? '0 4px 12px rgba(245, 158, 11, 0.3)'
+                    : 'none',
+                opacity:
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                    ? 1
+                    : 0.6
               }}
               onMouseEnter={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
+                if (
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                ) {
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.4)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (currentPlayer && (currentPlayer.movesEarned || 0) > 0 && !currentPlayer.eliminated) {
+                if (
+                  currentPlayer &&
+                  (currentPlayer.eliminated === true ||
+                    (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
+                ) {
                   e.currentTarget.style.transform = 'scale(1)';
                   e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.3)';
                 }
               }}
               title={
-                currentPlayer?.eliminated
-                  ? 'Eliminated — bag locked'
-                  : (currentPlayer && (currentPlayer.movesEarned || 0) === 0)
-                    ? 'No moves available. Earn Par. Pt. to use items!'
-                    : 'Use items from your bag'
+                playerLiveEventSkillsLocked && !currentPlayer?.eliminated
+                  ? 'Host paused Fight — bag locked'
+                  : currentPlayer?.eliminated
+                    ? 'Open your bag to use a Revive Potion on yourself (50% max HP)'
+                    : currentPlayer && (currentPlayer.movesEarned || 0) === 0
+                      ? 'No moves available. Earn Par. Pt. to use items!'
+                      : 'Use items from your bag'
               }
             >
               🎒 BAG{' '}
               {currentPlayer?.eliminated
-                ? '(Eliminated)'
+                ? '(Revive)'
                 : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button

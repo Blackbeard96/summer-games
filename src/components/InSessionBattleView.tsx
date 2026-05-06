@@ -44,80 +44,106 @@ const InSessionBattleView: React.FC = () => {
         const sessionData = sessionDoc.data();
         setSession(sessionData);
 
-        // Load all students in the class
-        const classRef = doc(db, 'classrooms', sessionData.classId);
-        const classDoc = await getDoc(classRef);
-
-        if (classDoc.exists()) {
-          const classData = classDoc.data() as {
-            students?: string[];
-            studentDisplayNames?: Record<string, string>;
-          };
-          const studentIds: string[] = Array.isArray(classData.students) ? classData.students : [];
-          const nameFromClassroom =
-            classData.studentDisplayNames && typeof classData.studentDisplayNames === 'object'
-              ? classData.studentDisplayNames
-              : {};
-
-          // Build a fallback map from current live-session players (works even when profile reads are denied).
-          const sessionPlayers = Array.isArray(sessionData.players) ? sessionData.players : [];
-          const sessionPlayerMap = new Map<string, any>(
-            sessionPlayers.map((p: any) => [p.userId, p])
-          );
-
-          // Load profile data best-effort, but NEVER drop a class member from the roster if reads fail.
-          const studentsData: Student[] = await Promise.all(
-            studentIds.map(async (studentId, index) => {
-              const sessionPlayer = sessionPlayerMap.get(studentId);
-              const fallbackName =
-                sessionPlayer?.displayName ||
-                nameFromClassroom[studentId] ||
-                `Student ${index + 1}`;
-
-              const base: Student = {
-                id: studentId,
-                displayName: fallbackName,
-                email: '',
-                powerPoints: sessionPlayer?.powerPoints || 0,
-                photoURL: sessionPlayer?.photoURL,
-                level: sessionPlayer?.level || 1,
-                xp: undefined,
-              };
-
-              try {
-                const [studentDoc, userDoc] = await Promise.all([
-                  getDoc(doc(db, 'students', studentId)),
-                  getDoc(doc(db, 'users', studentId))
-                ]);
-
-                const studentData = studentDoc.exists() ? studentDoc.data() : {};
-                const userData = userDoc.exists() ? userDoc.data() : {};
-                const level = getLevelFromXP(studentData.xp || 0);
-
-                const plRaw = studentData.powerLevel;
-                const powerLevel =
-                  typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
-
-                return {
-                  ...base,
-                  displayName: userData.displayName || studentData.displayName || base.displayName,
-                  email: userData.email || studentData.email || '',
-                  powerPoints: studentData.powerPoints || base.powerPoints,
-                  photoURL: userData.photoURL || studentData.photoURL || base.photoURL,
-                  level: level || base.level,
-                  xp: studentData.xp || base.xp,
-                  powerLevel
-                };
-              } catch (error) {
-                // Expected for non-admin students due profile access rules; keep fallback row visible.
-                console.warn(`Roster fallback used for ${studentId}`, error);
-                return base;
-              }
-            })
-          );
-
-          setStudents(studentsData);
+        // Load roster members from targeted classes (legacy classId OR universal classIds),
+        // then fallback to session players so Universal Event sessions always load.
+        const studentIdsFromClasses = new Set<string>();
+        const classNameFallbackByStudentId: Record<string, string> = {};
+        const targetClassIds: string[] = [];
+        if (typeof sessionData.classId === 'string' && sessionData.classId.trim()) {
+          targetClassIds.push(sessionData.classId.trim());
         }
+        if (Array.isArray(sessionData.classIds)) {
+          for (const id of sessionData.classIds) {
+            if (typeof id === 'string' && id.trim()) targetClassIds.push(id.trim());
+          }
+        }
+
+        const dedupedClassIds = Array.from(new Set(targetClassIds));
+        for (const classId of dedupedClassIds) {
+          try {
+            const classDoc = await getDoc(doc(db, 'classrooms', classId));
+            if (!classDoc.exists()) continue;
+            const classData = classDoc.data() as {
+              students?: string[];
+              studentDisplayNames?: Record<string, string>;
+            };
+            const classStudents = Array.isArray(classData.students) ? classData.students : [];
+            classStudents.forEach((id) => studentIdsFromClasses.add(id));
+            const rosterNames =
+              classData.studentDisplayNames && typeof classData.studentDisplayNames === 'object'
+                ? classData.studentDisplayNames
+                : {};
+            Object.keys(rosterNames).forEach((sid) => {
+              if (!classNameFallbackByStudentId[sid]) {
+                classNameFallbackByStudentId[sid] = String(rosterNames[sid]);
+              }
+            });
+          } catch (classLoadError) {
+            console.warn(`Failed to load classroom ${classId} for session roster`, classLoadError);
+          }
+        }
+
+        // Build a fallback map from current live-session players (works even when profile reads are denied).
+        const sessionPlayers = Array.isArray(sessionData.players) ? sessionData.players : [];
+        const sessionPlayerMap = new Map<string, any>(
+          sessionPlayers.map((p: any) => [p.userId, p])
+        );
+        sessionPlayers.forEach((p: any) => {
+          if (p?.userId) studentIdsFromClasses.add(String(p.userId));
+        });
+
+        const rosterStudentIds = Array.from(studentIdsFromClasses);
+        const studentsData: Student[] = await Promise.all(
+          rosterStudentIds.map(async (studentId, index) => {
+            const sessionPlayer = sessionPlayerMap.get(studentId);
+            const fallbackName =
+              sessionPlayer?.displayName ||
+              classNameFallbackByStudentId[studentId] ||
+              `Student ${index + 1}`;
+
+            const base: Student = {
+              id: studentId,
+              displayName: fallbackName,
+              email: '',
+              powerPoints: sessionPlayer?.powerPoints || 0,
+              photoURL: sessionPlayer?.photoURL,
+              level: sessionPlayer?.level || 1,
+              xp: undefined,
+            };
+
+            try {
+              const [studentDoc, userDoc] = await Promise.all([
+                getDoc(doc(db, 'students', studentId)),
+                getDoc(doc(db, 'users', studentId))
+              ]);
+
+              const studentData = studentDoc.exists() ? studentDoc.data() : {};
+              const userData = userDoc.exists() ? userDoc.data() : {};
+              const level = getLevelFromXP(studentData.xp || 0);
+
+              const plRaw = studentData.powerLevel;
+              const powerLevel =
+                typeof plRaw === 'number' && Number.isFinite(plRaw) ? Math.floor(plRaw) : null;
+
+              return {
+                ...base,
+                displayName: userData.displayName || studentData.displayName || base.displayName,
+                email: userData.email || studentData.email || '',
+                powerPoints: studentData.powerPoints || base.powerPoints,
+                photoURL: userData.photoURL || studentData.photoURL || base.photoURL,
+                level: level || base.level,
+                xp: studentData.xp || base.xp,
+                powerLevel
+              };
+            } catch (error) {
+              // Expected for non-admin students due profile access rules; keep fallback row visible.
+              console.warn(`Roster fallback used for ${studentId}`, error);
+              return base;
+            }
+          })
+        );
+
+        setStudents(studentsData);
 
         // Listen for session updates
         const unsubscribe = onSnapshot(sessionRef, (doc) => {

@@ -17,14 +17,26 @@ export function templateIndexFromMoveStableId(moveId?: string): number | null {
 }
 
 export function moveMatchesKnownManifestTemplate(
-  move: Pick<Move, 'id' | 'category' | 'manifestType'>
+  move: Pick<Move, 'id' | 'name' | 'category' | 'manifestType'>
 ): boolean {
   if (move.category === 'manifest') return true;
   if (move.manifestType) return true;
   const idx = templateIndexFromMoveStableId(move.id);
-  if (idx === null) return false;
-  const template = MOVE_TEMPLATES[idx];
-  return !!template && template.category === 'manifest';
+  if (idx !== null) {
+    const template = MOVE_TEMPLATES[idx];
+    if (template?.category === 'manifest') return true;
+  }
+  // Live loadouts / copies may use non–move_N ids but keep the canonical template name (or admin override).
+  const raw = (move.name || '').trim();
+  if (!raw) return false;
+  const resolved = (getMoveNameSync(raw) || '').trim();
+  for (const t of MOVE_TEMPLATES) {
+    if (t.category !== 'manifest') continue;
+    if (t.name === raw || t.name === resolved) return true;
+    const canon = (getMoveNameSync(t.name) || '').trim();
+    if (canon && (canon === raw || canon === resolved)) return true;
+  }
+  return false;
 }
 
 /** Applied to stored challenge rewardPP / rewardXP / rewardTruthMetal for display and grants. */
@@ -154,6 +166,7 @@ export function dailyChallengeStoredTypeMatchesEvent(
   // Admin text / legacy: full sentence saved as `type`, or title pasted into type field
   if (ne === 'use_manifest_ability' && ns.includes('manifest')) return true;
   if (ne === 'use_elemental_move' && ns.includes('elemental')) return true;
+  if (ne === 'use_health_potion' && ns.includes('health')) return true;
 
   return false;
 }
@@ -211,7 +224,7 @@ const MANIFEST_NAME_SNIPPETS = [
 ];
 
 export function moveCountsForDailyElementalChallenge(
-  move: Pick<Move, 'category' | 'elementalAffinity' | 'manifestType' | 'id' | 'effectKey'>
+  move: Pick<Move, 'category' | 'elementalAffinity' | 'manifestType' | 'id' | 'effectKey' | 'name'>
 ): boolean {
   if (move.effectKey === 'level2_manifest') return false;
   if (moveMatchesKnownManifestTemplate(move)) return false;

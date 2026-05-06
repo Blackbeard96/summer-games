@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, onSnapshot, doc, getDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { joinSession } from '../utils/inSessionService';
-import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
+import { getClassroomIdsForEnrolledStudent, getVisibleLiveEventsForUser } from '../utils/classroomQueries';
+import { canUserJoinLiveEvent, normalizeLiveEventEligibility } from '../utils/liveEventEligibility';
 
 interface LiveEvent {
   id: string;
-  classId: string;
+  classId: string | null;
+  classIds?: string[];
+  inviteAllClasses?: boolean;
+  eventType?: 'live_event' | 'universal_event';
   className: string;
   status: 'open' | 'active' | 'closed' | 'live' | 'ended';
   hostUid: string;
@@ -94,131 +98,60 @@ const LiveEvents: React.FC = () => {
       });
     }
     
-    // Query for active sessions in user's classrooms
-    // Firestore 'in' query supports up to 10 values, so we need to handle multiple queries if needed
-    const eventsRef = collection(db, 'inSessionRooms');
-    
-    // Split into chunks of 10 (Firestore 'in' limit)
-    const classChunks: string[][] = [];
-    for (let i = 0; i < userClassrooms.length; i += 10) {
-      classChunks.push(userClassrooms.slice(i, i + 10));
-    }
-    
-    // If no classrooms, return empty
-    if (classChunks.length === 0) {
-      setLiveEvents([]);
-      setLoading(false);
-      return;
-    }
-    
-    // CRITICAL: Query matches session creation status ('live')
-    // Also check 'open' and 'active' for backward compatibility
-    const queries = classChunks.map(chunk => {
-      if (DEBUG_EVENTS) {
-        console.log('🔍 LiveEvents: Creating query for chunk', {
-          chunk,
-          statusFilter: ['open', 'active', 'live'],
-          note: 'Sessions are created with status: "live"'
-        });
-      }
-      return query(
-        eventsRef,
-        where('classId', 'in', chunk),
-        where('status', 'in', ['open', 'active', 'live'])
-      );
-    });
-    
-    // Store results from all queries
-    const allEventMaps = new Map<string, LiveEvent>();
-    
-    const updateEvents = () => {
-      const uniqueEvents = Array.from(allEventMaps.values());
-      
-      // Sort by most recently started
-      uniqueEvents.sort((a, b) => {
-        const aTime = a.startedAt instanceof Timestamp ? a.startedAt.toMillis() : 
-                     a.startedAt instanceof Date ? a.startedAt.getTime() : 0;
-        const bTime = b.startedAt instanceof Timestamp ? b.startedAt.toMillis() : 
-                     b.startedAt instanceof Date ? b.startedAt.getTime() : 0;
-        return bTime - aTime;
-      });
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-      if (DEBUG_EVENTS) {
-        console.log('✅ EVENT DISCOVERY: Found events', {
-          count: uniqueEvents.length,
-          events: uniqueEvents.map(e => ({ id: e.id, className: e.className, status: e.status }))
+    const runFetch = async () => {
+      try {
+        const rows = await getVisibleLiveEventsForUser(userClassrooms, ['open', 'active', 'live']);
+        if (cancelled) return;
+        const nextEvents: LiveEvent[] = rows.map(({ id, data }) => ({
+          id,
+          classId: data.classId ?? null,
+          classIds: Array.isArray(data.classIds) ? data.classIds : undefined,
+          inviteAllClasses: data.inviteAllClasses === true,
+          eventType: data.eventType,
+          className: data.className || `Class ${data.classId || 'Event'}`,
+          status: data.status,
+          hostUid: data.hostUid || data.teacherId,
+          liveEventMode: data.liveEventMode,
+          goalLinkingEnabled: data.goalLinkingEnabled,
+          energyTypeAwarded: data.energyTypeAwarded,
+          players: data.players || [],
+          createdAt: data.createdAt,
+          startedAt: data.startedAt,
+          endedAt: data.endedAt,
+        }));
+
+        nextEvents.sort((a, b) => {
+          const aTime =
+            a.startedAt instanceof Timestamp ? a.startedAt.toMillis() : a.startedAt instanceof Date ? a.startedAt.getTime() : 0;
+          const bTime =
+            b.startedAt instanceof Timestamp ? b.startedAt.toMillis() : b.startedAt instanceof Date ? b.startedAt.getTime() : 0;
+          return bTime - aTime;
         });
-      }
-      
-      setLiveEvents(uniqueEvents);
-      setLoading(false);
-    };
-    
-    // Subscribe to all queries and merge results
-    const unsubscribes = queries.map((q, index) => 
-      onSnapshot(
-        q,
-        (snapshot) => {
-          if (DEBUG_EVENTS) {
-            console.log(`🔵 EVENT DISCOVERY: Query ${index + 1} snapshot update`, {
-              snapshotSize: snapshot.size,
-              docs: snapshot.docs.map(d => ({ id: d.id, classId: d.data().classId, status: d.data().status }))
-            });
-          }
-          
-          // Update events map with results from this query
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-            
-            // Double-check classId is in user's classrooms (safety check)
-            if (userClassrooms.includes(data.classId)) {
-              allEventMaps.set(doc.id, {
-                id: doc.id,
-                classId: data.classId,
-                className: data.className || `Class ${data.classId}`,
-                status: data.status,
-                hostUid: data.hostUid || data.teacherId,
-                liveEventMode: data.liveEventMode,
-                goalLinkingEnabled: data.goalLinkingEnabled,
-                energyTypeAwarded: data.energyTypeAwarded,
-                players: data.players || [],
-                createdAt: data.createdAt,
-                startedAt: data.startedAt,
-                endedAt: data.endedAt,
-              });
-            }
+
+        if (DEBUG_EVENTS) {
+          console.log('✅ EVENT DISCOVERY: Found events', {
+            count: nextEvents.length,
+            events: nextEvents.map((e) => ({ id: e.id, className: e.className, status: e.status })),
           });
-          
-          // Remove events that are no longer in any query result
-          // (This handles the case where an event ends or changes classId)
-          const currentIds = new Set(snapshot.docs.map(d => d.id));
-          Array.from(allEventMaps.keys()).forEach(id => {
-            if (!currentIds.has(id)) {
-              // Check if this event still exists in other queries
-              // For simplicity, we'll keep it unless all queries have updated
-              // In practice, events are removed when status changes, so this is fine
-            }
-          });
-          
-          updateEvents();
-        },
-        (error) => {
-          console.error(`❌ EVENT DISCOVERY ERROR: Error in query ${index + 1}:`, error);
-          if (DEBUG_EVENTS) {
-            console.error('Error details:', {
-              errorMessage: error.message,
-              errorCode: error.code,
-              queryIndex: index,
-              classChunk: classChunks[index]
-            });
-          }
-          setLoading(false);
         }
-      )
-    );
+
+        setLiveEvents(nextEvents);
+      } catch (error) {
+        console.error('❌ EVENT DISCOVERY ERROR:', error);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    runFetch();
+    pollTimer = setInterval(runFetch, 3000);
 
     return () => {
-      unsubscribes.forEach(unsub => unsub());
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [currentUser, userClassrooms]);
 
@@ -244,6 +177,7 @@ const LiveEvents: React.FC = () => {
       const newPlayer = {
         userId: currentUser.uid,
         displayName: displayName.trim(),
+        classId: studentData.classId || studentData.class || null,
         photoURL: userData.photoURL || studentData.photoURL || currentUser.photoURL,
         level: studentData.level || 1,
         powerPoints: studentData.powerPoints || 0,
@@ -265,6 +199,11 @@ const LiveEvents: React.FC = () => {
         playerLevel: newPlayer.level,
         playerPP: newPlayer.powerPoints
       });
+
+      if (!canUserJoinLiveEvent(userClassrooms, event)) {
+        alert('You are not invited to this live event.');
+        return;
+      }
 
       const result = await joinSession(event.id, newPlayer);
 
@@ -330,6 +269,15 @@ const LiveEvents: React.FC = () => {
     const en = event.energyTypeAwarded ? ` · ${event.energyTypeAwarded} energy` : '';
     const g = event.goalLinkingEnabled === false ? '' : ' · goals on';
     return `Mode: ${m}${en}${g}`;
+  };
+
+  const formatEventAudience = (event: LiveEvent): string => {
+    const normalized = normalizeLiveEventEligibility(event);
+    if (normalized.inviteAllClasses) return 'Audience: All classes';
+    if (normalized.eventType === 'universal_event') {
+      return `Audience: ${normalized.classIds.length} classes`;
+    }
+    return 'Audience: Single class';
   };
 
   const filteredLiveEvents = useMemo(() => {
@@ -509,6 +457,7 @@ const LiveEvents: React.FC = () => {
                 </div>
               ) : null}
               <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(userActiveEvent)}</div>
+              <div style={{ color: '#6b7280', fontSize: '0.78rem', marginTop: 4 }}>{formatEventAudience(userActiveEvent)}</div>
             </div>
             <button
               onClick={() => navigate(`/live-events/${userActiveEvent.id}`)}
@@ -620,6 +569,7 @@ const LiveEvents: React.FC = () => {
                       </div>
                     ) : null}
                     <div style={{ color: '#7c3aed', fontSize: '0.8rem', marginTop: 6 }}>{formatSeason1Mode(event)}</div>
+                    <div style={{ color: '#6b7280', fontSize: '0.78rem', marginTop: 4 }}>{formatEventAudience(event)}</div>
                   </div>
                   <button
                     onClick={() => isJoined ? navigate(`/live-events/${event.id}`) : handleJoinEvent(event)}

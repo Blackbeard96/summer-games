@@ -7,6 +7,7 @@ import {
   mergeRoomEliminationsIntoSummary,
   claimLiveEventSessionEndPendingPp,
   claimLiveEventSessionEndPowerAndBattlePass,
+  claimLiveEventSessionEndWinChallenge,
 } from '../utils/inSessionStatsService';
 
 interface SessionSummaryModalProps {
@@ -17,6 +18,7 @@ interface SessionSummaryModalProps {
   /** Live room players (e.g. from subscription); enriches embedded summary with eliminations when stats were incomplete. */
   roomPlayers?: Array<{
     userId: string;
+    classId?: string | null;
     displayName?: string;
     powerPoints?: number;
     participationCount?: number;
@@ -50,17 +52,25 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     if (!isOpen || !summary?.sessionId || !currentPlayerId) return;
     void claimLiveEventSessionEndPendingPp(summary.sessionId, currentPlayerId);
     void claimLiveEventSessionEndPowerAndBattlePass(summary.sessionId, currentPlayerId);
+    void claimLiveEventSessionEndWinChallenge(summary.sessionId, currentPlayerId);
   }, [isOpen, summary?.sessionId, currentPlayerId]);
 
   const displaySummary = React.useMemo(() => {
     if (!summary) return null;
     return mergeRoomEliminationsIntoSummary(summary, roomPlayers);
   }, [summary, roomPlayers]);
-
-  if (!isOpen || !displaySummary) return null;
-
-  const currentPlayerStats = displaySummary.stats[currentPlayerId];
-  const allStats = Object.values(displaySummary.stats);
+  const classIdByPlayer = React.useMemo(() => {
+    const map = new Map<string, string>();
+    (roomPlayers || []).forEach((p) => {
+      const classId = typeof p.classId === 'string' ? p.classId.trim() : '';
+      if (classId) map.set(p.userId, classId);
+    });
+    return map;
+  }, [roomPlayers]);
+  const allStats = React.useMemo(
+    () => (displaySummary ? Object.values(displaySummary.stats) : []),
+    [displaySummary]
+  );
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -69,7 +79,8 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   };
 
   // Total PP from quiz (placement) per player
-  const getQuizPP = (playerId: string) => displaySummary.quizPpByPlayer?.[playerId] ?? 0;
+  const quizPpByPlayer = displaySummary?.quizPpByPlayer || {};
+  const getQuizPP = (playerId: string) => quizPpByPlayer[playerId] ?? 0;
   // Players who earned any PP (quiz, eliminations, or participation)
   const totalEarned = (s: SessionStats) => getQuizPP(s.playerId) + (s.ppEarned || 0);
   const playersWithPP = allStats
@@ -85,6 +96,43 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
     if (!best || p > (best.participationEarned || 0)) return s;
     return best;
   }, null);
+
+  const classRollup = React.useMemo(() => {
+    type ClassRow = {
+      classId: string;
+      players: SessionStats[];
+      totalPP: number;
+      totalParticipation: number;
+      totalEliminations: number;
+      eliminatedCount: number;
+      participatingPlayers: number;
+    };
+    const rows = new Map<string, ClassRow>();
+    for (const stats of allStats) {
+      const classId = classIdByPlayer.get(stats.playerId) || 'Unspecified class';
+      const current = rows.get(classId) || {
+        classId,
+        players: [],
+        totalPP: 0,
+        totalParticipation: 0,
+        totalEliminations: 0,
+        eliminatedCount: 0,
+        participatingPlayers: 0,
+      };
+      current.players.push(stats);
+      current.totalPP += totalEarned(stats);
+      current.totalParticipation += stats.participationEarned || 0;
+      current.totalEliminations += stats.eliminations || 0;
+      current.eliminatedCount += stats.isEliminated ? 1 : 0;
+      current.participatingPlayers += (stats.participationEarned || 0) > 0 ? 1 : 0;
+      rows.set(classId, current);
+    }
+    return Array.from(rows.values()).sort((a, b) => b.players.length - a.players.length);
+  }, [allStats, classIdByPlayer]);
+
+  if (!isOpen || !displaySummary) return null;
+
+  const currentPlayerStats = displaySummary.stats[currentPlayerId];
 
   return (
     <div
@@ -270,6 +318,56 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             </p>
           ) : (
             <p style={{ fontSize: '0.9rem', color: '#6b7280', margin: 0 }}>No participation points earned this event.</p>
+          )}
+        </div>
+
+        {/* 4. Universal Event class rollup (works for class events too) */}
+        <div
+          style={{
+            background: 'rgba(255, 255, 255, 0.95)',
+            borderRadius: '0.75rem',
+            padding: '1.25rem',
+            marginBottom: '1rem',
+            border: '2px solid #14b8a6'
+          }}
+        >
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.75rem' }}>
+            🏫 Results by Class
+          </h3>
+          {classRollup.length === 0 ? (
+            <p style={{ fontSize: '0.9rem', color: '#6b7280' }}>No class-level results available.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {classRollup.map((row) => {
+                const total = row.players.length;
+                const completionCount = total - row.eliminatedCount;
+                const completionRate = total > 0 ? Math.round((completionCount / total) * 100) : 0;
+                const participationRate = total > 0 ? Math.round((row.participatingPlayers / total) * 100) : 0;
+                return (
+                  <div
+                    key={row.classId}
+                    style={{
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '0.5rem',
+                      padding: '0.75rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{row.classId}</div>
+                      <div style={{ fontSize: '0.85rem', color: '#334155' }}>
+                        {total} player{total !== 1 ? 's' : ''} • +{row.totalPP} PP • {row.totalEliminations} elim
+                      </div>
+                    </div>
+                    <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#475569' }}>
+                      Participation points: {row.totalParticipation} • Participation rate: {participationRate}% • Completion rate: {completionRate}%
+                    </div>
+                    <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
+                      {row.players.map((p) => p.playerName).join(', ')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -648,6 +746,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                   <div>
                     <div style={{ fontWeight: 'bold', color: '#1f2937' }}>
                       {stats.playerName}
+                      <span style={{ color: '#475569', marginLeft: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
+                        [{classIdByPlayer.get(stats.playerId) || 'Unspecified class'}]
+                      </span>
                       {stats.isEliminated && (
                         <span style={{ color: '#ef4444', marginLeft: '0.5rem' }}>☠️</span>
                       )}

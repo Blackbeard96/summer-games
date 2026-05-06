@@ -45,12 +45,38 @@ service cloud.firestore {
     }
 
     // Student enrolled in the class for this session, session host, or staff
+    function studentClassId() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/students/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/students/$(request.auth.uid)).data.classId
+        : null;
+    }
+
+    function isUserInLegacySessionClass(sessionData) {
+      return sessionData.classId != null &&
+        exists(/databases/$(database)/documents/classrooms/$(sessionData.classId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/classrooms/$(sessionData.classId)).data.students;
+    }
+
+    function isUserInInvitedSessionClass(sessionData) {
+      return sessionData.classIds is list &&
+        studentClassId() != null &&
+        studentClassId() in sessionData.classIds;
+    }
+
+    function canAccessInSessionRoomByData(sessionData) {
+      return request.auth != null && (
+        sessionData.inviteAllClasses == true ||
+        isUserInLegacySessionClass(sessionData) ||
+        isUserInInvitedSessionClass(sessionData)
+      );
+    }
+
     function canReadInSessionRoomSession(sessionId) {
       return isLiveEventStaff() || isInSessionRoomHost(sessionId) || (
         request.auth != null &&
         exists(/databases/$(database)/documents/inSessionRooms/$(sessionId)) &&
-        exists(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)) &&
-        request.auth.uid in get(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)).data.students
+        canAccessInSessionRoomByData(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data)
       );
     }
     
@@ -657,9 +683,8 @@ service cloud.firestore {
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
         isInSessionRoomHost(sessionId) ||
-        // Student can read if they're in the class
-        (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
+        // Student can read if they're invited via legacy classId, classIds, or inviteAllClasses
+        canAccessInSessionRoomByData(resource.data)
       );
       
       // Allow create/update/delete only for admins/Yondaime or host
@@ -677,8 +702,7 @@ service cloud.firestore {
         request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
         request.auth.token.email.matches('.*@mstgames\\.net$') ||
         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
-        (exists(/databases/$(database)/documents/classrooms/$(resource.data.classId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/classrooms/$(resource.data.classId)).data.students)
+        canAccessInSessionRoomByData(resource.data)
       );
       
       allow delete: if request.auth != null && (
@@ -698,8 +722,7 @@ service cloud.firestore {
         allow read: if request.auth != null; // Anyone in session can read actions
         allow create: if request.auth != null && (
           // Students in class can create actions
-          (exists(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)) &&
-           request.auth.uid in get(/databases/$(database)/documents/classrooms/$(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data.classId)).data.students) ||
+          canAccessInSessionRoomByData(get(/databases/$(database)/documents/inSessionRooms/$(sessionId)).data) ||
           // Admin/Yondaime can create actions
           request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
           request.auth.token.email.matches('.*@mstgames\\.net$') ||

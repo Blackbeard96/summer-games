@@ -128,7 +128,14 @@ export async function applyRevivePotionInLiveEvent(
     });
 
     await clearLiveEventEliminationStats(sessionId, targetUid);
-    debug('liveEventRevive', `Revived ${targetUid} in ${sessionId}`);
+    debug('liveEventRevive', 'revive used', {
+      sessionId,
+      actorUid,
+      actorName,
+      targetUid,
+      targetName,
+      hpPercent: hpPct,
+    });
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -230,7 +237,12 @@ export async function hostReviveEliminatedPlayersInLiveEvent(
     });
 
     await Promise.all(revivedList.map((r) => clearLiveEventEliminationStats(sessionId, r.userId)));
-    debug('liveEventRevive', `Host revived ${revivedList.length} in ${sessionId}`);
+    debug('liveEventRevive', 'revive used', {
+      sessionId,
+      hostDisplayName,
+      revivedCount: revivedList.length,
+      revivedUids: revivedList.map((r) => r.userId),
+    });
     return { ok: true, revived: revivedList };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

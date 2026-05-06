@@ -2,7 +2,13 @@
 
 export interface InSessionRoom {
   id: string;
-  classId: string;
+  classId: string | null;
+  /** Universal Events can target many classes while preserving legacy classId reads. */
+  classIds?: string[];
+  /** True means all classes in MST can discover/join this event. */
+  inviteAllClasses?: boolean;
+  /** Backward-compatible discriminator for live event targeting scope. */
+  eventType?: 'live_event' | 'universal_event';
   className: string;
   teacherId: string; // Keep for backward compatibility
   hostUid: string; // UID of the host (admin who started session)

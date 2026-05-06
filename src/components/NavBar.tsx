@@ -13,7 +13,7 @@ import {
   getAssessmentsByClass,
   getAssessmentGoal
 } from '../utils/assessmentGoalsFirestore';
-import { getClassroomIdsForEnrolledStudent } from '../utils/classroomQueries';
+import { getClassroomIdsForEnrolledStudent, getVisibleLiveEventsForUser } from '../utils/classroomQueries';
 
 const tooltipStyle: CSSProperties = {
   position: 'absolute',
@@ -609,7 +609,7 @@ const NavBar = memo(() => {
 
   // Removed battleSubItems - now using item.children from navConfig
 
-  // Track active live events count (per-class queries only — global inSessionRooms queries fail student rules)
+  // Track active live events count including Universal Events (classIds/inviteAllClasses).
   useEffect(() => {
     if (!currentUser) {
       setActiveLiveEventsCount(0);
@@ -617,17 +617,7 @@ const NavBar = memo(() => {
     }
 
     let cancelled = false;
-    const unsubscribes: Array<() => void> = [];
-    const countByClass = new Map<string, number>();
-    const LIVE_STATUSES = new Set(['open', 'active', 'live']);
-
-    const recompute = () => {
-      let total = 0;
-      countByClass.forEach((n) => {
-        total += n;
-      });
-      setActiveLiveEventsCount(total);
-    };
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     (async () => {
       let classIds: string[] = [];
@@ -644,28 +634,25 @@ const NavBar = memo(() => {
         return;
       }
 
-      const eventsRef = collection(db, 'inSessionRooms');
-      for (const classId of classIds) {
-        const unsub = onSnapshot(
-          query(eventsRef, where('classId', '==', classId)),
-          (snapshot) => {
-            const n = snapshot.docs.filter((d) => LIVE_STATUSES.has(String(d.data().status || ''))).length;
-            countByClass.set(classId, n);
-            recompute();
-          },
-          (error) => {
-            console.error('Error listening to live events for badge:', error);
-            countByClass.set(classId, 0);
-            recompute();
+      const fetchCount = async () => {
+        try {
+          const events = await getVisibleLiveEventsForUser(classIds, ['open', 'active', 'live']);
+          if (!cancelled) {
+            setActiveLiveEventsCount(events.length);
           }
-        );
-        unsubscribes.push(unsub);
-      }
+        } catch (error) {
+          console.error('Error fetching live events for badge:', error);
+          if (!cancelled) setActiveLiveEventsCount(0);
+        }
+      };
+
+      await fetchCount();
+      pollTimer = setInterval(fetchCount, 5000);
     })();
 
     return () => {
       cancelled = true;
-      unsubscribes.forEach((u) => u());
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [currentUser]);
 

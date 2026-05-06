@@ -29,6 +29,9 @@ export interface SessionStats {
   sessionEndBattlePassXpPending?: number;
   sessionEndPowerGainPending?: LiveEventPowerGain;
   sessionEndPowerBpClaimedAt?: unknown;
+  /** Host writes final Top 3 placement here; player self-claims daily win challenge credit. */
+  sessionEndWinChallengePlacementPending?: number;
+  sessionEndWinChallengeClaimedAt?: unknown;
 
   // Participation tracking
   participationEarned: number; // Total participation points earned

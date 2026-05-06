@@ -50,7 +50,7 @@ import {
   ACTION_CARD_TEMPLATES,
   MOVE_DAMAGE_VALUES
 } from '../types/battle';
-import { getMoveDamage } from '../utils/moveOverrides';
+import { getMoveDamage, getMoveNameSync } from '../utils/moveOverrides';
 import { getActivePPBoost, applyPPBoost } from '../utils/ppBoost';
 import {
   getElementalRingLevel,
@@ -4935,12 +4935,16 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateChallengeProgressByType(currentUser.uid, 'attack_vault', 1).catch(err =>
           console.error('❌ [Daily Challenge] Error updating attack_vault progress:', err)
         );
-        if (selectedMove && moveCountsForDailyElementalChallenge(selectedMove)) {
+        const dailyMoveLabel =
+          selectedMove?.name != null ? getMoveNameSync(selectedMove.name) || selectedMove.name : '';
+        const moveForDaily =
+          selectedMove && dailyMoveLabel ? { ...selectedMove, name: dailyMoveLabel } : selectedMove;
+        if (moveForDaily && moveCountsForDailyElementalChallenge(moveForDaily)) {
           updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
             console.error('❌ [Daily Challenge] Error updating use_elemental_move progress:', err)
           );
         }
-        if (selectedMove && moveCountsForDailyManifestChallenge(selectedMove)) {
+        if (moveForDaily && moveCountsForDailyManifestChallenge(moveForDaily)) {
           updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
             console.error('❌ [Daily Challenge] Error updating use_manifest_ability progress:', err)
           );

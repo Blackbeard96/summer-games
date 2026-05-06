@@ -16,6 +16,11 @@ import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
 import type { Move } from '../types/battle';
 import type { ResolvedSkillAction } from './battleSkillResolver';
+import {
+  challengeTypesForLiveEventSkill,
+  detectLiveEventSkillCategory,
+  trackDailyChallengeProgress,
+} from './liveEventDailyChallengeTracking';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -188,7 +193,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
     
     // ALWAYS log transaction start (critical for debugging) - concise
     console.log('🔄 [applyInSessionMove] ⚡ STARTING TRANSACTION ⚡', move.name, '→', targetName, '| Dmg:', damage, '| Shield:', shieldDamage, '| Heal:', healing);
-    
+    let pendingElimination: { eliminatorUid: string; eliminatedUid: string; eliminatorName: string; eliminatedName: string } | null = null;
+
     const result = await runTransaction(db, async (transaction) => {
       // Read session document
       const sessionDoc = await transaction.get(sessionRef);
@@ -543,17 +549,12 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
 
       // Track elimination in stats (outside transaction to avoid timeout)
       if (wasEliminated && actorUid !== targetUid) {
-        // Schedule async tracking (don't await in transaction)
-        Promise.resolve().then(async () => {
-          try {
-            await trackElimination(sessionId, actorUid, targetUid);
-            if (DEBUG_IN_SESSION_MOVES) {
-              debug('inSessionMove', `📊 Elimination tracked: ${actorName} eliminated ${targetName}`);
-            }
-          } catch (trackError) {
-            debugError('inSessionMove', 'Error tracking elimination', trackError);
-          }
-        });
+        pendingElimination = {
+          eliminatorUid: actorUid,
+          eliminatedUid: targetUid,
+          eliminatorName: actorName,
+          eliminatedName: targetName,
+        };
       }
 
       if (DEBUG_IN_SESSION_MOVES) {
@@ -622,6 +623,53 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       }));
     }
     
+    const eliminationToTrack = pendingElimination as
+      | { eliminatorUid: string; eliminatedUid: string; eliminatorName: string; eliminatedName: string }
+      | null;
+    if (eliminationToTrack) {
+      try {
+        await trackElimination(sessionId, eliminationToTrack.eliminatorUid, eliminationToTrack.eliminatedUid);
+        debug('inSessionMove', 'elimination awarded', {
+          sessionId,
+          eliminatorUid: eliminationToTrack.eliminatorUid,
+          eliminatedUid: eliminationToTrack.eliminatedUid,
+          eliminatorName: eliminationToTrack.eliminatorName,
+          eliminatedName: eliminationToTrack.eliminatedName,
+        });
+      } catch (trackError) {
+        debugError('inSessionMove', 'Error tracking elimination', trackError);
+      }
+    }
+    if (result.success) {
+      const detectedCategory = detectLiveEventSkillCategory(move);
+      const challengeTypes = challengeTypesForLiveEventSkill(move);
+      console.log('[liveEventDailyChallenge] successful skill use', {
+        sessionId,
+        actorUid,
+        moveId: move.id,
+        moveName: move.name,
+        detectedCategory,
+        challengeTypes,
+      });
+      await trackDailyChallengeProgress({
+        userId: actorUid,
+        eventType: 'live_event',
+        actionType: 'skill_resolved',
+        challengeTypes,
+        amount: 1,
+        sourceId: `live-event-skill:${sessionId}:${actorUid}:${traceId || `${move.id}:${Date.now()}`}:${targetUid}`,
+        liveEventId: sessionId,
+        skillId: move.id,
+        skillName: move.name,
+        skillCategory: detectedCategory,
+        metadata: {
+          targetUid,
+          useLiveEventParticipationForSkillCost,
+          traceId: traceId || null,
+        },
+      });
+    }
+
     // Instrument: Firestore write success
     battleDebug('firestore-write', {
       mode: 'liveEvent',

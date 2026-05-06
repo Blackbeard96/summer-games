@@ -75,7 +75,7 @@ const Battle: React.FC = () => {
   const getInitialTab = (): 'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle' => {
     const hash = window.location.hash.replace('#', '');
     if (hash === 'vault') return 'vault';
-    if (hash === 'siege') return 'battle';
+    if (hash === 'siege' || hash === 'practice') return 'battle';
     if (hash === 'moves' || hash === 'skills' || hash === 'skillMastery') {
       // Redirect old routes to moves tab (which will show Skill Mastery)
       if (hash === 'skills' || hash === 'skillMastery') {
@@ -186,19 +186,26 @@ const Battle: React.FC = () => {
     }
   }, [showVaultSiegeModal, getRemainingOfflineMoves]);
 
-  /** Play → Battle Arena → Vault Siege: `#siege` opens the Vault Siege modal on the Battle tab. */
+  /** Play menu deep links: `#siege` opens Vault Siege; `#practice` opens Practice Mode on the Battle tab. */
   useEffect(() => {
     if (!currentUser || loading) return;
-    const openSiegeFromHash = () => {
+    const applyBattleHash = () => {
       const h = window.location.hash.replace(/^#/, '');
-      if (h !== 'siege') return;
-      setActiveTab('battle');
-      setSelectedBattleMode('offline');
-      setShowVaultSiegeModal(true);
+      if (h === 'siege') {
+        setActiveTab('battle');
+        setSelectedBattleMode('offline');
+        setShowVaultSiegeModal(true);
+        return;
+      }
+      if (h === 'practice') {
+        setActiveTab('battle');
+        setSelectedBattleMode('practice');
+        setShowVaultSiegeModal(false);
+      }
     };
-    openSiegeFromHash();
-    window.addEventListener('hashchange', openSiegeFromHash);
-    return () => window.removeEventListener('hashchange', openSiegeFromHash);
+    applyBattleHash();
+    window.addEventListener('hashchange', applyBattleHash);
+    return () => window.removeEventListener('hashchange', applyBattleHash);
   }, [currentUser, loading]);
 
   // Truth Metal — same source order as Profile (students, then users fallback)

@@ -28,6 +28,7 @@ import {
 } from './liveEventPowerStatsService';
 import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
 import { trackPlayerAction } from './playerProgressionRewards';
+import { trackDailyChallengeProgress } from './liveEventDailyChallengeTracking';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -1102,12 +1103,30 @@ export async function finalizeSessionStats(
       ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer }),
       ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer })
     };
+    debug('inSessionStats', 'placement calculated', {
+      sessionId,
+      liveEventQuizRankByPlayer,
+      leaderboardSize: Object.keys(leaderboard).length,
+      totalPlayers: summary.totalPlayers,
+    });
 
     // Store summary in session document
     await updateDoc(sessionRef, {
       sessionSummary: summary,
       status: 'ended',
       endedAt: sessionEndTime
+    });
+    debug('inSessionStats', 'final score saved', {
+      sessionId,
+      totalPlayers: summary.totalPlayers,
+      statsCount: Object.keys(summary.stats).length,
+      hasQuizPp: !!summary.quizPpByPlayer,
+      hasPowerGains: !!summary.liveEventPowerGains,
+    });
+    debug('inSessionStats', 'Live Event ended', {
+      sessionId,
+      status: 'ended',
+      totalPlayers: summary.totalPlayers,
     });
 
     if (liveEventQuizRankByPlayer && Object.keys(liveEventQuizRankByPlayer).length > 0) {
@@ -1124,6 +1143,27 @@ export async function finalizeSessionStats(
         );
       } catch (rollupErr) {
         debugError('inSessionStats', 'Failed to write liveEventPlacementRollups', rollupErr);
+      }
+
+      const top3Entries = Object.entries(liveEventQuizRankByPlayer).filter(
+        ([, rank]) => Number(rank) <= 3
+      );
+      for (const [playerId, rank] of top3Entries) {
+        // Host finalization can't always write into other users' daily challenge subcollections.
+        // Queue pending placement on stats so each player self-claims challenge credit.
+        await setDoc(
+          doc(db, 'inSessionRooms', sessionId, 'stats', playerId),
+          {
+            sessionEndWinChallengePlacementPending: Number(rank),
+          },
+          { merge: true }
+        );
+        debug('inSessionStats', 'Top 3 win credit awarded', {
+          sessionId,
+          playerId,
+          placement: Number(rank),
+          queuedForSelfClaim: true,
+        });
       }
     }
     
@@ -1247,6 +1287,72 @@ export async function claimLiveEventSessionEndPendingPp(sessionId: string, playe
       });
     } catch (restoreErr) {
       debugError('inSessionStats', `Failed to restore pending PP after credit error for ${playerId}`, restoreErr);
+    }
+    return false;
+  }
+}
+
+export async function claimLiveEventSessionEndWinChallenge(
+  sessionId: string,
+  playerId: string
+): Promise<boolean> {
+  const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+  let reservedPlacement = 0;
+  try {
+    reservedPlacement = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(statsRef);
+      if (!snap.exists()) return 0;
+      const d = snap.data() as SessionStats;
+      if (d.sessionEndWinChallengeClaimedAt) return 0;
+      const placement = Math.max(
+        0,
+        Math.floor(Number(d.sessionEndWinChallengePlacementPending) || 0)
+      );
+      if (placement <= 0 || placement > 3) return 0;
+      transaction.update(statsRef, {
+        sessionEndWinChallengePlacementPending: deleteField(),
+        sessionEndWinChallengeClaimedAt: serverTimestamp(),
+      });
+      return placement;
+    });
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndWinChallenge transaction failed for ${playerId}`, e);
+    return false;
+  }
+
+  if (reservedPlacement <= 0) return false;
+
+  try {
+    const claim = await trackDailyChallengeProgress({
+      userId: playerId,
+      eventType: 'live_event',
+      actionType: 'final_placement',
+      challengeTypes: ['win_battle'],
+      amount: 1,
+      sourceId: `live-event-top3:${sessionId}:${playerId}`,
+      liveEventId: sessionId,
+      placement: reservedPlacement,
+      metadata: {
+        claimSource: 'sessionEndWinChallengePlacementPending',
+      },
+    });
+    debug('inSessionStats', 'Top 3 win credit awarded', {
+      sessionId,
+      playerId,
+      placement: reservedPlacement,
+      duplicateSkipped: claim.duplicate === true,
+      claimOk: claim.ok,
+    });
+    return claim.ok;
+  } catch (e) {
+    debugError('inSessionStats', `claimLiveEventSessionEndWinChallenge apply failed for ${playerId}`, e);
+    try {
+      await updateDoc(statsRef, {
+        sessionEndWinChallengePlacementPending: reservedPlacement,
+        sessionEndWinChallengeClaimedAt: deleteField(),
+      });
+    } catch (restoreErr) {
+      debugError('inSessionStats', `Failed to restore pending win challenge after claim error for ${playerId}`, restoreErr);
     }
     return false;
   }

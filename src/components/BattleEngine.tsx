@@ -5143,7 +5143,9 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const moveName = getMoveNameSync(move.name) || move.name;
     console.log(`[BattleEngine] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
-    if (currentUser) {
+    // Live Events: only credit daily challenges after Firestore accepts the move (avoids false negatives
+    // when tracking ran but `applyInSessionMove` later failed, and aligns progress with real usage).
+    if (currentUser && !isInSession) {
       if (moveCountsForDailyElementalChallenge(move)) {
         trackPlayerAction(currentUser.uid, 'ELEMENTAL_MOVE_USED', 1).catch(err =>
           console.error('Error updating daily challenge progress:', err)
@@ -6019,6 +6021,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           actorUid: currentUser.uid,
           actorName: playerName,
           actorEmail: inSessionActorEmail,
+          traceId: traceId || undefined,
           targetUid: effectiveTargetUid,
           targetName: effectiveTargetName,
           move,

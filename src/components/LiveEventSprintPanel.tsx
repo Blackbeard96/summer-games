@@ -216,6 +216,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             !penaltiesGranted.has(p.userId)
         ).length
       : 0;
+  const selfMarked = marked.has(currentUserId);
+  const canSelfCheckIn = !!sprint && !isSessionHost && sprint.status === 'live' && !timerExpired && !selfMarked;
 
   const fmt = (s: number) => {
     const m = Math.floor(s / 60);
@@ -497,6 +499,32 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             <p style={{ margin: '0.75rem 0 0', fontSize: '0.8rem', opacity: 0.88 }}>
               Your host will check you off if you finish the goal in time. When you’re checked, your participation PP and moves update right away so you can fight and shop in MST MKT.
             </p>
+          )}
+          {!isSessionHost && sprint.status === 'live' && (
+            <div style={{ marginTop: '0.65rem' }}>
+              {selfMarked ? (
+                <div style={{ fontSize: '0.85rem', color: '#a7f3d0', fontWeight: 600 }}>
+                  ✓ You are checked in for this sprint.
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!canSelfCheckIn}
+                  onClick={() => void onToggle(currentUserId)}
+                  style={{
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.55)',
+                    background: canSelfCheckIn ? 'rgba(16,185,129,0.95)' : 'rgba(255,255,255,0.2)',
+                    color: canSelfCheckIn ? '#022c22' : '#e2e8f0',
+                    fontWeight: 700,
+                    cursor: canSelfCheckIn ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  ✅ Check in complete
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

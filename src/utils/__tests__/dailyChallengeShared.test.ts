@@ -25,6 +25,7 @@ describe('dailyChallengeShared', () => {
     expect(
       dailyChallengeStoredTypeMatchesEvent('Use your Manifest Abilities THREE (3) Times', 'use_manifest_ability')
     ).toBe(true);
+    expect(dailyChallengeStoredTypeMatchesEvent('Use ONE (1) Health Potion', 'use_health_potion')).toBe(true);
     expect(dailyChallengeStoredTypeMatchesEvent('win_battle', 'earn_pp')).toBe(false);
   });
 
@@ -65,6 +66,16 @@ describe('dailyChallengeShared', () => {
         elementalAffinity: 'fire' as const,
       } as Move)
     ).toBe(false);
+  });
+
+  test('moveCountsForDailyManifestChallenge matches MOVE_TEMPLATES manifest by name when id is not move_N', () => {
+    expect(
+      moveCountsForDailyManifestChallenge({
+        id: 'custom-skill-slot',
+        category: undefined as unknown as Move['category'],
+        name: 'Pattern Break',
+      } as Move)
+    ).toBe(true);
   });
 
   test('moveCountsForDailyManifestChallenge counts RR Candy ids', () => {

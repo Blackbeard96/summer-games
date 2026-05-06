@@ -78,6 +78,12 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               ]
             },
             {
+              label: 'Practice Battles',
+              path: '/battle#practice',
+              icon: '🏋️',
+              visibility: 'all'
+            },
+            {
               label: 'Island Raid',
               path: '/island-raid',
               icon: '🏝️',
@@ -121,12 +127,6 @@ export const getNavConfig = (activeLiveEventsCount: number, pendingAssessmentGoa
               icon: '🎯',
               hasNotification: pendingAssessmentGoals > 0,
               notificationCount: pendingAssessmentGoals,
-              visibility: 'all'
-            },
-            {
-              label: 'Weekly Goals',
-              path: '/weekly-goals',
-              icon: '📆',
               visibility: 'all'
             },
             {
