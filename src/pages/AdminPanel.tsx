@@ -46,6 +46,7 @@ import Season1AdminPanel from '../components/admin/Season1AdminPanel';
 import VaultRecoveryAdmin from '../components/admin/VaultRecoveryAdmin';
 import RRCandyAdminPage from './admin/RRCandyAdminPage';
 import Level2ManifestBuilderAdmin from '../components/admin/Level2ManifestBuilderAdmin';
+import ProductivityDashboardAdmin from '../components/admin/ProductivityDashboardAdmin';
 
 interface Classroom {
   id: string;
@@ -223,7 +224,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels' | 'productivity-dashboard'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1161,6 +1162,7 @@ const AdminPanel: React.FC = () => {
       const p = new URLSearchParams(window.location.search);
       if (p.get('tab') === 'rr-candies') setActiveTab('rr-candies');
       if (p.get('tab') === 'level2-manifest') setActiveTab('level2-manifest');
+      if (p.get('tab') === 'productivity') setActiveTab('productivity-dashboard');
     } catch (_) {
       /* ignore */
     }
@@ -3022,6 +3024,23 @@ const AdminPanel: React.FC = () => {
           📆 Weekly Goals Review
         </button>
         <button
+          onClick={() => setActiveTab('productivity-dashboard')}
+          style={{
+            backgroundColor: activeTab === 'productivity-dashboard' ? '#0369a1' : '#e5e7eb',
+            color: activeTab === 'productivity-dashboard' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          📊 Productivity
+        </button>
+        <button
           onClick={() => setActiveTab('training-grounds')}
           style={{
             backgroundColor: activeTab === 'training-grounds' ? '#4f46e5' : '#e5e7eb',
@@ -3215,6 +3234,15 @@ const AdminPanel: React.FC = () => {
         <AssessmentGoalsAdmin />
       ) : activeTab === 'weekly-goals-review' ? (
         <WeeklyGoalsAdminReview />
+      ) : activeTab === 'productivity-dashboard' ? (
+        <ProductivityDashboardAdmin
+          students={students.map((s) => ({
+            id: s.id,
+            displayName: s.displayName,
+            email: s.email,
+          }))}
+          classrooms={classrooms}
+        />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />
       ) : activeTab === 'rr-candies' ? (

@@ -12,7 +12,7 @@ import {
 import { getClassesByStudent } from '../utils/assessmentGoalsFirestore';
 import { calculateQuizRewards, grantQuizRewards } from '../utils/trainingGroundsRewards';
 import { TrainingQuizSet, TrainingQuestion, TrainingAnswer, TrainingAttempt } from '../types/trainingGrounds';
-import { serverTimestamp } from 'firebase/firestore';
+import { recordQuizProductivityAttempt } from '../utils/productivityTracking';
 
 const QuizPlayer: React.FC = () => {
   const { quizSetId } = useParams<{ quizSetId: string }>();
@@ -259,6 +259,30 @@ const QuizPlayer: React.FC = () => {
         mode: 'solo',
       };
       await updateTrainingStats(currentUser.uid, createdAttempt);
+
+      const quizClassId =
+        quizSet.classIds && quizSet.classIds.length > 0 ? quizSet.classIds[0] : undefined;
+      const questionTags = Array.from(
+        new Set(
+          questions
+            .map((q) => (typeof q.category === 'string' ? q.category.trim() : ''))
+            .filter(Boolean)
+        )
+      );
+      await recordQuizProductivityAttempt({
+        userId: currentUser.uid,
+        quizSetId,
+        attemptId,
+        classId: quizClassId,
+        scorePercent: percent,
+        correctAnswers: correctCount,
+        totalQuestions,
+        timeTakenMs: Math.max(0, Date.now() - startTime),
+        completedAtMs: Date.now(),
+        quizTopic: quizSet.title,
+        questionTags,
+        mode: 'solo',
+      });
       
       const suffix = returnMission ? `?returnMission=${encodeURIComponent(returnMission)}` : '';
       navigate(`/training-grounds/results/${attemptId}${suffix}`);

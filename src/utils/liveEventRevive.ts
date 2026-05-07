@@ -12,6 +12,39 @@ export function isRevivePotionName(name: string): boolean {
   return REVIVE_POTION_NAMES.includes(name as (typeof REVIVE_POTION_NAMES)[number]);
 }
 
+/** Prefix for battle log lines — InSession UI highlights these. */
+export const LIVE_EVENT_REVIVE_BATTLE_LOG_PREFIX = '💚 REVIVE';
+
+/**
+ * Standard battle log line: who was revived, how, and HP outcome.
+ * Format: "💚 REVIVE — {player} — How: {method} — {hpPart}"
+ */
+export function formatLiveEventReviveBattleLog(
+  revivedDisplayName: string,
+  howMethod: string,
+  hpPart: string
+): string {
+  const who = (revivedDisplayName || 'Player').trim() || 'Player';
+  const how = howMethod.trim() || 'unknown';
+  const hp = hpPart.trim() || 'HP restored';
+  return `${LIVE_EVENT_REVIVE_BATTLE_LOG_PREFIX} — ${who} — How: ${how} — ${hp}`;
+}
+
+export function isLiveEventReviveBattleLogLine(line: string): boolean {
+  if (typeof line !== 'string' || !line.trim()) return false;
+  if (line.startsWith(LIVE_EVENT_REVIVE_BATTLE_LOG_PREFIX)) return true;
+  const low = line.toLowerCase();
+  if (line.startsWith('💚')) {
+    if (low.includes('revive potion')) return true;
+    if (low.includes('host') && low.includes('revived')) return true;
+    if (/returned at|return with/.test(low)) return true;
+  }
+  if (line.startsWith('🛒') && low.includes('mst mkt') && /returned at|return at/.test(low)) {
+    return true;
+  }
+  return false;
+}
+
 type SessionPlayerLike = {
   userId: string;
   displayName?: string;
@@ -90,7 +123,11 @@ export async function applyRevivePotionInLiveEvent(
         players[tIdx] = target as (typeof players)[number];
         const battleLog = [...(data.battleLog || [])];
         battleLog.push(
-          `💚 ${actorName} used a Revive Potion and returned at ${newHp}/${maxHp} HP!`
+          formatLiveEventReviveBattleLog(
+            actorName,
+            'Revive Potion (self — used participation move)',
+            `${newHp}/${maxHp} HP`
+          )
         );
         transaction.update(sessionRef, {
           players,
@@ -117,7 +154,11 @@ export async function applyRevivePotionInLiveEvent(
 
       const battleLog = [...(data.battleLog || [])];
       battleLog.push(
-        `💚 ${actorName} used a Revive Potion on ${targetName}! They return with ${newHp}/${maxHp} HP.`
+        formatLiveEventReviveBattleLog(
+          targetName,
+          `Revive Potion from teammate ${actorName} (spent their participation move)`,
+          `${newHp}/${maxHp} HP`
+        )
       );
 
       transaction.update(sessionRef, {
@@ -222,10 +263,20 @@ export async function hostReviveEliminatedPlayersInLiveEvent(
       }
 
       const battleLog = [...(data.battleLog || [])];
-      const names = revivedInTx.map((r) => r.displayName).join(', ');
-      battleLog.push(
-        `💚 Host (${hostDisplayName}) revived ${revivedInTx.length} player${revivedInTx.length === 1 ? '' : 's'}: ${names}`
-      );
+      revivedInTx.forEach((meta) => {
+        const row = players.find((p) => (p as SessionPlayerLike).userId === meta.userId) as
+          | SessionPlayerLike
+          | undefined;
+        const nh = row?.hp ?? '?';
+        const mh = row?.maxHp ?? '?';
+        battleLog.push(
+          formatLiveEventReviveBattleLog(
+            meta.displayName,
+            `Host revive (host/staff: ${hostDisplayName})`,
+            `${nh}/${mh} HP (${hpPct}% of max)`
+          )
+        );
+      });
 
       transaction.update(sessionRef, {
         players,

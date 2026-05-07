@@ -5,7 +5,11 @@
 import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { debug, debugError } from './inSessionDebug';
-import { clearLiveEventEliminationStats, reviveEliminatedSessionPlayerRow } from './liveEventRevive';
+import {
+  clearLiveEventEliminationStats,
+  formatLiveEventReviveBattleLog,
+  reviveEliminatedSessionPlayerRow,
+} from './liveEventRevive';
 import { fetchMergedMarketplaceCatalog } from './marketplaceStoreMerge';
 import { liveEventMstListableItems } from './marketplaceConsumableUtils';
 import type { MarketplaceStoreArtifact } from '../data/marketplaceArtifactsCatalog';
@@ -148,7 +152,11 @@ export async function purchaseLiveEventMstMktItem(
           const newHp = reviveEliminatedSessionPlayerRow(revived, hpPct);
           revived.powerPoints = pp - costPp;
           players[idx] = revived as (typeof players)[number];
-          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT and returned at ${newHp}/${revived.maxHp ?? 100} HP!`;
+          logLineOut = formatLiveEventReviveBattleLog(
+            buyerDisplayName,
+            `${itemName} — MST MKT (self revive; session PP spent)`,
+            `${newHp}/${revived.maxHp ?? 100} HP`
+          );
           hpAfter = revived.hp;
           shieldAfter = revived.shield;
           needsEliminationClear = true;
@@ -165,7 +173,11 @@ export async function purchaseLiveEventMstMktItem(
           players[tIdx] = targetRow as (typeof players)[number];
           const buyerNext = { ...row, powerPoints: pp - costPp };
           players[idx] = buyerNext as (typeof players)[number];
-          logLineOut = `🛒 ${buyerDisplayName} bought ${itemName} from MST MKT for ${tName}! They return at ${newHp}/${targetRow.maxHp ?? 100} HP.`;
+          logLineOut = formatLiveEventReviveBattleLog(
+            tName,
+            `${itemName} — MST MKT (purchased by ${buyerDisplayName} for eliminated teammate; session PP spent)`,
+            `${newHp}/${targetRow.maxHp ?? 100} HP`
+          );
           hpAfter = targetRow.hp;
           shieldAfter = targetRow.shield;
           needsEliminationClear = true;

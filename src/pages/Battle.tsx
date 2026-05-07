@@ -22,6 +22,45 @@ import type { ElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
 import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
 
+type BattleArenaMainTabId = 'battle' | 'vault' | 'moves' | 'cards';
+
+/** Main Battle Arena tabs: labels + tooltip copy aligned with Battle Arena Instructions. */
+const BATTLE_ARENA_MAIN_TABS: ReadonlyArray<{
+  id: BattleArenaMainTabId;
+  label: string;
+  icon: string;
+  description: string;
+}> = [
+  {
+    id: 'battle',
+    label: 'Player Battle',
+    icon: '⚔️',
+    description:
+      'Start PvP, vault siege, or practice. View your vault row, Live Battle toggle, PP sync, recent battle history, and quick-action cards—all in one place.',
+  },
+  {
+    id: 'vault',
+    label: 'Vault Management',
+    icon: '🏦',
+    description:
+      'Upgrade vault PP capacity, health, shields, and related systems. Spend Power Points to toughen your vault before fights.',
+  },
+  {
+    id: 'moves',
+    label: 'Skills & Mastery',
+    icon: '🎯',
+    description:
+      'Manage Manifest and elemental moves: level skills with PP, unlock new abilities, Mindforge tweaks, and keep your combat loadout ready.',
+  },
+  {
+    id: 'cards',
+    label: 'Action Cards',
+    icon: '🃏',
+    description:
+      'Configure action cards—buffs, heals, shields, and other effects—to use across battles and sharpen your toolkit.',
+  },
+];
+
 const Battle: React.FC = () => {
   const { currentUser } = useAuth();
   const { 
@@ -88,6 +127,8 @@ const Battle: React.FC = () => {
   };
   
   const [activeTab, setActiveTab] = useState<'lobby' | 'vault' | 'moves' | 'cards' | 'offline' | 'history' | 'battle'>(getInitialTab());
+  const [hoveredArenaTabId, setHoveredArenaTabId] = useState<BattleArenaMainTabId | null>(null);
+  const [focusedArenaTabId, setFocusedArenaTabId] = useState<BattleArenaMainTabId | null>(null);
   const [selectedBattleMode, setSelectedBattleMode] = useState<'pvp' | 'offline' | 'practice' | 'mindforge' | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [showVaultSiegeModal, setShowVaultSiegeModal] = useState(false);
@@ -459,30 +500,79 @@ const Battle: React.FC = () => {
         justifyContent: 'space-between'
       }}>
         <div style={{ display: 'flex' }}>
-          {[
-            { id: 'battle', label: 'Player Battle', icon: '⚔️' },
-            { id: 'vault', label: 'Vault Management', icon: '🏦' },
-            { id: 'moves', label: 'Skills & Mastery', icon: '🎯' },
-            { id: 'cards', label: 'Action Cards', icon: '🃏' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              style={{
-                background: activeTab === tab.id ? '#4f46e5' : 'transparent',
-                color: activeTab === tab.id ? 'white' : '#6b7280',
-                border: 'none',
-                padding: '1rem 1.5rem',
-                fontSize: '1rem',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                borderBottom: activeTab === tab.id ? '2px solid #4f46e5' : 'none',
-                transition: 'all 0.2s'
-              }}
-            >
-              {tab.icon} {tab.label}
-            </button>
-          ))}
+          {BATTLE_ARENA_MAIN_TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            const isHovered = hoveredArenaTabId === tab.id && !isActive;
+            const tabFocused = focusedArenaTabId === tab.id;
+            const showTabTip = hoveredArenaTabId === tab.id || tabFocused;
+            return (
+              <span
+                key={tab.id}
+                style={{
+                  position: 'relative',
+                  display: 'inline-block',
+                  marginRight: '0.15rem',
+                }}
+                onMouseEnter={() => setHoveredArenaTabId(tab.id)}
+                onMouseLeave={() => setHoveredArenaTabId(null)}
+              >
+                <button
+                  type="button"
+                  aria-describedby={showTabTip ? `battle-tab-tip-${tab.id}` : undefined}
+                  onFocus={() => setFocusedArenaTabId(tab.id)}
+                  onBlur={() => setFocusedArenaTabId(null)}
+                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                  style={{
+                    background: isActive ? '#4f46e5' : isHovered ? '#eef2ff' : 'transparent',
+                    color: isActive ? 'white' : isHovered ? '#4338ca' : '#6b7280',
+                    border: 'none',
+                    borderRadius: '0.5rem 0.5rem 0 0',
+                    padding: '1rem 1.5rem',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    borderBottom: isActive ? '2px solid #4f46e5' : '2px solid transparent',
+                    transition: 'background 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease',
+                    transform: isHovered || isActive ? 'translateY(-1px)' : 'translateY(0)',
+                    boxShadow:
+                      isHovered && !isActive
+                        ? '0 6px 16px rgba(79, 70, 229, 0.18)'
+                        : isActive
+                          ? '0 2px 10px rgba(79, 70, 229, 0.25)'
+                          : 'none',
+                  }}
+                >
+                  {tab.icon} {tab.label}
+                </button>
+                {showTabTip && (
+                  <div
+                    id={`battle-tab-tip-${tab.id}`}
+                    role="tooltip"
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: '100%',
+                      marginTop: '0.35rem',
+                      minWidth: 'min(22rem, 92vw)',
+                      maxWidth: 'min(26rem, 94vw)',
+                      padding: '0.75rem 0.875rem',
+                      background: '#1e1b4b',
+                      color: '#e0e7ff',
+                      fontSize: '0.8125rem',
+                      fontWeight: 500,
+                      lineHeight: 1.45,
+                      borderRadius: '0.5rem',
+                      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.22)',
+                      zIndex: 50,
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    {tab.description}
+                  </div>
+                )}
+              </span>
+            );
+          })}
         </div>
         
         {/* PP + Truth Metal — visible on Battle Arena tabs */}
@@ -1147,12 +1237,13 @@ const Battle: React.FC = () => {
                 </p>
                 
                 {(() => {
-                  const { getMaxShields, getShieldUpgradeCost } = require('../utils/vaultEconomy');
+                  const { getMaxShields, getShieldUpgradeCost, SHIELD_MAX_LEVEL } = require('../utils/vaultEconomy');
                   const currentLevel = vault?.shieldLevel || 1;
                   const currentMaxShields = getMaxShields(currentLevel);
-                  const nextMaxShields = getMaxShields(currentLevel + 1);
+                  const isMaxLevel = currentLevel >= SHIELD_MAX_LEVEL;
+                  const nextMaxShields = getMaxShields(Math.min(currentLevel + 1, SHIELD_MAX_LEVEL));
                   const upgradeCost = getShieldUpgradeCost(currentLevel);
-                  const canAfford = (vault?.currentPP || 0) >= upgradeCost;
+                  const canAfford = !isMaxLevel && (vault?.currentPP || 0) >= upgradeCost;
                   
                   return (
                     <>
@@ -1181,13 +1272,15 @@ const Battle: React.FC = () => {
                         border: '1px solid rgba(37, 99, 235, 0.2)'
                       }}>
                         <div style={{ fontSize: '0.875rem', color: '#2563eb', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                          ⬆️ After Upgrade
+                          {isMaxLevel ? '✅ Max Level Reached' : '⬆️ After Upgrade'}
                         </div>
                         <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#2563eb' }}>
                           {nextMaxShields} Shields
                         </div>
                         <div style={{ fontSize: '0.875rem', color: '#2563eb' }}>
-                          +{nextMaxShields - currentMaxShields} max shield strength
+                          {isMaxLevel
+                            ? `Shield Enhancement caps at Level ${SHIELD_MAX_LEVEL}`
+                            : `+${nextMaxShields - currentMaxShields} max shield strength`}
                         </div>
                       </div>
                       
@@ -1219,8 +1312,10 @@ const Battle: React.FC = () => {
                             e.currentTarget.style.boxShadow = 'none';
                           }
                         }}>
-                        🛡️ Upgrade ({upgradeCost} PP)
-                        {!canAfford && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.9 }}>Insufficient PP</div>}
+                        {isMaxLevel ? '✅ Max Level' : `🛡️ Upgrade (${upgradeCost} PP)`}
+                        {!canAfford && !isMaxLevel && (
+                          <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.9 }}>Insufficient PP</div>
+                        )}
                       </button>
                     </>
                   );

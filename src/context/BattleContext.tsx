@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { db } from '../firebase';
 import { 
@@ -245,6 +245,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [success, setSuccess] = useState<string | null>(null);
   const [vaultUpgradeModalData, setVaultUpgradeModalData] = useState<VaultUpgradeData | null>(null);
   const [showVaultUpgradeModal, setShowVaultUpgradeModal] = useState(false);
+  const shieldUpgradeInFlightRef = useRef(false);
 
   // Clear success message after 3 seconds
   useEffect(() => {
@@ -1789,12 +1790,14 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const upgradeVaultShields = async () => {
     if (!currentUser || !vault) return;
+    if (shieldUpgradeInFlightRef.current) return;
+    shieldUpgradeInFlightRef.current = true;
     
     try {
       const { 
         getMaxShields, 
         getShieldUpgradeCost,
-        getCapacity
+        SHIELD_MAX_LEVEL
       } = await import('../utils/vaultEconomy');
       
       const vaultRef = doc(db, 'vaults', currentUser.uid);
@@ -1821,6 +1824,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const currentPP = vaultData.currentPP || 0;
         const studentPP = studentDoc.exists() ? (studentDoc.data().powerPoints || 0) : 0;
         const actualPP = Math.max(currentPP, studentPP); // Use higher value
+        if (oldShieldLevel >= SHIELD_MAX_LEVEL) {
+          throw new Error(`Shield Enhancement is already at max level (${SHIELD_MAX_LEVEL}).`);
+        }
         
         // Calculate old and new values using formulas
         oldMaxShields = getMaxShields(oldShieldLevel);
@@ -1835,14 +1841,15 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         newShieldLevel = oldShieldLevel + 1;
         newMaxShields = getMaxShields(newShieldLevel);
         const newPP = actualPP - upgradeCost;
-        
-        // Validate cost doesn't exceed 75% of current capacity
-        const currentCapacityLevel = vaultData.capacityLevel || 1;
-        const currentCapacity = getCapacity(currentCapacityLevel);
-        const maxAllowedCost = Math.floor(0.75 * currentCapacity);
-        if (upgradeCost > maxAllowedCost) {
-          console.warn(`[Vault Economy] Shield cost ${upgradeCost} exceeds 75% of capacity ${currentCapacity}. This should not happen!`);
-        }
+        console.log('[Vault Shield Upgrade Debug]', {
+          currentShieldLevel: oldShieldLevel,
+          nextShieldLevel: newShieldLevel,
+          calculatedUpgradeCost: upgradeCost,
+          currentPP: actualPP,
+          newPPAfterPurchase: newPP,
+          currentMaxShields: oldMaxShields,
+          newMaxShields,
+        });
         
         // Write updates
         transaction.update(vaultRef, {
@@ -1876,6 +1883,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (error: any) {
       console.error('Error upgrading vault shields:', error);
       setError(error.message || 'Failed to upgrade vault shields');
+    } finally {
+      shieldUpgradeInFlightRef.current = false;
     }
   };
 

@@ -577,6 +577,14 @@ const AppContent = () => {
                 </RequireAdmin>
               }
             />
+            <Route
+              path="/admin/productivity"
+              element={
+                <RequireAdmin>
+                  <Navigate to="/admin?tab=productivity" replace />
+                </RequireAdmin>
+              }
+            />
             <Route path="/marketplace" element={
               <ProtectedRoute user={true}>
                 <Marketplace />

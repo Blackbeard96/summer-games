@@ -29,6 +29,26 @@ service cloud.firestore {
       );
     }
 
+    // Productivity dashboards (Firestore); UI is gated via RequireAdmin
+    function isProductivityAdmin() {
+      return isAdmin() || isAppAdminUser();
+    }
+
+    function productivitySprintWritable() {
+      return request.auth != null && (
+        isLiveEventStaff() ||
+        isProductivityAdmin() ||
+        request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    function productivityQuizWritable() {
+      return request.auth != null && (
+        isProductivityAdmin() ||
+        request.resource.data.userId == request.auth.uid
+      );
+    }
+
     // Teachers / admins listing assessment goals, results, habits by assessmentId (queries must not depend only on resource.studentId).
     function isAssessmentDashboardStaff() {
       return isLiveEventStaff() || isAdmin() || isAppAdminUser();
@@ -1151,6 +1171,32 @@ service cloud.firestore {
         request.auth.uid == resource.data.hostId ||
         (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
       );
+    }
+
+    // --- Productivity tracking (Class Flow sprints + quizzes) ---
+    // Reads: students see own doc; staff use isAssessmentDashboardStaff (same cohort as assessment dashboards).
+    match /productivityStats/{userId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAssessmentDashboardStaff()
+      );
+      allow create, update: if request.auth != null && (
+        request.auth.uid == userId ||
+        isProductivityAdmin()
+      );
+      allow delete: if isProductivityAdmin();
+    }
+
+    match /sprintProductivityLogs/{logId} {
+      allow read: if request.auth != null && isAssessmentDashboardStaff();
+      allow create, update: if productivitySprintWritable();
+      allow delete: if isProductivityAdmin();
+    }
+
+    match /quizProductivityLogs/{logId} {
+      allow read: if request.auth != null && isAssessmentDashboardStaff();
+      allow create, update: if productivityQuizWritable();
+      allow delete: if isProductivityAdmin();
     }
     
     // Default rule - deny all other access

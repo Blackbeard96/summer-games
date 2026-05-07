@@ -117,6 +117,7 @@ import LiveEventSprintPanel from './LiveEventSprintPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
 import LiveEventEconomyHud from './liveEvent/LiveEventEconomyHud';
+import LiveEventBattleLogLine from './liveEvent/LiveEventBattleLogLine';
 import './liveEvent/flowState.css';
 import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
 import { hostReviveEliminatedPlayersInLiveEvent } from '../utils/liveEventRevive';
@@ -5231,9 +5232,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 </div>
               ) : (
                 [...battleLog].reverse().map((log, revIndex) => (
-                  <div key={battleLog.length - 1 - revIndex} style={{ color: 'white', padding: '0.25rem 0' }}>
-                    {log}
-                  </div>
+                  <LiveEventBattleLogLine key={battleLog.length - 1 - revIndex} line={log} lightOnDark />
                 ))
               )}
             </div>

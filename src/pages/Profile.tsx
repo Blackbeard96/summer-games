@@ -4,6 +4,7 @@ import { useBattle } from '../context/BattleContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db, storage } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, getAuth } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
@@ -162,6 +163,7 @@ const Profile = () => {
   const [showPowerBreakdown, setShowPowerBreakdown] = useState(false);
   const [showWaysToEarnPpModal, setShowWaysToEarnPpModal] = useState(false);
   const [profilePowerStatHover, setProfilePowerStatHover] = useState<PowerStatBranch | null>(null);
+  const [productivityStats, setProductivityStats] = useState<ProductivityStatDoc | null | undefined>(undefined);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -412,6 +414,29 @@ const Profile = () => {
     }, 1000); // Update every second
     
     return () => clearInterval(interval);
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setProductivityStats(undefined);
+      return;
+    }
+    const ref = doc(db, 'productivityStats', currentUser.uid);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          setProductivityStats({
+            userId: currentUser.uid,
+            ...(snap.data() as object),
+          } as ProductivityStatDoc);
+        } else {
+          setProductivityStats(null);
+        }
+      },
+      () => setProductivityStats(null)
+    );
+    return () => unsub();
   }, [currentUser]);
 
   useEffect(() => {
@@ -1167,6 +1192,64 @@ const Profile = () => {
               powerStats={profilePowerStats}
             />
           </div>
+          {productivityStats !== undefined && (
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 40%, #e0f2fe 100%)',
+                borderRadius: '0.75rem',
+                padding: '1rem 1.25rem',
+                border: '1px solid #86efac',
+                boxShadow: '0 2px 8px rgba(16,185,129,0.15)',
+              }}
+            >
+              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#065f46' }}>
+                Productivity
+              </h3>
+              {productivityStats ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+                    gap: '0.65rem',
+                    fontSize: '0.8125rem',
+                    color: '#064e3b',
+                  }}
+                >
+                  <div>
+                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Rating</div>
+                    <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>
+                      {Math.round(productivityStats.overallProductivityRating || 0)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Rank</div>
+                    <div style={{ fontWeight: 800 }}>{productivityStats.productivityRank || '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint completion</div>
+                    <div style={{ fontWeight: 800 }}>
+                      {Math.round(productivityStats.sprintCompletionRate || 0)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Quiz average</div>
+                    <div style={{ fontWeight: 800 }}>
+                      {Math.round(productivityStats.averageQuizScore || 0)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly streak</div>
+                    <div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div>
+                  </div>
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
+                  Join Class Flow sprints and complete Training Grounds quizzes to populate your productivity
+                  profile.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Column - Profile Settings or Skill Tree Settings */}

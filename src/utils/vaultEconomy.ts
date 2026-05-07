@@ -36,36 +36,57 @@ export function getCapacityUpgradeCost(currentLevel: number): number {
   return Math.min(rawCost, hardCap);
 }
 
+/** Shield Enhancement max supported upgrade level in UI/transactions. */
+export const SHIELD_MAX_LEVEL = 10;
+
+/** Curated shield progression table (level -> max shields). */
+const SHIELD_MAX_VALUE_BY_LEVEL: Record<number, number> = {
+  1: 500,
+  2: 900,
+  3: 1500,
+  4: 2400,
+  5: 3800,
+  6: 5600,
+  7: 7600,
+  8: 9800,
+  9: 12200,
+  10: 15000,
+};
+
+/** Curated shield upgrade cost table (current level -> PP cost to next level). */
+const SHIELD_UPGRADE_COST_BY_LEVEL: Record<number, number> = {
+  1: 120,
+  2: 220,
+  3: 420,
+  4: 750,
+  5: 1200,
+  6: 1750,
+  7: 2500,
+  8: 3600,
+  9: 5000,
+};
+
 /**
- * Calculate max shields for a given shield level
- * Formula: MaxShields(L) = round(2.1 * Capacity(L))
- * 
- * Note: This uses the capacity formula with shieldLevel as the index,
- * so shields scale independently but use the same curve.
- * 
- * @param shieldLevel - Current shield level (starts at 1)
- * @returns Max shield strength
+ * Calculate max shields for a given shield level using curated table.
+ * For legacy data above level 10, we extend conservatively so existing users don't break.
  */
 export function getMaxShields(shieldLevel: number): number {
   if (shieldLevel < 1) shieldLevel = 1;
-  const capacityAtLevel = getCapacity(shieldLevel);
-  return Math.round(2.1 * capacityAtLevel);
+  if (shieldLevel <= SHIELD_MAX_LEVEL) {
+    return SHIELD_MAX_VALUE_BY_LEVEL[shieldLevel];
+  }
+  // Safe legacy fallback for users above configured max level.
+  return SHIELD_MAX_VALUE_BY_LEVEL[SHIELD_MAX_LEVEL] + (shieldLevel - SHIELD_MAX_LEVEL) * 3000;
 }
 
 /**
- * Calculate shield upgrade cost (L -> L+1)
- * Formula: CostShields = round(0.12 * Capacity(L))
- *          CostShields = min(CostShields, floor(0.75 * Capacity(L)))
- * 
- * @param currentShieldLevel - Current shield level
- * @returns Upgrade cost in PP
+ * Calculate shield upgrade cost (L -> L+1) using curated table.
+ * Returns Infinity at/above max to prevent further upgrades.
  */
 export function getShieldUpgradeCost(currentShieldLevel: number): number {
   if (currentShieldLevel < 1) currentShieldLevel = 1;
-  const capacityAtLevel = getCapacity(currentShieldLevel);
-  const rawCost = Math.round(0.12 * capacityAtLevel);
-  const hardCap = Math.floor(0.75 * capacityAtLevel);
-  return Math.min(rawCost, hardCap);
+  if (currentShieldLevel >= SHIELD_MAX_LEVEL) return Number.POSITIVE_INFINITY;
+  return SHIELD_UPGRADE_COST_BY_LEVEL[currentShieldLevel] ?? Number.POSITIVE_INFINITY;
 }
 
 /**
@@ -158,7 +179,7 @@ export function minCapacityLevelForAtLeast(storedCapacity: number): number {
  * @returns Inferred level (defaults to 1 if cannot be determined)
  */
 export function inferShieldLevel(storedMaxShields: number): number {
-  if (!storedMaxShields || storedMaxShields < 2100) return 1; // 2.1 * 1000
+  if (!storedMaxShields || storedMaxShields < SHIELD_MAX_VALUE_BY_LEVEL[1]) return 1;
   
   // Try to find the closest matching level
   for (let level = 1; level <= 100; level++) {

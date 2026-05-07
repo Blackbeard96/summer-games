@@ -411,6 +411,37 @@ export async function syncLiveEventQuizToTrainingAttempt(
     const attemptId = await createAttempt(attemptPayload);
     const createdAttempt: TrainingAttempt = { id: attemptId, ...attemptPayload };
     await updateTrainingStats(userId, createdAttempt);
+
+    try {
+      const { recordQuizProductivityAttempt } = await import('./productivityTracking');
+      const qs = await getQuizSet(quizSetId);
+      let completedMs = Date.now();
+      try {
+        const ca = attemptPayload.completedAt;
+        if (ca && typeof (ca as { toMillis?: () => number }).toMillis === 'function') {
+          completedMs = (ca as { toMillis: () => number }).toMillis();
+        }
+      } catch (_) {
+        /* keep now */
+      }
+      void recordQuizProductivityAttempt({
+        userId,
+        quizSetId,
+        attemptId,
+        classId: qs?.classIds?.[0],
+        scorePercent: percent,
+        correctAnswers: scoreCorrect,
+        totalQuestions: scoreTotal,
+        timeTakenMs: 0,
+        completedAtMs: completedMs,
+        quizTopic: qs?.title ?? '',
+        questionTags: qs && Array.isArray(qs.tags) ? qs.tags : [],
+        mode: 'live',
+      });
+    } catch (_) {
+      /* best-effort productivity */
+    }
+
     return { ok: true };
   } catch (e) {
     console.error('syncLiveEventQuizToTrainingAttempt', e);

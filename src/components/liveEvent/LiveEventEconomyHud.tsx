@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import type { SessionStats } from '../../types/inSessionStats';
+import LiveEventBattleLogLine from './LiveEventBattleLogLine';
 
 const HUD_COLLAPSED_STORAGE_KEY = 'liveEventEconomyHudCollapsed';
 
@@ -225,12 +226,10 @@ const LiveEventEconomyHud: React.FC<Props> = ({
               key={`${i}-${line.slice(0, 24)}`}
               style={{
                 borderBottom: '1px solid rgba(51,65,85,0.5)',
-                padding: '0.2rem 0',
-                lineHeight: 1.35,
-                color: '#cbd5e1',
+                padding: '0.15rem 0',
               }}
             >
-              {line}
+              <LiveEventBattleLogLine line={line} lightOnDark subdued />
             </div>
           ))
         )}

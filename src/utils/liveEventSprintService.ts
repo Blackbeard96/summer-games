@@ -24,6 +24,11 @@ import {
   recordHabitLiveEventSprintCompletion,
   recordHabitLiveEventSprintOpportunity,
 } from './habitLiveEventEvidenceService';
+import {
+  recordClassFlowSprintJoinsForPlayers,
+  recordClassFlowSprintCompletion,
+  recordClassFlowSprintMissed,
+} from './productivityTracking';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -174,6 +179,21 @@ export async function startClassFlowSprint(
     void recordHabitLiveEventSprintOpportunity(sessionId, title, playerUidsForSprints).catch(() => {
       /* best-effort habit live-event evidence */
     });
+
+    const roomClassId =
+      typeof snap.data()?.classId === 'string'
+        ? snap.data()!.classId
+        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
+          ? snap.data()!.classIds[0]
+          : undefined;
+    recordClassFlowSprintJoinsForPlayers(
+      sessionId,
+      id,
+      playerUidsForSprints,
+      roomClassId,
+      title,
+      now.toMillis()
+    );
 
     return { ok: true };
   } catch (e) {
@@ -484,6 +504,24 @@ export async function grantSprintRewardForSinglePlayer(
       /* best-effort weekly goals + habit evidence */
     }
 
+    const roomClassId =
+      typeof snap.data()?.classId === 'string'
+        ? snap.data()!.classId
+        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
+          ? snap.data()!.classIds[0]
+          : undefined;
+    const startedMsForProductivity = tsToMillis(sprint.startedAt);
+    void recordClassFlowSprintCompletion({
+      sessionId,
+      sprintId: sprint.id,
+      userId: playerUid,
+      classId: roomClassId,
+      completedAtMs: Date.now(),
+      sprintTitle: sprint.title,
+      sprintType: 'class_flow',
+      startedAtMs: startedMsForProductivity,
+    });
+
     return { ok: true, granted: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -606,6 +644,24 @@ export async function applyClassFlowSprintIncompletePenalties(
         `⚠️ Incomplete sprint penalty: −${penalty} vault PP for ${newlyPenalized.length} player(s) on "${sprint.title}" (not marked complete).`
       ),
     });
+
+    const roomClassId =
+      typeof snap.data()?.classId === 'string'
+        ? snap.data()!.classId
+        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
+          ? snap.data()!.classIds[0]
+          : undefined;
+    const nowMs = Date.now();
+    for (const uid of newlyPenalized) {
+      void recordClassFlowSprintMissed({
+        sessionId,
+        sprintId: sprint.id,
+        userId: uid,
+        classId: roomClassId,
+        missedAtMs: nowMs,
+        sprintTitle: sprint.title,
+      });
+    }
 
     return { ok: true, penalized: newlyPenalized.length };
   } catch (e) {
