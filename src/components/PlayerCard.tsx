@@ -624,7 +624,7 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
                 }}
               >
                 <span>📊</span>
-                Stats
+                Player Stats
               </button>
             </div>
 
@@ -666,10 +666,6 @@ const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
               </div>
             )}
             
-            {/* Flip hint */}
-            <div style={{ color: '#6b7280', fontSize: 14, marginTop: 'auto', textAlign: 'center' }}>
-              Click to view journey details
-            </div>
           </div>
 
           {/* Back */}

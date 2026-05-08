@@ -1188,13 +1188,19 @@ service cloud.firestore {
     }
 
     match /sprintProductivityLogs/{logId} {
-      allow read: if request.auth != null && isAssessmentDashboardStaff();
+      allow read: if request.auth != null && (
+        isAssessmentDashboardStaff() ||
+        resource.data.userId == request.auth.uid
+      );
       allow create, update: if productivitySprintWritable();
       allow delete: if isProductivityAdmin();
     }
 
     match /quizProductivityLogs/{logId} {
-      allow read: if request.auth != null && isAssessmentDashboardStaff();
+      allow read: if request.auth != null && (
+        isAssessmentDashboardStaff() ||
+        resource.data.userId == request.auth.uid
+      );
       allow create, update: if productivityQuizWritable();
       allow delete: if isProductivityAdmin();
     }

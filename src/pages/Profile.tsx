@@ -3,8 +3,23 @@ import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db, storage } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  serverTimestamp,
+  onSnapshot,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
+import { tsMs } from '../utils/productivityTracking';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, getAuth } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
@@ -128,6 +143,28 @@ const isEquippableArtifact = (artifact: any): boolean => {
 
 
 const Profile = () => {
+  type SprintActivityLog = {
+    id: string;
+    sprintTitle?: string;
+    sprintType?: string;
+    status?: string;
+    joinedAt?: unknown;
+    completedAt?: unknown;
+    missedAt?: unknown;
+    completionTime?: number | null;
+    weekId?: string;
+  };
+
+  type QuizActivityLog = {
+    id: string;
+    quizTopic?: string;
+    scorePercent?: number;
+    completedAt?: unknown;
+    weekId?: string;
+    totalQuestions?: number;
+    correctAnswers?: number;
+  };
+
   const { currentUser } = useAuth();
   const { syncVaultPP, vault, moves: battleMoves, refreshVaultData } = useBattle();
   const navigate = useNavigate();
@@ -164,6 +201,9 @@ const Profile = () => {
   const [showWaysToEarnPpModal, setShowWaysToEarnPpModal] = useState(false);
   const [profilePowerStatHover, setProfilePowerStatHover] = useState<PowerStatBranch | null>(null);
   const [productivityStats, setProductivityStats] = useState<ProductivityStatDoc | null | undefined>(undefined);
+  const [productivityActivityLoading, setProductivityActivityLoading] = useState(false);
+  const [recentSprintActivity, setRecentSprintActivity] = useState<SprintActivityLog[]>([]);
+  const [recentQuizActivity, setRecentQuizActivity] = useState<QuizActivityLog[]>([]);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -437,6 +477,86 @@ const Profile = () => {
       () => setProductivityStats(null)
     );
     return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProductivityActivity = async () => {
+      if (!currentUser) {
+        setRecentSprintActivity([]);
+        setRecentQuizActivity([]);
+        return;
+      }
+      setProductivityActivityLoading(true);
+      try {
+        const sprintPrimaryQuery = query(
+          collection(db, 'sprintProductivityLogs'),
+          where('userId', '==', currentUser.uid),
+          orderBy('joinedAt', 'desc'),
+          limit(8)
+        );
+        const quizPrimaryQuery = query(
+          collection(db, 'quizProductivityLogs'),
+          where('userId', '==', currentUser.uid),
+          orderBy('completedAt', 'desc'),
+          limit(8)
+        );
+
+        let sprintDocs;
+        let quizDocs;
+        try {
+          [sprintDocs, quizDocs] = await Promise.all([
+            getDocs(sprintPrimaryQuery),
+            getDocs(quizPrimaryQuery),
+          ]);
+        } catch {
+          const sprintFallback = query(
+            collection(db, 'sprintProductivityLogs'),
+            where('userId', '==', currentUser.uid),
+            limit(20)
+          );
+          const quizFallback = query(
+            collection(db, 'quizProductivityLogs'),
+            where('userId', '==', currentUser.uid),
+            limit(20)
+          );
+          [sprintDocs, quizDocs] = await Promise.all([
+            getDocs(sprintFallback),
+            getDocs(quizFallback),
+          ]);
+        }
+
+        const sprintRows = sprintDocs.docs
+          .map((d) => ({ id: d.id, ...(d.data() as object) } as SprintActivityLog))
+          .sort((a, b) => {
+            const aMs = tsMs(a.completedAt || a.joinedAt || a.missedAt) || 0;
+            const bMs = tsMs(b.completedAt || b.joinedAt || b.missedAt) || 0;
+            return bMs - aMs;
+          })
+          .slice(0, 8);
+        const quizRows = quizDocs.docs
+          .map((d) => ({ id: d.id, ...(d.data() as object) } as QuizActivityLog))
+          .sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0))
+          .slice(0, 8);
+
+        if (cancelled) return;
+        setRecentSprintActivity(sprintRows);
+        setRecentQuizActivity(quizRows);
+      } catch (error) {
+        console.warn('Profile: unable to load productivity activity logs', error);
+        if (!cancelled) {
+          setRecentSprintActivity([]);
+          setRecentQuizActivity([]);
+        }
+      } finally {
+        if (!cancelled) setProductivityActivityLoading(false);
+      }
+    };
+
+    void loadProductivityActivity();
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -1157,9 +1277,9 @@ const Profile = () => {
         }}
       >
         {/* Left Column - Player Card (stay top-aligned; right column may be taller) */}
-        <div style={{ alignSelf: 'start' }}>
+        <div style={{ alignSelf: 'start', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           {/* Player Card on top */}
-          <div style={{ marginBottom: '2rem' }}>
+          <div style={{ marginBottom: '2rem', width: '100%', maxWidth: '380px' }}>
             <PlayerCard
               key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
               name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
@@ -1200,52 +1320,122 @@ const Profile = () => {
                 padding: '1rem 1.25rem',
                 border: '1px solid #86efac',
                 boxShadow: '0 2px 8px rgba(16,185,129,0.15)',
+                width: '100%',
+                maxWidth: '380px',
+                marginTop: '2rem',
               }}
             >
               <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#065f46' }}>
-                Productivity
+                Productivity Stats (My Stats)
               </h3>
               {productivityStats ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-                    gap: '0.65rem',
-                    fontSize: '0.8125rem',
-                    color: '#064e3b',
-                  }}
-                >
-                  <div>
-                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Rating</div>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>
-                      {Math.round(productivityStats.overallProductivityRating || 0)}%
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.65rem' }}>
+                    <span
+                      style={{
+                        background: '#059669',
+                        color: 'white',
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        borderRadius: '999px',
+                        padding: '0.2rem 0.6rem',
+                      }}
+                    >
+                      {productivityStats.productivityRank || 'Dormant'}
+                    </span>
+                    <span style={{ color: '#065f46', fontWeight: 700, fontSize: '0.85rem' }}>
+                      Productivity Rating: {Math.round(productivityStats.overallProductivityRating || 0)}%
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '10px',
+                      background: 'rgba(16, 185, 129, 0.18)',
+                      borderRadius: '999px',
+                      overflow: 'hidden',
+                      marginBottom: '0.9rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(0, Math.min(100, Math.round(productivityStats.overallProductivityRating || 0)))}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #10b981 0%, #0ea5e9 100%)',
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                      gap: '0.65rem',
+                      fontSize: '0.8125rem',
+                      color: '#064e3b',
+                    }}
+                  >
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Joined</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsJoined || 0}</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsCompleted || 0}</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint Completion Rate</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.sprintCompletionRate || 0)}%</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Quizzes Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalQuizzesCompleted || 0}</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Quiz Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageQuizScore || 0)}%</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Current Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Best Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.bestStreak ?? 0} wk</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.weeklyProductivityRating || 0)}%</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Overall Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.overallProductivityRating || 0)}%</div></div>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: '0.9rem',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.5rem', padding: '0.55rem' }}>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
+                        Recent Sprint Activity
+                      </div>
+                      {productivityActivityLoading ? (
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading sprint activity…</div>
+                      ) : recentSprintActivity.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>No sprint activity yet.</div>
+                      ) : (
+                        <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
+                          {recentSprintActivity.slice(0, 5).map((item) => (
+                            <li key={item.id} style={{ marginBottom: '0.2rem' }}>
+                              {(item.status || 'joined').toUpperCase()} — {item.sprintTitle || 'Sprint'}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.5rem', padding: '0.55rem' }}>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
+                        Recent Quiz Activity
+                      </div>
+                      {productivityActivityLoading ? (
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading quiz activity…</div>
+                      ) : recentQuizActivity.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>No quiz activity yet.</div>
+                      ) : (
+                        <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
+                          {recentQuizActivity.slice(0, 5).map((item) => (
+                            <li key={item.id} style={{ marginBottom: '0.2rem' }}>
+                              {(item.quizTopic || 'Quiz')} — {Math.round(item.scorePercent || 0)}%
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </div>
-                  <div>
-                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Rank</div>
-                    <div style={{ fontWeight: 800 }}>{productivityStats.productivityRank || '—'}</div>
-                  </div>
-                  <div>
-                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint completion</div>
-                    <div style={{ fontWeight: 800 }}>
-                      {Math.round(productivityStats.sprintCompletionRate || 0)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Quiz average</div>
-                    <div style={{ fontWeight: 800 }}>
-                      {Math.round(productivityStats.averageQuizScore || 0)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly streak</div>
-                    <div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div>
-                  </div>
-                </div>
+                </>
               ) : (
                 <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
-                  Join Class Flow sprints and complete Training Grounds quizzes to populate your productivity
-                  profile.
+                  No productivity data yet. Join Class Flow sprints and complete Training Grounds quizzes to populate
+                  your My Stats section.
                 </p>
               )}
             </div>

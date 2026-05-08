@@ -20,6 +20,7 @@ import {
 } from '../utils/trainingGroundsService';
 import { TrainingQuizSet, TrainingQuestion, DEFAULT_REWARDS } from '../types/trainingGrounds';
 import { getAvailableArtifacts } from '../utils/artifactCompensation';
+import { exportTrainingGroundCFUsToCSV } from '../utils/exportTrainingGroundCFUsToCSV';
 
 const MIN_TRAINING_ANSWER_CHOICES = 2;
 const MAX_TRAINING_ANSWER_CHOICES = 6;
@@ -94,6 +95,8 @@ const TrainingGroundsAdmin: React.FC = () => {
   const [editClassIds, setEditClassIds] = useState<string[]>([]);
   const [savingClassIds, setSavingClassIds] = useState(false);
   const [savingPlayerCompletions, setSavingPlayerCompletions] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const [csvTopicFilter, setCsvTopicFilter] = useState('');
 
   // Form state
   const [quizSetForm, setQuizSetForm] = useState({
@@ -200,6 +203,93 @@ const TrainingGroundsAdmin: React.FC = () => {
     } catch (error) {
       console.error('Error loading questions:', error);
       alert('Failed to load questions');
+    }
+  };
+
+  const csvDateStamp = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const sanitizeFilePart = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 50) || 'all';
+
+  const matchesTopicFilter = (question: TrainingQuestion, quizSet: TrainingQuizSet, filter: string) => {
+    const f = filter.trim().toLowerCase();
+    if (!f) return true;
+    const questionTopic = (question.category || '').toLowerCase();
+    const setTitle = (quizSet.title || '').toLowerCase();
+    const setTags = (quizSet.tags || []).join(' ').toLowerCase();
+    return questionTopic.includes(f) || setTitle.includes(f) || setTags.includes(f);
+  };
+
+  const buildExportFileName = (base: string, topicFilter: string) => {
+    const topicPart = topicFilter.trim() ? `-${sanitizeFilePart(topicFilter)}` : '';
+    return `training-ground-cfus-${sanitizeFilePart(base)}${topicPart}-${csvDateStamp()}.csv`;
+  };
+
+  const handleExportSelectedQuizCsv = async () => {
+    if (!selectedQuizSet) {
+      alert('Select a quiz set first.');
+      return;
+    }
+    setExportingCsv(true);
+    try {
+      const setQuestions = await getQuestions(selectedQuizSet.id);
+      const filtered = setQuestions.filter((q) => matchesTopicFilter(q, selectedQuizSet, csvTopicFilter));
+      if (filtered.length === 0) {
+        alert('No questions matched the selected filter.');
+        return;
+      }
+      exportTrainingGroundCFUsToCSV(
+        filtered.map((q) => ({
+          ...q,
+          quizSetTitle: selectedQuizSet.title,
+          tags: selectedQuizSet.tags || [],
+        })),
+        buildExportFileName(selectedQuizSet.title, csvTopicFilter)
+      );
+    } catch (error) {
+      console.error('Error exporting selected quiz CSV:', error);
+      alert('Failed to export selected quiz CSV.');
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
+  const handleExportAllCsv = async () => {
+    setExportingCsv(true);
+    try {
+      const allSets = await getAllQuizSets(true);
+      const allRows: Array<TrainingQuestion & { quizSetTitle: string; tags: string[] }> = [];
+      for (const quizSet of allSets) {
+        const setQuestions = await getQuestions(quizSet.id);
+        setQuestions.forEach((q) => {
+          if (!matchesTopicFilter(q, quizSet, csvTopicFilter)) return;
+          allRows.push({
+            ...q,
+            quizSetTitle: quizSet.title,
+            tags: quizSet.tags || [],
+          });
+        });
+      }
+      if (allRows.length === 0) {
+        alert('No CFUs found for the selected filter.');
+        return;
+      }
+      exportTrainingGroundCFUsToCSV(allRows, buildExportFileName('all', csvTopicFilter));
+    } catch (error) {
+      console.error('Error exporting all CFUs CSV:', error);
+      alert('Failed to export all CFUs CSV.');
+    } finally {
+      setExportingCsv(false);
     }
   };
 
@@ -818,20 +908,52 @@ const TrainingGroundsAdmin: React.FC = () => {
     <div style={{ padding: '2rem' }}>
       <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Training Grounds (CFUs) Management</h2>
-        <button
-          onClick={() => setShowCreateForm(true)}
-          style={{
-            padding: '0.5rem 1rem',
-            background: '#4f46e5',
-            color: 'white',
-            border: 'none',
-            borderRadius: '0.5rem',
-            cursor: 'pointer',
-            fontWeight: '600',
-          }}
-        >
-          + Create Quiz Set
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <input
+            type="text"
+            placeholder="Filter by topic/category"
+            value={csvTopicFilter}
+            onChange={(e) => setCsvTopicFilter(e.target.value)}
+            style={{
+              padding: '0.45rem 0.6rem',
+              border: '1px solid #d1d5db',
+              borderRadius: '0.5rem',
+              minWidth: '190px',
+              fontSize: '0.8rem',
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => void handleExportAllCsv()}
+            disabled={exportingCsv}
+            style={{
+              padding: '0.5rem 0.9rem',
+              background: exportingCsv ? '#9ca3af' : '#0ea5e9',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              cursor: exportingCsv ? 'not-allowed' : 'pointer',
+              fontWeight: 600,
+              fontSize: '0.82rem',
+            }}
+          >
+            {exportingCsv ? 'Exporting…' : '⬇ Export All CSV'}
+          </button>
+          <button
+            onClick={() => setShowCreateForm(true)}
+            style={{
+              padding: '0.5rem 1rem',
+              background: '#4f46e5',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              cursor: 'pointer',
+              fontWeight: '600',
+            }}
+          >
+            + Create Quiz Set
+          </button>
+        </div>
       </div>
 
       {/* Create Quiz Set Modal */}
@@ -1112,6 +1234,22 @@ const TrainingGroundsAdmin: React.FC = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => void handleExportSelectedQuizCsv()}
+                  disabled={exportingCsv}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: exportingCsv ? '#9ca3af' : '#0ea5e9',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    cursor: exportingCsv ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  {exportingCsv ? 'Exporting…' : '⬇ Export CSV'}
+                </button>
                 <button
                   onClick={() => loadCompletionStats(selectedQuizSet.id)}
                   style={{

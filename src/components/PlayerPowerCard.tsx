@@ -556,10 +556,6 @@ const PlayerPowerCard: React.FC<PlayerPowerCardProps> = ({
           </button>
         </div>
         
-        {/* Flip hint */}
-        <div style={{ color: '#6b7280', fontSize: 10, marginTop: 6, textAlign: 'center', width: '100%', flexShrink: 0 }}>
-          Click to view journey details
-        </div>
       </div>
 
             {/* Back */}
