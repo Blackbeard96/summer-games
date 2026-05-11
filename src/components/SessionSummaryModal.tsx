@@ -193,6 +193,167 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
           </p>
         </div>
 
+        {/* Session activity: modes, sprints, quiz performance */}
+        {displaySummary.sessionActivity && (
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.95)',
+              borderRadius: '0.75rem',
+              padding: '1.25rem',
+              marginBottom: '1rem',
+              border: '2px solid #a855f7',
+            }}
+          >
+            <h3
+              style={{
+                fontSize: '1.25rem',
+                fontWeight: 'bold',
+                color: '#1f2937',
+                marginBottom: '0.5rem',
+              }}
+            >
+              📋 What happened this session
+            </h3>
+            <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '1rem', marginTop: 0 }}>
+              <strong>Room focus:</strong> {displaySummary.sessionActivity.sessionModeLabel}
+            </p>
+
+            {displaySummary.sessionActivity.sprints.length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#581c87', margin: '0 0 0.5rem 0' }}>
+                  Class Flow sprints
+                </h4>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  {displaySummary.sessionActivity.sprints.map((sp, idx) => {
+                    const named = sp.completedPlayerNames.length;
+                    const bulk = sp.bulkCompletionsAnnounced;
+                    const penalty = sp.incompletePenaltyPlayerCount;
+                    let successLine = '';
+                    if (named > 0 && typeof bulk === 'number' && bulk > 0) {
+                      successLine = `${named} named in log • bulk grant announced for ${bulk}`;
+                    } else if (named > 0) {
+                      successLine = `${named} completed: ${sp.completedPlayerNames.join(', ')}`;
+                    } else if (typeof bulk === 'number' && bulk > 0) {
+                      successLine = `${bulk} player${bulk === 1 ? '' : 's'} marked complete (bulk grant)`;
+                    } else {
+                      successLine = 'No completions recorded in the event log for this sprint.';
+                    }
+                    if (penalty) {
+                      successLine += ` • Incomplete penalty hit ${penalty} player${penalty === 1 ? '' : 's'}`;
+                    }
+                    if (sp.sprintWindowClosed) {
+                      successLine += ' • Sprint window closed';
+                    }
+                    return (
+                      <li
+                        key={`${sp.title}-${idx}`}
+                        style={{
+                          border: '1px solid #e9d5ff',
+                          borderRadius: '0.5rem',
+                          padding: '0.6rem 0.75rem',
+                          background: '#faf5ff',
+                        }}
+                      >
+                        <div style={{ fontWeight: 800, color: '#1f2937' }}>{sp.title}</div>
+                        <div style={{ fontSize: '0.82rem', color: '#4b5563', marginTop: '0.25rem' }}>{successLine}</div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {displaySummary.sessionActivity.pendingSprintAtEnd && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.65rem 0.75rem',
+                  borderRadius: '0.5rem',
+                  border: '1px dashed #7c3aed',
+                  background: '#f5f3ff',
+                  fontSize: '0.85rem',
+                  color: '#4c1d95',
+                }}
+              >
+                <strong>Sprint on room at session end:</strong> {displaySummary.sessionActivity.pendingSprintAtEnd.title}{' '}
+                ({displaySummary.sessionActivity.pendingSprintAtEnd.status}) —{' '}
+                {displaySummary.sessionActivity.pendingSprintAtEnd.markedCompleteCount} marked complete of ~
+                {displaySummary.sessionActivity.pendingSprintAtEnd.sessionPlayerCount} players
+                {typeof displaySummary.sessionActivity.pendingSprintAtEnd.rewardsGrantedCount === 'number'
+                  ? ` • ${displaySummary.sessionActivity.pendingSprintAtEnd.rewardsGrantedCount} reward grant(s) processed`
+                  : ''}
+                .
+              </div>
+            )}
+
+            {displaySummary.sessionActivity.quiz && displaySummary.sessionActivity.quiz.players.length > 0 && (
+              <div>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#0c4a6e', margin: '0 0 0.5rem 0' }}>
+                  Live quiz results
+                </h4>
+                {(displaySummary.sessionActivity.quiz.quizTitle || displaySummary.sessionActivity.quiz.gameModeLabel) && (
+                  <p style={{ fontSize: '0.85rem', color: '#475569', marginTop: 0, marginBottom: '0.5rem' }}>
+                    {displaySummary.sessionActivity.quiz.quizTitle && (
+                      <span>
+                        <strong>Quiz:</strong> {displaySummary.sessionActivity.quiz.quizTitle}
+                      </span>
+                    )}
+                    {displaySummary.sessionActivity.quiz.quizTitle && displaySummary.sessionActivity.quiz.gameModeLabel
+                      ? ' · '
+                      : ''}
+                    {displaySummary.sessionActivity.quiz.gameModeLabel && (
+                      <span>{displaySummary.sessionActivity.quiz.gameModeLabel}</span>
+                    )}
+                  </p>
+                )}
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', color: '#64748b' }}>
+                        <th style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #e2e8f0' }}>Player</th>
+                        <th style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #e2e8f0' }}>Rank</th>
+                        <th style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #e2e8f0' }}>Score</th>
+                        <th style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #e2e8f0' }}>Correct</th>
+                        <th style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #e2e8f0' }}>Quiz PP</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displaySummary.sessionActivity.quiz.players.map((row) => (
+                        <tr key={row.playerId}>
+                          <td style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #f1f5f9', fontWeight: 600 }}>
+                            {row.playerName}
+                          </td>
+                          <td style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #f1f5f9' }}>
+                            {row.rankByScore != null ? `#${row.rankByScore}` : '—'}
+                          </td>
+                          <td style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #f1f5f9' }}>
+                            {row.leaderboardScore}
+                          </td>
+                          <td style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #f1f5f9' }}>
+                            {row.correctAnswers}
+                          </td>
+                          <td style={{ padding: '0.35rem 0.25rem', borderBottom: '1px solid #f1f5f9', color: '#059669' }}>
+                            {row.quizPp > 0 ? `+${row.quizPp}` : '0'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {displaySummary.sessionActivity.sprints.length === 0 &&
+              !displaySummary.sessionActivity.pendingSprintAtEnd &&
+              (!displaySummary.sessionActivity.quiz || displaySummary.sessionActivity.quiz.players.length === 0) && (
+                <p style={{ fontSize: '0.85rem', color: '#6b7280', margin: 0 }}>
+                  No Class Flow sprints or scored quiz rows were captured in the session log for this event. Combat,
+                  participation, and other PP still appear below.
+                </p>
+              )}
+          </div>
+        )}
+
         {/* 1. PP Earned — who earned PP and breakdown (+900 per elimination, +50 per participation point) */}
         <div
           style={{

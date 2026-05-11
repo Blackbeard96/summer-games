@@ -30,6 +30,7 @@ import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestServi
 import { trackPlayerAction } from './playerProgressionRewards';
 import { trackDailyChallengeProgress } from './liveEventDailyChallengeTracking';
 import { inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
+import { buildSessionActivitySummary } from './liveEventSessionActivitySummary';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -911,15 +912,18 @@ export async function finalizeSessionStats(
     let correctByPlayer: Record<string, number> = {};
     let leaderboard: Record<string, number> = {};
     let quizGameMode: string | undefined;
+    let quizTitleFromSession: string | undefined;
     if (quizSessionSnap.exists()) {
       const qd = quizSessionSnap.data() as {
         correctCount?: Record<string, number>;
         leaderboard?: Record<string, number>;
         gameMode?: string;
+        quizTitle?: string;
       };
       correctByPlayer = { ...(qd.correctCount || {}) };
       leaderboard = { ...(qd.leaderboard || {}) };
       quizGameMode = qd.gameMode;
+      if (typeof qd.quizTitle === 'string' && qd.quizTitle.trim()) quizTitleFromSession = qd.quizTitle.trim();
     }
 
     const roomPlayersList = (sessionData.players || []) as Array<{ userId: string }>;
@@ -1103,6 +1107,27 @@ export async function finalizeSessionStats(
       }
     }
     
+    const lastSnap = sessionData.lastQuizAwardsSnapshot as { quizTitle?: string } | null | undefined;
+    const quizTitleFromAwards =
+      lastSnap && typeof lastSnap === 'object' && typeof lastSnap.quizTitle === 'string'
+        ? lastSnap.quizTitle.trim()
+        : undefined;
+
+    const sessionActivity = buildSessionActivitySummary({
+      battleLog: sessionData.battleLog,
+      liveEventMode: sessionData.liveEventMode as string | undefined,
+      neutralFlowEnergyType: sessionData.neutralFlowEnergyType as string | undefined,
+      classFlowSprintRaw: sessionData.classFlowSprint,
+      sessionPlayerCount: Array.isArray(sessionData.players) ? sessionData.players.length : 0,
+      statsMap,
+      quizTitle: quizTitleFromSession || quizTitleFromAwards,
+      quizGameMode,
+      correctByPlayer,
+      leaderboard,
+      quizPpByPlayer: adjustedQuizPpByPlayer,
+      liveEventQuizRankByPlayer,
+    });
+
     // Create session summary (include quiz awards if stored when a quiz completed)
     const summary: SessionSummary = {
       sessionId,
@@ -1123,7 +1148,8 @@ export async function finalizeSessionStats(
         ? { quizAwardsSnapshot: sessionData.lastQuizAwardsSnapshot as SessionSummary['quizAwardsSnapshot'] }
         : {}),
       ...(Object.keys(adjustedQuizPpByPlayer).length > 0 && { quizPpByPlayer: adjustedQuizPpByPlayer }),
-      ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer })
+      ...(liveEventQuizRankByPlayer && { liveEventQuizRankByPlayer }),
+      sessionActivity,
     };
     debug('inSessionStats', 'placement calculated', {
       sessionId,

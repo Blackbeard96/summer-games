@@ -23,6 +23,21 @@ export interface PowerLevelResult {
   breakdown: PowerBreakdown;
 }
 
+/** Largest PL sources (base, skills, artifacts, ascension) for profile / tooltips. */
+export function topPowerLevelContributors(
+  breakdown: Partial<Pick<PowerBreakdown, 'base' | 'skills' | 'artifacts' | 'ascension'>> | null | undefined,
+  topN = 3
+): Array<{ label: string; value: number }> {
+  if (!breakdown) return [];
+  const rows = [
+    { label: 'Base (level × 10)', value: Math.max(0, Math.floor(Number(breakdown.base) || 0)) },
+    { label: 'Equipped skills', value: Math.max(0, Math.floor(Number(breakdown.skills) || 0)) },
+    { label: 'Equipped artifacts', value: Math.max(0, Math.floor(Number(breakdown.artifacts) || 0)) },
+    { label: 'Manifest ascension', value: Math.max(0, Math.floor(Number(breakdown.ascension) || 0)) },
+  ];
+  return [...rows].sort((a, b) => b.value - a.value).slice(0, Math.max(1, topN));
+}
+
 /**
  * Tier value map for skills
  */

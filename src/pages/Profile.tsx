@@ -29,6 +29,7 @@ import ManifestProgress from '../components/ManifestProgress';
 import ManifestSelection from '../components/ManifestSelection';
 import { SketchPicker } from 'react-color';
 import { getLevelFromXP } from '../utils/leveling';
+import { topPowerLevelContributors } from '../utils/powerLevel';
 import { PlayerManifest, MANIFESTS } from '../types/manifest';
 import type { PowerStatBranch } from '../types/playerPowerStats';
 import { POWER_STAT_EVENT_DESCRIPTION } from '../types/playerPowerStats';
@@ -1424,7 +1425,7 @@ const Profile = () => {
                               ? 'Measured Intelligence'
                               : k === ENERGY_TYPES.EMOTIONAL
                                 ? 'Connection to Self'
-                                : 'Overall Power Level';
+                                : 'Card Power Level';
                         const barColor =
                           k === ENERGY_TYPES.PHYSICAL
                             ? '#059669'
@@ -1434,6 +1435,118 @@ const Profile = () => {
                                 ? '#db2777'
                                 : '#7c3aed';
                         const lastMs = tsMs(b.lastCompletedAt);
+
+                        if (k === ENERGY_TYPES.SPIRITUAL) {
+                          const plContributors = topPowerLevelContributors(powerBreakdown, 3);
+                          return (
+                            <div
+                              key={k}
+                              style={{
+                                background: 'rgba(255,255,255,0.65)',
+                                borderRadius: '0.5rem',
+                                padding: '0.5rem 0.55rem',
+                                border: '1px solid rgba(124, 58, 237, 0.35)',
+                              }}
+                            >
+                              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
+                              <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 6 }}>{line2}</div>
+                              {powerLevel != null ? (
+                                <>
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 6,
+                                      marginBottom: 8,
+                                    }}
+                                  >
+                                    <span style={{ fontSize: '1.1rem' }}>⚡</span>
+                                    <div>
+                                      <div style={{ fontSize: '0.65rem', color: '#6b7280', fontWeight: 600 }}>
+                                        Power Level
+                                      </div>
+                                      <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#5b21b6', lineHeight: 1.1 }}>
+                                        {powerLevel}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {plContributors.length > 0 ? (
+                                    <div style={{ marginBottom: 8 }}>
+                                      <div
+                                        style={{
+                                          fontSize: '0.65rem',
+                                          fontWeight: 800,
+                                          color: '#4c1d95',
+                                          marginBottom: 4,
+                                          letterSpacing: '0.02em',
+                                        }}
+                                      >
+                                        Top contributors
+                                      </div>
+                                      <ol
+                                        style={{
+                                          margin: 0,
+                                          paddingLeft: '1.1rem',
+                                          fontSize: '0.68rem',
+                                          color: '#374151',
+                                          lineHeight: 1.35,
+                                        }}
+                                      >
+                                        {plContributors.map((row) => (
+                                          <li key={row.label}>
+                                            <strong>{row.label}</strong>: +{row.value}
+                                          </li>
+                                        ))}
+                                      </ol>
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: '0.65rem', color: '#6b7280', marginBottom: 8 }}>
+                                      Open the header <strong>Power Level</strong> tile after your card syncs for a
+                                      full breakdown.
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <div style={{ fontSize: '0.68rem', color: '#6b7280', marginBottom: 8 }}>
+                                  Power Level appears after your profile recalculates (equip skills & artifacts on
+                                  your card).
+                                </div>
+                              )}
+                              <div
+                                style={{
+                                  borderTop: '1px solid rgba(124, 58, 237, 0.2)',
+                                  paddingTop: 6,
+                                  marginTop: 2,
+                                }}
+                              >
+                                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#64748b', marginBottom: 4 }}>
+                                  Spiritual work (goals & live events)
+                                </div>
+                                <div style={{ fontSize: '0.72rem', color: '#374151' }}>
+                                  Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
+                                </div>
+                                <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
+                                  Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
+                                </div>
+                                <div
+                                  style={{
+                                    marginTop: 6,
+                                    height: 8,
+                                    borderRadius: 999,
+                                    background: 'rgba(16,185,129,0.15)',
+                                    overflow: 'hidden',
+                                  }}
+                                >
+                                  <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
+                                </div>
+                                <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
+                                  Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={k}

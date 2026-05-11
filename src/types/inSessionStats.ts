@@ -90,6 +90,52 @@ export interface QuizAwardsSnapshot {
   placements: QuizAwardsPlacement[];
 }
 
+/** One Class Flow sprint inferred from battle log (+ optional room snapshot at end). */
+export interface SessionSprintActivitySummary {
+  title: string;
+  /** Players who earned sprint rewards (names from battle log lines). */
+  completedPlayerNames: string[];
+  /** When the host used bulk grant, the announced count (names may be absent from the log). */
+  bulkCompletionsAnnounced?: number;
+  /** From incomplete sprint penalty log line. */
+  incompletePenaltyPlayerCount?: number;
+  /** Sprint window was closed before clearing. */
+  sprintWindowClosed?: boolean;
+}
+
+export interface SessionQuizPlayerResultSummary {
+  playerId: string;
+  playerName: string;
+  leaderboardScore: number;
+  correctAnswers: number;
+  rankByScore?: number;
+  quizPp: number;
+}
+
+export interface SessionQuizActivitySummary {
+  quizTitle?: string;
+  gameMode?: string;
+  gameModeLabel?: string;
+  maxLeaderboardScore?: number;
+  players: SessionQuizPlayerResultSummary[];
+}
+
+/** Timeline-style recap: room mode, sprints, quiz — for Live Event Summary modal. */
+export interface SessionActivitySummary {
+  sessionModeLabel: string;
+  sessionMode?: string;
+  sprints: SessionSprintActivitySummary[];
+  quiz: SessionQuizActivitySummary | null;
+  /** Sprint still present on the room document when the session ended. */
+  pendingSprintAtEnd?: {
+    title: string;
+    status: 'live' | 'closed';
+    markedCompleteCount: number;
+    rewardsGrantedCount?: number;
+    sessionPlayerCount: number;
+  };
+}
+
 export interface SessionSummary {
   sessionId: string;
   classId: string;
@@ -117,6 +163,8 @@ export interface SessionSummary {
    * a scored live quiz (max leaderboard score > 0). Used for school-wide placement stats.
    */
   liveEventQuizRankByPlayer?: Record<string, number>;
+  /** Sprints + quiz recap built at finalize (see `liveEventSessionActivitySummary.ts`). */
+  sessionActivity?: SessionActivitySummary;
 }
 
 
