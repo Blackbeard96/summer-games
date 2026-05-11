@@ -9,6 +9,10 @@ export function isReflectionAssessmentType(t: AssessmentType | string | undefine
   return t === 'reflection' || t === 'live_reflection';
 }
 
+export function isWeeklyDeliverableAssessmentType(t: AssessmentType | string | undefined): boolean {
+  return t === 'weekly_deliverable';
+}
+
 /** True when a reflection assessment has at least one configured prompt (structured student UI). */
 export function hasStructuredReflectionQuestions(a: Pick<Assessment, 'type' | 'reflectionConfig'>): boolean {
   if (!isReflectionAssessmentType(a.type)) return false;
@@ -56,5 +60,6 @@ export function formatAssessmentTypeLabel(a: Pick<Assessment, 'type' | 'writtenA
     return `Written Assessment (${k.charAt(0).toUpperCase() + k.slice(1)})`;
   }
   if (a.type === 'story-goal') return 'Story Goal';
+  if (a.type === 'weekly_deliverable') return 'Weekly Deliverable';
   return a.type.replace(/_/g, ' ');
 }

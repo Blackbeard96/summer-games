@@ -31,6 +31,7 @@ import { trackPlayerAction } from './playerProgressionRewards';
 import { trackDailyChallengeProgress } from './liveEventDailyChallengeTracking';
 import { inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
 import { buildSessionActivitySummary } from './liveEventSessionActivitySummary';
+import { skillUseDebug, truncateId } from './liveEventDebugLogging';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -188,6 +189,18 @@ export async function trackSkillUsage(
     });
     
     debug('inSessionStats', `Tracked skill usage: ${skillName} by ${playerId}`);
+    skillUseDebug({
+      eventId: truncateId(sessionId),
+      playerId: truncateId(playerId),
+      skillId,
+      skillName,
+      skillType: 'session_stats',
+      energyType: energyType || 'unspecified',
+      cost: ppCost,
+      damageDealtRecorded: damage ?? 0,
+      healingRecorded: healing ?? 0,
+      source: 'trackSkillUsage',
+    });
     return true;
   } catch (error) {
     debugError('inSessionStats', `Error tracking skill usage for ${playerId}`, error);

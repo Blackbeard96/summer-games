@@ -59,6 +59,7 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
   const [results, setResults] = useState<any[]>([]);
   const [habitSubmissions, setHabitSubmissions] = useState<HabitSubmission[]>([]);
   const isHabits = assessment.type === 'habits';
+  const isWeeklyDeliverable = assessment.type === 'weekly_deliverable';
   
   // Local editing state for habit fields
   const [editingHabit, setEditingHabit] = useState<{ [studentId: string]: {
@@ -163,7 +164,7 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
     };
 
     fetchData();
-  }, [assessment.id, assessment.classId, assessment.type, classId, currentUser]);
+  }, [assessment.id, assessment.classId, assessment.type, assessment.maxScore, classId, currentUser]);
 
   const handleScoreChange = async (studentId: string, score: number) => {
     if (!currentUser) return;
@@ -427,7 +428,7 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
             <tr style={{ background: '#f3f4f6' }}>
               <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>Student</th>
               <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>
-                {isHabits ? 'Habit Commitment' : 'Goal Score'}
+                {isHabits ? 'Habit Commitment' : isWeeklyDeliverable ? 'Deliverable / commitment' : 'Goal Score'}
               </th>
               {isHabits ? (
                 <>
@@ -438,8 +439,12 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                 </>
               ) : (
                 <>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>Actual Score</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>Delta</th>
+                  <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>
+                    {isWeeklyDeliverable ? 'Completed' : 'Actual Score'}
+                  </th>
+                  <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>
+                    {isWeeklyDeliverable ? '—' : 'Delta'}
+                  </th>
                   <th style={{ padding: '0.75rem', textAlign: 'left', border: '1px solid #e5e7eb' }}>PP Change</th>
                 </>
               )}
@@ -483,6 +488,17 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                       ) : (
                         '—'
                       )}
+                    </>
+                  ) : isWeeklyDeliverable ? (
+                    <>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#065f46' }}>
+                        {assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: 4 }}>
+                        {row.goalScore !== undefined
+                          ? `Acknowledged (target ${assessment.maxScore})`
+                          : 'No student acknowledgment yet'}
+                      </div>
                     </>
                   ) : (
                     <>
@@ -622,34 +638,59 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                 ) : (
                   <>
                     <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>
-                      <input
-                        type="number"
-                        min="0"
-                        max={assessment.maxScore}
-                        step="0.1"
-                        value={row.actualScore ?? ''}
-                        onChange={(e) => {
-                          const value = parseFloat(e.target.value);
-                          if (!isNaN(value)) {
-                            handleScoreChange(row.studentId, value);
-                          }
-                        }}
-                        disabled={saving[row.studentId]}
-                        style={{
-                          width: '80px',
-                          padding: '0.5rem',
-                          borderRadius: '0.25rem',
-                          border: '1px solid #d1d5db'
-                        }}
-                      />
+                      {isWeeklyDeliverable ? (
+                        <label
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            cursor: saving[row.studentId] ? 'not-allowed' : 'pointer',
+                            fontWeight: 600,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={(row.actualScore ?? 0) >= (assessment.maxScore || 100)}
+                            disabled={saving[row.studentId]}
+                            onChange={(e) => {
+                              const v = e.target.checked ? assessment.maxScore || 100 : 0;
+                              void handleScoreChange(row.studentId, v);
+                            }}
+                          />
+                          <span>{(row.actualScore ?? 0) >= (assessment.maxScore || 100) ? 'Yes' : 'No'}</span>
+                        </label>
+                      ) : (
+                        <input
+                          type="number"
+                          min="0"
+                          max={assessment.maxScore}
+                          step="0.1"
+                          value={row.actualScore ?? ''}
+                          onChange={(e) => {
+                            const value = parseFloat(e.target.value);
+                            if (!isNaN(value)) {
+                              handleScoreChange(row.studentId, value);
+                            }
+                          }}
+                          disabled={saving[row.studentId]}
+                          style={{
+                            width: '80px',
+                            padding: '0.5rem',
+                            borderRadius: '0.25rem',
+                            border: '1px solid #d1d5db'
+                          }}
+                        />
+                      )}
                       {saving[row.studentId] && <span style={{ marginLeft: '0.5rem', color: '#6b7280' }}>Saving...</span>}
                     </td>
                     <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>
-                      {row.computedDelta !== undefined ? (
+                      {!isWeeklyDeliverable && row.computedDelta !== undefined ? (
                         <span style={{ color: row.computedDelta >= 0 ? '#10b981' : '#ef4444' }}>
                           {row.computedDelta > 0 ? '+' : ''}{row.computedDelta}
                         </span>
-                      ) : '—'}
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>
                       {row.ppChange !== undefined ? (

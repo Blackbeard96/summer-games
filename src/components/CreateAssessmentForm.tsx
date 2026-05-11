@@ -50,6 +50,8 @@ function assessmentGoalTypeSelectLabel(t: AssessmentType): string {
       return `Reflection (${track})`;
     case 'story-goal':
       return `Story Goal (legacy) (${track})`;
+    case 'weekly_deliverable':
+      return `Weekly Deliverable (${track})`;
     default:
       return `${String(t)} (${track})`;
   }
@@ -102,7 +104,9 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   const initialFormType: AssessmentType =
     initialData?.type === 'story-goal'
       ? 'story-goal'
-      : normalizeAssessmentFormType(initialData?.type as AssessmentType);
+      : initialData?.type === 'weekly_deliverable'
+        ? 'weekly_deliverable'
+        : normalizeAssessmentFormType(initialData?.type as AssessmentType);
   const [type, setType] = useState<AssessmentType>(initialFormType || 'written_assessment');
   const [writtenKind, setWrittenKind] = useState<WrittenAssessmentKind>(() => {
     const k = initialData?.writtenAssessmentKind;
@@ -131,6 +135,9 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   
   // Initialize reward tiers - label-based for Story Goals, threshold-based for others
   const initializeRewardTiers = (): RewardTier[] => {
+    if (initialData?.type === 'weekly_deliverable' && initialData.rewardTiers?.length) {
+      return initialData.rewardTiers;
+    }
     const isStoryGoal = initialData?.type === 'story-goal' || type === 'story-goal';
     
     if (initialData?.rewardTiers) {
@@ -224,8 +231,25 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
     initialData?.storyGoal?.prompt || ''
   );
 
+  const [weeklyAssignmentType, setWeeklyAssignmentType] = useState(
+    () => initialData?.weeklyDeliverableConfig?.assignmentType?.trim() || ''
+  );
+
+  const handleAssessmentTypeChange = (next: AssessmentType) => {
+    setType(next);
+    if (next === 'weekly_deliverable') {
+      setMaxScore(100);
+      setMinGoalScore(0);
+      setRewardTiers([
+        { label: 'Completed', bonus: 50 },
+        { label: 'Did not Complete', bonus: 0 },
+      ]);
+    }
+  };
+
   // Update reward tiers when type changes
   useEffect(() => {
+    if (type === 'weekly_deliverable') return;
     const isStoryGoal = type === 'story-goal';
     const hasLabels = rewardTiers.some(t => t.label !== undefined);
     const hasThresholds = rewardTiers.some(t => t.threshold !== undefined);
@@ -250,6 +274,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   }, [type]); // Only run when type changes
 
   const addRewardTier = () => {
+    if (type === 'weekly_deliverable') return;
     const isStoryGoal = type === 'story-goal';
     
     if (isStoryGoal) {
@@ -433,6 +458,18 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       assessmentData.type = 'written_assessment';
     }
 
+    if (type === 'weekly_deliverable') {
+      const at = weeklyAssignmentType.trim();
+      if (!at) {
+        alert('Describe the assignment type (what students must turn in or complete).');
+        return null;
+      }
+      assessmentData.type = 'weekly_deliverable';
+      assessmentData.maxScore = 100;
+      assessmentData.minGoalScore = undefined;
+      assessmentData.weeklyDeliverableConfig = { assignmentType: at };
+    }
+
     if (type === 'reflection') {
       const cleanedQs = reflectionQuestions.map((q) => ({
         id: q.id || newReflectionQuestionId(),
@@ -598,7 +635,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
             </label>
             <select
               value={type}
-              onChange={(e) => setType(e.target.value as AssessmentType)}
+              onChange={(e) => handleAssessmentTypeChange(e.target.value as AssessmentType)}
               style={{
                 width: '100%',
                 padding: '0.75rem',
@@ -612,6 +649,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               </option>
               <option value="habits">{assessmentGoalTypeSelectLabel('habits')}</option>
               <option value="reflection">{assessmentGoalTypeSelectLabel('reflection')}</option>
+              <option value="weekly_deliverable">{assessmentGoalTypeSelectLabel('weekly_deliverable')}</option>
               {isEditMode && initialData?.type === 'story-goal' ? (
                 <option value="story-goal">{assessmentGoalTypeSelectLabel('story-goal')}</option>
               ) : null}
@@ -665,7 +703,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
         </div>
 
         {/* Max Score and Minimum Goal Score (hidden for Habits and Story Goals) */}
-        {type !== 'habits' && type !== 'story-goal' && (
+        {type !== 'habits' && type !== 'story-goal' && type !== 'weekly_deliverable' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
@@ -854,6 +892,45 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
             >
               + Add question
             </button>
+          </div>
+        )}
+
+        {type === 'weekly_deliverable' && (
+          <div
+            style={{
+              marginBottom: '1.5rem',
+              padding: '1rem',
+              background: '#ecfdf5',
+              borderRadius: '0.75rem',
+              border: '1px solid #34d399',
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Weekly deliverable</h3>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', color: '#065f46' }}>
+              Physical work item for the week. Students acknowledge the deliverable (or you mark them in the dashboard).
+              Grading is <strong>completed</strong> vs <strong>did not complete</strong> — configure PP for each tier below.
+            </p>
+            <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+              Assignment type <span style={{ color: '#b91c1c' }}>*</span>
+            </label>
+            <input
+              type="text"
+              value={weeklyAssignmentType}
+              onChange={(e) => setWeeklyAssignmentType(e.target.value)}
+              placeholder='e.g. "Lab safety packet", "Return signed permission slip"'
+              required
+              style={{
+                width: '100%',
+                padding: '0.65rem',
+                borderRadius: 8,
+                border: '1px solid #10b981',
+                fontSize: '1rem',
+                boxSizing: 'border-box',
+              }}
+            />
+            <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#047857' }}>
+              Scoring scale is fixed at 100 = completed, 0 = not completed (same pattern as sprint-style checkoffs).
+            </p>
           </div>
         )}
 
@@ -1145,20 +1222,22 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
           <div style={{ marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3>Reward Tiers</h3>
-            <button
-              type="button"
-              onClick={addRewardTier}
-              style={{
-                padding: '0.5rem 1rem',
-                background: '#10b981',
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                cursor: 'pointer'
-              }}
-            >
-              + Add Tier
-            </button>
+            {type !== 'weekly_deliverable' && (
+              <button
+                type="button"
+                onClick={addRewardTier}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: '#10b981',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                + Add Tier
+              </button>
+            )}
           </div>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -1170,8 +1249,8 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
                 background: '#f9fafb'
               }}>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  {type === 'story-goal' ? (
-                    // Story Goals: Use label dropdown
+                  {type === 'story-goal' || type === 'weekly_deliverable' ? (
+                    // Story Goals / Weekly deliverable: label dropdown
                     <>
                       <select
                         value={tier.label || ''}
@@ -1184,10 +1263,19 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
                           fontSize: '1rem'
                         }}
                       >
-                        <option value="Completed">Completed</option>
-                        <option value="Almost">Almost</option>
-                        <option value="Attempted">Attempted</option>
-                        <option value="Did not Complete">Did not Complete</option>
+                        {type === 'weekly_deliverable' ? (
+                          <>
+                            <option value="Completed">Completed</option>
+                            <option value="Did not Complete">Did not Complete</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="Completed">Completed</option>
+                            <option value="Almost">Almost</option>
+                            <option value="Attempted">Attempted</option>
+                            <option value="Did not Complete">Did not Complete</option>
+                          </>
+                        )}
                       </select>
                       <span>→</span>
                     </>
@@ -1226,13 +1314,15 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
                   <button
                     type="button"
                     onClick={() => removeRewardTier(index)}
+                    disabled={type === 'weekly_deliverable' && rewardTiers.length <= 2}
                     style={{
                       padding: '0.5rem',
                       background: '#ef4444',
                       color: 'white',
                       border: 'none',
                       borderRadius: '0.5rem',
-                      cursor: 'pointer'
+                      cursor: type === 'weekly_deliverable' && rewardTiers.length <= 2 ? 'not-allowed' : 'pointer',
+                      opacity: type === 'weekly_deliverable' && rewardTiers.length <= 2 ? 0.45 : 1,
                     }}
                   >
                     ×

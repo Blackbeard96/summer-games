@@ -3,6 +3,7 @@ import {
   AssessmentGoal, 
   AssessmentResult, 
   RewardTier, 
+  RewardTierLabel,
   PenaltyTier,
   OutcomeType,
   ArtifactReward
@@ -50,11 +51,22 @@ export function computePPChange(
   let outcome: OutcomeType;
   let matchingTierLabel: 'Completed' | 'Almost' | 'Attempted' | 'Did not Complete' | undefined;
   
+  const isWeeklyDeliverable = assessment.type === 'weekly_deliverable';
   // Check if this is a Story Goal (should use label-based tiers)
   const isStoryGoal = assessment.type === 'story-goal';
   const hasLabelBasedTiers = assessment.rewardTiers.some(tier => tier.label !== undefined);
   
-  if (isStoryGoal && hasLabelBasedTiers) {
+  if (isWeeklyDeliverable) {
+    const target = Math.max(1, assessment.maxScore || 100);
+    if (actualScore >= target) {
+      matchingTierLabel = 'Completed';
+      outcome = 'hit';
+    } else {
+      matchingTierLabel = 'Did not Complete';
+      outcome = 'miss';
+    }
+    matchingRewardTier = assessment.rewardTiers.find((tier) => tier.label === matchingTierLabel);
+  } else if (isStoryGoal && hasLabelBasedTiers) {
     // Story Goals: Use label-based system
     if (actualScore >= goalScore) {
       // Met or exceeded goal
@@ -101,7 +113,9 @@ export function computePPChange(
   if (matchingRewardTier) {
     if (outcome === 'hit' || outcome === 'exceed') {
       ppChange = matchingRewardTier.bonus;
-      if (isStoryGoal && matchingTierLabel) {
+      if (isWeeklyDeliverable && matchingTierLabel) {
+        tierExplanation = `${matchingTierLabel} — ${matchingRewardTier.bonus} PP`;
+      } else if (isStoryGoal && matchingTierLabel) {
         tierExplanation = `${matchingTierLabel} - ${matchingRewardTier.bonus} PP reward`;
       } else {
         if (absDiff === 0) {
@@ -293,6 +307,22 @@ export function validateAssessmentConfig(assessment: Partial<Assessment>): {
   }
 
   const refType = assessment.type;
+  if (refType === 'weekly_deliverable') {
+    const t = assessment.weeklyDeliverableConfig?.assignmentType?.trim();
+    if (!t) {
+      errors.push('Weekly Deliverable: describe the assignment type (what students must turn in or complete).');
+    }
+    const labels = new Set(
+      (assessment.rewardTiers || []).map((x) => x.label).filter(Boolean) as RewardTierLabel[]
+    );
+    if (!labels.has('Completed')) {
+      errors.push('Weekly Deliverable: add a reward tier labeled "Completed".');
+    }
+    if (!labels.has('Did not Complete')) {
+      errors.push('Weekly Deliverable: add a reward tier labeled "Did not Complete" (PP is often 0).');
+    }
+  }
+
   if (refType === 'reflection' || refType === 'live_reflection') {
     const qs = assessment.reflectionConfig?.questions;
     if (!qs || qs.length === 0) {

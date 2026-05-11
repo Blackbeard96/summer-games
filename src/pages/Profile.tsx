@@ -166,6 +166,8 @@ const Profile = () => {
     weekId?: string;
     totalQuestions?: number;
     correctAnswers?: number;
+    /** 'live' when synced from a live event session; 'solo' for Training Grounds solo, etc. */
+    mode?: string;
   };
 
   const { currentUser } = useAuth();
@@ -206,7 +208,7 @@ const Profile = () => {
   const [productivityStats, setProductivityStats] = useState<ProductivityStatDoc | null | undefined>(undefined);
   const [productivityActivityLoading, setProductivityActivityLoading] = useState(false);
   const [recentSprintActivity, setRecentSprintActivity] = useState<SprintActivityLog[]>([]);
-  const [recentQuizActivity, setRecentQuizActivity] = useState<QuizActivityLog[]>([]);
+  const [recentLiveEventQuizActivity, setRecentLiveEventQuizActivity] = useState<QuizActivityLog[]>([]);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -487,7 +489,7 @@ const Profile = () => {
     const loadProductivityActivity = async () => {
       if (!currentUser) {
         setRecentSprintActivity([]);
-        setRecentQuizActivity([]);
+        setRecentLiveEventQuizActivity([]);
         return;
       }
       setProductivityActivityLoading(true);
@@ -502,7 +504,7 @@ const Profile = () => {
           collection(db, 'quizProductivityLogs'),
           where('userId', '==', currentUser.uid),
           orderBy('completedAt', 'desc'),
-          limit(8)
+          limit(50)
         );
 
         let sprintDocs;
@@ -521,7 +523,7 @@ const Profile = () => {
           const quizFallback = query(
             collection(db, 'quizProductivityLogs'),
             where('userId', '==', currentUser.uid),
-            limit(20)
+            limit(80)
           );
           [sprintDocs, quizDocs] = await Promise.all([
             getDocs(sprintFallback),
@@ -537,19 +539,21 @@ const Profile = () => {
             return bMs - aMs;
           })
           .slice(0, 8);
-        const quizRows = quizDocs.docs
+        const allQuizRows = quizDocs.docs
           .map((d) => ({ id: d.id, ...(d.data() as object) } as QuizActivityLog))
-          .sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0))
-          .slice(0, 8);
+          .sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0));
+        const liveQuizRows = allQuizRows
+          .filter((q) => q.mode === 'live')
+          .slice(0, 3);
 
         if (cancelled) return;
         setRecentSprintActivity(sprintRows);
-        setRecentQuizActivity(quizRows);
+        setRecentLiveEventQuizActivity(liveQuizRows);
       } catch (error) {
         console.warn('Profile: unable to load productivity activity logs', error);
         if (!cancelled) {
           setRecentSprintActivity([]);
-          setRecentQuizActivity([]);
+          setRecentLiveEventQuizActivity([]);
         }
       } finally {
         if (!cancelled) setProductivityActivityLoading(false);
@@ -1613,19 +1617,39 @@ const Profile = () => {
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.5rem', padding: '0.55rem' }}>
                       <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
-                        Recent Quiz Activity
+                        Live Event CFU / quizzes (last 3)
                       </div>
                       {productivityActivityLoading ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading quiz activity…</div>
-                      ) : recentQuizActivity.length === 0 ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>No quiz activity yet.</div>
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading live quiz activity…</div>
+                      ) : recentLiveEventQuizActivity.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>
+                          No live event CFU or quiz completions yet.
+                        </div>
                       ) : (
                         <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
-                          {recentQuizActivity.slice(0, 5).map((item) => (
-                            <li key={item.id} style={{ marginBottom: '0.2rem' }}>
-                              {(item.quizTopic || 'Quiz')} — {Math.round(item.scorePercent || 0)}%
-                            </li>
-                          ))}
+                          {recentLiveEventQuizActivity.map((item) => {
+                            const pct = Math.round(item.scorePercent ?? 0);
+                            const cq = item.correctAnswers;
+                            const tq = item.totalQuestions;
+                            const detail =
+                              typeof cq === 'number' && typeof tq === 'number' && tq > 0
+                                ? ` (${cq}/${tq} correct)`
+                                : '';
+                            const whenMs = tsMs(item.completedAt);
+                            const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
+                            return (
+                              <li key={item.id} style={{ marginBottom: '0.35rem' }}>
+                                <div style={{ fontWeight: 600 }}>{item.quizTopic || 'CFU / Live quiz'}</div>
+                                <div style={{ color: '#047857' }}>
+                                  Score: <strong>{pct}%</strong>
+                                  {detail}
+                                </div>
+                                {whenStr ? (
+                                  <div style={{ fontSize: '0.7rem', color: '#6b7280', marginTop: 2 }}>{whenStr}</div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                         </ul>
                       )}
                     </div>

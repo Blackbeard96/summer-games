@@ -9,11 +9,14 @@ import {
   grantClassFlowSprintRewards,
   applyClassFlowSprintIncompletePenalties,
 } from '../utils/liveEventSprintService';
+import { mergeSprintRosterForClassFlow } from '../utils/classFlowSprintRosterService';
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
   sprint: ClassFlowSprintState | null;
   sessionPlayers: { userId: string; displayName: string }[];
+  /** Full class roster (same class as the live session). When set, sprint list includes everyone and flags who is in-session. */
+  classStudentRoster?: { userId: string; displayName: string }[] | null;
   /** Room host — excluded from incomplete PP penalties */
   sessionHostUid?: string;
   isSessionHost: boolean;
@@ -33,6 +36,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   sessionId,
   sprint,
   sessionPlayers,
+  classStudentRoster = null,
   sessionHostUid = '',
   isSessionHost,
   currentUserId,
@@ -65,11 +69,17 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
 
   const timerExpired = sprint && sprint.status === 'live' && remainingSec <= 0;
 
+  const sprintRosterRows = useMemo(
+    () => mergeSprintRosterForClassFlow(classStudentRoster, sessionPlayers),
+    [classStudentRoster, sessionPlayers]
+  );
+  const showPresenceBadges = Boolean(classStudentRoster && classStudentRoster.length > 0);
+
   const playerNames = useMemo(() => {
     const m = new Map<string, string>();
-    sessionPlayers.forEach((p) => m.set(p.userId, p.displayName || 'Player'));
+    sprintRosterRows.forEach((p) => m.set(p.userId, p.displayName || 'Player'));
     return m;
-  }, [sessionPlayers]);
+  }, [sprintRosterRows]);
 
   const onStart = useCallback(async () => {
     setMessage(null);
@@ -209,7 +219,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
     : 0;
   const pendingPenaltyCount =
     sprint && (sprint.incompletePenaltyVaultPP || 0) > 0
-      ? sessionPlayers.filter(
+      ? sprintRosterRows.filter(
           (p) =>
             p.userId !== sessionHostUid &&
             !marked.has(p.userId) &&
@@ -244,7 +254,7 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
         )}
       </div>
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
-        Host sets a timed goal and checks off students who finish on time. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award pending” only to catch anyone who was marked before this update or if a grant failed. Optionally set an incomplete penalty: after the sprint, use “Apply incomplete penalty” to deduct vault PP from everyone in the session who is still unchecked (host excluded).
+        Host sets a timed goal and checks off students who finish on time. The list includes the whole class when a roster is available; “In session” means the student is currently in this live room. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award pending” only to catch anyone who was marked before this update or if a grant failed. Optionally set an incomplete penalty: after the sprint, use “Apply incomplete penalty” to deduct vault PP from everyone on the class roster (or in-session only if no class is linked) who is still unchecked (host excluded).
       </p>
 
       {message && (
@@ -457,10 +467,28 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
           )}
 
           <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {sessionPlayers.map((p) => {
+            {sprintRosterRows.map((p) => {
               const isMarked = marked.has(p.userId);
               const isPaid = granted.has(p.userId);
               const canToggle = isSessionHost && (sprint.status === 'live' || sprint.status === 'closed');
+              const sessionBadge = showPresenceBadges ? (
+                <span
+                  style={{
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    flexShrink: 0,
+                    background: p.isInSession ? 'rgba(52,211,153,0.25)' : 'rgba(148,163,184,0.35)',
+                    color: p.isInSession ? '#d1fae5' : '#e2e8f0',
+                    border: `1px solid ${p.isInSession ? 'rgba(52,211,153,0.45)' : 'rgba(148,163,184,0.5)'}`,
+                  }}
+                >
+                  {p.isInSession ? 'In session' : 'Not in session'}
+                </span>
+              ) : null;
               return (
                 <div
                   key={p.userId}
@@ -477,11 +505,15 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
                   {canToggle ? (
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1 }}>
                       <input type="checkbox" checked={isMarked} onChange={() => void onToggle(p.userId)} />
-                      <span>{p.displayName}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                        <span>{p.displayName}</span>
+                        {sessionBadge}
+                      </span>
                     </label>
                   ) : (
-                    <span style={{ flex: 1 }}>
-                      {p.displayName}
+                    <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                      <span>{p.displayName}</span>
+                      {sessionBadge}
                       {isMarked && (
                         <span style={{ marginLeft: 8, opacity: 0.9, color: '#a7f3d0' }}>
                           {p.userId === currentUserId ? '✓ You are marked complete' : '✓ Complete'}

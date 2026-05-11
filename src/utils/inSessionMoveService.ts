@@ -22,6 +22,13 @@ import {
   detectLiveEventSkillCategory,
   trackDailyChallengeProgress,
 } from './liveEventDailyChallengeTracking';
+import { isSelfDirectedBattleMove } from './battleSkillTargetResolution';
+import {
+  LIVE_EVENT_DEBUG,
+  liveEventSkillEffectDebug,
+  skillUseDebug,
+  truncateId,
+} from './liveEventDebugLogging';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -106,15 +113,42 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
                              process.env.REACT_APP_DEBUG === 'true';
 
   // Use resolvedAction if provided (unified resolver), otherwise use legacy individual values
-  const damage = resolvedAction ? resolvedAction.damage : legacyDamage;
-  const shieldDamage = resolvedAction ? resolvedAction.shieldDamage : legacyShieldDamage;
-  const healing = resolvedAction ? resolvedAction.healing : legacyHealing;
-  const shieldBoost = resolvedAction ? resolvedAction.shieldBoost : legacyShieldBoost;
+  let damage = Math.max(0, Math.floor(Number(resolvedAction ? resolvedAction.damage : legacyDamage) || 0));
+  let shieldDamage = Math.max(
+    0,
+    Math.floor(Number(resolvedAction ? resolvedAction.shieldDamage : legacyShieldDamage) || 0)
+  );
+  let healing = Math.max(0, Math.floor(Number(resolvedAction ? resolvedAction.healing : legacyHealing) || 0));
+  let shieldBoost = Math.max(
+    0,
+    Math.floor(Number(resolvedAction ? resolvedAction.shieldBoost : legacyShieldBoost) || 0)
+  );
   const ppStolen = resolvedAction ? resolvedAction.ppStolen : legacyPpStolen;
   const ppCost = resolvedAction ? resolvedAction.ppCost : legacyPpCost;
   const battleLogMessage = resolvedAction && resolvedAction.logMessages.length > 0 
     ? resolvedAction.logMessages[0] 
     : legacyBattleLogMessage;
+
+  /** Allow damage only when the move is explicitly an attack with a weapon line (life-drain / hybrid). */
+  const hybridOffensiveAttack =
+    String(move.type) === 'attack' && typeof move.damage === 'number' && move.damage > 0;
+
+  if (isSelfDirectedBattleMove(move) && healing + shieldBoost > 0 && !hybridOffensiveAttack) {
+    if (LIVE_EVENT_DEBUG && (damage > 0 || shieldDamage > 0)) {
+      liveEventSkillEffectDebug({
+        eventId: truncateId(sessionId),
+        reason: 'strip_offense_on_self_buff',
+        playerId: truncateId(actorUid),
+        skillId: move.id,
+        skillName: move.name,
+        skillType: move.type,
+        strippedDamage: damage,
+        strippedShieldDamage: shieldDamage,
+      });
+    }
+    damage = 0;
+    shieldDamage = 0;
+  }
 
   if (DEBUG_IN_SESSION_MOVES || DEBUG_LIVE_EVENTS) {
     console.log('[applyInSessionMove] 🎯 SUBMIT ACTION CALLED:', {
@@ -603,6 +637,30 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       const hpChange = result.stateChanges ? `${result.stateChanges.targetHpBefore} → ${result.stateChanges.targetHpAfter}` : 'N/A';
       const shieldChange = result.stateChanges ? `${result.stateChanges.targetShieldBefore} → ${result.stateChanges.targetShieldAfter}` : 'N/A';
       console.log('✅ [applyInSessionMove] ⚡ SUCCESS ⚡', targetName, '| HP:', hpChange, '| Shield:', shieldChange, '| Dmg:', result.damage, '| Subscription should update');
+      skillUseDebug({
+        eventId: truncateId(sessionId),
+        playerId: truncateId(actorUid),
+        playerName: actorName,
+        skillId: move.id,
+        skillName: move.name,
+        skillType: move.type ?? move.category ?? 'unknown',
+        energyType: getResolvedMoveEnergyType(move),
+        cost: result.participationPointsSpent ?? result.ppCost ?? 0,
+        playerPPBefore: result.stateChanges?.actorPpBefore,
+        playerPPAfter: result.stateChanges?.actorPpAfter,
+        targetId: truncateId(targetUid),
+        effectType: [
+          result.damage ? 'damage' : null,
+          result.healing ? 'heal' : null,
+          result.shieldBoost ? 'shieldBoost' : null,
+          result.shieldDamage ? 'shieldDamage' : null,
+        ]
+          .filter(Boolean)
+          .join('+') || 'none',
+        damage: result.damage,
+        healing: result.healing,
+        shieldBoost: result.shieldBoost,
+      });
       // Vault was updated inside the transaction (atomic with session players).
     } else {
       console.error('❌ [applyInSessionMove] ⚠️ FAILED', move.name, '→', targetName, '| Error:', result.message);

@@ -18,6 +18,7 @@ const AssessmentResultModal: React.FC<AssessmentResultModalProps> = ({
   onClose
 }) => {
   const isStoryGoal = assessment.type === 'story-goal';
+  const isWeeklyDeliverable = assessment.type === 'weekly_deliverable';
   const outcome = result.outcome || 'miss';
   const ppChange = result.ppChange || 0;
   const actualScore = result.actualScore;
@@ -93,6 +94,21 @@ const AssessmentResultModal: React.FC<AssessmentResultModalProps> = ({
                 fontStyle: 'italic'
               }}>
                 "{textGoal}"
+              </div>
+            </div>
+          ) : isWeeklyDeliverable ? (
+            <div style={{ marginBottom: '1rem', textAlign: 'left' }}>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.35rem' }}>Deliverable</div>
+              <div style={{ fontWeight: 700, color: '#065f46', marginBottom: '0.75rem' }}>
+                {assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}
+              </div>
+              <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem' }}>Teacher mark</div>
+              <div style={{ fontSize: '1.35rem', fontWeight: 'bold', color: textColor }}>
+                {actualScore >= (assessment.maxScore || 100) ? 'Completed' : 'Not completed'}
+              </div>
+              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: `1px solid ${borderColor}` }}>
+                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Outcome: </span>
+                <span style={{ fontWeight: 'bold', color: textColor }}>{formatOutcome(outcome)}</span>
               </div>
             </div>
           ) : (

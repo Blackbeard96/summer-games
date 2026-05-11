@@ -90,7 +90,10 @@ const AssessmentGoalsAdmin: React.FC = () => {
       energyType:
         assessmentData.energyType ?? inferEnergyTypeForAssessment(assessmentData.type),
       date: Timestamp.fromDate(new Date(assessmentData.date)),
-      maxScore: assessmentData.type === 'habits' ? 100 : (assessmentData.maxScore || 100),
+      maxScore:
+        assessmentData.type === 'habits' || assessmentData.type === 'weekly_deliverable'
+          ? 100
+          : assessmentData.maxScore || 100,
       isLocked: assessmentData.isLocked || false,
       rewardTiers: assessmentData.rewardTiers || [],
       missPenaltyTiers: assessmentData.missPenaltyTiers || [],
@@ -154,6 +157,14 @@ const AssessmentGoalsAdmin: React.FC = () => {
       } else if (isUpdate && assessmentData.type !== 'story-goal' && selectedAssessment?.storyGoal) {
         // If updating and type is not story-goal, remove storyGoal if it exists
         baseAssessment.storyGoal = deleteField();
+      }
+
+      if (assessmentData.type === 'weekly_deliverable' && assessmentData.weeklyDeliverableConfig?.assignmentType) {
+        baseAssessment.weeklyDeliverableConfig = {
+          assignmentType: String(assessmentData.weeklyDeliverableConfig.assignmentType).trim(),
+        };
+      } else if (isUpdate && assessmentData.type !== 'weekly_deliverable' && selectedAssessment?.weeklyDeliverableConfig) {
+        baseAssessment.weeklyDeliverableConfig = deleteField();
       }
 
       if (assessmentData.type === 'written_assessment') {

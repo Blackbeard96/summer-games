@@ -430,18 +430,21 @@ export async function setAssessmentResult(
   
   let artifactsGranted: ArtifactReward[] | undefined;
   
-  if (goal && goal.goalScore !== undefined && assessment.type !== 'story-goal') {
-    // Only compute PP change for numeric goals (not Story Goals which are text-based)
-    const computation = computePPChange(goal.goalScore, actualScore, assessment);
+  const goalScoreForPP =
+    assessment.type === 'weekly_deliverable'
+      ? assessment.maxScore || 100
+      : goal?.goalScore;
+
+  if (goalScoreForPP !== undefined && assessment.type !== 'story-goal') {
+    // Numeric / reflection-style goals; weekly deliverable uses implicit target = maxScore
+    const computation = computePPChange(goalScoreForPP, actualScore, assessment);
     computedDelta = computation.delta;
     computedAbsDiff = computation.absDiff;
     outcome = computation.outcome;
     ppChange = computation.ppChange;
     artifactsGranted = computation.artifactsGranted;
   } else if (goal && assessment.type === 'story-goal') {
-    // For Story Goals, we might want to handle completion differently
-    // For now, we'll skip numeric computation - Story Goals completion is handled via Hero's Journey
-    // If you want to add PP rewards for Story Goals, you can add that logic here
+    // Story Goals: text-based; PP on apply may be handled elsewhere
   }
   
   const resultData: any = {
@@ -1496,6 +1499,30 @@ export async function submitLiveEventGoalSettingToAssessment(params: {
   };
 
   try {
+    if (assessment.type === 'weekly_deliverable') {
+      const at = assessment.weeklyDeliverableConfig?.assignmentType?.trim() || assessment.title;
+      await setAssessmentGoal(
+        assessmentId,
+        studentId,
+        assessment.maxScore || 100,
+        classId,
+        typeof evidenceRaw === 'string' && evidenceRaw.trim() ? evidenceRaw.trim() : null,
+        `Weekly deliverable: ${at}`,
+        undefined
+      );
+      await awardGoalSettingXp(`weekly_deliverable:${at}`);
+      void bumpAssessmentWorkStats({
+        studentId,
+        classId,
+        assessment,
+        attemptedIncrement: 1,
+        completedIncrement: 1,
+        pointsEarnedIncrement: 20,
+        sourceId: `${assessmentId}_live_weekly_deliverable`,
+      });
+      return { ok: true };
+    }
+
     if (assessment.type === 'habits') {
       const habitText = (habitTextRaw || '').trim();
       if (habitText.length < 3 || habitText.length > 180) {

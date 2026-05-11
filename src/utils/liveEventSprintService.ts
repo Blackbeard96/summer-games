@@ -29,6 +29,8 @@ import {
   recordClassFlowSprintCompletion,
   recordClassFlowSprintMissed,
 } from './productivityTracking';
+import { liveEventAwardDebug, truncateId } from './liveEventDebugLogging';
+import { fetchClassroomStudentUids } from './classFlowSprintRosterService';
 
 const roomRef = (sessionId: string) => doc(db, 'inSessionRooms', sessionId);
 
@@ -125,7 +127,7 @@ export async function startClassFlowSprint(
     const snap = await getDoc(ref);
     if (!snap.exists()) return { ok: false, error: 'Session not found' };
     const players = (snap.data()?.players as { userId?: string }[]) || [];
-    const playerUidsForSprints = players
+    let playerUidsForSprints = players
       .map((p) => p.userId)
       .filter((x): x is string => typeof x === 'string' && !!x);
     const hostUid = snap.data()?.hostUid;
@@ -148,6 +150,23 @@ export async function startClassFlowSprint(
     const now = Timestamp.now();
     const endsAt = Timestamp.fromMillis(now.toMillis() + durationSeconds * 1000);
     const id = `sprint_${Date.now()}`;
+
+    const roomClassId =
+      typeof snap.data()?.classId === 'string'
+        ? snap.data()!.classId
+        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
+          ? snap.data()!.classIds[0]
+          : undefined;
+    if (roomClassId) {
+      try {
+        const classUids = await fetchClassroomStudentUids(roomClassId);
+        if (classUids.length > 0) {
+          playerUidsForSprints = Array.from(new Set([...classUids, ...playerUidsForSprints]));
+        }
+      } catch {
+        /* keep session-only roster if classroom read fails */
+      }
+    }
 
     await updateDoc(ref, {
       classFlowSprint: {
@@ -179,13 +198,6 @@ export async function startClassFlowSprint(
     void recordHabitLiveEventSprintOpportunity(sessionId, title, playerUidsForSprints).catch(() => {
       /* best-effort habit live-event evidence */
     });
-
-    const roomClassId =
-      typeof snap.data()?.classId === 'string'
-        ? snap.data()!.classId
-        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
-          ? snap.data()!.classIds[0]
-          : undefined;
     const liveEventMode =
       typeof snap.data()?.liveEventMode === 'string' ? snap.data()!.liveEventMode : undefined;
     const neutralFlowEnergyType = snap.data()?.neutralFlowEnergyType as EnergyType | undefined;
@@ -533,6 +545,17 @@ export async function grantSprintRewardForSinglePlayer(
       pointsEarned,
     });
 
+    liveEventAwardDebug({
+      eventId: truncateId(sessionId),
+      eventType: 'class_flow_sprint',
+      playerId: truncateId(playerUid),
+      playerName: playerDisplayName,
+      pointsAwarded: ppAmt + vaultPP,
+      xpAwarded: xpAmt,
+      artifactsAwarded: null,
+      reason: `sprint_complete:${truncateId(sprint.id)}`,
+    });
+
     return { ok: true, granted: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -595,7 +618,8 @@ export async function grantClassFlowSprintRewards(
 }
 
 /**
- * Deduct vault PP from every player in the session who is not marked complete for this sprint.
+ * Deduct vault PP from every class student (when the room has a class) or every session player
+ * who is not marked complete for this sprint.
  * Idempotent per player via incompletePenaltiesGrantedUids. Session host is never penalized.
  */
 export async function applyClassFlowSprintIncompletePenalties(
@@ -621,10 +645,30 @@ export async function applyClassFlowSprintIncompletePenalties(
     const marked = new Set(sprint.markedCompleteUids || []);
     const already = new Set(sprint.incompletePenaltiesGrantedUids || []);
     const sessionPlayers = (snap.data()?.players as { userId?: string }[]) || [];
+    const roomClassId =
+      typeof snap.data()?.classId === 'string'
+        ? snap.data()!.classId
+        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
+          ? snap.data()!.classIds[0]
+          : undefined;
+
+    let rosterUids: string[] = [];
+    if (roomClassId) {
+      try {
+        const classUids = await fetchClassroomStudentUids(roomClassId);
+        if (classUids.length > 0) rosterUids = classUids;
+      } catch {
+        /* fall back to session roster */
+      }
+    }
+    if (rosterUids.length === 0) {
+      rosterUids = sessionPlayers
+        .map((row) => (typeof row?.userId === 'string' ? row.userId : ''))
+        .filter(Boolean);
+    }
 
     const toPenalize: string[] = [];
-    for (const row of sessionPlayers) {
-      const uid = typeof row?.userId === 'string' ? row.userId : '';
+    for (const uid of rosterUids) {
       if (!uid || uid === roomHostUid) continue;
       if (marked.has(uid)) continue;
       if (already.has(uid)) continue;
@@ -656,12 +700,6 @@ export async function applyClassFlowSprintIncompletePenalties(
       ),
     });
 
-    const roomClassId =
-      typeof snap.data()?.classId === 'string'
-        ? snap.data()!.classId
-        : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
-          ? snap.data()!.classIds[0]
-          : undefined;
     const nowMs = Date.now();
     for (const uid of newlyPenalized) {
       void recordClassFlowSprintMissed({

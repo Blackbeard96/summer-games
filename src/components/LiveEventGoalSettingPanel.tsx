@@ -49,6 +49,7 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
   const [duration, setDuration] = useState<HabitDuration>('1_week');
   const [habitEvidence, setHabitEvidence] = useState('');
   const [storyEvidence, setStoryEvidence] = useState('');
+  const [weeklyDeliverableNote, setWeeklyDeliverableNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [assessmentLoading, setAssessmentLoading] = useState(false);
   const [hostSaving, setHostSaving] = useState(false);
@@ -87,11 +88,14 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
           setDuration('1_week');
           setHabitEvidence('');
           setStoryEvidence('');
+          setWeeklyDeliverableNote('');
           setAssessment(a);
           if (a?.type === 'habits' && sub) {
             setHabitText(sub.habitText || '');
             setDuration(sub.duration || '1_week');
             setHabitEvidence(sub.evidence || '');
+          } else if (a?.type === 'weekly_deliverable' && goal) {
+            setWeeklyDeliverableNote(goal.evidence || '');
           } else if (a?.type === 'story-goal' && goal) {
             setTextGoal(goal.textGoal || '');
             setStoryEvidence(goal.evidence || '');
@@ -174,22 +178,30 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
             duration,
             habitEvidence: habitEvidence.trim() || null,
           }
-        : assessment?.type === 'story-goal'
+        : assessment?.type === 'weekly_deliverable'
           ? {
               assessmentId: goalSettingAssessmentId,
               studentId: currentUserId,
               classId,
               sessionId,
-              textGoal,
-              evidence: storyEvidence.trim() || null,
+              evidence: weeklyDeliverableNote.trim() || null,
             }
-          : {
-              assessmentId: goalSettingAssessmentId,
-              studentId: currentUserId,
-              classId,
-              sessionId,
-              goalScore: parseFloat(goalScore),
-            }
+          : assessment?.type === 'story-goal'
+            ? {
+                assessmentId: goalSettingAssessmentId,
+                studentId: currentUserId,
+                classId,
+                sessionId,
+                textGoal,
+                evidence: storyEvidence.trim() || null,
+              }
+            : {
+                assessmentId: goalSettingAssessmentId,
+                studentId: currentUserId,
+                classId,
+                sessionId,
+                goalScore: parseFloat(goalScore),
+              }
     );
 
     setLoading(false);
@@ -216,6 +228,7 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
       (textGoal.trim().length < 3 || textGoal.trim().length > 500)) ||
     (assessment.type !== 'habits' &&
       assessment.type !== 'story-goal' &&
+      assessment.type !== 'weekly_deliverable' &&
       (goalScore.trim() === '' || Number.isNaN(parseFloat(goalScore))));
 
   if (!isGoalSetting) return null;
@@ -377,6 +390,32 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
                   borderRadius: 8,
                   border: '2px solid #a78bfa',
                   marginBottom: 10,
+                  fontSize: '0.95rem',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </>
+          ) : assessment.type === 'weekly_deliverable' ? (
+            <>
+              <p style={{ margin: '0 0 0.75rem', fontSize: '0.88rem', color: '#065f46', lineHeight: 1.45 }}>
+                <strong>Deliverable:</strong>{' '}
+                {assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}. Tap save to record your
+                acknowledgment on Assessment Goals (same as the goals page).
+              </p>
+              <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+                Optional note
+              </label>
+              <textarea
+                value={weeklyDeliverableNote}
+                onChange={(e) => setWeeklyDeliverableNote(e.target.value)}
+                rows={3}
+                placeholder="e.g. turning in at end of class…"
+                style={{
+                  width: '100%',
+                  padding: '0.65rem',
+                  borderRadius: 8,
+                  border: '2px solid #34d399',
+                  marginBottom: 12,
                   fontSize: '0.95rem',
                   boxSizing: 'border-box',
                 }}

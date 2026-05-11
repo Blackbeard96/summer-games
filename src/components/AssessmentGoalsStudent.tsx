@@ -20,6 +20,7 @@ import {
 } from '../utils/assessmentGoalsFirestore';
 import { validateGoalScore } from '../utils/assessmentGoals';
 import { formatOutcome, formatPPChange } from '../utils/assessmentGoals';
+import { formatAssessmentTypeLabel } from '../utils/assessmentTypeHelpers';
 import SetGoalModal from './SetGoalModal';
 import HabitLiveEventEvidencePanel from './HabitLiveEventEvidencePanel';
 import { habitEvidenceTracksLiveEvents } from '../utils/habitLiveEventEvidenceService';
@@ -257,15 +258,31 @@ const AssessmentGoalsStudent: React.FC = () => {
                   <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{assessment.title}</h3>
                   <p style={{ margin: 0, color: '#6b7280' }}>
                     {[
-                      assessment.type === 'story-goal'
-                        ? 'Story Goal'
-                        : assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1),
-                      assessment.type !== 'habits' ? `Max Score: ${assessment.maxScore}` : null,
+                      formatAssessmentTypeLabel(assessment),
+                      assessment.type !== 'habits' && assessment.type !== 'weekly_deliverable'
+                        ? `Max Score: ${assessment.maxScore}`
+                        : assessment.type === 'weekly_deliverable'
+                          ? 'Physical deliverable • completion checkoff'
+                          : null,
                     ]
                       .filter(Boolean)
                       .join(' • ')}
                   </p>
                   {/* Story Goal Information */}
+                  {assessment.type === 'weekly_deliverable' && (
+                    <div style={{ marginTop: '0.5rem', padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #34d399' }}>
+                      <p style={{ margin: 0, fontWeight: 'bold', color: '#065f46', marginBottom: '0.25rem' }}>
+                        📦 Deliverable type
+                      </p>
+                      <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
+                        {assessment.weeklyDeliverableConfig?.assignmentType || 'See title above'}
+                      </p>
+                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+                        Your teacher marks done vs. not on the dashboard. You can acknowledge here or during a Goal
+                        Setting live session.
+                      </p>
+                    </div>
+                  )}
                   {assessment.type === 'story-goal' && assessment.storyGoal && (
                     <div style={{ marginTop: '0.5rem', padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>
                       <p style={{ margin: 0, fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>
@@ -342,14 +359,29 @@ const AssessmentGoalsStudent: React.FC = () => {
                   )}
                 </div>
               ) : assessment.goal ? (
-                <div style={{ marginBottom: '1rem', padding: '1rem', background: assessment.type === 'story-goal' ? '#fef3c7' : '#f9fafb', borderRadius: '0.5rem', border: `2px solid ${assessment.type === 'story-goal' ? '#fbbf24' : '#3b82f6'}` }}>
-                  <p style={{ margin: 0, fontWeight: 'bold', color: assessment.type === 'story-goal' ? '#92400e' : '#3b82f6', marginBottom: assessment.type === 'story-goal' && assessment.goal.textGoal ? '0.5rem' : '0' }}>
-                    ✅ Your Goal: {assessment.type === 'story-goal' && assessment.goal.textGoal ? (
+                <div style={{ marginBottom: '1rem', padding: '1rem', background: assessment.type === 'story-goal' ? '#fef3c7' : assessment.type === 'weekly_deliverable' ? '#ecfdf5' : '#f9fafb', borderRadius: '0.5rem', border: `2px solid ${assessment.type === 'story-goal' ? '#fbbf24' : assessment.type === 'weekly_deliverable' ? '#34d399' : '#3b82f6'}` }}>
+                  <p style={{ margin: 0, fontWeight: 'bold', color: assessment.type === 'story-goal' ? '#92400e' : assessment.type === 'weekly_deliverable' ? '#065f46' : '#3b82f6', marginBottom: assessment.type === 'story-goal' && assessment.goal.textGoal ? '0.5rem' : '0' }}>
+                    ✅ Your Goal:{' '}
+                    {assessment.type === 'weekly_deliverable' ? (
+                      <span style={{ fontWeight: 'normal' }}>
+                        Acknowledged — target {assessment.goal.goalScore ?? assessment.maxScore}/{assessment.maxScore}
+                      </span>
+                    ) : assessment.type === 'story-goal' && assessment.goal.textGoal ? (
                       <span style={{ fontWeight: 'normal', fontStyle: 'italic' }}>"{assessment.goal.textGoal}"</span>
                     ) : (
                       `${assessment.goal.goalScore} / ${assessment.maxScore}`
                     )}
                   </p>
+                  {assessment.type === 'weekly_deliverable' && assessment.goal.evidence && (
+                    <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #a7f3d0' }}>
+                      <p style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#047857', marginBottom: '0.25rem' }}>
+                        Your note
+                      </p>
+                      <p style={{ margin: 0, fontSize: '0.875rem', color: '#374151', fontStyle: 'italic' }}>
+                        "{assessment.goal.evidence}"
+                      </p>
+                    </div>
+                  )}
                   {assessment.type === 'story-goal' && assessment.goal.evidence && (
                     <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #fbbf24' }}>
                       <p style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', color: '#92400e', marginBottom: '0.25rem' }}>

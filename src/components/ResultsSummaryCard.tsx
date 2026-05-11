@@ -16,6 +16,7 @@ const ResultsSummaryCard: React.FC<ResultsSummaryCardProps> = ({
   const goalScore = goal?.goalScore ?? null;
   const textGoal = goal?.textGoal;
   const isStoryGoal = assessment.type === 'story-goal';
+  const isWeeklyDeliverable = assessment.type === 'weekly_deliverable';
   const actualScore = result.actualScore;
   const delta = result.computedDelta ?? (goalScore !== null ? actualScore - goalScore : null);
   const absDiff = result.computedAbsDiff ?? (delta !== null ? Math.abs(delta) : null);
@@ -31,7 +32,9 @@ const ResultsSummaryCard: React.FC<ResultsSummaryCardProps> = ({
       if (hasLabelBasedTiers) {
         // Determine which label applies (same logic as computePPChange)
         let matchingLabel: string;
-        if (absDiff === 0) {
+        if (isWeeklyDeliverable) {
+          matchingLabel = actualScore >= (assessment.maxScore || 100) ? 'Completed' : 'Did not Complete';
+        } else if (absDiff === 0) {
           matchingLabel = 'Completed';
         } else if (absDiff <= 2) {
           matchingLabel = 'Almost';
@@ -79,7 +82,17 @@ const ResultsSummaryCard: React.FC<ResultsSummaryCardProps> = ({
     >
       <h4 style={{ marginTop: 0, marginBottom: '0.75rem' }}>Results</h4>
       
-      {isStoryGoal && textGoal ? (
+      {isWeeklyDeliverable ? (
+        <div style={{ marginBottom: '0.5rem', padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #34d399' }}>
+          <strong style={{ color: '#065f46' }}>Weekly deliverable:</strong>{' '}
+          <span style={{ color: '#047857' }}>{assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}</span>
+          {goal?.evidence && (
+            <p style={{ margin: '0.5rem 0 0', fontSize: '0.875rem', color: '#374151', fontStyle: 'italic' }}>
+              Student note: "{goal.evidence}"
+            </p>
+          )}
+        </div>
+      ) : isStoryGoal && textGoal ? (
         <div style={{ marginBottom: '0.5rem', padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', border: '1px solid #fbbf24' }}>
           <strong style={{ color: '#92400e' }}>Your Goal:</strong>
           <p style={{ margin: '0.5rem 0 0 0', color: '#78350f', fontStyle: 'italic' }}>"{textGoal}"</p>
@@ -90,17 +103,17 @@ const ResultsSummaryCard: React.FC<ResultsSummaryCardProps> = ({
             </div>
           )}
         </div>
-      ) : goalScore !== null ? (
+      ) : goalScore !== null && !isWeeklyDeliverable ? (
         <div style={{ marginBottom: '0.5rem' }}>
           <strong>Goal:</strong> {goalScore} / {assessment.maxScore}
         </div>
-      ) : (
+      ) : !isWeeklyDeliverable ? (
         <div style={{ marginBottom: '0.5rem', color: '#6b7280' }}>
           No goal was set
         </div>
-      )}
+      ) : null}
       
-      {!isStoryGoal && (
+      {!isStoryGoal && !isWeeklyDeliverable && (
         <>
           <div style={{ marginBottom: '0.5rem' }}>
             <strong>Actual:</strong> {actualScore} / {assessment.maxScore}
@@ -112,6 +125,13 @@ const ResultsSummaryCard: React.FC<ResultsSummaryCardProps> = ({
             </div>
           )}
         </>
+      )}
+
+      {isWeeklyDeliverable && (
+        <div style={{ marginBottom: '0.5rem' }}>
+          <strong>Marked:</strong>{' '}
+          {actualScore >= (assessment.maxScore || 100) ? 'Completed' : 'Not completed'}
+        </div>
       )}
 
       {outcome && (

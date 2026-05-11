@@ -39,6 +39,7 @@ import { trackParticipation, trackElimination, breakParticipationStreak } from '
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
 import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
+import { liveEventAwardDebug, truncateId } from './liveEventDebugLogging';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
 
@@ -391,7 +392,20 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
             await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + config.ppAmount) });
           }
         }
-        if (didGrant) grantedCount++;
+        if (didGrant) {
+          grantedCount++;
+          liveEventAwardDebug({
+            eventId: truncateId(sessionId),
+            eventType: 'live_quiz_legacy',
+            playerId: truncateId(uid),
+            pointsAwarded: config.rewardTypes.pp ? config.ppAmount : 0,
+            xpAwarded: config.rewardTypes.xp ? config.xpAmount : 0,
+            artifactsAwarded: config.rewardTypes.artifacts
+              ? config.artifactName || config.artifactId || null
+              : null,
+            reason: `legacy_rank_${rank}`,
+          });
+        }
       }
       await updateDoc(sessionRef(sessionId), {
         rewardsGrantedAt: serverTimestamp(),
@@ -479,7 +493,18 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
           await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppAmount) });
         }
       }
-      if (didGrant) grantedCount++;
+      if (didGrant) {
+        grantedCount++;
+        liveEventAwardDebug({
+          eventId: truncateId(sessionId),
+          eventType: 'live_quiz',
+          playerId: truncateId(uid),
+          pointsAwarded: ppAmount,
+          xpAwarded: xpAmount,
+          artifactsAwarded: reward.artifactName || reward.artifactId || null,
+          reason: `placement_rank_${rank}`,
+        });
+      }
     }
     await updateDoc(sessionRef(sessionId), {
       rewardsGrantedAt: serverTimestamp(),

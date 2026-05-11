@@ -17,6 +17,7 @@ import {
   type BattleEnergyType,
   normalizeEnergyType,
 } from '../constants/energyTypes';
+import { workStatsDebug } from './liveEventDebugLogging';
 
 export const WORK_ENERGY_ORDER: readonly BattleEnergyType[] = [
   ENERGY_TYPES.PHYSICAL,
@@ -158,6 +159,17 @@ export async function updatePlayerWorkStats(params: UpdatePlayerWorkStatsParams)
       },
       { merge: true }
     );
+  });
+
+  workStatsDebug({
+    playerId: userId,
+    eventId: sourceId ?? source,
+    eventType: source,
+    inferredEnergyType: energyType,
+    attemptedIncrement,
+    completedIncrement,
+    pointsEarnedIncrement,
+    classId: classId ?? '',
   });
 
   if (!logActivity) return;

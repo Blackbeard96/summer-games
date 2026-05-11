@@ -27,6 +27,8 @@ export type AssessmentType =
   | 'reflection'
   | 'habits'
   | 'story-goal'
+  /** Physical work — admin-defined deliverable; completion is marked on/off (same scoring shape as label tiers). */
+  | 'weekly_deliverable'
   /** @deprecated Legacy — treat as written_assessment in UI. */
   | 'test'
   | 'exam'
@@ -127,6 +129,11 @@ export interface Assessment {
     stageLabel: string;     // Display label (e.g., 'Call to Adventure')
     milestoneTitle?: string; // Optional milestone title (e.g., 'Accept the invite')
     prompt?: string;        // Optional prompt/notes shown to students
+  };
+
+  /** Weekly deliverable — what kind of physical assignment it is (e.g. "Lab packet", "Equipment return"). */
+  weeklyDeliverableConfig?: {
+    assignmentType: string;
   };
 }
 

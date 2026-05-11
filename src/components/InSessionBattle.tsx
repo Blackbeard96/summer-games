@@ -3688,6 +3688,11 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           sessionId={sessionId}
           sprint={roomClassFlowSprint}
           sessionPlayers={sessionPlayers.map((p) => ({ userId: p.userId, displayName: p.displayName }))}
+          classStudentRoster={
+            students.length > 0
+              ? students.map((s) => ({ userId: s.id, displayName: s.displayName || 'Student' }))
+              : null
+          }
           sessionHostUid={sessionRoomHostUid}
           isSessionHost={isSessionHost}
           currentUserId={currentUser.uid}

@@ -11,6 +11,7 @@ import {
   formatAssessmentTypeLabel,
   formatReflectionResponsesAsEvidence,
   isReflectionAssessmentType,
+  isWeeklyDeliverableAssessmentType,
 } from '../utils/assessmentTypeHelpers';
 import { useAuth } from '../context/AuthContext';
 
@@ -31,6 +32,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const isHabits = assessment.type === 'habits';
+  const isWeeklyDeliverable = isWeeklyDeliverableAssessmentType(assessment.type);
   const isStoryGoal = assessment.type === 'story-goal';
   const isReflection = isReflectionAssessmentType(assessment.type);
   const reflectionQuestionList = assessment.reflectionConfig?.questions ?? [];
@@ -107,7 +109,7 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [savedGoalData, setSavedGoalData] = useState<{
-    type: 'numeric' | 'habit' | 'story-goal' | 'reflection';
+    type: 'numeric' | 'habit' | 'story-goal' | 'reflection' | 'weekly_deliverable';
     goalScore?: number;
     textGoal?: string;
     habitText?: string;
@@ -135,7 +137,32 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
     setSaving(true);
 
     try {
-      if (isHabits) {
+      if (isWeeklyDeliverable) {
+        const note = evidence.trim();
+        const at = assessment.weeklyDeliverableConfig?.assignmentType?.trim() || assessment.title;
+        await setAssessmentGoal(
+          assessment.id,
+          currentUser.uid,
+          assessment.maxScore || 100,
+          assessment.classId,
+          note || null,
+          `Weekly deliverable: ${at}`,
+          undefined
+        );
+        void bumpAssessmentWorkStats({
+          studentId: currentUser.uid,
+          classId: assessment.classId,
+          assessment,
+          attemptedIncrement: 1,
+          completedIncrement: 1,
+          pointsEarnedIncrement: 20,
+          sourceId: `${assessment.id}_assessment_goals_ui_weekly`,
+        });
+        setSavedGoalData({
+          type: 'weekly_deliverable',
+          evidence: note || undefined,
+        });
+      } else if (isHabits) {
         // Validate habit text
         const trimmedText = habitText.trim();
         if (trimmedText.length < 3) {
@@ -465,6 +492,19 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                   )
                 )}
               </div>
+            ) : savedGoalData.type === 'weekly_deliverable' ? (
+              <div style={{ marginBottom: '1rem' }}>
+                <p style={{ margin: '0 0 0.5rem', fontWeight: 'bold', color: '#065f46' }}>Weekly deliverable</p>
+                <p style={{ margin: 0, color: '#374151' }}>
+                  Acknowledged for:{' '}
+                  <strong>{assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}</strong>
+                </p>
+                {savedGoalData.evidence && (
+                  <p style={{ margin: '0.75rem 0 0', color: '#374151', fontStyle: 'italic' }}>
+                    Note: "{savedGoalData.evidence}"
+                  </p>
+                )}
+              </div>
             ) : savedGoalData.type === 'story-goal' ? (
               <div>
                 <div style={{ marginBottom: '1rem' }}>
@@ -574,18 +614,24 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>
-          {existingGoal || existingHabitSubmission ? 'Edit Goal' : isHabits ? 'Commit to Habit' : 'Set Goal'}
+          {existingGoal || existingHabitSubmission
+            ? 'Edit Goal'
+            : isHabits
+              ? 'Commit to Habit'
+              : isWeeklyDeliverable
+                ? 'Acknowledge deliverable'
+                : 'Set Goal'}
         </h2>
         
         <p style={{ marginBottom: '0.35rem', color: '#111827', fontWeight: 600 }}>
           {assessment.title}
         </p>
-        {!isHabits && !isStoryGoal && (
+        {!isHabits && !isStoryGoal && !isWeeklyDeliverable && (
           <p style={{ marginTop: 0, marginBottom: '1rem', color: '#6b7280', fontSize: '0.9rem' }}>
             {formatAssessmentTypeLabel(assessment)}
           </p>
         )}
-        {isStoryGoal && (
+        {(isStoryGoal || isWeeklyDeliverable) && (
           <p style={{ marginTop: '-0.5rem', marginBottom: '1rem', color: '#6b7280', fontSize: '0.9rem' }}>
             {formatAssessmentTypeLabel(assessment)}
           </p>
@@ -625,6 +671,24 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           >
             🪞 <strong>Reflection:</strong> Set your target score, then answer each prompt. Your teacher may also ask you
             to add evidence during a live session.
+          </div>
+        )}
+
+        {isWeeklyDeliverable && (
+          <div
+            style={{
+              padding: '0.75rem',
+              background: '#ecfdf5',
+              borderRadius: '0.5rem',
+              marginBottom: '1rem',
+              fontSize: '0.875rem',
+              color: '#065f46',
+              border: '1px solid #34d399',
+            }}
+          >
+            📦 <strong>Weekly deliverable (physical work):</strong>{' '}
+            {assessment.weeklyDeliverableConfig?.assignmentType || assessment.title}. Your teacher marks completion on the
+            class dashboard; you can acknowledge here so they know you are on it.
           </div>
         )}
 
@@ -726,6 +790,35 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                     <span>1 Week</span>
                   </label>
                 </div>
+              </div>
+            </>
+          ) : isWeeklyDeliverable ? (
+            <>
+              <div style={{ marginBottom: '1rem' }}>
+                <label
+                  htmlFor="weeklyNotes"
+                  style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#065f46' }}
+                >
+                  Optional note to your teacher
+                </label>
+                <textarea
+                  id="weeklyNotes"
+                  value={evidence}
+                  onChange={(e) => setEvidence(e.target.value)}
+                  disabled={assessment.isLocked || saving}
+                  placeholder="e.g. submitting Friday 3rd period, already turned in to front office…"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #10b981',
+                    fontSize: '1rem',
+                    fontFamily: 'inherit',
+                    resize: 'vertical',
+                    background: 'white',
+                  }}
+                />
               </div>
             </>
           ) : isStoryGoal ? (
@@ -1074,7 +1167,15 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                 fontWeight: 'bold'
               }}
             >
-              {saving ? 'Saving...' : (existingGoal || existingHabitSubmission) ? 'Update Goal' : (isHabits ? 'Commit' : 'Set Goal')}
+              {saving
+                ? 'Saving...'
+                : existingGoal || existingHabitSubmission
+                  ? 'Update Goal'
+                  : isHabits
+                    ? 'Commit'
+                    : isWeeklyDeliverable
+                      ? 'Acknowledge'
+                      : 'Set Goal'}
             </button>
           </div>
         </form>

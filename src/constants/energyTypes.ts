@@ -18,6 +18,8 @@ export type BattleEnergyType = (typeof ENERGY_TYPES)[keyof typeof ENERGY_TYPES];
 export const LIVE_EVENT_ENERGY_TYPES: Record<string, BattleEnergyType> = {
   class_flow: ENERGY_TYPES.PHYSICAL,
   battle_royale: ENERGY_TYPES.PHYSICAL,
+  /** Team BR uses same Physical work bucket as FFA BR (combat + quiz layer). */
+  team_battle_royale: ENERGY_TYPES.PHYSICAL,
   quiz: ENERGY_TYPES.MENTAL,
   reflection: ENERGY_TYPES.EMOTIONAL,
   goals: ENERGY_TYPES.SPIRITUAL,
@@ -28,6 +30,7 @@ export const LIVE_EVENT_ENERGY_TYPES: Record<string, BattleEnergyType> = {
   live_event_quiz: ENERGY_TYPES.MENTAL,
   live_reflection: ENERGY_TYPES.EMOTIONAL,
   live_goal_setting: ENERGY_TYPES.SPIRITUAL,
+  weekly_deliverable: ENERGY_TYPES.PHYSICAL,
 };
 
 export function battleEnergyDisplayLabel(energy: BattleEnergyType): string {
@@ -145,6 +148,8 @@ export function inferEnergyTypeForAssessment(assessmentType: string | undefined)
     case 'habits':
     case 'story-goal':
       return ENERGY_TYPES.SPIRITUAL;
+    case 'weekly_deliverable':
+      return ENERGY_TYPES.PHYSICAL;
     case 'reflection':
     case 'live_reflection':
       return ENERGY_TYPES.EMOTIONAL;

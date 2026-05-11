@@ -39,6 +39,7 @@ import {
 import type { UniversalLawBoonEffects } from './universalLawBoons';
 import { getSkillEffectsSync } from './moveOverrides';
 import { mergeSkillEffectsIntoResolvedSkillAction } from './skillEffectEngine/resolverBridge';
+import { isSelfDirectedBattleMove } from './battleSkillTargetResolution';
 
 export interface ActorState {
   uid: string;
@@ -190,8 +191,15 @@ export async function resolveSkillAction(
     }
   }
 
-  // Calculate damage for offensive moves
-  if (skill.damage && skill.damage > 0 && skill.type === 'attack') {
+  // Offensive damage only for real attacks — never roll weapon damage for self heals/shields/buffs
+  // (mis-tagged moves with a legacy `damage` number must not hit the damage pipeline).
+  const hybridAttack =
+    String(skill.type) === 'attack' &&
+    typeof skill.damage === 'number' &&
+    skill.damage > 0 &&
+    !isSelfDirectedBattleMove(skill);
+
+  if (skill.damage && skill.damage > 0 && skill.type === 'attack' && hybridAttack) {
     // Use the move's actual damage property if it exists (from upgrades), otherwise use lookup
     let baseDamage: number;
     if (skill.damage > 0) {

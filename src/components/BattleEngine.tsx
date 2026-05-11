@@ -5269,8 +5269,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     }
     
     // Offensive moves - use damage range system
-    // Skip normal damage calculation for RR Candy moves that have already been handled
-    if (move.id !== 'rr-candy-on-off-shields-off' && move.id !== 'rr-candy-on-off-shields-on' && move.damage) {
+    // Skip normal damage calculation for RR Candy moves that have already been handled.
+    // Only true attacks roll damage — never use legacy `move.damage` for heals/shields/self-buffs (prevents self-hit bugs).
+    if (
+      move.id !== 'rr-candy-on-off-shields-off' &&
+      move.id !== 'rr-candy-on-off-shields-on' &&
+      move.damage &&
+      move.type === 'attack' &&
+      !isDefensiveMove
+    ) {
       // Use the move's actual damage property if it exists (from upgrades), otherwise use lookup
       let baseDamage: number;
       if (move.damage > 0) {
