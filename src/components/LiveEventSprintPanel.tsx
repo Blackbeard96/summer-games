@@ -10,6 +10,7 @@ import {
   applyClassFlowSprintIncompletePenalties,
 } from '../utils/liveEventSprintService';
 import { mergeSprintRosterForClassFlow } from '../utils/classFlowSprintRosterService';
+import LiveEventWeeklyDeliverableMarkPanel from './LiveEventWeeklyDeliverableMarkPanel';
 
 export interface LiveEventSprintPanelProps {
   sessionId: string;
@@ -23,6 +24,9 @@ export interface LiveEventSprintPanelProps {
   currentUserId: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
+  /** When set with goalSettingAssessmentId, host can mark weekly deliverable completion here. */
+  classId?: string;
+  goalSettingAssessmentId?: string | null;
 }
 
 function endsAtMs(s: ClassFlowSprintState): number {
@@ -42,6 +46,8 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
   currentUserId,
   userEmail,
   userDisplayName,
+  classId = '',
+  goalSettingAssessmentId = null,
 }) => {
   const [now, setNow] = useState(() => Date.now());
   const [title, setTitle] = useState('');
@@ -255,6 +261,14 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
       </div>
       <p style={{ margin: '0.5rem 0 0.75rem', fontSize: '0.85rem', opacity: 0.92, lineHeight: 1.45 }}>
         Host sets a timed goal and checks off students who finish on time. The list includes the whole class when a roster is available; “In session” means the student is currently in this live room. Rewards (session PP, moves, participation stats, and optional vault PP / XP) apply as soon as a student is checked—no separate award step required. Use “Award pending” only to catch anyone who was marked before this update or if a grant failed. Optionally set an incomplete penalty: after the sprint, use “Apply incomplete penalty” to deduct vault PP from everyone on the class roster (or in-session only if no class is linked) who is still unchecked (host excluded).
+        {classId && goalSettingAssessmentId?.trim() ? (
+          <>
+            {' '}
+            If this live session has <strong>Goal setting</strong> linked to a <strong>Weekly Deliverable</strong>{' '}
+            assessment, use the deliverable block below to mark completion and apply vault PP the same way as the admin
+            dashboard.
+          </>
+        ) : null}
       </p>
 
       {message && (
@@ -559,6 +573,17 @@ const LiveEventSprintPanel: React.FC<LiveEventSprintPanelProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {isSessionHost && classId && goalSettingAssessmentId?.trim() && (
+        <LiveEventWeeklyDeliverableMarkPanel
+          classId={classId}
+          goalSettingAssessmentId={goalSettingAssessmentId.trim()}
+          hostUid={currentUserId}
+          classStudentRoster={classStudentRoster}
+          sessionPlayers={sessionPlayers}
+          isSessionHost={isSessionHost}
+        />
       )}
     </div>
   );

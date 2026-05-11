@@ -3698,6 +3698,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           currentUserId={currentUser.uid}
           userEmail={currentUser.email}
           userDisplayName={currentUser.displayName}
+          classId={classId}
+          goalSettingAssessmentId={roomReflectionMeta.goalSettingAssessmentId}
         />
       )}
 
