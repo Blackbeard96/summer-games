@@ -20,6 +20,7 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { logger } from '../utils/debugLogger';
+import { inferEnergyTypeForMove } from '../constants/energyTypes';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
 import {
   moveCountsForDailyElementalChallenge,
@@ -819,7 +820,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               })
               .map((pcMove: any) => {
                 const moveId = `power-card-${pcMove.name?.toLowerCase().replace(/\s+/g, '-')}`;
-                return {
+                const baseMove = {
                   id: moveId,
                   name: pcMove.name,
                   description: pcMove.description || '',
@@ -834,10 +835,17 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   masteryLevel: 1,
                   targetType: 'single' as const,
                   priority: 0,
+                  energyType: inferEnergyTypeForMove({
+                    category: 'system',
+                    type: 'utility',
+                    name: pcMove.name,
+                    description: pcMove.description,
+                  }),
                   // Store original Power Card data (these are additional properties not in Move type)
                   powerCardIcon: pcMove.icon,
                   powerCardData: pcMove
                 } as Move & { powerCardIcon?: string; powerCardData?: any };
+                return baseMove;
               });
             
             if (convertedPowerCardMoves.length > 0) {

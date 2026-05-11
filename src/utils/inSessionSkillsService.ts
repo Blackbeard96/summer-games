@@ -6,6 +6,7 @@
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Move } from '../types/battle';
+import { getResolvedMoveEnergyType } from '../constants/energyTypes';
 import {
   computeLiveEventParticipationSkillCost,
   logLiveEventSkillCostAttempt,
@@ -181,6 +182,7 @@ export async function validateSkillUsage(
           actorId: userId,
           skillId: skill.id,
           skillName: skill.name,
+          energyType: getResolvedMoveEnergyType(skill),
           detectedCategory: res.breakdown.category,
           detectedLevel: res.breakdown.elementalMoveTier,
           baseCost: res.breakdown.baseCost,
@@ -202,6 +204,7 @@ export async function validateSkillUsage(
           actorId: userId,
           skillId: skill.id,
           skillName: skill.name,
+          energyType: getResolvedMoveEnergyType(skill),
           detectedCategory: res.breakdown.category,
           detectedLevel: res.breakdown.elementalMoveTier,
           baseCost: res.breakdown.baseCost,
@@ -216,6 +219,7 @@ export async function validateSkillUsage(
         actorId: userId,
         skillId: skill.id,
         skillName: skill.name,
+        energyType: getResolvedMoveEnergyType(skill),
         detectedCategory: res.breakdown.category,
         detectedLevel: res.breakdown.elementalMoveTier,
         baseCost: res.breakdown.baseCost,
@@ -239,6 +243,7 @@ export async function validateSkillUsage(
         actorId: userId,
         skillId: skill.id,
         skillName: skill.name,
+        energyType: getResolvedMoveEnergyType(skill),
         detectedCategory: breakdown.category,
         detectedLevel: breakdown.elementalMoveTier,
         baseCost: breakdown.baseCost,
@@ -262,6 +267,7 @@ export async function validateSkillUsage(
         actorId: userId,
         skillId: skill.id,
         skillName: skill.name,
+        energyType: getResolvedMoveEnergyType(skill),
         detectedCategory: breakdown.category,
         detectedLevel: breakdown.elementalMoveTier,
         baseCost: breakdown.baseCost,
@@ -277,6 +283,7 @@ export async function validateSkillUsage(
       actorId: userId,
       skillId: skill.id,
       skillName: skill.name,
+      energyType: getResolvedMoveEnergyType(skill),
       detectedCategory: breakdown.category,
       detectedLevel: breakdown.elementalMoveTier,
       baseCost: breakdown.baseCost,

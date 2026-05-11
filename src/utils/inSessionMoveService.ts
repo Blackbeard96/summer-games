@@ -15,6 +15,7 @@ import { debug, debugError, debugAction, debugSessionWrite } from './inSessionDe
 import { trackElimination } from './inSessionStatsService';
 import { battleDebug, battleError, detectBattleMode } from './battleDebug';
 import type { Move } from '../types/battle';
+import { getResolvedMoveEnergyType } from '../constants/energyTypes';
 import type { ResolvedSkillAction } from './battleSkillResolver';
 import {
   challengeTypesForLiveEventSkill,
@@ -277,6 +278,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
             actorId: actorUid,
             skillId: move.id,
             skillName: move.name,
+            energyType: getResolvedMoveEnergyType(move),
             detectedCategory: costBreakdown.category,
             detectedLevel: costBreakdown.elementalMoveTier,
             baseCost: costBreakdown.baseCost,
@@ -298,6 +300,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           actorId: actorUid,
           skillId: move.id,
           skillName: move.name,
+          energyType: getResolvedMoveEnergyType(move),
           detectedCategory: costBreakdown.category,
           detectedLevel: costBreakdown.elementalMoveTier,
           baseCost: costBreakdown.baseCost,
@@ -666,6 +669,7 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
           targetUid,
           useLiveEventParticipationForSkillCost,
           traceId: traceId || null,
+          energyType: getResolvedMoveEnergyType(move),
         },
       });
     }

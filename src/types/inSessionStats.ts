@@ -36,6 +36,8 @@ export interface SessionStats {
   // Participation tracking
   participationEarned: number; // Total participation points earned
   movesEarned: number; // Moves earned from participation
+  /** Aggregated participation volume by battle energy type (Physical/Mental/Emotional/Spiritual). */
+  participationEnergyTotals?: Record<string, number>;
   /** Season 1: consecutive successful participation awards (for battle-log streak). */
   consecutiveParticipationAwards?: number;
   /** Season 1: last displayed streak count (optional, for dedupe). */
@@ -55,6 +57,8 @@ export interface SessionStats {
     skillId: string;
     skillName: string;
     count: number; // How many times this skill was used
+    /** Physical / Mental / Emotional / Spiritual */
+    energyType?: string;
     totalDamage?: number; // Total damage dealt with this skill
     totalHealing?: number; // Total healing with this skill
   }>;

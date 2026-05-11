@@ -5,6 +5,10 @@ import { doc, getDoc, collection, addDoc, serverTimestamp, getDocs } from 'fireb
 import { db } from '../firebase';
 import type { LiveEventModeType, EnergyType } from '../types/season1';
 import { getEnergyTypeForMode } from '../utils/season1Energy';
+import {
+  battleEnergyDisplayLabel,
+  getBattleEnergyTypeForLiveEventMode,
+} from '../constants/energyTypes';
 import { buildLiveEventTargeting, type LiveEventType } from '../utils/liveEventEligibility';
 
 interface ClassroomOption {
@@ -92,6 +96,10 @@ const InSessionCreate: React.FC = () => {
         liveEventMode === 'neutral_flow'
           ? neutralEnergyOverride
           : getEnergyTypeForMode(liveEventMode);
+      const battleEnergyType = getBattleEnergyTypeForLiveEventMode(
+        liveEventMode,
+        liveEventMode === 'neutral_flow' ? neutralEnergyOverride : undefined
+      );
 
       const roomData = {
         classId: targeting.classId,
@@ -109,6 +117,8 @@ const InSessionCreate: React.FC = () => {
         /** Season 1 — live event taxonomy (defaults safe for older clients). */
         liveEventMode,
         goalLinkingEnabled,
+        /** Display + analytics: Physical / Mental / Emotional / Spiritual */
+        energyType: battleEnergyType,
         energyTypeAwarded,
         ...(liveEventMode === 'neutral_flow' ? { neutralFlowEnergyType: neutralEnergyOverride } : {}),
         players: [{
@@ -262,23 +272,26 @@ const InSessionCreate: React.FC = () => {
             onChange={(e) => setLiveEventMode(e.target.value as LiveEventModeType)}
             style={{ width: '100%', padding: '0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
           >
-            <option value="class_flow">Class Flow — timed sprints &amp; participation (Kinetic)</option>
-            <option value="battle_royale">Battle Royale — Kinetic</option>
-            <option value="quiz">Quiz — Mental</option>
-            <option value="reflection">Reflection — Emotional</option>
-            <option value="goal_setting">Goal Setting — Spiritual</option>
-            <option value="neutral_flow">Neutral Flow — configurable energy</option>
+            <option value="class_flow">Class Flow — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('class_flow'))}</option>
+            <option value="battle_royale">Battle Royale — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('battle_royale'))}</option>
+            <option value="quiz">Quiz — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('quiz'))}</option>
+            <option value="reflection">Reflection — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('reflection'))}</option>
+            <option value="goal_setting">Goal Setting — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('goal_setting'))}</option>
+            <option value="neutral_flow">Neutral Flow — pick track below</option>
           </select>
+          <p style={{ margin: '6px 0 0', fontSize: '0.85rem', color: '#4b5563' }}>
+            This room awards <strong>{battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode(liveEventMode, liveEventMode === 'neutral_flow' ? neutralEnergyOverride : undefined))}</strong> to Season 1 energy (vault uses legacy kinetic/mental keys under the hood).
+          </p>
           {liveEventMode === 'neutral_flow' && (
             <select
               value={neutralEnergyOverride}
               onChange={(e) => setNeutralEnergyOverride(e.target.value as EnergyType)}
               style={{ width: '100%', marginTop: 8, padding: '0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
             >
-              <option value="kinetic">Kinetic</option>
-              <option value="mental">Mental</option>
-              <option value="emotional">Emotional</option>
-              <option value="spiritual">Spiritual</option>
+              <option value="kinetic">Physical Energy (kinetic)</option>
+              <option value="mental">Mental Energy</option>
+              <option value="emotional">Emotional Energy</option>
+              <option value="spiritual">Spiritual Energy</option>
             </select>
           )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: '0.9rem' }}>

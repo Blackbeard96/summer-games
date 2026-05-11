@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { joinSession } from '../utils/inSessionService';
 import { getClassroomIdsForEnrolledStudent, getVisibleLiveEventsForUser } from '../utils/classroomQueries';
 import { canUserJoinLiveEvent, normalizeLiveEventEligibility } from '../utils/liveEventEligibility';
+import { battleEnergyDisplayLabel, inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
 
 interface LiveEvent {
   id: string;
@@ -19,7 +20,9 @@ interface LiveEvent {
   /** Season 1 live mode — absent on legacy rooms (treat as quiz). */
   liveEventMode?: string;
   goalLinkingEnabled?: boolean;
+  energyType?: string;
   energyTypeAwarded?: string;
+  neutralFlowEnergyType?: string;
   players: Array<{
     userId: string;
     displayName: string;
@@ -116,7 +119,9 @@ const LiveEvents: React.FC = () => {
           hostUid: data.hostUid || data.teacherId,
           liveEventMode: data.liveEventMode,
           goalLinkingEnabled: data.goalLinkingEnabled,
+          energyType: data.energyType,
           energyTypeAwarded: data.energyTypeAwarded,
+          neutralFlowEnergyType: data.neutralFlowEnergyType,
           players: data.players || [],
           createdAt: data.createdAt,
           startedAt: data.startedAt,
@@ -266,7 +271,13 @@ const LiveEvents: React.FC = () => {
   const formatSeason1Mode = (event: LiveEvent): string => {
     if (!event.liveEventMode) return 'Classic session';
     const m = event.liveEventMode.replace(/_/g, ' ');
-    const en = event.energyTypeAwarded ? ` · ${event.energyTypeAwarded} energy` : '';
+    const battle = inferEnergyTypeForLiveEvent({
+      energyType: event.energyType,
+      liveEventMode: event.liveEventMode,
+      energyTypeAwarded: event.energyTypeAwarded as import('../types/season1').EnergyType | undefined,
+      neutralFlowEnergyType: event.neutralFlowEnergyType as import('../types/season1').EnergyType | undefined,
+    });
+    const en = ` · ${battleEnergyDisplayLabel(battle)}`;
     const g = event.goalLinkingEnabled === false ? '' : ' · goals on';
     return `Mode: ${m}${en}${g}`;
   };

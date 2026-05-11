@@ -8,10 +8,10 @@ import { energyXPForNextLevel, getEnergyLevelBonuses } from '../utils/season1Ene
 import type { EnergyType } from '../types/season1';
 
 const ENERGY_META: { key: EnergyType; label: string; icon: string; blurb: string }[] = [
-  { key: 'kinetic', label: 'Kinetic', icon: '⚡', blurb: 'Motion, action, Battle Royale intensity.' },
-  { key: 'mental', label: 'Mental', icon: '🧠', blurb: 'Focus, recall, Quiz mastery.' },
-  { key: 'emotional', label: 'Emotional', icon: '💜', blurb: 'Honesty, reflection, empathy.' },
-  { key: 'spiritual', label: 'Spiritual', icon: '✨', blurb: 'Purpose, intention — Kon’s path.' },
+  { key: 'kinetic', label: 'Physical Energy', icon: '⚡', blurb: 'Motion, action, Class Flow & Battle Royale intensity.' },
+  { key: 'mental', label: 'Mental Energy', icon: '🧠', blurb: 'Focus, recall, quizzes & strategy.' },
+  { key: 'emotional', label: 'Emotional Energy', icon: '💜', blurb: 'Honesty, reflection, shields & empathy.' },
+  { key: 'spiritual', label: 'Spiritual Energy', icon: '✨', blurb: 'Purpose, goals, ascension & next-level play.' },
 ];
 
 const EnergyMasteryPage: React.FC = () => {

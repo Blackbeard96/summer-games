@@ -11,7 +11,33 @@ import { Timestamp } from 'firebase/firestore';
 // Core Types
 // ============================================================================
 
-export type AssessmentType = 'test' | 'exam' | 'quiz' | 'habits' | 'story-goal';
+export type WrittenAssessmentKind = 'test' | 'exam' | 'quiz';
+
+/** One prompt in a Reflection-type assessment (admin-configured). */
+export interface ReflectionQuestionConfig {
+  id: string;
+  prompt: string;
+  responseMode: 'open' | 'preset';
+  /** When responseMode === 'preset', labels shown in the student dropdown (min 2). */
+  presetOptions?: string[];
+}
+
+export type AssessmentType =
+  | 'written_assessment'
+  | 'reflection'
+  | 'habits'
+  | 'story-goal'
+  /** @deprecated Legacy — treat as written_assessment in UI. */
+  | 'test'
+  | 'exam'
+  | 'quiz'
+  /** @deprecated Use `reflection`. */
+  | 'live_reflection'
+  /** @deprecated Live-event templates; avoid new creates. */
+  | 'class_flow'
+  | 'battle_royale'
+  | 'live_event_quiz'
+  | 'live_goal_setting';
 export type GradingStatus = 'draft' | 'open' | 'graded';
 export type OutcomeType = 'hit' | 'miss' | 'exceed';
 
@@ -57,6 +83,12 @@ export interface Assessment {
   classId: string;
   title: string; // e.g., "Unit 3 Test"
   type: AssessmentType;
+  /** Physical / Mental / Emotional / Spiritual — optional on legacy rows. */
+  energyType?: string;
+  /** When type is written_assessment (or legacy test/exam/quiz coerced in UI). */
+  writtenAssessmentKind?: WrittenAssessmentKind;
+  /** When type is reflection — structured prompts for students. */
+  reflectionConfig?: { questions: ReflectionQuestionConfig[] };
   date: Timestamp;
   maxScore: number; // Default 100
   minGoalScore?: number; // Minimum score students can set as their goal (default: 0)
@@ -109,6 +141,8 @@ export interface AssessmentGoal {
   studentId: string;
   goalScore?: number; // Required for numeric goals (test/exam/quiz), optional for text-based goals
   textGoal?: string; // Required for Story Goals (text-based), optional for numeric goals
+  /** Reflection-type assessments: answers keyed by question id. */
+  reflectionResponses?: Record<string, string>;
   evidence?: string | null; // Optional evidence/reflection text for Story Goals and Habit Goals
   createdAt: Timestamp;
   updatedAt: Timestamp;

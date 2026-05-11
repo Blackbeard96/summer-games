@@ -291,7 +291,29 @@ export function validateAssessmentConfig(assessment: Partial<Assessment>): {
   if (assessment.penaltyCap !== undefined && assessment.penaltyCap < 0) {
     errors.push('Penalty cap cannot be negative');
   }
-  
+
+  const refType = assessment.type;
+  if (refType === 'reflection' || refType === 'live_reflection') {
+    const qs = assessment.reflectionConfig?.questions;
+    if (!qs || qs.length === 0) {
+      errors.push('Reflection assessments need at least one question.');
+    } else {
+      qs.forEach((qu, index) => {
+        if (!qu.prompt || !String(qu.prompt).trim()) {
+          errors.push(`Reflection question ${index + 1}: prompt is required.`);
+        }
+        if (qu.responseMode === 'preset') {
+          const opts = (qu.presetOptions || []).map((s) => String(s).trim()).filter(Boolean);
+          if (opts.length < 2) {
+            errors.push(
+              `Reflection question ${index + 1}: preset mode needs at least two non-empty options.`
+            );
+          }
+        }
+      });
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors

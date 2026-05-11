@@ -15,7 +15,7 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import type { UpdateData, DocumentData } from 'firebase/firestore';
-import type { ClassFlowSprintState } from '../types/season1';
+import type { ClassFlowSprintState, EnergyType } from '../types/season1';
 import { addVaultPpGrantedMidSessionStat, trackParticipation } from './inSessionStatsService';
 import { isGlobalHost } from './inSessionService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
@@ -186,13 +186,17 @@ export async function startClassFlowSprint(
         : Array.isArray(snap.data()?.classIds) && typeof snap.data()!.classIds[0] === 'string'
           ? snap.data()!.classIds[0]
           : undefined;
+    const liveEventMode =
+      typeof snap.data()?.liveEventMode === 'string' ? snap.data()!.liveEventMode : undefined;
+    const neutralFlowEnergyType = snap.data()?.neutralFlowEnergyType as EnergyType | undefined;
     recordClassFlowSprintJoinsForPlayers(
       sessionId,
       id,
       playerUidsForSprints,
       roomClassId,
       title,
-      now.toMillis()
+      now.toMillis(),
+      { liveEventMode, neutralFlowEnergyType }
     );
 
     return { ok: true };
@@ -511,6 +515,10 @@ export async function grantSprintRewardForSinglePlayer(
           ? snap.data()!.classIds[0]
           : undefined;
     const startedMsForProductivity = tsToMillis(sprint.startedAt);
+    const liveEventMode =
+      typeof snap.data()?.liveEventMode === 'string' ? snap.data()!.liveEventMode : undefined;
+    const neutralFlowEnergyType = snap.data()?.neutralFlowEnergyType as EnergyType | undefined;
+    const pointsEarned = ppAmt + vaultPP + xpAmt;
     void recordClassFlowSprintCompletion({
       sessionId,
       sprintId: sprint.id,
@@ -520,6 +528,9 @@ export async function grantSprintRewardForSinglePlayer(
       sprintTitle: sprint.title,
       sprintType: 'class_flow',
       startedAtMs: startedMsForProductivity,
+      liveEventMode,
+      neutralFlowEnergyType,
+      pointsEarned,
     });
 
     return { ok: true, granted: true };

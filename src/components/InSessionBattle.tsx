@@ -109,6 +109,7 @@ import type { TrainingQuestion } from '../types/trainingGrounds';
 import type { LiveEventModeType } from '../types/season1';
 import type { Assessment } from '../types/assessmentGoals';
 import { getEnergyTypeForMode } from '../utils/season1Energy';
+import { getResolvedMoveEnergyType } from '../constants/energyTypes';
 import { getAssessmentsByClass } from '../utils/assessmentGoalsFirestore';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
 import LiveEventReflectionPanel from './LiveEventReflectionPanel';
@@ -2621,7 +2622,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 name: selectedMove.name,
                 type: selectedMove.type,
                 cost: selectedMove.cost,
-                category: selectedMove.category
+                category: selectedMove.category,
+                energyType: getResolvedMoveEnergyType(selectedMove),
               },
               actorUid: currentUser?.uid,
               sessionId: sessionId
@@ -2651,7 +2653,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 name: selectedMove.name,
                 type: selectedMove.type,
                 cost: selectedMove.cost,
-                category: selectedMove.category
+                category: selectedMove.category,
+                energyType: getResolvedMoveEnergyType(selectedMove),
               } : null,
               actorUid: currentUser?.uid,
               sessionId: sessionId,
@@ -4049,7 +4052,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   lineHeight: 1.5,
                 }}
               >
-                <strong>Class Flow</strong> — kinetic energy. After you activate, use the <strong>Class Flow Sprint</strong> panel
+                <strong>Class Flow</strong> — Physical Energy. After you activate, use the <strong>Class Flow Sprint</strong> panel
                 below the header to run timed goals, check off finishers, and grant participation power plus optional vault PP/XP.
               </div>
             )}
@@ -6279,6 +6282,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                     <div style={{ flex: 1 }}>
                                       <div style={{ fontWeight: 'bold', marginBottom: '0.125rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                                         {move.name}
+                                        <span
+                                          style={{
+                                            fontSize: '0.58rem',
+                                            fontWeight: 800,
+                                            background: 'rgba(255,255,255,0.22)',
+                                            border: '1px solid rgba(255,255,255,0.45)',
+                                            padding: '0.08rem 0.3rem',
+                                            borderRadius: '0.25rem',
+                                          }}
+                                        >
+                                          {getResolvedMoveEnergyType(move)}
+                                        </span>
                                         {isLevel2ManifestSkill ? (
                                           <span
                                             style={{

@@ -22,6 +22,7 @@ import { applyLevel2PerkModifiers } from '../utils/level2ManifestModifiers';
 import { buildLevel2SkillDescription } from '../utils/level2ManifestSkillCodec';
 import { level2RecordToLiveEventLegacyFields, level2RecordToSkillEffectPayloads } from '../utils/level2ManifestSkillEffects';
 import type { Move } from '../types/battle';
+import { getResolvedMoveEnergyType } from '../constants/energyTypes';
 const COL = 'students';
 
 /** Firestore rejects `undefined` anywhere in the payload (merge included). */
@@ -249,7 +250,8 @@ export async function getActiveLevel2ManifestMove(userId: string): Promise<Move 
     const base = level2SkillToMove(sk, sk.manifestId);
     const legacy = level2RecordToLiveEventLegacyFields(sk);
     const fx = level2RecordToSkillEffectPayloads(sk);
-    return { ...base, ...legacy, skillEffects: fx.length ? fx : undefined };
+    const merged: Move = { ...base, ...legacy, skillEffects: fx.length ? fx : undefined };
+    return { ...merged, energyType: merged.energyType ?? getResolvedMoveEnergyType(merged) };
   } catch {
     return null;
   }

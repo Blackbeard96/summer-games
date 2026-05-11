@@ -35,8 +35,44 @@ import {
   computePPChange,
   validateGoalScore,
 } from './assessmentGoals';
+import {
+  formatReflectionResponsesAsEvidence,
+  hasStructuredReflectionQuestions,
+} from './assessmentTypeHelpers';
 import { arrayUnion, runTransaction } from 'firebase/firestore';
 import { updateHeroJourneyProgress } from './heroJourneyProgress';
+
+/** Work / energy stats when a student sets or updates a goal (Assessment Goals UI or live goal-setting). */
+export async function bumpAssessmentWorkStats(params: {
+  studentId: string;
+  classId: string;
+  assessment: Assessment;
+  attemptedIncrement?: number;
+  completedIncrement?: number;
+  pointsEarnedIncrement?: number;
+  sourceId: string;
+}): Promise<void> {
+  try {
+    const { getEnergyTypeForAssessmentType } = await import('../constants/energyTypes');
+    const { updatePlayerWorkStats } = await import('./workStatsTracking');
+    const et = getEnergyTypeForAssessmentType(
+      params.assessment.type,
+      (params.assessment as { energyType?: string }).energyType
+    );
+    await updatePlayerWorkStats({
+      userId: params.studentId,
+      energyType: et,
+      attemptedIncrement: params.attemptedIncrement ?? 0,
+      completedIncrement: params.completedIncrement ?? 0,
+      pointsEarnedIncrement: params.pointsEarnedIncrement ?? 0,
+      classId: params.classId,
+      source: 'assessment',
+      sourceId: params.sourceId,
+    });
+  } catch (e) {
+    console.warn('[assessmentGoalsFirestore] workStats', e);
+  }
+}
 
 // Artifact lookup data (matches Marketplace.tsx artifacts list)
 const ARTIFACT_LOOKUP: { [key: string]: { description: string; icon: string; image: string; category: 'time' | 'protection' | 'food' | 'special'; rarity: 'common' | 'rare' | 'epic' | 'legendary' } } = {
@@ -263,7 +299,8 @@ export async function setAssessmentGoal(
   goalScore: number | undefined,
   classId: string,
   evidence?: string | null,
-  textGoal?: string
+  textGoal?: string,
+  reflectionResponses?: Record<string, string> | null
 ): Promise<void> {
   const goalId = generateGoalId(assessmentId, studentId);
   const goalRef = doc(db, 'assessmentGoals', goalId);
@@ -271,6 +308,15 @@ export async function setAssessmentGoal(
   // Check if goal already exists to determine if we should increment numGoalsSet
   const existingGoal = await getDoc(goalRef);
   const isNewGoal = !existingGoal.exists();
+
+  let mergedReflection: Record<string, string> | undefined;
+  if (reflectionResponses && Object.keys(reflectionResponses).length > 0) {
+    const prev =
+      (existingGoal.exists() &&
+        (existingGoal.data() as { reflectionResponses?: Record<string, string> }).reflectionResponses) ||
+      {};
+    mergedReflection = { ...prev, ...reflectionResponses };
+  }
   
   const goalData: AssessmentGoal = {
     id: goalId,
@@ -279,6 +325,7 @@ export async function setAssessmentGoal(
     studentId,
     ...(goalScore !== undefined && { goalScore }),
     ...(textGoal !== undefined && { textGoal }),
+    ...(mergedReflection && { reflectionResponses: mergedReflection }),
     evidence: evidence || null,
     createdAt: existingGoal.exists() ? existingGoal.data().createdAt : Timestamp.now(),
     updatedAt: Timestamp.now(),
@@ -298,6 +345,21 @@ export async function setAssessmentGoal(
         'Goal saved but numGoalsSet could not be updated on the assessment (deploy latest Firestore rules if this persists).',
         e
       );
+    }
+
+    try {
+      const a = await getAssessment(assessmentId);
+      if (a) {
+        void bumpAssessmentWorkStats({
+          studentId,
+          classId,
+          assessment: a,
+          attemptedIncrement: 1,
+          sourceId: assessmentId,
+        });
+      }
+    } catch (e) {
+      console.warn('[setAssessmentGoal] workStats attempted', e);
     }
   }
 }
@@ -418,6 +480,16 @@ export async function setAssessmentResult(
   await updateDoc(assessmentRef, {
     numGraded: increment(1),
     gradingStatus: 'graded' as const
+  });
+
+  const pts = Math.max(0, Math.round(typeof ppChange === 'number' ? ppChange : 0));
+  void bumpAssessmentWorkStats({
+    studentId,
+    classId: assessment.classId,
+    assessment,
+    completedIncrement: 1,
+    pointsEarnedIncrement: pts + Math.min(50, Math.round(actualScore || 0)),
+    sourceId: `${assessmentId}_graded`,
   });
 }
 
@@ -1437,6 +1509,15 @@ export async function submitLiveEventGoalSettingToAssessment(params: {
         await createHabitSubmission(assessmentId, studentId, classId, habitText, duration, ev, 'other');
       }
       await awardGoalSettingXp(`${habitText}${ev ? `\n${ev}` : ''}`);
+      void bumpAssessmentWorkStats({
+        studentId,
+        classId,
+        assessment,
+        attemptedIncrement: 1,
+        completedIncrement: 1,
+        pointsEarnedIncrement: 15 + Math.min(40, habitText.length),
+        sourceId: `${assessmentId}_live_goal_habit`,
+      });
       return { ok: true };
     }
 
@@ -1449,8 +1530,16 @@ export async function submitLiveEventGoalSettingToAssessment(params: {
         return { ok: false, error: 'Goal description must be 500 characters or less.' };
       }
       const evidence = typeof evidenceRaw === 'string' ? evidenceRaw.trim() || null : null;
-      await setAssessmentGoal(assessmentId, studentId, undefined, classId, evidence, textGoal);
+      await setAssessmentGoal(assessmentId, studentId, undefined, classId, evidence, textGoal, undefined);
       await awardGoalSettingXp(`${textGoal}${evidence ? `\n${evidence}` : ''}`);
+      void bumpAssessmentWorkStats({
+        studentId,
+        classId,
+        assessment,
+        completedIncrement: 1,
+        pointsEarnedIncrement: 15 + Math.min(50, textGoal.length),
+        sourceId: `${assessmentId}_live_goal_story`,
+      });
       return { ok: true };
     }
 
@@ -1463,8 +1552,16 @@ export async function submitLiveEventGoalSettingToAssessment(params: {
     if (!validation.valid) {
       return { ok: false, error: validation.error || 'Invalid goal score.' };
     }
-    await setAssessmentGoal(assessmentId, studentId, score, classId);
+    await setAssessmentGoal(assessmentId, studentId, score, classId, undefined, undefined, undefined);
     await awardGoalSettingXp(String(score));
+    void bumpAssessmentWorkStats({
+      studentId,
+      classId,
+      assessment,
+      completedIncrement: 1,
+      pointsEarnedIncrement: 12 + Math.min(40, Math.round(score)),
+      sourceId: `${assessmentId}_live_goal_numeric`,
+    });
     return { ok: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1494,6 +1591,8 @@ export async function submitLiveEventReflectionToAssessment(params: {
   collectHabit?: boolean;
   /** When false, evidence is not collected this session (habits only). */
   collectEvidence?: boolean;
+  /** Reflection assessments with `reflectionConfig`: keyed by question id. */
+  reflectionResponses?: Record<string, string>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const {
     assessmentId,
@@ -1505,6 +1604,7 @@ export async function submitLiveEventReflectionToAssessment(params: {
     evidenceText = '',
     collectHabit: collectHabitParam,
     collectEvidence: collectEvidenceParam,
+    reflectionResponses: reflectionResponsesParam,
   } = params;
 
   const assessment = await getAssessment(assessmentId);
@@ -1576,6 +1676,14 @@ export async function submitLiveEventReflectionToAssessment(params: {
           await updateHabitSubmissionGoal(assessmentId, studentId, habitIn, sub.duration, mergedEvid);
         }
         await awardReflectionXp(`${habitIn}\n\n${evidIn}`);
+        void bumpAssessmentWorkStats({
+          studentId,
+          classId,
+          assessment,
+          completedIncrement: 1,
+          pointsEarnedIncrement: Math.min(100, 10 + Math.floor(`${habitIn}\n${evidIn}`.length / 20)),
+          sourceId: `${assessmentId}_${sessionId}_reflect_habit_full`,
+        });
         return { ok: true };
       }
 
@@ -1586,6 +1694,14 @@ export async function submitLiveEventReflectionToAssessment(params: {
           await updateHabitSubmissionGoal(assessmentId, studentId, habitIn, sub.duration, undefined);
         }
         await awardReflectionXp(habitIn);
+        void bumpAssessmentWorkStats({
+          studentId,
+          classId,
+          assessment,
+          completedIncrement: 1,
+          pointsEarnedIncrement: Math.min(80, 10 + habitIn.length),
+          sourceId: `${assessmentId}_${sessionId}_reflect_habit_commit`,
+        });
         return { ok: true };
       }
 
@@ -1600,6 +1716,67 @@ export async function submitLiveEventReflectionToAssessment(params: {
       const merged = mergeReflectionIntoEvidence(sub.evidence ?? null, evidIn, sessionLabel);
       await updateHabitSubmission(assessmentId, studentId, { evidence: merged });
       await awardReflectionXp(evidIn);
+      void bumpAssessmentWorkStats({
+        studentId,
+        classId,
+        assessment,
+        completedIncrement: 1,
+        pointsEarnedIncrement: Math.min(100, 10 + Math.floor(evidIn.length / 20)),
+        sourceId: `${assessmentId}_${sessionId}_reflect_habit_evidence`,
+      });
+      return { ok: true };
+    }
+
+    if (hasStructuredReflectionQuestions(assessment)) {
+      const structuredQs = assessment.reflectionConfig!.questions!;
+      const answers = reflectionResponsesParam || {};
+      for (const q of structuredQs) {
+        const raw = String(answers[q.id] ?? '').trim();
+        if (!raw) {
+          const p = q.prompt.trim();
+          const truncated = p.length > 56 ? `${p.slice(0, 56)}…` : p;
+          return {
+            ok: false,
+            error: `Please answer all questions (“${truncated || 'untitled prompt'}”).`,
+          };
+        }
+        if (raw.length > 4000) {
+          return { ok: false, error: 'An answer is too long (max 4000 characters).' };
+        }
+        if (q.responseMode === 'preset') {
+          const opts = (q.presetOptions || []).map((o) => String(o).trim()).filter(Boolean);
+          if (opts.length > 0 && !opts.includes(raw)) {
+            return { ok: false, error: 'Invalid choice for a dropdown question.' };
+          }
+        }
+      }
+      const goal = await getAssessmentGoal(assessmentId, studentId);
+      if (!goal) {
+        return {
+          ok: false,
+          error: 'No goal found for this assessment. Set your goal under Assessment Goals first.',
+        };
+      }
+      const block = formatReflectionResponsesAsEvidence(structuredQs, answers as Record<string, string>);
+      const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, block, sessionLabel);
+      const prev = goal.reflectionResponses || {};
+      const mergedResponses = { ...prev, ...answers } as Record<string, string>;
+      const goalId = generateGoalId(assessmentId, studentId);
+      const goalRef = doc(db, 'assessmentGoals', goalId);
+      await updateDoc(goalRef, {
+        evidence: merged,
+        reflectionResponses: mergedResponses,
+        updatedAt: Timestamp.now(),
+      });
+      await awardReflectionXp(block);
+      void bumpAssessmentWorkStats({
+        studentId,
+        classId,
+        assessment,
+        completedIncrement: 1,
+        pointsEarnedIncrement: Math.min(120, 10 + Math.floor(block.length / 15)),
+        sourceId: `${assessmentId}_${sessionId}_reflect_structured`,
+      });
       return { ok: true };
     }
 
@@ -1617,6 +1794,14 @@ export async function submitLiveEventReflectionToAssessment(params: {
     const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, text, sessionLabel);
     await appendEvidenceToAssessmentGoalDoc(assessmentId, studentId, merged);
     await awardReflectionXp(text);
+    void bumpAssessmentWorkStats({
+      studentId,
+      classId,
+      assessment,
+      completedIncrement: 1,
+      pointsEarnedIncrement: Math.min(120, 10 + Math.floor(text.length / 15)),
+      sourceId: `${assessmentId}_${sessionId}_reflect_text`,
+    });
     return { ok: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1759,7 +1944,7 @@ export async function submitMissionReflectionForSequence(params: {
       }
       let ev: string | null = storyCommitment.evidence?.trim() || null;
       if (text) ev = mergeReflectionIntoEvidence(ev, text, sessionLabel);
-      await setAssessmentGoal(assessmentId, studentId, undefined, assessment.classId, ev, tg);
+      await setAssessmentGoal(assessmentId, studentId, undefined, assessment.classId, ev, tg, undefined);
       return { stored: 'assessmentGoal' };
     }
 

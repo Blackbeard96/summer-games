@@ -22,6 +22,12 @@ import {
   getPPLedgerEntriesByAssessment
 } from '../utils/assessmentGoalsFirestore';
 import { validateAssessmentConfig } from '../utils/assessmentGoals';
+import {
+  battleEnergyDisplayLabel,
+  inferEnergyTypeForAssessment,
+  resolveAssessmentEnergyType,
+} from '../constants/energyTypes';
+import { formatAssessmentTypeLabel, isWrittenAssessmentType } from '../utils/assessmentTypeHelpers';
 import { Timestamp, deleteField } from 'firebase/firestore';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -81,6 +87,8 @@ const AssessmentGoalsAdmin: React.FC = () => {
     const baseAssessment: any = {
       title: assessmentData.title,
       type: assessmentData.type,
+      energyType:
+        assessmentData.energyType ?? inferEnergyTypeForAssessment(assessmentData.type),
       date: Timestamp.fromDate(new Date(assessmentData.date)),
       maxScore: assessmentData.type === 'habits' ? 100 : (assessmentData.maxScore || 100),
       isLocked: assessmentData.isLocked || false,
@@ -146,6 +154,27 @@ const AssessmentGoalsAdmin: React.FC = () => {
       } else if (isUpdate && assessmentData.type !== 'story-goal' && selectedAssessment?.storyGoal) {
         // If updating and type is not story-goal, remove storyGoal if it exists
         baseAssessment.storyGoal = deleteField();
+      }
+
+      if (assessmentData.type === 'written_assessment') {
+        const k = assessmentData.writtenAssessmentKind;
+        baseAssessment.writtenAssessmentKind =
+          k === 'test' || k === 'exam' || k === 'quiz' ? k : 'test';
+      } else if (
+        isUpdate &&
+        selectedAssessment?.writtenAssessmentKind &&
+        !isWrittenAssessmentType(assessmentData.type)
+      ) {
+        baseAssessment.writtenAssessmentKind = deleteField();
+      }
+
+      if (assessmentData.type === 'reflection' || assessmentData.type === 'live_reflection') {
+        if (assessmentData.reflectionConfig?.questions?.length) {
+          baseAssessment.type = 'reflection';
+          baseAssessment.reflectionConfig = assessmentData.reflectionConfig;
+        }
+      } else if (isUpdate && selectedAssessment?.reflectionConfig && assessmentData.type !== 'reflection') {
+        baseAssessment.reflectionConfig = deleteField();
       }
 
       return baseAssessment;
@@ -462,13 +491,16 @@ const AssessmentGoalsAdmin: React.FC = () => {
                       <h3 style={{ margin: 0, marginBottom: '0.5rem' }}>{assessment.title}</h3>
                       <p style={{ margin: 0, color: '#6b7280' }}>
                         {[
-                          assessment.type.charAt(0).toUpperCase() + assessment.type.slice(1),
+                          formatAssessmentTypeLabel(assessment),
                           assessment.type !== 'habits' ? `Max Score: ${assessment.maxScore}` : null,
                           `Status: ${assessment.gradingStatus}`,
                           assessment.isLocked ? '🔒 Locked' : '🔓 Unlocked',
                         ]
                           .filter(Boolean)
                           .join(' • ')}
+                      </p>
+                      <p style={{ margin: '0.35rem 0 0 0', color: '#374151', fontSize: '0.82rem' }}>
+                        {battleEnergyDisplayLabel(resolveAssessmentEnergyType(assessment))}
                       </p>
                       <p style={{ margin: '0.5rem 0 0 0', color: '#6b7280', fontSize: '0.875rem' }}>
                         Goals Set: {assessment.numGoalsSet || 0} • 

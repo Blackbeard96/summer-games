@@ -6073,6 +6073,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 moveResult.ppCost ??
                 ppCost ??
                 0;
+              const { getResolvedMoveEnergyType } = await import('../constants/energyTypes');
               await trackSkillUsage(
                 sessionId,
                 currentUser.uid,
@@ -6080,7 +6081,8 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                 move.name,
                 ppForStats,
                 totalDamage, // Total damage dealt (health + shield)
-                playerHealing || 0 // Healing given
+                playerHealing || 0, // Healing given
+                getResolvedMoveEnergyType(move)
               );
               
               // Track damage dealt (only if damage was dealt)

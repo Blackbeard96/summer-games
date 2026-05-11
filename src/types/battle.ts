@@ -1,6 +1,8 @@
 // Battle System Types for Nine Knowings MST
 
 import type { Season1SkillCost } from './season1';
+import type { BattleEnergyType } from '../constants/energyTypes';
+import { inferEnergyTypeForMove } from '../constants/energyTypes';
 import type { ElementType } from './elementTypes';
 import type { ReactiveEffect, SkillEffectInstance, SkillEffectPayload } from './skillEffects';
 
@@ -77,6 +79,8 @@ export interface Move {
   };
   /** Season 1: optional participation + energy payment rules (Live Events / Flow). */
   season1Cost?: Season1SkillCost;
+  /** MST battle energy (Physical / Mental / Emotional / Spiritual) — optional on legacy rows. */
+  energyType?: BattleEnergyType;
   /** RR Candy / Konfig tree: optional battle hook (engine can branch on this later). */
   effectKey?: string;
   rrCandyNodeId?: string;
@@ -362,7 +366,7 @@ export const BATTLE_CONSTANTS = {
 } as const;
 
 // Move Templates - New Elemental System
-export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 'masteryLevel'>[] = [
+const MOVE_TEMPLATES_RAW: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 'masteryLevel'>[] = [
   // Manifest Moves (Specific to each manifest)
   // Reading Manifest
   {
@@ -1211,6 +1215,12 @@ export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 
     targetType: 'self',
   },
 ];
+
+export const MOVE_TEMPLATES: Omit<Move, 'id' | 'unlocked' | 'currentCooldown' | 'masteryLevel'>[] =
+  MOVE_TEMPLATES_RAW.map((m) => ({
+    ...m,
+    energyType: m.energyType ?? inferEnergyTypeForMove(m),
+  }));
 
 // Move damage values (combined shield damage + PP steal)
 export const MOVE_DAMAGE_VALUES: Record<string, { damage: number }> = {

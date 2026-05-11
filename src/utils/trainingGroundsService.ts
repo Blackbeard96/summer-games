@@ -437,6 +437,8 @@ export async function syncLiveEventQuizToTrainingAttempt(
         quizTopic: qs?.title ?? '',
         questionTags: qs && Array.isArray(qs.tags) ? qs.tags : [],
         mode: 'live',
+        liveQuizGameMode: session.gameMode,
+        incrementAttempt: false,
       });
     } catch (_) {
       /* best-effort productivity */

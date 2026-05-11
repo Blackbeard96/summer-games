@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Assessment, AssessmentGoal, HabitDuration, HabitEvidenceType, HabitSubmission } from '../types/assessmentGoals';
-import { setAssessmentGoal, createHabitSubmission, updateHabitSubmissionGoal } from '../utils/assessmentGoalsFirestore';
+import {
+  bumpAssessmentWorkStats,
+  setAssessmentGoal,
+  createHabitSubmission,
+  updateHabitSubmissionGoal,
+} from '../utils/assessmentGoalsFirestore';
 import { validateGoalScore } from '../utils/assessmentGoals';
+import {
+  formatAssessmentTypeLabel,
+  formatReflectionResponsesAsEvidence,
+  isReflectionAssessmentType,
+} from '../utils/assessmentTypeHelpers';
 import { useAuth } from '../context/AuthContext';
 
 interface SetGoalModalProps {
@@ -22,6 +32,8 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   const { currentUser } = useAuth();
   const isHabits = assessment.type === 'habits';
   const isStoryGoal = assessment.type === 'story-goal';
+  const isReflection = isReflectionAssessmentType(assessment.type);
+  const reflectionQuestionList = assessment.reflectionConfig?.questions ?? [];
   
   // For regular assessments (numeric goals)
   const [goalScore, setGoalScore] = useState<string>(
@@ -48,7 +60,32 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   const [habitEvidenceType, setHabitEvidenceType] = useState<HabitEvidenceType>(
     (existingHabitSubmission?.habitEvidenceType as HabitEvidenceType) || 'other'
   );
-  
+
+  const [reflectionAnswers, setReflectionAnswers] = useState<Record<string, string>>({});
+
+  const reflectionConfigKey = JSON.stringify(
+    reflectionQuestionList.map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      responseMode: q.responseMode,
+      presetOptions: q.presetOptions,
+    }))
+  );
+
+  const existingReflectionKey = JSON.stringify(existingGoal?.reflectionResponses ?? null);
+
+  useEffect(() => {
+    if (reflectionQuestionList.length === 0) {
+      setReflectionAnswers({});
+      return;
+    }
+    const next: Record<string, string> = {};
+    reflectionQuestionList.forEach((q) => {
+      next[q.id] = existingGoal?.reflectionResponses?.[q.id] ?? '';
+    });
+    setReflectionAnswers(next);
+  }, [assessment.id, reflectionConfigKey, existingReflectionKey]);
+
   // Update form when existingHabitSubmission or existingGoal changes
   useEffect(() => {
     if (existingHabitSubmission) {
@@ -70,13 +107,15 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [savedGoalData, setSavedGoalData] = useState<{
-    type: 'numeric' | 'habit' | 'story-goal';
+    type: 'numeric' | 'habit' | 'story-goal' | 'reflection';
     goalScore?: number;
     textGoal?: string;
     habitText?: string;
     duration?: HabitDuration;
     evidence?: string;
     habitEvidenceType?: HabitEvidenceType;
+    reflectionAnswers?: Record<string, string>;
+    reflectionQuestions?: { id: string; prompt: string; responseMode: 'open' | 'preset' }[];
   } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -133,7 +172,17 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
             evType
           );
         }
-        
+
+        void bumpAssessmentWorkStats({
+          studentId: currentUser.uid,
+          classId: assessment.classId,
+          assessment,
+          attemptedIncrement: 1,
+          completedIncrement: 1,
+          pointsEarnedIncrement: 15 + Math.min(40, trimmedText.length),
+          sourceId: `${assessment.id}_assessment_goals_ui_habit`,
+        });
+
         // Store saved data for preview
         setSavedGoalData({
           type: 'habit',
@@ -162,38 +211,130 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           undefined, // No numeric goalScore for Story Goals
           assessment.classId,
           evidence.trim() || null,
-          trimmedText // textGoal
+          trimmedText, // textGoal
+          undefined
         );
-        
+
+        void bumpAssessmentWorkStats({
+          studentId: currentUser.uid,
+          classId: assessment.classId,
+          assessment,
+          completedIncrement: 1,
+          pointsEarnedIncrement: 15 + Math.min(50, trimmedText.length),
+          sourceId: `${assessment.id}_assessment_goals_ui_story`,
+        });
+
         // Store saved data for preview
         setSavedGoalData({
           type: 'story-goal',
           textGoal: trimmedText,
           evidence: evidence.trim() || undefined
         });
-      } else {
-        // Regular numeric goal
+      } else if (isReflection) {
         const score = parseFloat(goalScore);
         const minGoalScore = assessment.minGoalScore || 0;
         const validation = validateGoalScore(score, assessment.maxScore, minGoalScore);
-        
         if (!validation.valid) {
           setError(validation.error || 'Invalid goal score');
           setSaving(false);
           return;
         }
-        
+
+        const qs = reflectionQuestionList;
+        if (qs.length === 0) {
+          setError('This reflection assessment has no questions yet. Ask your teacher to add prompts.');
+          setSaving(false);
+          return;
+        }
+
+        const answers: Record<string, string> = {};
+        for (const q of qs) {
+          const raw = (reflectionAnswers[q.id] || '').trim();
+          if (!raw) {
+            setError('Please answer every reflection question.');
+            setSaving(false);
+            return;
+          }
+          if (q.responseMode === 'preset') {
+            const opts = (q.presetOptions || []).map((o) => String(o).trim()).filter(Boolean);
+            if (opts.length > 0 && !opts.includes(raw)) {
+              setError('Invalid selection for a dropdown question.');
+              setSaving(false);
+              return;
+            }
+          }
+          answers[q.id] = raw;
+        }
+
+        const evidenceFormatted =
+          qs.length > 0 ? formatReflectionResponsesAsEvidence(qs, answers) : null;
+
         await setAssessmentGoal(
           assessment.id,
           currentUser.uid,
           score,
-          assessment.classId
+          assessment.classId,
+          evidenceFormatted,
+          undefined,
+          answers
         );
-        
-        // Store saved data for preview
+
+        void bumpAssessmentWorkStats({
+          studentId: currentUser.uid,
+          classId: assessment.classId,
+          assessment,
+          completedIncrement: 1,
+          pointsEarnedIncrement: Math.min(
+            120,
+            10 + Math.floor((evidenceFormatted || '').length / 15)
+          ),
+          sourceId: `${assessment.id}_assessment_goals_ui_reflection`,
+        });
+
+        setSavedGoalData({
+          type: 'reflection',
+          goalScore: score,
+          reflectionAnswers: answers,
+          reflectionQuestions: qs.map((q) => ({
+            id: q.id,
+            prompt: q.prompt,
+            responseMode: q.responseMode,
+          })),
+        });
+      } else {
+        // Written assessment (numeric goal)
+        const score = parseFloat(goalScore);
+        const minGoalScore = assessment.minGoalScore || 0;
+        const validation = validateGoalScore(score, assessment.maxScore, minGoalScore);
+
+        if (!validation.valid) {
+          setError(validation.error || 'Invalid goal score');
+          setSaving(false);
+          return;
+        }
+
+        await setAssessmentGoal(
+          assessment.id,
+          currentUser.uid,
+          score,
+          assessment.classId,
+          undefined,
+          undefined,
+          undefined
+        );
+
+        void bumpAssessmentWorkStats({
+          studentId: currentUser.uid,
+          classId: assessment.classId,
+          assessment,
+          completedIncrement: 1,
+          pointsEarnedIncrement: 12 + Math.min(40, Math.round(score)),
+          sourceId: `${assessment.id}_assessment_goals_ui_written`,
+        });
+
         setSavedGoalData({
           type: 'numeric',
-          goalScore: score
+          goalScore: score,
         });
       }
       
@@ -345,6 +486,25 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                   </div>
                 )}
               </div>
+            ) : savedGoalData.type === 'reflection' ? (
+              <div>
+                <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.5rem' }}>
+                  Goal score:
+                </p>
+                <p style={{ margin: '0 0 1rem 0', fontSize: '1.35rem', color: '#3b82f6', fontWeight: 'bold' }}>
+                  {savedGoalData.goalScore} / {assessment.maxScore}
+                </p>
+                {savedGoalData.reflectionQuestions?.map((q) => (
+                  <div key={q.id} style={{ marginTop: '0.85rem' }}>
+                    <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.25rem' }}>
+                      {q.prompt}
+                    </p>
+                    <p style={{ margin: 0, color: '#6b7280', fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
+                      {savedGoalData.reflectionAnswers?.[q.id] ?? ''}
+                    </p>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div>
                 <p style={{ margin: 0, fontWeight: 'bold', color: '#374151', marginBottom: '0.5rem' }}>
@@ -417,9 +577,19 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
           {existingGoal || existingHabitSubmission ? 'Edit Goal' : isHabits ? 'Commit to Habit' : 'Set Goal'}
         </h2>
         
-        <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
+        <p style={{ marginBottom: '0.35rem', color: '#111827', fontWeight: 600 }}>
           {assessment.title}
         </p>
+        {!isHabits && !isStoryGoal && (
+          <p style={{ marginTop: 0, marginBottom: '1rem', color: '#6b7280', fontSize: '0.9rem' }}>
+            {formatAssessmentTypeLabel(assessment)}
+          </p>
+        )}
+        {isStoryGoal && (
+          <p style={{ marginTop: '-0.5rem', marginBottom: '1rem', color: '#6b7280', fontSize: '0.9rem' }}>
+            {formatAssessmentTypeLabel(assessment)}
+          </p>
+        )}
 
         {/* Info for Story Goals */}
         {isStoryGoal && (
@@ -438,6 +608,23 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                 "{assessment.storyGoal.prompt}"
               </div>
             )}
+          </div>
+        )}
+
+        {isReflection && (
+          <div
+            style={{
+              padding: '0.75rem',
+              background: '#eff6ff',
+              borderRadius: '0.5rem',
+              marginBottom: '1rem',
+              fontSize: '0.875rem',
+              color: '#1e3a8a',
+              border: '1px solid #93c5fd',
+            }}
+          >
+            🪞 <strong>Reflection:</strong> Set your target score, then answer each prompt. Your teacher may also ask you
+            to add evidence during a live session.
           </div>
         )}
 
@@ -577,9 +764,103 @@ const SetGoalModal: React.FC<SetGoalModalProps> = ({
                 </p>
               </div>
             </>
+          ) : isReflection ? (
+            <>
+              {reflectionQuestionList.map((q, idx) => (
+                <div key={q.id} style={{ marginBottom: '1.25rem' }}>
+                  <label
+                    style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold', color: '#1e3a8a' }}
+                  >
+                    {idx + 1}. {q.prompt} <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  {q.responseMode === 'preset' ? (
+                    <select
+                      value={reflectionAnswers[q.id] ?? ''}
+                      onChange={(e) =>
+                        setReflectionAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                      }
+                      disabled={assessment.isLocked || saving}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '0.75rem',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #93c5fd',
+                        fontSize: '1rem',
+                        background: 'white',
+                      }}
+                    >
+                      <option value="">Choose…</option>
+                      {(q.presetOptions || [])
+                        .map((o) => String(o).trim())
+                        .filter(Boolean)
+                        .map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <textarea
+                      value={reflectionAnswers[q.id] ?? ''}
+                      onChange={(e) =>
+                        setReflectionAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                      }
+                      disabled={assessment.isLocked || saving}
+                      rows={3}
+                      placeholder="Your reflection…"
+                      style={{
+                        width: '100%',
+                        padding: '0.75rem',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #93c5fd',
+                        fontSize: '1rem',
+                        fontFamily: 'inherit',
+                        resize: 'vertical',
+                        background: 'white',
+                      }}
+                      required
+                    />
+                  )}
+                </div>
+              ))}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label
+                  htmlFor="goalScore"
+                  style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}
+                >
+                  Goal Score: <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input
+                  id="goalScore"
+                  type="number"
+                  min={assessment.minGoalScore || 0}
+                  max={assessment.maxScore || 100}
+                  step="0.1"
+                  value={goalScore}
+                  onChange={(e) => setGoalScore(e.target.value)}
+                  disabled={assessment.isLocked || saving}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '1rem',
+                    background: 'white',
+                  }}
+                  required
+                />
+                <p style={{ marginTop: '0.5rem', color: '#6b7280', fontSize: '0.875rem' }}>
+                  Maximum score: {assessment.maxScore || 100}
+                  {assessment.minGoalScore !== undefined && assessment.minGoalScore > 0 && (
+                    <span> • Minimum: {assessment.minGoalScore}</span>
+                  )}
+                </p>
+              </div>
+            </>
           ) : (
             <>
-              {/* Goal Score field - shown for numeric goals (test/exam/quiz) */}
+              {/* Goal Score field — written assessment (numeric) */}
               <div style={{ marginBottom: '1.5rem' }}>
                 <label
                   htmlFor="goalScore"

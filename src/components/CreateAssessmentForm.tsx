@@ -1,5 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { RewardTier, PenaltyTier, ArtifactReward, RewardTierLabel } from '../types/assessmentGoals';
+import {
+  RewardTier,
+  PenaltyTier,
+  ArtifactReward,
+  RewardTierLabel,
+  type AssessmentType,
+  type ReflectionQuestionConfig,
+  type WrittenAssessmentKind,
+} from '../types/assessmentGoals';
+import {
+  normalizeAssessmentFormType,
+  newReflectionQuestionId,
+} from '../utils/assessmentTypeHelpers';
+import { battleEnergyDisplayLabel, inferEnergyTypeForAssessment } from '../constants/energyTypes';
 import { validateAssessmentConfig } from '../utils/assessmentGoals';
 import { HERO_JOURNEY_STAGES } from '../utils/heroJourneyStages';
 
@@ -24,6 +37,23 @@ const AVAILABLE_ARTIFACTS = [
   { id: 'instant-regrade-pass', name: 'Instant Regrade Pass' },
   { id: 'captain-helmet', name: "Captain's Helmet" }
 ];
+
+/** Type dropdown: show which battle-energy track the goal aligns to. */
+function assessmentGoalTypeSelectLabel(t: AssessmentType): string {
+  const track = battleEnergyDisplayLabel(inferEnergyTypeForAssessment(t));
+  switch (t) {
+    case 'written_assessment':
+      return `Written Assessment (${track})`;
+    case 'habits':
+      return `Habit Goals (${track})`;
+    case 'reflection':
+      return `Reflection (${track})`;
+    case 'story-goal':
+      return `Story Goal (legacy) (${track})`;
+    default:
+      return `${String(t)} (${track})`;
+  }
+}
 
 interface CreateAssessmentFormProps {
   classId?: string; // Optional: for edit mode or single class selection
@@ -69,7 +99,29 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   
   // Initialize state from initialData if editing, otherwise use defaults
   const [title, setTitle] = useState(initialData?.title || '');
-  const [type, setType] = useState<'test' | 'exam' | 'quiz' | 'habits' | 'story-goal'>(initialData?.type || 'test');
+  const initialFormType: AssessmentType =
+    initialData?.type === 'story-goal'
+      ? 'story-goal'
+      : normalizeAssessmentFormType(initialData?.type as AssessmentType);
+  const [type, setType] = useState<AssessmentType>(initialFormType || 'written_assessment');
+  const [writtenKind, setWrittenKind] = useState<WrittenAssessmentKind>(() => {
+    const k = initialData?.writtenAssessmentKind;
+    if (k === 'test' || k === 'exam' || k === 'quiz') return k;
+    const legacy = initialData?.type;
+    if (legacy === 'test' || legacy === 'exam' || legacy === 'quiz') return legacy;
+    return 'test';
+  });
+  const [reflectionQuestions, setReflectionQuestions] = useState<ReflectionQuestionConfig[]>(() => {
+    const qs = initialData?.reflectionConfig?.questions;
+    if (Array.isArray(qs) && qs.length > 0) return qs;
+    return [
+      {
+        id: newReflectionQuestionId(),
+        prompt: '',
+        responseMode: 'open',
+      },
+    ];
+  });
   const [date, setDate] = useState(initialData?.date ? (initialData.date.toDate ? initialData.date.toDate().toISOString().split('T')[0] : new Date(initialData.date).toISOString().split('T')[0]) : '');
   const [maxScore, setMaxScore] = useState(initialData?.maxScore || 100);
   const [minGoalScore, setMinGoalScore] = useState<number | ''>(initialData?.minGoalScore ?? 0);
@@ -376,6 +428,43 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       assessmentData.storyGoal = storyGoalConfig;
     }
 
+    if (type === 'written_assessment') {
+      assessmentData.writtenAssessmentKind = writtenKind;
+      assessmentData.type = 'written_assessment';
+    }
+
+    if (type === 'reflection') {
+      const cleanedQs = reflectionQuestions.map((q) => ({
+        id: q.id || newReflectionQuestionId(),
+        prompt: (q.prompt || '').trim(),
+        responseMode: q.responseMode,
+        ...(q.responseMode === 'preset'
+          ? {
+              presetOptions: (q.presetOptions || [])
+                .map((o) => String(o).trim())
+                .filter(Boolean),
+            }
+          : {}),
+      }));
+      if (cleanedQs.some((q) => !q.prompt)) {
+        alert('Each reflection question needs a prompt.');
+        return null;
+      }
+      if (
+        cleanedQs.some(
+          (q) =>
+            q.responseMode === 'preset' &&
+            (!q.presetOptions || (q.presetOptions as string[]).length < 2)
+        )
+      ) {
+        alert('Preset questions need at least two options.');
+        return null;
+      }
+      assessmentData.type = 'reflection';
+      assessmentData.reflectionConfig = { questions: cleanedQs };
+    }
+
+    assessmentData.energyType = inferEnergyTypeForAssessment(assessmentData.type);
     return assessmentData;
   };
 
@@ -509,7 +598,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
             </label>
             <select
               value={type}
-              onChange={(e) => setType(e.target.value as 'test' | 'exam' | 'quiz' | 'habits' | 'story-goal')}
+              onChange={(e) => setType(e.target.value as AssessmentType)}
               style={{
                 width: '100%',
                 padding: '0.75rem',
@@ -518,12 +607,41 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
                 fontSize: '1rem'
               }}
             >
-              <option value="test">Test</option>
-              <option value="exam">Exam</option>
-              <option value="quiz">Quiz</option>
-              <option value="habits">Habits</option>
-              <option value="story-goal">Story Goal</option>
+              <option value="written_assessment">
+                {assessmentGoalTypeSelectLabel('written_assessment')}
+              </option>
+              <option value="habits">{assessmentGoalTypeSelectLabel('habits')}</option>
+              <option value="reflection">{assessmentGoalTypeSelectLabel('reflection')}</option>
+              {isEditMode && initialData?.type === 'story-goal' ? (
+                <option value="story-goal">{assessmentGoalTypeSelectLabel('story-goal')}</option>
+              ) : null}
             </select>
+            {type === 'written_assessment' && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: 6 }}>
+                  Written assessment format
+                </label>
+                <select
+                  value={writtenKind}
+                  onChange={(e) => setWrittenKind(e.target.value as WrittenAssessmentKind)}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #d1d5db',
+                    fontSize: '0.95rem',
+                  }}
+                >
+                  <option value="test">Test</option>
+                  <option value="exam">Exam</option>
+                  <option value="quiz">Quiz</option>
+                </select>
+              </div>
+            )}
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#4b5563' }}>
+              Energy track:{' '}
+              <strong>{battleEnergyDisplayLabel(inferEnergyTypeForAssessment(type))}</strong>
+            </p>
           </div>
 
           <div>
@@ -608,6 +726,134 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
                 Students must set a goal of at least this score (default: 0)
               </p>
             </div>
+          </div>
+        )}
+
+        {type === 'reflection' && (
+          <div
+            style={{
+              marginBottom: '1.5rem',
+              padding: '1rem',
+              background: '#f0fdf4',
+              borderRadius: '0.75rem',
+              border: '1px solid #86efac',
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: '0.75rem' }}>Reflection questions</h3>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#166534' }}>
+              Add one or more prompts. Open-ended responses use a text box; preset responses use a dropdown built from
+              the options you list (one per line).
+            </p>
+            {reflectionQuestions.map((q, idx) => (
+              <div
+                key={q.id}
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.75rem',
+                  background: 'white',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <strong>Question {idx + 1}</strong>
+                  {reflectionQuestions.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReflectionQuestions((prev) => prev.filter((row) => row.id !== q.id))
+                      }
+                      style={{
+                        fontSize: '0.8rem',
+                        color: '#b91c1c',
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: 4 }}>Prompt</label>
+                <textarea
+                  value={q.prompt}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setReflectionQuestions((prev) =>
+                      prev.map((row) => (row.id === q.id ? { ...row, prompt: v } : row))
+                    );
+                  }}
+                  rows={2}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: 8, border: '1px solid #d1d5db', marginBottom: 8 }}
+                />
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: 4 }}>
+                  Response type
+                </label>
+                <select
+                  value={q.responseMode}
+                  onChange={(e) => {
+                    const mode = e.target.value as 'open' | 'preset';
+                    setReflectionQuestions((prev) =>
+                      prev.map((row) =>
+                        row.id === q.id
+                          ? {
+                              ...row,
+                              responseMode: mode,
+                              presetOptions: mode === 'preset' ? row.presetOptions ?? ['', ''] : undefined,
+                            }
+                          : row
+                      )
+                    );
+                  }}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: 8, border: '1px solid #d1d5db', marginBottom: 8 }}
+                >
+                  <option value="open">Open-ended (student types an answer)</option>
+                  <option value="preset">Preset choices (dropdown)</option>
+                </select>
+                {q.responseMode === 'preset' ? (
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: 4 }}>
+                      Dropdown options (one per line)
+                    </label>
+                    <textarea
+                      value={(q.presetOptions || []).join('\n')}
+                      onChange={(e) => {
+                        const lines = e.target.value.split('\n');
+                        setReflectionQuestions((prev) =>
+                          prev.map((row) =>
+                            row.id === q.id ? { ...row, presetOptions: lines } : row
+                          )
+                        );
+                      }}
+                      rows={4}
+                      placeholder={'Strongly agree\nAgree\nNeutral\nDisagree'}
+                      style={{ width: '100%', padding: '0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() =>
+                setReflectionQuestions((prev) => [
+                  ...prev,
+                  { id: newReflectionQuestionId(), prompt: '', responseMode: 'open' },
+                ])
+              }
+              style={{
+                padding: '0.5rem 1rem',
+                background: '#059669',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              + Add question
+            </button>
           </div>
         )}
 

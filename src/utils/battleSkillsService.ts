@@ -15,6 +15,7 @@
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Move } from '../types/battle';
+import { inferEnergyTypeForMove } from '../constants/energyTypes';
 import { getUserRRCandySkills } from './rrCandyService';
 import { getRRCandyStatusAsync } from './rrCandyUtils';
 import { getPlayerSkillState } from './skillStateService';
@@ -58,6 +59,17 @@ function artifactSkillToMove(skill: ArtifactSkillDefinition, artifactId: string)
     targetType: skill.targetType,
     priority: skill.priority,
     statusEffects: skill.statusEffects,
+    energyType: inferEnergyTypeForMove({
+      category: 'system',
+      type: skill.type || 'attack',
+      damage: skill.damage,
+      healing: skill.healing,
+      shieldBoost: skill.shieldBoost,
+      debuffType: skill.debuffType as string | undefined,
+      buffType: skill.buffType as string | undefined,
+      name: skill.name,
+      description: skill.description,
+    }),
   } as Move;
 }
 

@@ -1,4 +1,5 @@
 import { Move } from '../types/battle';
+import { ENERGY_TYPES } from '../constants/energyTypes';
 import type { RRCandyNodeDefinition } from '../types/rrCandyConfig';
 import { rrCandyBattleMoveIdFromSkillId } from './rrCandyConfigMapping';
 
@@ -76,6 +77,7 @@ export function buildKonfigMovesFromLearnedNodes(
       masteryLevel: 1,
       targetType: 'single' as const,
       priority: 0,
+      energyType: ENERGY_TYPES.SPIRITUAL,
       effectKey: n.effectKey,
       rrCandyNodeId: n.nodeId,
       rrCandySkillId: n.skillId,
@@ -105,7 +107,8 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
       unlocked: true,
       masteryLevel: 1,
       targetType: 'single',
-      priority: 0
+      priority: 0,
+      energyType: ENERGY_TYPES.SPIRITUAL,
     });
 
     // Shield ON - Restore 50% of max shields
@@ -123,7 +126,8 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
       unlocked: true,
       masteryLevel: 1,
       targetType: 'self',
-      priority: 0
+      priority: 0,
+      energyType: ENERGY_TYPES.SPIRITUAL,
     });
   }
 
@@ -145,6 +149,7 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
       masteryLevel: 1,
       targetType: 'single',
       priority: 0,
+      energyType: ENERGY_TYPES.SPIRITUAL,
     });
     moves.push({
       id: 'rr-candy-up-down-lift-up',
@@ -161,6 +166,7 @@ export function getRRCandyMoves(candyType: 'on-off' | 'up-down' | 'config'): Mov
       masteryLevel: 1,
       targetType: 'self',
       priority: 0,
+      energyType: ENERGY_TYPES.SPIRITUAL,
     });
   }
 

@@ -4,9 +4,14 @@ import { db } from '../firebase';
 import type { Assessment } from '../types/assessmentGoals';
 import {
   getAssessment,
+  getAssessmentGoal,
   getAssessmentsByClass,
   submitLiveEventReflectionToAssessment,
 } from '../utils/assessmentGoalsFirestore';
+import {
+  formatAssessmentTypeLabel,
+  hasStructuredReflectionQuestions,
+} from '../utils/assessmentTypeHelpers';
 
 export interface LiveEventReflectionPanelProps {
   sessionId: string;
@@ -46,6 +51,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   const [hostPrompt, setHostPrompt] = useState(reflectionPrompt || '');
   const [reflectionText, setReflectionText] = useState('');
   const [evidenceText, setEvidenceText] = useState('');
+  const [structuredAnswers, setStructuredAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [hostSaving, setHostSaving] = useState(false);
   const [assessmentLoading, setAssessmentLoading] = useState(false);
@@ -82,6 +88,38 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
       cancelled = true;
     };
   }, [isReflection, reflectionAssessmentId]);
+
+  useEffect(() => {
+    if (!isReflection || !reflectionAssessmentId || !assessment || !hasStructuredReflectionQuestions(assessment)) {
+      setStructuredAnswers({});
+      return;
+    }
+    const qs = assessment.reflectionConfig!.questions!;
+    let cancelled = false;
+    (async () => {
+      try {
+        const g = await getAssessmentGoal(reflectionAssessmentId, currentUserId);
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        qs.forEach((q) => {
+          next[q.id] = g?.reflectionResponses?.[q.id] ?? '';
+        });
+        setStructuredAnswers(next);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          const next: Record<string, string> = {};
+          qs.forEach((q) => {
+            next[q.id] = '';
+          });
+          setStructuredAnswers(next);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isReflection, reflectionAssessmentId, currentUserId, assessment]);
 
   useEffect(() => {
     if (!isReflection || !isSessionHost || !classId) return;
@@ -140,6 +178,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
     setError(null);
     setMessage(null);
     const isHabits = assessment?.type === 'habits';
+    const structuredSubmit = Boolean(assessment && hasStructuredReflectionQuestions(assessment));
     const res = await submitLiveEventReflectionToAssessment(
       isHabits
         ? {
@@ -152,13 +191,22 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             collectHabit: false,
             collectEvidence: true,
           }
-        : {
-            assessmentId: reflectionAssessmentId,
-            studentId: currentUserId,
-            classId,
-            sessionId,
-            reflectionText,
-          }
+        : structuredSubmit
+          ? {
+              assessmentId: reflectionAssessmentId,
+              studentId: currentUserId,
+              classId,
+              sessionId,
+              reflectionText: '',
+              reflectionResponses: structuredAnswers,
+            }
+          : {
+              assessmentId: reflectionAssessmentId,
+              studentId: currentUserId,
+              classId,
+              sessionId,
+              reflectionText,
+            }
     );
     setLoading(false);
     if (!res.ok) {
@@ -167,6 +215,24 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
     }
     setReflectionText('');
     setEvidenceText('');
+    if (structuredSubmit && assessment && reflectionAssessmentId) {
+      try {
+        const g = await getAssessmentGoal(reflectionAssessmentId, currentUserId);
+        const qs = assessment.reflectionConfig!.questions!;
+        const next: Record<string, string> = {};
+        qs.forEach((q) => {
+          next[q.id] = g?.reflectionResponses?.[q.id] ?? '';
+        });
+        setStructuredAnswers(next);
+      } catch {
+        const qs = assessment.reflectionConfig!.questions!;
+        const next: Record<string, string> = {};
+        qs.forEach((q) => {
+          next[q.id] = '';
+        });
+        setStructuredAnswers(next);
+      }
+    }
     setMessage('Evidence saved to Assessment Goals. Your teacher can review it on the dashboard.');
     if (onAppendBattleLog) {
       await onAppendBattleLog(
@@ -179,7 +245,17 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
   };
 
   const habitsSubmitDisabled = assessment?.type === 'habits' && !evidenceText.trim();
-  const genericSubmitDisabled = assessment?.type !== 'habits' && !reflectionText.trim();
+  const useStructuredReflectionForm = Boolean(
+    assessment && hasStructuredReflectionQuestions(assessment)
+  );
+  const structuredIncomplete =
+    useStructuredReflectionForm &&
+    Boolean(
+      assessment?.reflectionConfig?.questions?.some((q) => !(structuredAnswers[q.id] || '').trim())
+    );
+  const genericSubmitDisabled =
+    assessment?.type !== 'habits' &&
+    (useStructuredReflectionForm ? structuredIncomplete : !reflectionText.trim());
 
   if (!isReflection) return null;
 
@@ -205,10 +281,17 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             first if you do not have one yet.
           </>
         ) : assessment ? (
-          <>
-            Your text is appended to <strong>Evidence</strong> on your goal row for this assessment so your teacher can
-            verify progress.
-          </>
+          hasStructuredReflectionQuestions(assessment) ? (
+            <>
+              Your answers are saved on your goal row and a summary is appended to <strong>Evidence</strong> so your
+              teacher can verify progress.
+            </>
+          ) : (
+            <>
+              Your text is appended to <strong>Evidence</strong> on your goal row for this assessment so your teacher can
+              verify progress.
+            </>
+          )
         ) : (
           <>The host links an assessment below; then use <strong>Your evidence</strong> to submit.</>
         )}
@@ -236,7 +319,7 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
             <option value="">Select assessment…</option>
             {hostAssessments.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.title} ({a.type})
+                {a.title} ({formatAssessmentTypeLabel(a)})
               </option>
             ))}
           </select>
@@ -275,7 +358,8 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
 
       {reflectionAssessmentId && assessment && (
         <div style={{ fontSize: '0.88rem', fontWeight: 600, marginBottom: 8 }}>
-          Linked: <span style={{ color: '#047857' }}>{assessment.title}</span> ({assessment.type})
+          Linked: <span style={{ color: '#047857' }}>{assessment.title}</span> (
+          {formatAssessmentTypeLabel(assessment)})
         </div>
       )}
 
@@ -316,7 +400,9 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
         >
           <h4 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', color: '#064e3b' }}>Your evidence</h4>
           <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', opacity: 0.9, lineHeight: 1.45 }}>
-            Describe how you met (or are meeting) your goal. You can submit again to add more detail.
+            {useStructuredReflectionForm
+              ? 'Update your responses below. Each submit appends a dated block to Evidence for your teacher.'
+              : 'Describe how you met (or are meeting) your goal. You can submit again to add more detail.'}
           </p>
 
           {assessmentLoading ? (
@@ -349,26 +435,81 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
               />
             </>
           ) : assessment ? (
-            <>
-              <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
-                Evidence / reflection
-              </label>
-              <textarea
-                value={reflectionText}
-                onChange={(e) => setReflectionText(e.target.value)}
-                rows={6}
-                placeholder="Evidence that you met your goal for this assessment…"
-                style={{
-                  width: '100%',
-                  padding: '0.65rem',
-                  borderRadius: 8,
-                  border: '2px solid #34d399',
-                  marginBottom: 10,
-                  fontSize: '0.95rem',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </>
+            useStructuredReflectionForm ? (
+              <>
+                {assessment.reflectionConfig!.questions!.map((q, idx) => (
+                  <div key={q.id} style={{ marginBottom: 12 }}>
+                    <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+                      {idx + 1}. {q.prompt}
+                    </label>
+                    {q.responseMode === 'preset' ? (
+                      <select
+                        value={structuredAnswers[q.id] ?? ''}
+                        onChange={(e) =>
+                          setStructuredAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                        }
+                        style={{
+                          width: '100%',
+                          padding: '0.55rem',
+                          borderRadius: 8,
+                          border: '2px solid #34d399',
+                          fontSize: '0.95rem',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        <option value="">Choose…</option>
+                        {(q.presetOptions || [])
+                          .map((o) => String(o).trim())
+                          .filter(Boolean)
+                          .map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                      </select>
+                    ) : (
+                      <textarea
+                        value={structuredAnswers[q.id] ?? ''}
+                        onChange={(e) =>
+                          setStructuredAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                        }
+                        rows={4}
+                        placeholder="Your reflection…"
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem',
+                          borderRadius: 8,
+                          border: '2px solid #34d399',
+                          fontSize: '0.95rem',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    )}
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
+                  Evidence / reflection
+                </label>
+                <textarea
+                  value={reflectionText}
+                  onChange={(e) => setReflectionText(e.target.value)}
+                  rows={6}
+                  placeholder="Evidence that you met your goal for this assessment…"
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem',
+                    borderRadius: 8,
+                    border: '2px solid #34d399',
+                    marginBottom: 10,
+                    fontSize: '0.95rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </>
+            )
           ) : (
             <p style={{ fontSize: '0.85rem', margin: 0, color: '#b91c1c' }}>
               Could not load this assessment. Check the link or try again.

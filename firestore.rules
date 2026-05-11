@@ -1196,6 +1196,19 @@ service cloud.firestore {
       allow delete: if isProductivityAdmin();
     }
 
+    match /workStatsActivityLogs/{logId} {
+      allow read: if request.auth != null && (
+        isAssessmentDashboardStaff() ||
+        isProductivityAdmin() ||
+        resource.data.playerId == request.auth.uid
+      );
+      allow create: if request.auth != null && (
+        request.resource.data.playerId == request.auth.uid ||
+        isProductivityAdmin()
+      );
+      allow delete: if isProductivityAdmin();
+    }
+
     match /quizProductivityLogs/{logId} {
       allow read: if request.auth != null && (
         isAssessmentDashboardStaff() ||

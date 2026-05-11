@@ -42,6 +42,7 @@ import {
   resolveConstructStatsForSummonEffect,
 } from '../utils/summonConstructStats';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
+import { battleEnergyDisplayLabel, getResolvedMoveEnergyType } from '../constants/energyTypes';
 import {
   getMaxLoadoutSlotsFromEffects,
   getPlayerUniversalLawEffects,
@@ -918,6 +919,18 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               {move.artifactGrant.artifactName ? ` (${move.artifactGrant.artifactName})` : ''}
             </div>
           )}
+          <div
+            style={{
+              marginTop: '0.4rem',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              color: '#4338ca',
+              textAlign: 'center',
+            }}
+          >
+            {battleEnergyDisplayLabel(getResolvedMoveEnergyType(move))}
+          </div>
           {move.level > 1 && (
             <span style={{ 
               background: 'rgba(255,255,255,0.2)',

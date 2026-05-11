@@ -35,6 +35,8 @@ export interface LiveEventSkillCostAttemptLog {
   actorId: string;
   skillId: string;
   skillName: string;
+  /** Physical / Mental / Emotional / Spiritual */
+  energyType?: string;
   detectedCategory: LiveEventSkillCostCategory;
   detectedLevel?: number;
   baseCost: number;

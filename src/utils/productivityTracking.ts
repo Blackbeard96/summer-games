@@ -18,6 +18,10 @@ import {
   type Transaction,
 } from 'firebase/firestore';
 import type { TrainingAttempt } from '../types/trainingGrounds';
+import type { EnergyType } from '../types/season1';
+import { getEnergyTypeForLiveEvent, ENERGY_TYPES } from '../constants/energyTypes';
+import type { PlayerWorkStats } from './workStatsTracking';
+import { parseWorkStatsFromDoc, updatePlayerWorkStats } from './workStatsTracking';
 
 /** Monday-start week key (local): YYYY-MM-DD */
 export function getWeekId(d: Date = new Date()): string {
@@ -154,6 +158,8 @@ export type ProductivityStatDoc = {
   weekSprintCompleted?: number;
   weekQuizCompletes?: number;
   weekQuizScoreSum?: number;
+  /** Physical / Mental / Emotional / Spiritual work counters (MST). */
+  workStats?: PlayerWorkStats;
 };
 
 export function tsMs(t: unknown): number | null {
@@ -376,6 +382,9 @@ export async function recordClassFlowSprintJoin(args: {
   sprintTitle?: string;
   sprintType?: string;
   joinedAtMs: number;
+  /** When set, drives work-stats bucket (defaults to class_flow → Physical). */
+  liveEventMode?: string;
+  neutralFlowEnergyType?: EnergyType;
 }): Promise<void> {
   const weekId = getWeekId(new Date(args.joinedAtMs));
   const logId = sprintProductivityDocId(args.sessionId, args.sprintId, args.userId);
@@ -415,6 +424,20 @@ export async function recordClassFlowSprintJoin(args: {
       },
       { classId: args.classId }
     );
+
+    const modeForEnergy =
+      typeof args.liveEventMode === 'string' && args.liveEventMode.trim()
+        ? args.liveEventMode.trim()
+        : 'class_flow';
+    const energy = getEnergyTypeForLiveEvent(modeForEnergy, args.neutralFlowEnergyType);
+    void updatePlayerWorkStats({
+      userId: args.userId,
+      energyType: energy,
+      attemptedIncrement: 1,
+      classId: args.classId,
+      source: 'live_event',
+      sourceId: `${args.sessionId}__${args.sprintId}__join`,
+    }).catch(() => {});
   } catch (e) {
     console.warn('[productivityTracking] sprint join', e);
   }
@@ -426,7 +449,8 @@ export function recordClassFlowSprintJoinsForPlayers(
   playerUids: string[],
   classId: string | undefined,
   sprintTitle: string,
-  joinedAtMs: number
+  joinedAtMs: number,
+  opts?: { liveEventMode?: string; neutralFlowEnergyType?: EnergyType }
 ): void {
   for (const uid of playerUids) {
     void recordClassFlowSprintJoin({
@@ -437,6 +461,8 @@ export function recordClassFlowSprintJoinsForPlayers(
       sprintTitle,
       sprintType: 'class_flow',
       joinedAtMs,
+      liveEventMode: opts?.liveEventMode,
+      neutralFlowEnergyType: opts?.neutralFlowEnergyType,
     });
   }
 }
@@ -452,6 +478,10 @@ export async function recordClassFlowSprintCompletion(args: {
   sprintType?: string;
   score?: number | null;
   startedAtMs?: number | null;
+  liveEventMode?: string;
+  neutralFlowEnergyType?: EnergyType;
+  /** Participation + vault + XP granted for this completion (best-effort). */
+  pointsEarned?: number;
 }): Promise<void> {
   const weekId = getWeekId(new Date(args.completedAtMs));
   const logId = sprintProductivityDocId(args.sessionId, args.sprintId, args.userId);
@@ -522,6 +552,25 @@ export async function recordClassFlowSprintCompletion(args: {
       },
       { classId: args.classId }
     );
+
+    const modeForEnergy =
+      typeof args.liveEventMode === 'string' && args.liveEventMode.trim()
+        ? args.liveEventMode.trim()
+        : 'class_flow';
+    const energy = getEnergyTypeForLiveEvent(modeForEnergy, args.neutralFlowEnergyType);
+    const pts =
+      typeof args.pointsEarned === 'number' && Number.isFinite(args.pointsEarned)
+        ? Math.max(0, args.pointsEarned)
+        : 0;
+    void updatePlayerWorkStats({
+      userId: args.userId,
+      energyType: energy,
+      completedIncrement: 1,
+      pointsEarnedIncrement: pts,
+      classId: args.classId,
+      source: 'live_event',
+      sourceId: `${args.sessionId}__${args.sprintId}__complete`,
+    }).catch(() => {});
   } catch (e) {
     console.warn('[productivityTracking] sprint complete', e);
   }
@@ -601,6 +650,10 @@ export async function recordQuizProductivityAttempt(args: {
   quizTopic?: string;
   questionTags?: string[];
   mode?: TrainingAttempt['mode'];
+  /** Live quiz session `gameMode` — battle royale variants map to Physical work. */
+  liveQuizGameMode?: string;
+  /** When false, only increments completed (e.g. live quiz after session join already counted attempted). */
+  incrementAttempt?: boolean;
 }): Promise<void> {
   const weekId = getWeekId(new Date(args.completedAtMs));
   const logId = quizProductivityDocId(args.userId, args.quizSetId, args.attemptId);
@@ -642,6 +695,21 @@ export async function recordQuizProductivityAttempt(args: {
       },
       { classId: args.classId }
     );
+
+    const gm = (args.liveQuizGameMode || '').toLowerCase();
+    const isBattleQuiz = gm === 'battle_royale' || gm === 'team_battle_royale';
+    const energy = isBattleQuiz ? ENERGY_TYPES.PHYSICAL : ENERGY_TYPES.MENTAL;
+    const countAttempt = args.incrementAttempt !== false;
+    void updatePlayerWorkStats({
+      userId: args.userId,
+      energyType: energy,
+      attemptedIncrement: countAttempt ? 1 : 0,
+      completedIncrement: 1,
+      pointsEarnedIncrement: Math.max(0, Math.round(args.scorePercent || 0)),
+      classId: args.classId,
+      source: args.mode === 'live' ? 'live_event' : 'assessment',
+      sourceId: args.quizSetId,
+    }).catch(() => {});
   } catch (e) {
     console.warn('[productivityTracking] quiz', e);
   }
@@ -698,7 +766,6 @@ export async function updateUserProductivityStats(userId: string): Promise<void>
     const prev = await tx.get(statsRef);
     const prow = prev.exists() ? prev.data() : {};
     const priorOverall = Number((prow as { overallProductivityRating?: number }).overallProductivityRating || 0);
-
     const prevStreak = evolveStreak(weeklyRating, wkNow, {
       currentStreak: Number((prow as { currentStreak?: number }).currentStreak || 0),
       bestStreak: Number((prow as { bestStreak?: number }).bestStreak || 0),

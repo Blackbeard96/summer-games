@@ -1,24 +1,11 @@
 import type { EnergyType, LiveEventModeType, Season1PlayerSlice } from '../types/season1';
 import type { EnergiesMap, EnergyLevelsMap, EnergyXPMap } from '../types/season1';
+import { battleEnergyToSeason1Energy, getBattleEnergyTypeForLiveEventMode } from '../constants/energyTypes';
 
-/** Primary energy awarded per live mode (Neutral Flow default kinetic; host can override on session). */
+/** Primary Season 1 energy key awarded per live mode (maps through battle energy labels; Neutral uses override). */
 export function getEnergyTypeForMode(mode: LiveEventModeType, neutralOverride?: EnergyType): EnergyType {
-  switch (mode) {
-    case 'class_flow':
-      return 'kinetic';
-    case 'battle_royale':
-      return 'kinetic';
-    case 'quiz':
-      return 'mental';
-    case 'reflection':
-      return 'emotional';
-    case 'goal_setting':
-      return 'spiritual';
-    case 'neutral_flow':
-      return neutralOverride || 'kinetic';
-    default:
-      return 'kinetic';
-  }
+  const battle = getBattleEnergyTypeForLiveEventMode(mode, mode === 'neutral_flow' ? neutralOverride : undefined);
+  return battleEnergyToSeason1Energy(battle);
 }
 
 /** XP required to reach next level (simple curve; rebalance in one place). */

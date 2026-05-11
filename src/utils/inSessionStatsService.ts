@@ -29,6 +29,7 @@ import {
 import { unlockLevel2BuilderFromLiveFlow } from '../services/level2ManifestService';
 import { trackPlayerAction } from './playerProgressionRewards';
 import { trackDailyChallengeProgress } from './liveEventDailyChallengeTracking';
+import { inferEnergyTypeForLiveEvent } from '../constants/energyTypes';
 
 /** Base PP awarded per elimination in a live event (eliminator also receives the eliminated player's vault PP) */
 export const LIVE_EVENT_PP_BASE_PER_ELIMINATION = 500;
@@ -131,7 +132,8 @@ export async function trackSkillUsage(
   skillName: string,
   ppCost: number,
   damage?: number,
-  healing?: number
+  healing?: number,
+  energyType?: string
 ): Promise<boolean> {
   try {
     await ensurePlayerStatsIfMissing(sessionId, playerId, {});
@@ -159,6 +161,7 @@ export async function trackSkillUsage(
         skillsUsed[skillIndex] = {
           ...skillsUsed[skillIndex],
           count: skillsUsed[skillIndex].count + 1,
+          energyType: energyType || skillsUsed[skillIndex].energyType,
           totalDamage: (skillsUsed[skillIndex].totalDamage || 0) + (damage || 0),
           totalHealing: (skillsUsed[skillIndex].totalHealing || 0) + (healing || 0)
         };
@@ -168,6 +171,7 @@ export async function trackSkillUsage(
           skillId,
           skillName,
           count: 1,
+          energyType,
           totalDamage: damage || 0,
           totalHealing: healing || 0
         });
@@ -556,7 +560,7 @@ export async function trackParticipation(
   sessionId: string,
   playerId: string,
   participationAmount: number,
-  options?: { playerDisplayName?: string }
+  options?: { playerDisplayName?: string; eventEnergyType?: string }
 ): Promise<boolean> {
   try {
     const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
@@ -587,12 +591,30 @@ export async function trackParticipation(
       nextConsecutive = next.consecutiveAwards;
       streakLogLine = battleLogLine;
 
+      const sessionRow = sessionDoc.exists()
+        ? (sessionDoc.data() as Record<string, unknown>)
+        : {};
+      const eventEnergyType =
+        options?.eventEnergyType ||
+        inferEnergyTypeForLiveEvent({
+          energyType: sessionRow.energyType as string | undefined,
+          liveEventMode: sessionRow.liveEventMode as string | undefined,
+          energyTypeAwarded: sessionRow.energyTypeAwarded as import('../types/season1').EnergyType | undefined,
+          neutralFlowEnergyType: sessionRow.neutralFlowEnergyType as import('../types/season1').EnergyType | undefined,
+        });
+      const prevTotals = stats.participationEnergyTotals || {};
+      const nextEnergyTotals = {
+        ...prevTotals,
+        [eventEnergyType]: (prevTotals[eventEnergyType] || 0) + participationAmount,
+      };
+
       transaction.update(statsRef, {
         participationEarned: newParticipation,
         movesEarned: newMovesEarned,
         ppEarned: newPPEarned,
         consecutiveParticipationAwards: nextConsecutive,
         lastLoggedStreakCount: nextConsecutive,
+        participationEnergyTotals: nextEnergyTotals,
       });
 
       // Session row PP is what MST MKT and finalizeSessionStats use; mirror participation awards here

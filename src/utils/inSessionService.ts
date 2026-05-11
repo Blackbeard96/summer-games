@@ -4,6 +4,9 @@
  */
 
 import { db } from '../firebase';
+import { getEnergyTypeForLiveEvent } from '../constants/energyTypes';
+import type { EnergyType } from '../types/season1';
+import { updatePlayerWorkStats } from './workStatsTracking';
 import { 
   collection, 
   doc, 
@@ -274,7 +277,7 @@ export async function joinSession(
           } catch (_) {
             // stats heal is best-effort
           }
-          return { success: true, isNewPlayer: false };
+          return { success: true, isNewPlayer: false as const };
         }
       }
     } catch (quickCheckError) {
@@ -402,8 +405,42 @@ export async function joinSession(
         playerCount: result.playerCount
       });
     }
-    
-    return { success: true };
+
+    if (result.isNewPlayer) {
+      try {
+        const sd = await getDoc(sessionRef);
+        const mode =
+          sd.exists() && typeof (sd.data() as { liveEventMode?: string }).liveEventMode === 'string'
+            ? (sd.data() as { liveEventMode: string }).liveEventMode
+            : undefined;
+        const neutral = sd.exists()
+          ? ((sd.data() as { neutralFlowEnergyType?: EnergyType }).neutralFlowEnergyType as
+              | EnergyType
+              | undefined)
+          : undefined;
+        const isClassFlowSprintOnly =
+          !mode || mode === 'class_flow' || mode === 'neutral_flow';
+        if (!isClassFlowSprintOnly) {
+          const energy = getEnergyTypeForLiveEvent(mode, neutral);
+          void updatePlayerWorkStats({
+            userId: player.userId,
+            energyType: energy,
+            attemptedIncrement: 1,
+            classId:
+              typeof (sd.data() as { classId?: string })?.classId === 'string'
+                ? (sd.data() as { classId: string }).classId
+                : undefined,
+            playerName: player.displayName,
+            source: 'live_event',
+            sourceId: sessionId,
+          });
+        }
+      } catch (wsErr) {
+        console.warn('[inSessionService] workStats join', wsErr);
+      }
+    }
+
+    return { success: true, isNewPlayer: result.isNewPlayer };
   } catch (error: any) {
     const errorMessage = error?.message || 'Unknown error occurred';
     const errorCode = error?.code || 'unknown';

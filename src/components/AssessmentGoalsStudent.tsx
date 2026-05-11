@@ -15,7 +15,6 @@ import {
   getAssessmentsByClass,
   getAssessmentGoal,
   getAssessmentResult,
-  setAssessmentGoal,
   getAssessment,
   getHabitSubmission
 } from '../utils/assessmentGoalsFirestore';

@@ -7,6 +7,14 @@ import {
   getWeekId,
   tsMs,
 } from '../../utils/productivityTracking';
+import type { BattleEnergyType } from '../../constants/energyTypes';
+import { ENERGY_TYPES } from '../../constants/energyTypes';
+import {
+  maxWorkStatLastCompletedMs,
+  parseWorkStatsFromDoc,
+  workCompletionRatePct,
+  WORK_ENERGY_ORDER,
+} from '../../utils/workStatsTracking';
 
 type Classroom = { id: string; name: string; students: string[] };
 
@@ -17,6 +25,30 @@ type StudentLite = {
 };
 
 type Row = StudentLite & ProductivityStatDoc & { productivityRankSort: number; cohortRank?: number | null };
+
+const WORK_LABELS: Record<BattleEnergyType, { title: string; subtitle: string }> = {
+  [ENERGY_TYPES.PHYSICAL]: { title: 'Physical Work', subtitle: 'Discipline' },
+  [ENERGY_TYPES.MENTAL]: { title: 'Mental Work', subtitle: 'Measured Intelligence' },
+  [ENERGY_TYPES.EMOTIONAL]: { title: 'Emotional Work', subtitle: 'Connection to Self' },
+  [ENERGY_TYPES.SPIRITUAL]: { title: 'Spiritual Work', subtitle: 'Overall Power Level' },
+};
+
+function workCell(w: ReturnType<typeof parseWorkStatsFromDoc>, key: BattleEnergyType): string {
+  const b = w[key];
+  return `${b.completed} / ${b.attempted}`;
+}
+
+function totalWorkCompleted(w: ReturnType<typeof parseWorkStatsFromDoc>): number {
+  return WORK_ENERGY_ORDER.reduce((s, k) => s + w[k].completed, 0);
+}
+
+function totalWorkAttempted(w: ReturnType<typeof parseWorkStatsFromDoc>): number {
+  return WORK_ENERGY_ORDER.reduce((s, k) => s + w[k].attempted, 0);
+}
+
+function overallWorkCompletionPct(w: ReturnType<typeof parseWorkStatsFromDoc>): number {
+  return workCompletionRatePct(totalWorkCompleted(w), totalWorkAttempted(w));
+}
 
 const RANK_ORDER: ProductivityRankLabel[] = [
   'Flow State',
@@ -127,6 +159,10 @@ const ProductivityDashboardAdmin: React.FC<{
     'overall' | 'sprintRate' | 'quiz' | 'streak' | 'name'
   >('overall');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
+  const [workTypeFilter, setWorkTypeFilter] = useState<BattleEnergyType | 'all'>('all');
+  const [dateRangeStart, setDateRangeStart] = useState('');
+  const [dateRangeEnd, setDateRangeEnd] = useState('');
+  const [dateRangeEnabled, setDateRangeEnabled] = useState(false);
   const [detailUid, setDetailUid] = useState<string | null>(null);
   const [detailSprints, setDetailSprints] = useState<SprintLog[]>([]);
   const [detailQuizzes, setDetailQuizzes] = useState<QuizLog[]>([]);
@@ -253,6 +289,19 @@ const ProductivityDashboardAdmin: React.FC<{
           const em = (r.email || '').toLowerCase();
           if (!dn.includes(q) && !em.includes(q) && !r.id.toLowerCase().includes(q)) return false;
         }
+        const wk = parseWorkStatsFromDoc(r.workStats);
+        if (workTypeFilter !== 'all') {
+          const b = wk[workTypeFilter];
+          if (!b || (b.completed <= 0 && b.attempted <= 0)) return false;
+        }
+        if (dateRangeEnabled && (dateRangeStart || dateRangeEnd)) {
+          const lastMs = maxWorkStatLastCompletedMs(wk);
+          const startMs = dateRangeStart ? new Date(dateRangeStart + 'T00:00:00').getTime() : 0;
+          const endMs = dateRangeEnd
+            ? new Date(dateRangeEnd + 'T23:59:59.999').getTime()
+            : Number.POSITIVE_INFINITY;
+          if (lastMs <= 0 || lastMs < startMs || lastMs > endMs) return false;
+        }
         return true;
       });
   }, [
@@ -264,6 +313,10 @@ const ProductivityDashboardAdmin: React.FC<{
     weekActivityUids,
     weekFilterEnabled,
     studentClassIdsForFilter,
+    workTypeFilter,
+    dateRangeEnabled,
+    dateRangeStart,
+    dateRangeEnd,
   ]);
 
   const sortedRows = useMemo(() => {
@@ -292,6 +345,28 @@ const ProductivityDashboardAdmin: React.FC<{
       cohortRank: orderMap.get(r.id) ?? null,
     }));
   }, [sortedRows]);
+
+  const workAggregates = useMemo(() => {
+    const list = rankedRows;
+    const agg: Record<
+      BattleEnergyType,
+      { completed: number; attempted: number; points: number }
+    > = {
+      [ENERGY_TYPES.PHYSICAL]: { completed: 0, attempted: 0, points: 0 },
+      [ENERGY_TYPES.MENTAL]: { completed: 0, attempted: 0, points: 0 },
+      [ENERGY_TYPES.EMOTIONAL]: { completed: 0, attempted: 0, points: 0 },
+      [ENERGY_TYPES.SPIRITUAL]: { completed: 0, attempted: 0, points: 0 },
+    };
+    list.forEach((r) => {
+      const w = parseWorkStatsFromDoc(r.workStats);
+      WORK_ENERGY_ORDER.forEach((k) => {
+        agg[k].completed += w[k].completed;
+        agg[k].attempted += w[k].attempted;
+        agg[k].points += w[k].pointsEarned;
+      });
+    });
+    return agg;
+  }, [rankedRows]);
 
   const summary = useMemo(() => {
     const list = rankedRows;
@@ -469,6 +544,62 @@ const ProductivityDashboardAdmin: React.FC<{
             </div>
           </div>
 
+          <h3 style={{ margin: '1.25rem 0 0.5rem', fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>
+            4 Work Types (MST)
+          </h3>
+          <p style={{ margin: '0 0 0.75rem', fontSize: 13, color: '#6b7280', maxWidth: 720 }}>
+            Totals reflect students matching the filters. The date range uses the most recent completion time among
+            all four energies (see workStatsActivityLogs for per-event detail).
+          </p>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '0.75rem',
+              marginBottom: '0.5rem',
+            }}
+          >
+            {WORK_ENERGY_ORDER.map((k) => {
+              const a = workAggregates[k];
+              const pct = workCompletionRatePct(a.completed, a.attempted);
+              const meta = WORK_LABELS[k];
+              return (
+                <div
+                  key={k}
+                  style={{
+                    background: 'white',
+                    borderRadius: 12,
+                    padding: '0.85rem',
+                    border: '1px solid #e5e7eb',
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#111827' }}>{meta.title}</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{meta.subtitle}</div>
+                  <div style={{ fontSize: 13, color: '#374151' }}>
+                    Completed: <strong>{a.completed}</strong> · Attempted: <strong>{a.attempted}</strong>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>
+                    Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(a.points)}</strong>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <MiniBar
+                      pct={pct}
+                      color={
+                        k === ENERGY_TYPES.PHYSICAL
+                          ? '#059669'
+                          : k === ENERGY_TYPES.MENTAL
+                            ? '#2563eb'
+                            : k === ENERGY_TYPES.EMOTIONAL
+                              ? '#db2777'
+                              : '#7c3aed'
+                      }
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
           <div
             style={{
               marginTop: '1rem',
@@ -536,6 +667,49 @@ const ProductivityDashboardAdmin: React.FC<{
                 style={{ padding: '0.35rem 0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
               />
             </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280' }}>Work type</span>
+              <select
+                value={workTypeFilter}
+                onChange={(e) => setWorkTypeFilter(e.target.value as BattleEnergyType | 'all')}
+                style={{ padding: '0.35rem 0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
+              >
+                <option value="all">All</option>
+                {WORK_ENERGY_ORDER.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280' }}>Activity from</span>
+              <input
+                type="date"
+                value={dateRangeStart}
+                onChange={(e) => setDateRangeStart(e.target.value)}
+                disabled={!dateRangeEnabled}
+                style={{ padding: '0.35rem 0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280' }}>Activity to</span>
+              <input
+                type="date"
+                value={dateRangeEnd}
+                onChange={(e) => setDateRangeEnd(e.target.value)}
+                disabled={!dateRangeEnabled}
+                style={{ padding: '0.35rem 0.5rem', borderRadius: 8, border: '1px solid #d1d5db' }}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={dateRangeEnabled}
+                onChange={(e) => setDateRangeEnabled(e.target.checked)}
+              />
+              Filter by last completion date
+            </label>
           </div>
 
           <div style={{ marginTop: '1rem', overflowX: 'auto', background: 'white', borderRadius: 12, border: '1px solid #e5e7eb' }}>
@@ -546,6 +720,13 @@ const ProductivityDashboardAdmin: React.FC<{
                     Student
                   </th>
                   <th style={{ padding: '0.6rem' }}>Class</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Physical</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Mental</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Emotional</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Spiritual</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Σ Done</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Work %</th>
+                  <th style={{ padding: '0.6rem', fontSize: 12 }}>Last work</th>
                   <th style={{ padding: '0.6rem' }}>Rank</th>
                   <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('sprintRate')}>
                     Sprints J / C
@@ -567,6 +748,8 @@ const ProductivityDashboardAdmin: React.FC<{
               <tbody>
                 {rankedRows.map((r) => {
                   const delta = r.ratingDelta ?? 0;
+                  const wk = parseWorkStatsFromDoc(r.workStats);
+                  const lastMs = maxWorkStatLastCompletedMs(wk);
                   return (
                     <tr
                       key={r.id}
@@ -580,6 +763,21 @@ const ProductivityDashboardAdmin: React.FC<{
                         {r.displayName || r.email || r.id.slice(0, 8)}
                       </td>
                       <td style={{ padding: '0.6rem', color: '#4b5563' }}>{studentClassLabel(r.id)}</td>
+                      {WORK_ENERGY_ORDER.map((k) => (
+                        <td key={k} style={{ padding: '0.6rem', fontSize: 12, color: '#374151' }}>
+                          {workCell(wk, k)}
+                        </td>
+                      ))}
+                      <td style={{ padding: '0.6rem', fontWeight: 700 }}>{totalWorkCompleted(wk)}</td>
+                      <td style={{ padding: '0.6rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <MiniBar pct={overallWorkCompletionPct(wk)} color="#6366f1" />
+                          <span>{overallWorkCompletionPct(wk)}%</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: '0.6rem', fontSize: 12, color: '#6b7280' }}>
+                        {lastMs ? new Date(lastMs).toLocaleDateString() : '—'}
+                      </td>
                       <td style={{ padding: '0.6rem' }}>{r.cohortRank}</td>
                       <td style={{ padding: '0.6rem' }}>
                         {r.totalSprintsJoined} / {r.totalSprintsCompleted}

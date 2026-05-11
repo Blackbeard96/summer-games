@@ -20,6 +20,8 @@ import {
 } from 'firebase/firestore';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { tsMs } from '../utils/productivityTracking';
+import { ENERGY_TYPES, type BattleEnergyType } from '../constants/energyTypes';
+import { parseWorkStatsFromDoc, workCompletionRatePct, WORK_ENERGY_ORDER } from '../utils/workStatsTracking';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, getAuth } from 'firebase/auth';
 import PlayerCard from '../components/PlayerCard';
@@ -1384,6 +1386,90 @@ const Profile = () => {
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Best Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.bestStreak ?? 0} wk</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.weeklyProductivityRating || 0)}%</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Overall Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.overallProductivityRating || 0)}%</div></div>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: '1rem',
+                      paddingTop: '0.85rem',
+                      borderTop: '1px solid rgba(5, 150, 105, 0.25)',
+                    }}
+                  >
+                    <h4 style={{ margin: '0 0 0.6rem', fontSize: '0.92rem', fontWeight: 800, color: '#065f46' }}>
+                      Work & Energy Stats
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
+                        gap: '0.55rem',
+                      }}
+                    >
+                      {WORK_ENERGY_ORDER.map((k: BattleEnergyType) => {
+                        const w = parseWorkStatsFromDoc(productivityStats.workStats);
+                        const b = w[k];
+                        const pct = workCompletionRatePct(b.completed, b.attempted);
+                        const line1 =
+                          k === ENERGY_TYPES.PHYSICAL
+                            ? 'Physical Energy'
+                            : k === ENERGY_TYPES.MENTAL
+                              ? 'Mental Energy'
+                              : k === ENERGY_TYPES.EMOTIONAL
+                                ? 'Emotional Energy'
+                                : 'Spiritual Energy';
+                        const line2 =
+                          k === ENERGY_TYPES.PHYSICAL
+                            ? 'Discipline'
+                            : k === ENERGY_TYPES.MENTAL
+                              ? 'Measured Intelligence'
+                              : k === ENERGY_TYPES.EMOTIONAL
+                                ? 'Connection to Self'
+                                : 'Overall Power Level';
+                        const barColor =
+                          k === ENERGY_TYPES.PHYSICAL
+                            ? '#059669'
+                            : k === ENERGY_TYPES.MENTAL
+                              ? '#2563eb'
+                              : k === ENERGY_TYPES.EMOTIONAL
+                                ? '#db2777'
+                                : '#7c3aed';
+                        const lastMs = tsMs(b.lastCompletedAt);
+                        return (
+                          <div
+                            key={k}
+                            style={{
+                              background: 'rgba(255,255,255,0.65)',
+                              borderRadius: '0.5rem',
+                              padding: '0.5rem 0.55rem',
+                              border: '1px solid rgba(5, 150, 105, 0.2)',
+                            }}
+                          >
+                            <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
+                            <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 4 }}>{line2}</div>
+                            <div style={{ fontSize: '0.72rem', color: '#374151' }}>
+                              Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
+                              Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
+                            </div>
+                            <div
+                              style={{
+                                marginTop: 6,
+                                height: 8,
+                                borderRadius: 999,
+                                background: 'rgba(16,185,129,0.15)',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
+                              Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div
