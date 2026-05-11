@@ -7,9 +7,31 @@ import {
   runTransaction,
   serverTimestamp,
   updateDoc,
-  increment,
   arrayUnion
 } from 'firebase/firestore';
+import { syncPrimarySquadIdOnUser } from './squadPrimarySquadProfile';
+
+/** User-facing message for Firestore failures (check-in, squad stream, etc.). */
+export function formatSquadFirestoreError(
+  error: unknown,
+  context: 'checkin' | 'generic' = 'generic'
+): string {
+  const err = error as { code?: string; message?: string } | undefined;
+  const code = err?.code;
+  const raw = (err?.message || '').trim();
+  if (
+    code === 'permission-denied' ||
+    /insufficient permissions/i.test(raw) ||
+    /missing or insufficient permissions/i.test(raw)
+  ) {
+    if (context === 'checkin') {
+      return 'Your check-in could not be saved. Refresh the page, open Squads once, then try Check In again. If it still fails, tell your teacher the app may need an update.';
+    }
+    return "This squad action couldn't be completed (permissions). Try refreshing the page or signing out and back in.";
+  }
+  if (raw) return raw;
+  return 'Something went wrong. Please try again.';
+}
 
 /**
  * Get today's date key (YYYY-MM-DD) in America/New_York timezone
@@ -106,6 +128,8 @@ export async function checkInToSquad(
 ): Promise<{ success: boolean; error?: string; count?: number; checkedInUserIds?: string[] }> {
   try {
     await ensureSquadHasMemberUids(squadId);
+    // Rules use `users/{auth}.primarySquadId` + squad `memberUids` to allow PP updates on teammates.
+    await syncPrimarySquadIdOnUser(userId, squadId);
     const dateKey = getDateKey();
     const checkInRef = doc(db, 'squads', squadId, 'dailyCheckins', dateKey);
 
@@ -198,11 +222,11 @@ export async function checkInToSquad(
         checkedInUserIds: newCheckedInUserIds
       };
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error checking in:', error);
     return {
       success: false,
-      error: error.message || 'Failed to check in'
+      error: formatSquadFirestoreError(error, 'checkin')
     };
   }
 }

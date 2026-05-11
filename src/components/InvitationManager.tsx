@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, doc, updateDoc, onSnapshot, query, where, getDocs, getDoc, Timestamp, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { syncPrimarySquadIdOnUser } from '../utils/squadPrimarySquadProfile';
 import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
 
 interface SquadMember {
@@ -259,6 +260,8 @@ const InvitationManager: React.FC = () => {
             .filter((id): id is string => Boolean(id)),
           updatedAt: serverTimestamp()
         });
+
+        await syncPrimarySquadIdOnUser(currentUser.uid, invitation.squadId);
         
         console.log('InvitationManager: UpdateDoc completed successfully');
       } catch (updateError: any) {

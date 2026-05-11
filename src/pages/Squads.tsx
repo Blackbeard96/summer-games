@@ -11,6 +11,7 @@ import { MANIFESTS } from '../types/manifest';
 import { normalizePlayerData, fetchAndNormalizePlayerData, NormalizedPlayerData } from '../utils/playerData';
 import { getUserSquadAbbreviation } from '../utils/squadUtils';
 import { isUidInSquad, squadMemberUid } from '../utils/squadMemberUtils';
+import { clearPrimarySquadIdOnUser, syncPrimarySquadIdOnUser } from '../utils/squadPrimarySquadProfile';
 import AlliesManager from '../components/AlliesManager';
 import '../styles/squadStream.css';
 
@@ -591,6 +592,8 @@ const Squads: React.FC = () => {
       squadData.members = sanitizeForFirestore(squadData.members);
       const docRef = await addDoc(collection(db, 'squads'), squadData);
       console.log('Squad created with ID:', docRef.id);
+
+      await syncPrimarySquadIdOnUser(currentUser.uid, docRef.id);
       
       alert(`🎉 Squad "${newSquadName.trim()}" created successfully!`);
       
@@ -780,6 +783,8 @@ const Squads: React.FC = () => {
 
       console.log('Squads: UpdateDoc completed successfully');
 
+      await syncPrimarySquadIdOnUser(currentUser.uid, squadId);
+
       alert(`🎉 Successfully joined ${finalSquadData.name}!`);
       
       // Refresh squads list
@@ -842,6 +847,7 @@ const Squads: React.FC = () => {
           leader: newLeaderUid ?? newLeader.uid
         });
       }
+      await clearPrimarySquadIdOnUser(currentUser.uid);
     } catch (error) {
       console.error('Error leaving squad:', error);
     }
@@ -934,6 +940,7 @@ const Squads: React.FC = () => {
         members: sanitizeForFirestore(updatedMembers),
         memberUids: memberUidsFromMemberList(updatedMembers)
       });
+      await clearPrimarySquadIdOnUser(memberId);
     } catch (error) {
       console.error('Error removing member:', error);
     }

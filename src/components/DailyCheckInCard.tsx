@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, getDoc, onSnapshot, serverTimestamp, runTransaction } from 'firebase/firestore';
-import { checkInToSquad } from '../utils/squadStreamService';
+import { checkInToSquad, formatSquadFirestoreError } from '../utils/squadStreamService';
 
 interface DailyCheckInCardProps {
   squadId: string;
@@ -165,13 +165,17 @@ const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({ squadId, currentUse
           ? `${displayName} checked in (+50 PP)`
           : `${displayName} checked in (+${totalPP} PP to all checked-in members)`;
         
-        await createSystemMessage(squadId, systemMessageText, 'checkin');
+        try {
+          await createSystemMessage(squadId, systemMessageText, 'checkin');
+        } catch (feedErr) {
+          console.warn('DailyCheckInCard: check-in saved but squad feed message failed:', feedErr);
+        }
       } else {
         setError(result.error || 'Failed to check in');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error checking in:', err);
-      setError(err.message || 'Failed to check in');
+      setError(formatSquadFirestoreError(err, 'checkin'));
     } finally {
       setCheckingIn(false);
     }
