@@ -240,6 +240,7 @@ const LiveEventWeeklyDeliverableMarkPanel: React.FC<LiveEventWeeklyDeliverableMa
           rows.map((row) => {
             const completed = (row.actualScore ?? 0) >= maxScore;
             const busy = !!saving[row.studentId];
+            const disabled = busy || row.applied;
             return (
               <div
                 key={row.studentId}
@@ -255,16 +256,42 @@ const LiveEventWeeklyDeliverableMarkPanel: React.FC<LiveEventWeeklyDeliverableMa
                   flexWrap: 'wrap',
                 }}
               >
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: busy ? 'not-allowed' : 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={completed}
-                    disabled={busy}
-                    onChange={(e) => void onToggleComplete(row.studentId, e.target.checked)}
-                  />
-                  <span>{row.displayName}</span>
-                </label>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, minWidth: 0 }}>{row.displayName}</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void onToggleComplete(row.studentId, true)}
+                    style={{
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: 6,
+                      border: completed ? '2px solid #a7f3d0' : '1px solid rgba(255,255,255,0.35)',
+                      background: completed ? 'rgba(52,211,153,0.35)' : 'transparent',
+                      color: '#ecfdf5',
+                      fontWeight: 700,
+                      fontSize: '0.72rem',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void onToggleComplete(row.studentId, false)}
+                    style={{
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: 6,
+                      border: !completed && row.actualScore !== undefined ? '2px solid #fecaca' : '1px solid rgba(255,255,255,0.35)',
+                      background: !completed && row.actualScore !== undefined ? 'rgba(248,113,113,0.2)' : 'transparent',
+                      color: '#fecaca',
+                      fontWeight: 700,
+                      fontSize: '0.72rem',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    No
+                  </button>
                   {row.ppChange !== undefined ? (
                     <span style={{ fontWeight: 700, color: row.ppChange >= 0 ? '#a7f3d0' : '#fecaca' }}>
                       {formatPPChange(row.ppChange)}
@@ -278,7 +305,7 @@ const LiveEventWeeklyDeliverableMarkPanel: React.FC<LiveEventWeeklyDeliverableMa
                     <span style={{ fontSize: '0.72rem', opacity: 0.85 }}>Pending apply</span>
                   )}
                   {busy ? <span style={{ fontSize: '0.72rem' }}>Saving…</span> : null}
-                </span>
+                </div>
               </div>
             );
           })

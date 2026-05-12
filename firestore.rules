@@ -492,11 +492,12 @@ service cloud.firestore {
       );
       allow list: if isAssessmentDashboardStaff();
       allow list: if request.auth != null && resource.data.studentId == request.auth.uid;
-      // Only admins can create/update results
+      // Only admins can create/update results (align cohort with assessment dashboard list + live-event staff).
       allow write: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
+         isAssessmentDashboardStaff());
     }
 
     // Habit submissions (habits-type assessments) — was missing; fell through to deny-all.

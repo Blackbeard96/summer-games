@@ -639,26 +639,60 @@ const AssessmentDashboard: React.FC<AssessmentDashboardProps> = ({
                   <>
                     <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb' }}>
                       {isWeeklyDeliverable ? (
-                        <label
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            cursor: saving[row.studentId] ? 'not-allowed' : 'pointer',
-                            fontWeight: 600,
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={(row.actualScore ?? 0) >= (assessment.maxScore || 100)}
-                            disabled={saving[row.studentId]}
-                            onChange={(e) => {
-                              const v = e.target.checked ? assessment.maxScore || 100 : 0;
-                              void handleScoreChange(row.studentId, v);
-                            }}
-                          />
-                          <span>{(row.actualScore ?? 0) >= (assessment.maxScore || 100) ? 'Yes' : 'No'}</span>
-                        </label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', maxWidth: 280 }}>
+                            Confirm completion for this deliverable. You can mark <strong>Yes</strong> or{' '}
+                            <strong>No</strong> even if the student has not acknowledged yet in Goal setting.
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                            {(() => {
+                              const max = assessment.maxScore || 100;
+                              const completed = (row.actualScore ?? 0) >= max;
+                              const disabled = !!saving[row.studentId] || row.applied;
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={() => void handleScoreChange(row.studentId, max)}
+                                    style={{
+                                      padding: '0.4rem 0.75rem',
+                                      borderRadius: '0.375rem',
+                                      border: completed ? '2px solid #059669' : '1px solid #d1d5db',
+                                      background: completed ? '#d1fae5' : '#fff',
+                                      color: completed ? '#065f46' : '#374151',
+                                      fontWeight: 600,
+                                      cursor: disabled ? 'not-allowed' : 'pointer',
+                                      opacity: disabled ? 0.7 : 1,
+                                    }}
+                                  >
+                                    Yes — completed
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={() => void handleScoreChange(row.studentId, 0)}
+                                    style={{
+                                      padding: '0.4rem 0.75rem',
+                                      borderRadius: '0.375rem',
+                                      border: !completed && row.actualScore !== undefined ? '2px solid #dc2626' : '1px solid #d1d5db',
+                                      background: !completed && row.actualScore !== undefined ? '#fee2e2' : '#fff',
+                                      color: !completed && row.actualScore !== undefined ? '#991b1b' : '#374151',
+                                      fontWeight: 600,
+                                      cursor: disabled ? 'not-allowed' : 'pointer',
+                                      opacity: disabled ? 0.7 : 1,
+                                    }}
+                                  >
+                                    No — not completed
+                                  </button>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: completed ? '#059669' : '#6b7280' }}>
+                                    {completed ? 'Marked: completed' : row.actualScore !== undefined ? 'Marked: not completed' : 'Not marked yet'}
+                                  </span>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
                       ) : (
                         <input
                           type="number"
