@@ -728,6 +728,68 @@ export async function breakParticipationStreak(
   }
 }
 
+/**
+ * Battle / Team Battle Royale live quiz: one incorrect answer removes one Participation Power
+ * (session `movesEarned` / `participationCount`) and mirrors the same session PP delta as losing
+ * one participation point ({@link LIVE_EVENT_PP_PER_PARTICIPATION_POINT}), without touching streak logic
+ * (caller should run {@link breakParticipationStreak} first).
+ */
+export async function deductParticipationPowerForBattleQuizIncorrect(
+  sessionId: string,
+  playerId: string,
+  playerDisplayName?: string
+): Promise<void> {
+  try {
+    const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
+    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    const ppDelta = LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
+
+    await runTransaction(db, async (transaction) => {
+      const statsDoc = await transaction.get(statsRef);
+      const sessionDoc = await transaction.get(sessionRef);
+      if (!sessionDoc.exists()) return;
+
+      const name = playerDisplayName || 'Player';
+      const logLine = `⚠️ ${name} lost 1 Participation Power (incorrect quiz answer).`;
+
+      const players = [...((sessionDoc.data()?.players || []) as Array<Record<string, unknown>>)];
+      const pIdx = players.findIndex((p) => p && (p as { userId?: string }).userId === playerId);
+      if (pIdx < 0) return;
+
+      if (statsDoc.exists()) {
+        const stats = statsDoc.data() as SessionStats;
+        const nextParticipation = Math.max(0, (stats.participationEarned || 0) - 1);
+        const nextMoves = Math.max(0, (stats.movesEarned || 0) - 1);
+        const nextPpEarned = Math.max(0, (stats.ppEarned || 0) - ppDelta);
+        transaction.update(statsRef, {
+          participationEarned: nextParticipation,
+          movesEarned: nextMoves,
+          ppEarned: nextPpEarned,
+        });
+      }
+
+      const row = { ...players[pIdx] } as Record<string, unknown>;
+      const moves = Math.max(0, Math.floor(Number(row.movesEarned) || 0) - 1);
+      const partCount = Math.max(0, Math.floor(Number(row.participationCount) || 0) - 1);
+      const pp = Math.max(0, Math.floor(Number(row.powerPoints) || 0) - ppDelta);
+      players[pIdx] = {
+        ...row,
+        movesEarned: moves,
+        participationCount: partCount,
+        powerPoints: pp,
+      } as (typeof players)[number];
+
+      transaction.update(sessionRef, {
+        players,
+        battleLog: arrayUnion(logLine),
+        updatedAt: serverTimestamp(),
+      } as Record<string, unknown> as never);
+    });
+  } catch (error) {
+    debugError('inSessionStats', 'deductParticipationPowerForBattleQuizIncorrect', error);
+  }
+}
+
 /** UIDs that should receive session-end Power XP (roster + optional co-op `participantRecords`). */
 function collectLiveEventRewardPlayerIds(sessionData: Record<string, unknown>, fallbackPlayerIds: string[]): string[] {
   const fromPlayers = Array.isArray(sessionData.players)

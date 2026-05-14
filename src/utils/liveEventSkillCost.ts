@@ -1,6 +1,6 @@
 /**
- * Live Events: Participation Power for skills uses **canonical category rules**, not `move.cost`
- * (vault PP / legacy move cost is often 1 for everything).
+ * Live Events: Participation Power for skills uses **canonical rules** from `getLiveEventParticipationBaseFromSkillRules`
+ * (`skillCooldownCost.ts` — manifest & elemental level tables). RR Candy stays a flat **4** base before reductions.
  *
  * `computeLiveEventParticipationSkillCost` applies artifact + battle-effect reductions on top of that
  * canonical base, then floors so the player never pays **less** than the category minimum (unless
@@ -10,6 +10,7 @@
 import type { Move } from '../types/battle';
 import { getLiveEventPpCostReductionFromEquipped } from './artifactPerkEffects';
 import type { UniversalLawBoonEffects } from './universalLawBoons';
+import { getLiveEventParticipationBaseFromSkillRules, getSkillLevelForCooldownCost } from './skillCooldownCost';
 
 const DEBUG_LIVE_EVENT_SKILL_COST =
   process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILL_COST === 'true' ||
@@ -99,17 +100,7 @@ export function getLiveEventElementalMoveTier(move: Pick<Move, 'level'>): number
 
 /** Canonical participation base before artifact / effect reductions. */
 export function getLiveEventCanonicalParticipationBaseCost(move: Move): number {
-  const cat = getLiveEventSkillCostCategory(move);
-  switch (cat) {
-    case 'RR_CANDY':
-      return 4;
-    case 'MANIFEST':
-      return 2;
-    case 'ELEMENTAL':
-      return getLiveEventElementalMoveTier(move);
-    default:
-      return 1;
-  }
+  return getLiveEventParticipationBaseFromSkillRules(move);
 }
 
 /**
@@ -156,7 +147,10 @@ export function computeLiveEventParticipationSkillCost(
   universalLawEffects?: UniversalLawBoonEffects | null
 ): LiveEventSkillCostBreakdown {
   const category = getLiveEventSkillCostCategory(move);
-  const elementalMoveTier = category === 'ELEMENTAL' ? getLiveEventElementalMoveTier(move) : undefined;
+  const elementalMoveTier =
+    category === 'ELEMENTAL' || category === 'MANIFEST'
+      ? getSkillLevelForCooldownCost(move)
+      : undefined;
   const baseCost = getLiveEventCanonicalParticipationBaseCost(move);
 
   const redArtifacts = getLiveEventPpCostReductionFromEquipped(

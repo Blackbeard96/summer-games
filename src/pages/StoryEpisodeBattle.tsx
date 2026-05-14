@@ -23,6 +23,7 @@ import {
 } from '../utils/dailyChallengeShared';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
 
 const StoryEpisodeBattle: React.FC = () => {
   const { episodeId } = useParams<{ episodeId: string }>();
@@ -118,9 +119,11 @@ const StoryEpisodeBattle: React.FC = () => {
   const executeMove = async (move: Move) => {
     if (!boss || !vault || !currentUser) return;
 
+    const skillCost = getSkillCooldownOrCost(move);
+
     // Check energy cost
-    if (playerEnergy < move.cost) {
-      addToBattleLog(`⚠️ Not enough energy! Need ${move.cost}, have ${playerEnergy}`);
+    if (playerEnergy < skillCost) {
+      addToBattleLog(`⚠️ Not enough energy! Need ${skillCost}, have ${playerEnergy}`);
       return;
     }
 
@@ -147,7 +150,7 @@ const StoryEpisodeBattle: React.FC = () => {
     }
 
     // Consume energy
-    setPlayerEnergy(prev => prev - move.cost);
+    setPlayerEnergy(prev => prev - skillCost);
 
     // Get student data for equipped artifacts and player level
     const studentRef = doc(db, 'students', currentUser.uid);
@@ -746,11 +749,11 @@ const StoryEpisodeBattle: React.FC = () => {
                       <button
                         key={move.id}
                         onClick={() => setSelectedMove(move)}
-                        disabled={isBattling || playerEnergy < move.cost}
+                        disabled={isBattling || playerEnergy < getSkillCooldownOrCost(move)}
                         style={{
                           background: selectedMove?.id === move.id 
                             ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                            : playerEnergy < move.cost
+                            : playerEnergy < getSkillCooldownOrCost(move)
                               ? 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'
                               : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
                           color: 'white',
@@ -759,14 +762,14 @@ const StoryEpisodeBattle: React.FC = () => {
                           borderRadius: '0.5rem',
                           fontSize: '0.875rem',
                           fontWeight: 'bold',
-                          cursor: (isBattling || playerEnergy < move.cost) ? 'not-allowed' : 'pointer',
+                          cursor: (isBattling || playerEnergy < getSkillCooldownOrCost(move)) ? 'not-allowed' : 'pointer',
                           transition: 'all 0.2s',
                           textAlign: 'left'
                         }}
                       >
                         <div style={{ fontWeight: 'bold' }}>{move.name} [Level {move.masteryLevel}]</div>
                         <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
-                          {move.cost} Energy
+                          {getSkillCooldownOrCost(move)} Energy
                           {move.damage && ` • ${move.damage} DMG`}
                           {move.healing && ` • ${move.healing} HEAL`}
                         </div>

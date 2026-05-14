@@ -110,7 +110,7 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
               textAlign: 'left',
               cursor: disabled ? 'default' : 'pointer',
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'flex-start',
               gap: '1rem',
               fontWeight: 500,
               transition: 'all 0.2s',
@@ -130,11 +130,23 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
                 fontWeight: 'bold',
                 fontSize: '1rem',
                 flexShrink: 0,
+                marginTop: '0.15rem',
               }}
             >
               {answerChoiceLetter(displayPos)}
             </span>
-            <span style={{ flex: 1 }}>{option}</span>
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                whiteSpace: 'normal',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+                lineHeight: 1.45,
+              }}
+            >
+              {option}
+            </span>
             {reveal && showCorrect && <span style={{ fontSize: '1.25rem' }}>✓</span>}
             {reveal && showIncorrect && <span style={{ fontSize: '1.25rem' }}>✗</span>}
           </button>

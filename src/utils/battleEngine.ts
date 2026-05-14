@@ -12,6 +12,7 @@ import {
 } from '../types/battle';
 import { normalizeElementType } from '../types/elementTypes';
 import { attackElementFromActionCard, getElementMultiplier } from './elementAdvantages';
+import { getSkillCooldownOrCost } from './skillCooldownCost';
 
 export interface BattleCalculation {
   damage: number;
@@ -137,8 +138,10 @@ export class BattleEngine {
       };
     }
 
+    const energyCost = getSkillCooldownOrCost(move);
+
     // Check energy cost
-    if (attacker.energy < move.cost) {
+    if (attacker.energy < energyCost) {
       return {
         damage: 0,
         healing: 0,
@@ -464,7 +467,7 @@ export class BattleEngine {
     // Consume energy
     const move = updatedAttacker.moves.find(m => m.id === 'current_move_id'); // This would need to be passed in
     if (move) {
-      updatedAttacker.energy = Math.max(0, updatedAttacker.energy - move.cost);
+      updatedAttacker.energy = Math.max(0, updatedAttacker.energy - getSkillCooldownOrCost(move));
     }
 
     return { updatedAttacker, updatedDefender };

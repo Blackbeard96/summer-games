@@ -50,7 +50,19 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
           </span>
         )}
       </div>
-      <h2 style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#1e293b', marginBottom: '0.5rem', lineHeight: 1.4 }}>
+      <h2
+        style={{
+          fontSize: '1.35rem',
+          fontWeight: 'bold',
+          color: '#1e293b',
+          marginBottom: '0.5rem',
+          lineHeight: 1.45,
+          whiteSpace: 'normal',
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word',
+          hyphens: 'auto',
+        }}
+      >
         {question.prompt}
       </h2>
       <p style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '1rem', fontWeight: 500 }}>
@@ -65,7 +77,9 @@ export const LiveQuizQuestionCard: React.FC<LiveQuizQuestionCardProps> = ({
             alt="Question"
             style={{
               maxWidth: '100%',
-              maxHeight: '220px',
+              width: 'auto',
+              height: 'auto',
+              maxHeight: 'min(75vh, 720px)',
               borderRadius: '0.5rem',
               objectFit: 'contain',
               boxShadow: '0 2px 8px rgba(0,0,0,0.08)',

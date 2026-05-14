@@ -38,6 +38,11 @@ export interface TeamBattleRoyaleTeamDef {
 export interface TeamBattleRoyaleHostConfig {
   teamCount: number;
   teams: TeamBattleRoyaleTeamDef[];
+  /**
+   * When true, teamCount / manual team names are ignored at start: one team per distinct squad tag
+   * (same [TAG] as shown on the roster). Players with no tag share one "No squad" team.
+   */
+  teamsBySquads?: boolean;
   autoBalanceTeams: boolean;
   supportAlliesEnabled: boolean;
   /** false = each player has own HP (MVP); true reserved for shared pool UX */

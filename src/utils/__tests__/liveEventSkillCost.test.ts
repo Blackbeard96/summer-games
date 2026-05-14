@@ -6,6 +6,7 @@ import {
   getLiveEventSkillCostCategory,
   getLiveEventSkillCost,
 } from '../liveEventSkillCost';
+import { getSkillCooldownOrCost } from '../skillCooldownCost';
 
 const baseMove = (partial: Partial<Move>): Move =>
   ({
@@ -59,21 +60,29 @@ describe('getLiveEventCanonicalParticipationBaseCost', () => {
   it('RR Candy = 4', () => {
     expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ id: 'rr-candy-x', category: 'system' }))).toBe(4);
   });
-  it('Manifest = 2', () => {
-    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'manifest' }))).toBe(2);
+  it('Manifest uses floor(level/2) min 1', () => {
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'manifest', level: 1 }))).toBe(1);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'manifest', level: 4 }))).toBe(2);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'manifest', level: 5 }))).toBe(2);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'manifest', level: 6 }))).toBe(3);
   });
-  it('Elemental L1–L4', () => {
+  it('Elemental level bands', () => {
     expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 1 }))).toBe(1);
-    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 2 }))).toBe(2);
-    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 3 }))).toBe(3);
-    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 4 }))).toBe(4);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 2 }))).toBe(1);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 3 }))).toBe(2);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 5 }))).toBe(2);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 6 }))).toBe(3);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 8 }))).toBe(3);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 9 }))).toBe(4);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 10 }))).toBe(4);
+    expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'elemental', level: 11 }))).toBe(4);
   });
-  it('does not use mastery as elemental tier (high mastery, level 2 → 2 PP)', () => {
+  it('does not use mastery as elemental cost (high mastery, level 2 → 1 PP)', () => {
     expect(
       getLiveEventCanonicalParticipationBaseCost(
         baseMove({ category: 'elemental', level: 2, masteryLevel: 5 })
       )
-    ).toBe(2);
+    ).toBe(1);
   });
   it('OTHER = 1', () => {
     expect(getLiveEventCanonicalParticipationBaseCost(baseMove({ category: 'system', id: 'construct-skill::x' }))).toBe(
@@ -84,10 +93,10 @@ describe('getLiveEventCanonicalParticipationBaseCost', () => {
 
 describe('computeLiveEventParticipationSkillCost', () => {
   it('ignores legacy move.cost for category pricing', () => {
-    const m = baseMove({ category: 'manifest', cost: 99 });
+    const m = baseMove({ category: 'manifest', cost: 99, level: 1 });
     const b = computeLiveEventParticipationSkillCost(m, null, null, 0, null);
-    expect(b.baseCost).toBe(2);
-    expect(b.finalCost).toBe(2);
+    expect(b.baseCost).toBe(1);
+    expect(b.finalCost).toBe(1);
   });
 
   it('RR Candy returns cost 4 with no equipment', () => {
@@ -96,14 +105,14 @@ describe('computeLiveEventParticipationSkillCost', () => {
     expect(b.finalCost).toBe(4);
   });
 
-  it('Manifest returns 2 PP', () => {
-    const m = baseMove({ category: 'manifest', cost: 1 });
+  it('Manifest level 4 returns 2 PP', () => {
+    const m = baseMove({ category: 'manifest', level: 4, cost: 1 });
     expect(computeLiveEventParticipationSkillCost(m, null, null, 0, null).finalCost).toBe(2);
   });
 
-  it('Elemental L3 returns 3 PP', () => {
+  it('Elemental L3 returns 2 PP', () => {
     const m = baseMove({ category: 'elemental', level: 3, cost: 1 });
-    expect(computeLiveEventParticipationSkillCost(m, null, null, 0, null).finalCost).toBe(3);
+    expect(computeLiveEventParticipationSkillCost(m, null, null, 0, null).finalCost).toBe(2);
   });
 
   it('getLiveEventSkillCost matches breakdown.finalCost', () => {
@@ -125,20 +134,29 @@ describe('Live Event cost vs participation (integration-style)', () => {
     const b = computeLiveEventParticipationSkillCost(m, null, null, 0, null);
     expect(3 >= b.finalCost).toBe(false);
   });
-  it('player with 2 PP can afford manifest', () => {
-    const m = baseMove({ category: 'manifest' });
+  it('player with 1 PP can afford manifest level 1', () => {
+    const m = baseMove({ category: 'manifest', level: 1 });
     const b = computeLiveEventParticipationSkillCost(m, null, null, 0, null);
-    expect(2 >= b.finalCost).toBe(true);
+    expect(1 >= b.finalCost).toBe(true);
   });
-  it('player with 1 PP cannot afford manifest', () => {
-    const m = baseMove({ category: 'manifest' });
+  it('player with 1 PP cannot afford manifest level 4', () => {
+    const m = baseMove({ category: 'manifest', level: 4 });
     const b = computeLiveEventParticipationSkillCost(m, null, null, 0, null);
     expect(1 >= b.finalCost).toBe(false);
   });
-  it('elemental L3: 3 PP sufficient, 2 PP not', () => {
+  it('elemental L3: 2 PP sufficient, 1 PP not', () => {
     const m = baseMove({ category: 'elemental', level: 3 });
     const b = computeLiveEventParticipationSkillCost(m, null, null, 0, null);
-    expect(3 >= b.finalCost).toBe(true);
-    expect(2 >= b.finalCost).toBe(false);
+    expect(2 >= b.finalCost).toBe(true);
+    expect(1 >= b.finalCost).toBe(false);
+  });
+});
+
+describe('Live Event base vs shared cooldown/cost helper', () => {
+  it('canonical participation base matches getSkillCooldownOrCost for manifest/elemental', () => {
+    const manifest = baseMove({ category: 'manifest', level: 5 });
+    expect(getLiveEventCanonicalParticipationBaseCost(manifest)).toBe(getSkillCooldownOrCost(manifest));
+    const el = baseMove({ category: 'elemental', level: 7 });
+    expect(getLiveEventCanonicalParticipationBaseCost(el)).toBe(getSkillCooldownOrCost(el));
   });
 });

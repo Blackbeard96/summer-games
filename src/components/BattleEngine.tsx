@@ -73,6 +73,7 @@ import {
   computeLiveEventParticipationSkillCost,
   getSkillCostReductionFromBattleEffects,
 } from '../utils/liveEventSkillCost';
+import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
 import { SpacesModeState, SpaceId } from '../types/battleSession';
 import SpacesModeUI from './SpacesModeUI';
 import { 
@@ -1345,7 +1346,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   const getBattleSkillCooldownTurns = useCallback(
     (move: Move) =>
       effectiveSkillCooldownTurns(
-        move.cooldown || 0,
+        getSkillCooldownOrCost(move),
         equippedArtifacts,
         equippableCatalogRaw,
         universalLawEffects,
@@ -5854,7 +5855,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     // This ensures all clients see the same state updates
     if (isInSession && sessionId && currentUser) {
       // ALWAYS log move execution start (critical for debugging) - concise
-      console.log('🚀 [BattleEngine] ⚡ EXECUTION START ⚡', displayMoveName, '→', targetOpponent.name, '| Dmg:', damage || 0, '| Shield:', shieldDamage || 0, '| Heal:', playerHealing || 0, '| Cost:', move.cost || 0);
+      console.log('🚀 [BattleEngine] ⚡ EXECUTION START ⚡', displayMoveName, '→', targetOpponent.name, '| Dmg:', damage || 0, '| Shield:', shieldDamage || 0, '| Heal:', playerHealing || 0, '| Cost:', getSkillCooldownOrCost(move));
       
       const DEBUG_LIVE_EVENTS = process.env.REACT_APP_DEBUG_LIVE_EVENT_SKILLS === 'true' ||
                                  process.env.REACT_APP_DEBUG_LIVE_EVENTS === 'true' || 
@@ -5878,7 +5879,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           healing: playerHealing,
           shieldBoost: playerShieldBoost,
           ppStolen,
-          ppCost: move.cost || 0
+          ppCost: getSkillCooldownOrCost(move)
         }, { file: 'BattleEngine.tsx', line: 4187 });
         
         // Write debug mirror
@@ -5902,7 +5903,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               healing: playerHealing,
               shieldBoost: playerShieldBoost,
               ppStolen,
-              ppCost: move.cost || 0
+              ppCost: getSkillCooldownOrCost(move)
             }
           });
         }
@@ -5928,7 +5929,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         }
         
         // Vault PP cost (Live Events: skill activation uses participation in applyInSessionMove, not vault)
-        const ppCost = move.cost || 0;
+        const ppCost = getSkillCooldownOrCost(move);
         const liveEventEffectRed = getSkillCostReductionFromBattleEffects(playerEffects as never);
         const liveEventCostPreview = computeLiveEventParticipationSkillCost(
           move,
@@ -6478,7 +6479,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           console.log('[BattleEngine] skill use cooldown', {
             actorId: currentUser.uid,
             skillId: move.id,
-            baseCooldown: move.cooldown,
+            baseCooldown: getSkillCooldownOrCost(move),
             remainingBeforeUse: remBefore,
             appliedTurns: effCdAfterMove,
             turnCount: battleState.turnCount,
@@ -8750,7 +8751,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
                         <span style={{ fontSize: '0.875rem', color: '#f59e0b', fontWeight: 'bold' }}>
                           {isInSession && le
                             ? `${le.finalCost} PP`
-                            : `${move.cost} PP`}
+                            : `${getSkillCooldownOrCost(move)} PP`}
                         </span>
                         </div>
                         {isInSession && le && (

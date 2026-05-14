@@ -125,7 +125,9 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pp'])
         && request.resource.data.pp is int
         && request.resource.data.pp >= prevPp
-        && request.resource.data.pp <= prevPp + 500;
+        // One check-in can award up to (checkedInCount - priorMilestone) * 50 PP per member;
+        // large same-day cohorts or catch-up milestones must not trip a tight cap.
+        && request.resource.data.pp <= prevPp + 5000;
     }
     
     // Users collection - allow users to read/write their own documents

@@ -1,4 +1,5 @@
 import { Move } from './battle';
+import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
 
 /**
  * Unified Skill type that encompasses all skill sources:
@@ -53,8 +54,8 @@ export function moveToSkill(move: Move, sourceType: 'manifest' | 'element' | 'rr
     sourceType,
     sourceId,
     description: move.description,
-    cost: move.cost,
-    cooldownTurns: move.cooldown,
+    cost: getSkillCooldownOrCost(move),
+    cooldownTurns: getSkillCooldownOrCost(move),
     level: move.level,
     mastery: {
       current: move.masteryLevel,

@@ -24,6 +24,7 @@ import {
   computeLiveEventParticipationSkillCost,
   getSkillCostReductionFromBattleEffects,
 } from '../utils/liveEventSkillCost';
+import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
 import type { ElementType } from '../types/elementTypes';
 import { normalizeElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
@@ -1307,7 +1308,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                             <span style={{ fontSize: '0.65rem' }}>
                               {liveLe
                                 ? `Skill Cost (PP): ${liveLe.finalCost} (base ${liveLe.baseCost}, −${liveLe.reductionFromArtifacts + liveLe.reductionFromEffects})`
-                                : `Cost: ${move.cost} PP`}
+                                : `Cost: ${getSkillCooldownOrCost(move)} PP`}
                             </span>
                           </div>
                         </div>

@@ -29,6 +29,7 @@ import type {
   LiveQuizGameMode,
   BattleRoyaleHostConfig,
   TeamBattleRoyaleHostConfig,
+  TeamBattleRoyaleTeamDef,
   TeamBattleRoyaleRuntimeState,
   BattleRoyaleRuntimeState,
   LiveQuizPerQuestionResultEntry,
@@ -36,7 +37,7 @@ import type {
 import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
-import { trackParticipation, trackElimination, breakParticipationStreak } from './inSessionStatsService';
+import { trackParticipation, trackElimination, breakParticipationStreak, deductParticipationPowerForBattleQuizIncorrect } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
 import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
@@ -130,6 +131,7 @@ export const DEFAULT_TEAM_BATTLE_ROYALE_HOST_CONFIG: TeamBattleRoyaleHostConfig 
     { id: 'team-1', name: 'Team 1', color: '#dc2626' },
     { id: 'team-2', name: 'Team 2', color: '#2563eb' },
   ],
+  teamsBySquads: false,
   autoBalanceTeams: true,
   supportAlliesEnabled: true,
   sharedTeamHealth: false,
@@ -145,6 +147,8 @@ export type StartQuizSessionOptions = {
   battleRoyale?: BattleRoyaleHostConfig;
   teamBattleRoyale?: TeamBattleRoyaleHostConfig;
   roomPlayerUids?: string[];
+  /** Per joined player: squad tag / abbreviation (same key groups into one team when teamsBySquads is on) */
+  squadTagByUid?: Record<string, string | null | undefined>;
 };
 
 export function isBattleQuizMode(mode?: LiveQuizGameMode): boolean {
@@ -160,10 +164,75 @@ function shuffleUids<T>(arr: T[]): T[] {
   return a;
 }
 
+const SQUAD_BR_TEAM_COLORS = [
+  '#dc2626',
+  '#2563eb',
+  '#16a34a',
+  '#ca8a04',
+  '#9333ea',
+  '#db2777',
+  '#0d9488',
+  '#c026d3',
+  '#ea580c',
+  '#4f46e5',
+];
+
+function teamIdFromSquadGroupKey(key: string, index: number): string {
+  if (key === '__none__') return 'team-no-squad';
+  const slug = key
+    .replace(/[^a-z0-9_-]+/gi, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  return slug ? `squad-${slug}` : `squad-idx-${index}`;
+}
+
+/** One team per distinct squad tag (case-insensitive); missing tag → shared "No squad" team. */
+function buildTeamAssignmentsFromSquads(
+  roomPlayerUids: string[],
+  squadTagByUid: Record<string, string | null | undefined> | undefined
+): TeamBattleRoyaleRuntimeState {
+  type Group = { displayLabel: string; uids: string[] };
+  const groups = new Map<string, Group>();
+
+  for (const uid of roomPlayerUids) {
+    const raw = squadTagByUid?.[uid];
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    const key = trimmed ? trimmed.toLowerCase() : '__none__';
+    let g = groups.get(key);
+    if (!g) {
+      g = { displayLabel: trimmed ? trimmed : 'No squad', uids: [] };
+      groups.set(key, g);
+    }
+    g.uids.push(uid);
+  }
+
+  const sortedKeys = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
+  const teams: TeamBattleRoyaleTeamDef[] = sortedKeys.map((key, i) => {
+    const g = groups.get(key)!;
+    return {
+      id: teamIdFromSquadGroupKey(key, i),
+      name: g.displayLabel,
+      color: SQUAD_BR_TEAM_COLORS[i % SQUAD_BR_TEAM_COLORS.length],
+    };
+  });
+  const playerTeamId: Record<string, string> = {};
+  sortedKeys.forEach((key, i) => {
+    const tid = teamIdFromSquadGroupKey(key, i);
+    for (const uid of groups.get(key)!.uids) {
+      playerTeamId[uid] = tid;
+    }
+  });
+  return { teams, playerTeamId };
+}
+
 function buildTeamAssignments(
   cfg: TeamBattleRoyaleHostConfig,
-  roomPlayerUids: string[]
+  roomPlayerUids: string[],
+  squadTagByUid?: Record<string, string | null | undefined>
 ): TeamBattleRoyaleRuntimeState {
+  if (cfg.teamsBySquads && squadTagByUid && roomPlayerUids.length > 0) {
+    return buildTeamAssignmentsFromSquads(roomPlayerUids, squadTagByUid);
+  }
   const n = Math.max(1, cfg.teamCount || 2);
   const teams: TeamBattleRoyaleHostConfig['teams'] =
     cfg.teams?.length >= n
@@ -247,7 +316,8 @@ export async function startQuizSession(
     if (gameMode === 'team_battle_royale' && options?.teamBattleRoyale) {
       teamBattleState = buildTeamAssignments(
         options.teamBattleRoyale,
-        options.roomPlayerUids ?? []
+        options.roomPlayerUids ?? [],
+        options.squadTagByUid
       );
     }
 
@@ -815,8 +885,11 @@ async function submitQuizResponseFollowUp(
         displayName = players.find((p) => p.userId === uid)?.displayName;
       }
       await breakParticipationStreak(sessionId, uid, displayName);
+      if (isBattleQuizMode(result.gameMode ?? 'regular')) {
+        await deductParticipationPowerForBattleQuizIncorrect(sessionId, uid, displayName);
+      }
     } catch (e) {
-      log('breakParticipationStreak failed', e);
+      log('breakParticipationStreak / BR quiz penalty failed', e);
     }
     return;
   }

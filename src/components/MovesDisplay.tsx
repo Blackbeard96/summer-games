@@ -37,6 +37,7 @@ import {
   getSkillsMasteryPerkDisplaySnapshot,
   hasElementalAccessPerkEquipped,
 } from '../utils/artifactPerkEffects';
+import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
 import {
   getFirstSummonEffectFromMove,
   resolveConstructStatsForSummonEffect,
@@ -1071,7 +1072,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             backdropFilter: 'blur(10px)'
           }}>
             <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>SKILL COST</div>
-            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{move.cost}</div>
+            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f59e0b' }}>{getSkillCooldownOrCost(move)}</div>
           </div>
 
           {/* Combined Damage Range */}
@@ -1389,8 +1390,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           )}
 
           {/* Cooldown (turn-based battle; Cost Reduction perk no longer shortens this) */}
-          {move.cooldown > 0 && (() => {
-            const baseCd = Math.max(0, Math.floor(Number(move.cooldown) || 0));
+          {getSkillCooldownOrCost(move) > 0 && (() => {
+            const baseCd = Math.max(0, Math.floor(getSkillCooldownOrCost(move)));
             const effCd = effectiveSkillCooldownTurns(
               baseCd,
               equippedArtifacts as Record<string, unknown>,

@@ -27,6 +27,7 @@ import {
   getPlayerUniversalLawEffects,
 } from './universalLawBoons';
 import { getActiveLevel2ManifestMove } from '../services/level2ManifestService';
+import { applyCanonicalSkillCostAndCooldown } from './skillCooldownCost';
 
 // Prevent console log spam; only emit a small number of Magical Paintbrush debug lines.
 let artifactPaintbrushDebugEmitted = false;
@@ -645,7 +646,7 @@ export async function getUserUnlockedSkillsForBattle(
       rrCandySkills.forEach(s => uniqueSkills.set(s.id, s));
       const finalSkills = Array.from(uniqueSkills.values());
       sortBattlePoolSkills(finalSkills);
-      return finalSkills;
+      return finalSkills.map(applyCanonicalSkillCostAndCooldown);
     }
 
     // Get user's element if not provided (Artifacts primary = chosen_element)
@@ -748,7 +749,7 @@ export async function getUserUnlockedSkillsForBattle(
       });
     }
 
-    return finalSkills;
+    return finalSkills.map(applyCanonicalSkillCostAndCooldown);
   } catch (error) {
     console.error('Error fetching battle skills:', error);
     return [];
@@ -804,7 +805,7 @@ export async function getEquippedSkillsForBattle(
       }
       try {
         const l2 = await getActiveLevel2ManifestMove(userId);
-        if (l2 && !out.some((m) => m.id === l2.id)) out = [...out, l2];
+        if (l2 && !out.some((m) => m.id === l2.id)) out = [...out, applyCanonicalSkillCostAndCooldown(l2)];
       } catch {
         /* ignore */
       }

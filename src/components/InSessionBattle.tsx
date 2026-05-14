@@ -442,6 +442,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
   /** Widen center quiz column by hiding left/right player sidebars (Quiz tab only). */
   const [liveQuizExpanded, setLiveQuizExpanded] = useState(false);
+  /** Collapsed by default so question + answers stay in view during BR / team BR quiz. */
+  const [liveEventEliminationsExpanded, setLiveEventEliminationsExpanded] = useState(false);
 
   useEffect(() => {
     if (centerView !== 'quiz') setLiveQuizExpanded(false);
@@ -1418,20 +1420,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
   }, [sessionPlayers, students]);
 
-  // Fetch squad abbreviations for all students
-  useEffect(() => {
-    const fetchSquadAbbreviations = async () => {
-      const studentIds = students.map(s => s.id).filter(id => id);
-      
-      if (studentIds.length > 0) {
-        const abbreviations = await getUserSquadAbbreviations(studentIds);
-        setSquadAbbreviations(abbreviations);
-      }
-    };
-    
-    fetchSquadAbbreviations();
-  }, [students]);
-
   /**
    * Stable roster identity: only when **membership** changes should we attach/detach `users/{id}` listeners.
    * Depending on `students` (new array reference every parent render) caused rapid listener churn and
@@ -1449,6 +1437,27 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
     return unique.sort().join(',');
   }, [students]);
+
+  /** Joined session player Uids (stable string) — squad abbrev fetch when membership changes, not every HP tick */
+  const sessionJoinedIdsKey = useMemo(() => {
+    const u = sessionPlayers.map((p) => p.userId);
+    return Array.from(new Set(u)).sort().join(',');
+  }, [sessionPlayers]);
+
+  // Fetch squad abbreviations for class roster and anyone joined in-session (for Team BR squad grouping)
+  useEffect(() => {
+    const fetchSquadAbbreviations = async () => {
+      const ids = new Set<string>();
+      rosterStudentIdsKey.split(',').filter(Boolean).forEach((id) => ids.add(id));
+      sessionJoinedIdsKey.split(',').filter(Boolean).forEach((id) => ids.add(id));
+      const studentIds = Array.from(ids);
+      if (studentIds.length === 0) return;
+      const abbreviations = await getUserSquadAbbreviations(studentIds);
+      setSquadAbbreviations(abbreviations);
+    };
+
+    void fetchSquadAbbreviations();
+  }, [rosterStudentIdsKey, sessionJoinedIdsKey]);
 
   // Listen to user profile updates in real-time (displayName / photoURL from `users` docs).
   useEffect(() => {
@@ -2276,6 +2285,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       }))
       .sort((a, b) => a.victimName.localeCompare(b.victimName, undefined, { sensitivity: 'base' }));
   }, [quizSession, sessionPlayers, userProfiles, students]);
+
+  /** Alive / total players (joined session); team BR also counts distinct teams still alive. */
+  const battleRoyaleAliveStats = useMemo(() => {
+    if (!quizSession || !isBattleQuizMode(quizSession.gameMode)) return null;
+    const total = sessionPlayers.length;
+    const alive = sessionPlayers.filter((p) => !isLiveEventPlayerEliminatedForRevive(p)).length;
+    let teamsAlive: number | null = null;
+    if (quizSession.gameMode === 'team_battle_royale' && quizSession.teamBattleState?.playerTeamId) {
+      const map = quizSession.teamBattleState.playerTeamId;
+      teamsAlive = new Set(
+        sessionPlayers
+          .filter((p) => !isLiveEventPlayerEliminatedForRevive(p))
+          .map((p) => map[p.userId])
+          .filter((tid): tid is string => typeof tid === 'string' && tid.length > 0)
+      ).size;
+    }
+    return { total, alive, teamsAlive };
+  }, [quizSession, sessionPlayers]);
 
   useEffect(() => {
     const isEliminatedNow = currentPlayerEliminated;
@@ -3925,58 +3952,84 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             {liveEventLaunchMode === 'battle_royale' && battleRoyaleTeamFormat && (
               <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f0fdf4', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
                 <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Team Battle Royale host settings</div>
-                <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>Number of teams</label>
-                <input
-                  type="number"
-                  min={2}
-                  max={6}
-                  value={teamBrHostConfig.teamCount}
-                  onChange={(e) => {
-                    const n = Math.min(6, Math.max(2, parseInt(e.target.value, 10) || 2));
-                    setTeamBrHostConfig((c) => {
-                      const colors = ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#db2777'];
-                      let teams = [...c.teams];
-                      if (teams.length > n) teams = teams.slice(0, n);
-                      while (teams.length < n) {
-                        const i = teams.length;
-                        teams.push({
-                          id: `team-${i + 1}`,
-                          name: `Team ${i + 1}`,
-                          color: colors[i % colors.length],
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', marginBottom: '0.65rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!teamBrHostConfig.teamsBySquads}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setTeamBrHostConfig((c) => ({
+                        ...c,
+                        teamsBySquads: on,
+                        ...(on ? { autoBalanceTeams: false } : {}),
+                      }));
+                    }}
+                    style={{ marginTop: '0.15rem' }}
+                  />
+                  <span>
+                    <strong>Teams from squad tags</strong>
+                    <span style={{ display: 'block', fontWeight: 400, fontSize: '0.78rem', color: '#166534', marginTop: '0.2rem', lineHeight: 1.35 }}>
+                      Everyone with the same squad abbreviation (the [TAG] by names on the roster) starts on the same team.
+                      Players without a tag share one &quot;No squad&quot; team. Manual team count/names below are skipped when this is on.
+                    </span>
+                  </span>
+                </label>
+                {!teamBrHostConfig.teamsBySquads && (
+                  <>
+                    <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 600 }}>Number of teams</label>
+                    <input
+                      type="number"
+                      min={2}
+                      max={6}
+                      value={teamBrHostConfig.teamCount}
+                      onChange={(e) => {
+                        const n = Math.min(6, Math.max(2, parseInt(e.target.value, 10) || 2));
+                        setTeamBrHostConfig((c) => {
+                          const colors = ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#db2777'];
+                          let teams = [...c.teams];
+                          if (teams.length > n) teams = teams.slice(0, n);
+                          while (teams.length < n) {
+                            const i = teams.length;
+                            teams.push({
+                              id: `team-${i + 1}`,
+                              name: `Team ${i + 1}`,
+                              color: colors[i % colors.length],
+                            });
+                          }
+                          return { ...c, teamCount: n, teams };
                         });
-                      }
-                      return { ...c, teamCount: n, teams };
-                    });
-                  }}
-                  style={{ width: '100%', marginBottom: '0.75rem', padding: '0.35rem', borderRadius: '0.35rem' }}
-                />
-                {teamBrHostConfig.teams.map((tm, idx) => (
-                  <div key={tm.id} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.35rem', alignItems: 'center' }}>
-                    <input
-                      type="color"
-                      value={tm.color}
-                      onChange={(e) =>
-                        setTeamBrHostConfig((c) => ({
-                          ...c,
-                          teams: c.teams.map((t, i) => (i === idx ? { ...t, color: e.target.value } : t)),
-                        }))
-                      }
-                      title="Team color"
-                      style={{ width: 36, height: 28, padding: 0, border: 'none' }}
+                      }}
+                      style={{ width: '100%', marginBottom: '0.75rem', padding: '0.35rem', borderRadius: '0.35rem' }}
                     />
-                    <input
-                      type="text"
-                      value={tm.name}
-                      onChange={(e) =>
-                        setTeamBrHostConfig((c) => ({
-                          ...c,
-                          teams: c.teams.map((t, i) => (i === idx ? { ...t, name: e.target.value } : t)),
-                        }))
-                      }
-                      style={{ flex: 1, padding: '0.35rem', borderRadius: '0.35rem' }}
-                    />
-                  </div>
-                ))}
+                    {teamBrHostConfig.teams.map((tm, idx) => (
+                      <div key={tm.id} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.35rem', alignItems: 'center' }}>
+                        <input
+                          type="color"
+                          value={tm.color}
+                          onChange={(e) =>
+                            setTeamBrHostConfig((c) => ({
+                              ...c,
+                              teams: c.teams.map((t, i) => (i === idx ? { ...t, color: e.target.value } : t)),
+                            }))
+                          }
+                          title="Team color"
+                          style={{ width: 36, height: 28, padding: 0, border: 'none' }}
+                        />
+                        <input
+                          type="text"
+                          value={tm.name}
+                          onChange={(e) =>
+                            setTeamBrHostConfig((c) => ({
+                              ...c,
+                              teams: c.teams.map((t, i) => (i === idx ? { ...t, name: e.target.value } : t)),
+                            }))
+                          }
+                          style={{ flex: 1, padding: '0.35rem', borderRadius: '0.35rem' }}
+                        />
+                      </div>
+                    ))}
+                  </>
+                )}
                 {(
                   [
                     ['autoBalanceTeams', 'Auto-balance teams'],
@@ -4353,6 +4406,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       ? Math.max(1, brCustomSurvivorTarget)
                       : parseInt(brSurvivorPreset, 10);
                   const useTeamBr = liveEventLaunchMode === 'battle_royale' && battleRoyaleTeamFormat;
+                  const squadTagByUid: Record<string, string | null> = {};
+                  sessionPlayers.forEach((p) => {
+                    squadTagByUid[p.userId] = squadAbbreviations.get(p.userId) ?? null;
+                  });
                   const startOptions =
                     liveEventLaunchMode === 'quiz'
                       ? undefined
@@ -4361,6 +4418,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             gameMode: 'team_battle_royale' as const,
                             teamBattleRoyale: { ...teamBrHostConfig },
                             roomPlayerUids: sessionPlayers.map((p) => p.userId),
+                            squadTagByUid,
                           }
                         : {
                             gameMode: 'battle_royale' as const,
@@ -4690,42 +4748,131 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 flexShrink: 0,
                 background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
                 borderRadius: '0.75rem',
-                padding: '0.75rem 1rem',
                 border: '1px solid #4b5563',
-                maxHeight: '180px',
-                overflowY: 'auto',
+                overflow: 'hidden',
               }}
             >
-              <div
+              <button
+                type="button"
+                onClick={() => setLiveEventEliminationsExpanded((v) => !v)}
+                aria-expanded={liveEventEliminationsExpanded}
+                title={liveEventEliminationsExpanded ? 'Hide elimination list' : 'Show elimination list'}
                 style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  color: '#fca5a5',
-                  marginBottom: '0.5rem',
-                  letterSpacing: '0.06em',
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.75rem',
+                  padding: '0.65rem 1rem',
+                  margin: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  flexWrap: 'wrap',
                 }}
               >
-                ☠️ ELIMINATIONS
-              </div>
-              {battleRoyaleEliminations.length === 0 ? (
-                <div style={{ color: '#9ca3af', fontSize: '0.8rem', fontStyle: 'italic' }}>No eliminations yet.</div>
-              ) : (
-                <ul style={{ margin: 0, paddingLeft: '1.1rem', color: '#e5e7eb', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                  {battleRoyaleEliminations.map((row) => (
-                    <li key={row.victimId} style={{ marginBottom: '0.25rem' }}>
-                      <span style={{ fontWeight: 600 }}>{row.victimName}</span>
-                      {row.eliminatorName ? (
-                        <>
-                          {' '}
-                          <span style={{ color: '#9ca3af' }}>— eliminated by</span>{' '}
-                          <span style={{ color: '#fde68a', fontWeight: 600 }}>{row.eliminatorName}</span>
-                        </>
-                      ) : (
-                        <span style={{ color: '#9ca3af' }}> — eliminated</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: '#fca5a5',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  ☠️ ELIMINATIONS
+                </span>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    gap: '0.2rem',
+                    marginLeft: 'auto',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      color: '#e5e7eb',
+                    }}
+                  >
+                    <span style={{ color: '#9ca3af', fontWeight: 500 }}>
+                      {battleRoyaleEliminations.length === 0
+                        ? 'None yet'
+                        : `${battleRoyaleEliminations.length} total`}
+                    </span>
+                    <span style={{ color: '#fcd34d', fontSize: '0.7rem' }} aria-hidden>
+                      {liveEventEliminationsExpanded ? '▼' : '▶'}
+                    </span>
+                  </span>
+                  {battleRoyaleAliveStats != null && battleRoyaleAliveStats.total > 0 ? (
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: '#bbf7d0',
+                        letterSpacing: '0.02em',
+                        textAlign: 'right',
+                        lineHeight: 1.25,
+                      }}
+                    >
+                      {battleRoyaleAliveStats.alive}/{battleRoyaleAliveStats.total} players left
+                      {battleRoyaleAliveStats.teamsAlive != null &&
+                      battleRoyaleAliveStats.alive > 0 &&
+                      battleRoyaleAliveStats.teamsAlive > 0
+                        ? ` · ${battleRoyaleAliveStats.teamsAlive} ${
+                            battleRoyaleAliveStats.teamsAlive === 1 ? 'team' : 'teams'
+                          } left`
+                        : ''}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+              {liveEventEliminationsExpanded && (
+                <div
+                  style={{
+                    padding: '0 1rem 0.75rem',
+                    maxHeight: 'min(40vh, 300px)',
+                    overflowY: 'auto',
+                    borderTop: '1px solid #374151',
+                  }}
+                >
+                  {battleRoyaleEliminations.length === 0 ? (
+                    <div style={{ color: '#9ca3af', fontSize: '0.8rem', fontStyle: 'italic', paddingTop: '0.35rem' }}>
+                      No eliminations yet.
+                    </div>
+                  ) : (
+                    <ul
+                      style={{
+                        margin: '0.35rem 0 0',
+                        paddingLeft: '1.1rem',
+                        color: '#e5e7eb',
+                        fontSize: '0.82rem',
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {battleRoyaleEliminations.map((row) => (
+                        <li key={row.victimId} style={{ marginBottom: '0.25rem' }}>
+                          <span style={{ fontWeight: 600 }}>{row.victimName}</span>
+                          {row.eliminatorName ? (
+                            <>
+                              {' '}
+                              <span style={{ color: '#9ca3af' }}>— eliminated by</span>{' '}
+                              <span style={{ color: '#fde68a', fontWeight: 600 }}>{row.eliminatorName}</span>
+                            </>
+                          ) : (
+                            <span style={{ color: '#9ca3af' }}> — eliminated</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -5159,7 +5306,6 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   {isSessionHost && (() => {
                     const totalQuestions = quizSession.questionOrder?.length ?? 0;
                     const questionMap = new Map(quizQuestions.map((q) => [q.id, q]));
-                    const truncate = (s: string, max: number) => (s.length <= max ? s : s.slice(0, max) + '…');
                     return (
                       <div style={{
                         marginTop: '1.25rem',
@@ -5206,22 +5352,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                   </span>
                                   <span>+{totalPP} PP</span>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                  <div style={{ padding: '0.5rem', background: '#ecfdf5', borderRadius: '0.375rem', border: '1px solid #a7f3d0' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                  <div style={{ padding: '0.5rem', background: '#ecfdf5', borderRadius: '0.375rem', border: '1px solid #a7f3d0', minWidth: 0 }}>
                                     <div style={{ fontWeight: 600, color: '#047857', fontSize: '0.8rem' }}>✓ Correct ({correctItems.length})</div>
                                     {correctItems.length === 0 ? <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>—</div> : (
-                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#065f46', fontSize: '0.85rem' }}>
-                                        {correctItems.slice(0, 5).map((text: string, i: number) => <li key={i}>{truncate(text, 50)}</li>)}
-                                        {correctItems.length > 5 && <li style={{ color: '#6b7280' }}>+{correctItems.length - 5} more</li>}
+                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#065f46', fontSize: '0.85rem', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                                        {correctItems.map((text: string, i: number) => (
+                                          <li key={i} style={{ marginBottom: '0.35rem' }}>{text}</li>
+                                        ))}
                                       </ul>
                                     )}
                                   </div>
-                                  <div style={{ padding: '0.5rem', background: '#fef2f2', borderRadius: '0.375rem', border: '1px solid #fecaca' }}>
+                                  <div style={{ padding: '0.5rem', background: '#fef2f2', borderRadius: '0.375rem', border: '1px solid #fecaca', minWidth: 0 }}>
                                     <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: '0.8rem' }}>✗ Wrong ({wrongItems.length})</div>
                                     {wrongItems.length === 0 ? <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>—</div> : (
-                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#991b1b', fontSize: '0.85rem' }}>
-                                        {wrongItems.slice(0, 5).map((text: string, i: number) => <li key={i}>{truncate(text, 50)}</li>)}
-                                        {wrongItems.length > 5 && <li style={{ color: '#6b7280' }}>+{wrongItems.length - 5} more</li>}
+                                      <ul style={{ margin: 0, paddingLeft: '1rem', color: '#991b1b', fontSize: '0.85rem', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                                        {wrongItems.map((text: string, i: number) => (
+                                          <li key={i} style={{ marginBottom: '0.35rem' }}>{text}</li>
+                                        ))}
                                       </ul>
                                     )}
                                   </div>
@@ -5265,20 +5413,24 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                           How you did on each question and what you earned.
                         </p>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.95rem' }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                            <div style={{ padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #a7f3d0' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '0.75rem' }}>
+                            <div style={{ padding: '0.75rem', background: '#ecfdf5', borderRadius: '0.5rem', border: '1px solid #a7f3d0', minWidth: 0 }}>
                               <div style={{ fontWeight: 600, color: '#047857', marginBottom: '0.35rem' }}>✓ Correct ({correctItems.length})</div>
                               {correctItems.length === 0 ? <div style={{ color: '#6b7280' }}>None</div> : (
-                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#065f46' }}>
-                                  {correctItems.map((text, i) => <li key={i}>{truncate(text, 60)}</li>)}
+                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#065f46', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                                  {correctItems.map((text, i) => (
+                                    <li key={i} style={{ marginBottom: '0.35rem' }}>{text}</li>
+                                  ))}
                                 </ul>
                               )}
                             </div>
-                            <div style={{ padding: '0.75rem', background: '#fef2f2', borderRadius: '0.5rem', border: '1px solid #fecaca' }}>
+                            <div style={{ padding: '0.75rem', background: '#fef2f2', borderRadius: '0.5rem', border: '1px solid #fecaca', minWidth: 0 }}>
                               <div style={{ fontWeight: 600, color: '#b91c1c', marginBottom: '0.35rem' }}>✗ Wrong ({wrongItems.length})</div>
                               {wrongItems.length === 0 ? <div style={{ color: '#6b7280' }}>None</div> : (
-                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#991b1b' }}>
-                                  {wrongItems.map((text, i) => <li key={i}>{truncate(text, 60)}</li>)}
+                                <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#991b1b', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                                  {wrongItems.map((text, i) => (
+                                    <li key={i} style={{ marginBottom: '0.35rem' }}>{text}</li>
+                                  ))}
                                 </ul>
                               )}
                             </div>

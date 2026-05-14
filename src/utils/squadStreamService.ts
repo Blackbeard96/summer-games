@@ -180,8 +180,8 @@ export async function checkInToSquad(
         const ppDelta = (newCount - memberMilestone) * 50;
 
         if (ppDelta > 0 && userDocs[memberId].exists) {
-          const currentPP = userDocs[memberId].data?.pp || 0;
-          userUpdates[memberId] = currentPP + ppDelta;
+          const currentPP = Number(userDocs[memberId].data?.pp) || 0;
+          userUpdates[memberId] = Math.floor(currentPP + ppDelta);
         }
 
         // Update milestone for this member

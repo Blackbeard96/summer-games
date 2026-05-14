@@ -40,6 +40,7 @@ import type { UniversalLawBoonEffects } from './universalLawBoons';
 import { getSkillEffectsSync } from './moveOverrides';
 import { mergeSkillEffectsIntoResolvedSkillAction } from './skillEffectEngine/resolverBridge';
 import { isSelfDirectedBattleMove } from './battleSkillTargetResolution';
+import { getSkillCooldownOrCost } from './skillCooldownCost';
 
 export interface ActorState {
   uid: string;
@@ -163,7 +164,7 @@ export async function resolveSkillAction(
     healing: 0,
     shieldBoost: 0,
     ppStolen: 0,
-    ppCost: skill.cost || 0,
+    ppCost: getSkillCooldownOrCost(skill),
     actorDelta: {},
     targetDelta: {},
     logMessages: [],

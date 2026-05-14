@@ -1,6 +1,7 @@
 import type { Move } from '../types/battle';
 import type { BattleSkillRuntimePolicy } from './battleModeSkillRules';
 import { getRemainingCooldown, type SkillCooldownsByCombatant } from './battleCooldownState';
+import { getSkillCooldownOrCost } from './skillCooldownCost';
 
 /** Set `REACT_APP_DEBUG_SKILL_COOLDOWNS=true` for verbose cooldown / PP trace logs. */
 export const DEBUG_SKILL_COOLDOWNS = process.env.REACT_APP_DEBUG_SKILL_COOLDOWNS === 'true';
@@ -79,7 +80,7 @@ export function getSkillAvailability(params: {
     const cost =
       typeof battleContext.liveEventFinalCost === 'number'
         ? battleContext.liveEventFinalCost
-        : Math.max(0, Math.floor(Number(skill.cost) || 0));
+        : Math.max(0, Math.floor(getSkillCooldownOrCost(skill)));
     const have = Math.max(0, Math.floor(Number(battleContext.participationPointsAvailable) || 0));
     if (cost > 0 && have < cost) {
       missingPP = cost - have;
@@ -92,7 +93,7 @@ export function getSkillAvailability(params: {
   logDebug({
     actorId: actor.id,
     skillId: skill.id,
-    baseCooldown: skill.cooldown,
+    baseCooldown: getSkillCooldownOrCost(skill),
     remainingCooldownBeforeUse: remainingCooldown,
     turnOwnerId: battleContext.turnOwnerId,
     battleMode: battleContext.battleModeLabel,
