@@ -121,7 +121,10 @@ import LiveEventEconomyHud from './liveEvent/LiveEventEconomyHud';
 import LiveEventBattleLogLine from './liveEvent/LiveEventBattleLogLine';
 import './liveEvent/flowState.css';
 import { setLiveEventMstMktOpen } from '../utils/liveEventMktService';
-import { hostReviveEliminatedPlayersInLiveEvent } from '../utils/liveEventRevive';
+import {
+  hostReviveEliminatedPlayersInLiveEvent,
+  isLiveEventPlayerEliminatedForRevive,
+} from '../utils/liveEventRevive';
 import { parseClassFlowSprint } from '../utils/liveEventSprintService';
 import type { ClassFlowSprintState } from '../types/season1';
 import type { Move as BattleMove } from '../types/battle';
@@ -424,6 +427,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [brInterQuestionSecondsLeft, setBrInterQuestionSecondsLeft] = useState<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
+  /** Prevents double-submit (e.g. rapid taps on auto-submit single-choice). */
+  const quizSubmitLockRef = useRef(false);
   const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
   const [quizResponseCount, setQuizResponseCount] = useState(0);
   const [showEliminatedQuizOverlay, setShowEliminatedQuizOverlay] = useState(false);
@@ -435,6 +440,25 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const wasCurrentPlayerEliminatedRef = useRef(false);
   /** When a quiz is active, players/host can swap between Quiz view and Battle Log view. Persist in sessionStorage so it survives remounts and toggling works reliably. */
   const [centerView, setCenterViewState] = useState<'quiz' | 'battleLog'>('battleLog');
+  /** Widen center quiz column by hiding left/right player sidebars (Quiz tab only). */
+  const [liveQuizExpanded, setLiveQuizExpanded] = useState(false);
+
+  useEffect(() => {
+    if (centerView !== 'quiz') setLiveQuizExpanded(false);
+  }, [centerView]);
+
+  useEffect(() => {
+    if (!quizSession) setLiveQuizExpanded(false);
+  }, [quizSession]);
+
+  useEffect(() => {
+    if (!liveQuizExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLiveQuizExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [liveQuizExpanded]);
 
   useEffect(() => {
     if (
@@ -1199,6 +1223,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   useEffect(() => {
     if (quizSession?.status === 'question_live' && quizSession.currentQuestionId) {
       setQuizAnswerSubmitted(false);
+      quizSubmitLockRef.current = false;
       setQuizMyResponse(null);
       setQuizSelectedIndices([]);
       const round = quizSession.quizRoundIndex ?? 1;
@@ -1744,7 +1769,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             isPlayer: true,
             speed: 50,
             movesEarned: player.movesEarned ?? 0,
-            eliminated: player.eliminated === true,
+            eliminated: isLiveEventPlayerEliminatedForRevive(player),
           };
         }),
     [sessionPlayers, currentUser?.uid, students, userProfiles, playerVaultData, vault]
@@ -2163,6 +2188,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   };
 
   const currentPlayer = sessionPlayers.find(p => p.userId === currentUser?.uid);
+  const currentPlayerEliminated = useMemo(
+    () => !!currentPlayer && isLiveEventPlayerEliminatedForRevive(currentPlayer),
+    [currentPlayer?.userId, currentPlayer?.eliminated, currentPlayer?.hp, currentPlayer?.shield]
+  );
 
   const [flowActivationVisible, setFlowActivationVisible] = useState(false);
   const flowNonceSyncRef = useRef<{ sessionId: string; uid: string; nonce: number } | null>(null);
@@ -2238,7 +2267,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       students.find((s) => s.id === uid)?.displayName ||
       'Unknown';
     return sessionPlayers
-      .filter((p) => p.eliminated)
+      .filter((p) => isLiveEventPlayerEliminatedForRevive(p))
       .map((p) => ({
         victimId: p.userId,
         victimName: p.displayName || 'Player',
@@ -2249,7 +2278,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   }, [quizSession, sessionPlayers, userProfiles, students]);
 
   useEffect(() => {
-    const isEliminatedNow = currentPlayer?.eliminated === true;
+    const isEliminatedNow = currentPlayerEliminated;
     const becameEliminated = isEliminatedNow && !wasCurrentPlayerEliminatedRef.current;
     wasCurrentPlayerEliminatedRef.current = isEliminatedNow;
 
@@ -2263,7 +2292,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       setShowEliminatedQuizOverlay(false);
       eliminationOverlayTimeoutRef.current = null;
     }, 1800);
-  }, [currentPlayer?.eliminated]);
+  }, [currentPlayerEliminated]);
 
   useEffect(() => {
     return () => {
@@ -2570,8 +2599,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const isPresentInPresenceService = playerPresence?.connected === true;
     const isPresentInActiveViewers = activeViewers.includes(student.id);
     const isPresent = isActiveInSession && (isPresentInPresenceService || isPresentInActiveViewers);
-    // Eliminated: from session flag or inferred when in session with 0 health and 0 shield
-    const isEliminated = player?.eliminated === true || (isActiveInSession && vaultData.vaultHealth === 0 && vaultData.shieldStrength === 0);
+    // Eliminated: session row (flag or 0 HP+0 shield) or display fallback when in session with 0/0 vault snapshot
+    const isEliminated =
+      isLiveEventPlayerEliminatedForRevive(player || {}) ||
+      (isActiveInSession && vaultData.vaultHealth === 0 && vaultData.shieldStrength === 0);
 
     const effectivePowerLevel =
       finitePowerLevel(player?.powerLevel) ?? finitePowerLevel(student.powerLevel);
@@ -2719,21 +2750,50 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           }
         }}
         style={{
-          background: isActiveInSession ? 'white' : '#f9fafb',
+          background: inFlowState
+            ? isActiveInSession
+              ? 'linear-gradient(168deg, #ecfeff 0%, #e0f2fe 42%, #f5f3ff 100%)'
+              : 'linear-gradient(168deg, #f0fdfa 0%, #ecfeff 55%, #f8fafc 100%)'
+            : isActiveInSession
+              ? 'white'
+              : '#f9fafb',
           borderRadius: '0.5rem',
           padding: '0.75rem',
           border: canPickThisLiveEventTarget
             ? '3px solid #fbbf24'
-            : (isCurrentPlayer ? '2px solid #3b82f6' : (isPresent ? '2px solid #10b981' : (isActiveInSession ? '2px solid #ef4444' : '1px solid #e5e7eb'))),
-          boxShadow: canPickThisLiveEventTarget
-            ? '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2)'
-            : (isCurrentPlayer ? '0 2px 8px rgba(59, 130, 246, 0.2)' : (isPresent ? '0 2px 8px rgba(16, 185, 129, 0.2)' : (isActiveInSession ? '0 2px 8px rgba(239, 68, 68, 0.2)' : '0 1px 3px rgba(0, 0, 0, 0.1)'))),
-          opacity: isActiveInSession ? 1 : (selectedMove ? 1 : 0.7), // Full opacity when move is selected
+            : inFlowState
+              ? isCurrentPlayer
+                ? '2px solid #0891b2'
+                : '2px solid #22d3ee'
+              : isCurrentPlayer
+                ? '2px solid #3b82f6'
+                : isPresent
+                  ? '2px solid #10b981'
+                  : isActiveInSession
+                    ? '2px solid #ef4444'
+                    : '1px solid #e5e7eb',
+          ...(canPickThisLiveEventTarget
+            ? {
+                boxShadow:
+                  '0 0 20px rgba(251, 191, 36, 0.8), 0 4px 12px rgba(0, 0, 0, 0.2)',
+              }
+            : !inFlowState
+              ? {
+                  boxShadow: isCurrentPlayer
+                    ? '0 2px 8px rgba(59, 130, 246, 0.2)'
+                    : isPresent
+                      ? '0 2px 8px rgba(16, 185, 129, 0.2)'
+                      : isActiveInSession
+                        ? '0 2px 8px rgba(239, 68, 68, 0.2)'
+                        : '0 1px 3px rgba(0, 0, 0, 0.1)',
+                }
+              : {}),
+          opacity: isActiveInSession ? 1 : selectedMove ? 1 : 0.7,
           position: 'relative',
           cursor: canPickThisLiveEventTarget ? 'pointer' : 'default',
           transform: canPickThisLiveEventTarget ? 'scale(1.05)' : 'scale(1)',
           transition: 'all 0.2s',
-          zIndex: canPickThisLiveEventTarget ? 1000 : 'auto'
+          zIndex: canPickThisLiveEventTarget ? 1000 : 'auto',
         }}
         onMouseEnter={(e) => {
           if (canPickThisLiveEventTarget) {
@@ -3399,15 +3459,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             (roomSessionStatus === 'live' || roomSessionStatus === 'active') && (
               <button
                 type="button"
-                disabled={!sessionPlayers.some((p) => p.eliminated === true)}
+                disabled={!sessionPlayers.some((p) => isLiveEventPlayerEliminatedForRevive(p))}
                 onClick={() => {
-                  const eliminated = sessionPlayers.filter((p) => p.eliminated === true);
+                  const eliminated = sessionPlayers.filter((p) => isLiveEventPlayerEliminatedForRevive(p));
                   setHostReviveHpPercent(50);
                   setHostReviveSelectedUserIds(eliminated.map((p) => p.userId));
                   setHostReviveModalOpen(true);
                 }}
                 title={
-                  sessionPlayers.some((p) => p.eliminated === true)
+                  sessionPlayers.some((p) => isLiveEventPlayerEliminatedForRevive(p))
                     ? 'Restore eliminated players to the battle (host)'
                     : 'No eliminated players right now'
                 }
@@ -3419,8 +3479,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   padding: '0.75rem 1.25rem',
                   fontSize: '1rem',
                   fontWeight: '600',
-                  cursor: sessionPlayers.some((p) => p.eliminated === true) ? 'pointer' : 'not-allowed',
-                  opacity: sessionPlayers.some((p) => p.eliminated === true) ? 1 : 0.55,
+                  cursor: sessionPlayers.some((p) => isLiveEventPlayerEliminatedForRevive(p)) ? 'pointer' : 'not-allowed',
+                  opacity: sessionPlayers.some((p) => isLiveEventPlayerEliminatedForRevive(p)) ? 1 : 0.55,
                 }}
               >
                 💚 Revive players
@@ -4407,8 +4467,19 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             </span>
           ) : null}
         </div>
-      <div style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 200px)', minHeight: '600px' }}>
-        {/* Left Side - Players (Scrollable) */}
+      {(() => {
+        const quizFocusLayout = Boolean(quizSession && centerView === 'quiz' && liveQuizExpanded);
+        return (
+      <div
+        style={{
+          display: 'flex',
+          gap: quizFocusLayout ? '0' : '1rem',
+          height: 'calc(100vh - 200px)',
+          minHeight: '600px',
+        }}
+      >
+        {/* Left Side - Players (Scrollable) — hidden when quiz is expanded */}
+        {!quizFocusLayout ? (
         <div style={{
           background: 'white',
           borderRadius: '0.75rem',
@@ -4455,6 +4526,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             ))}
           </div>
         </div>
+        ) : null}
 
         {/* Center - Quiz Mode or Battle Log + Action Buttons + BattleEngine */}
         <div style={{ 
@@ -4506,6 +4578,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 display: 'flex',
                 gap: '0.25rem',
                 flexShrink: 0,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                width: '100%',
                 position: 'sticky',
                 top: 0,
                 zIndex: 50,
@@ -4578,6 +4653,35 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     🛒 MKT
                   </button>
                 )}
+              {centerView === 'quiz' && (
+                <button
+                  type="button"
+                  onClick={() => setLiveQuizExpanded((prev) => !prev)}
+                  aria-pressed={liveQuizExpanded}
+                  title={
+                    liveQuizExpanded
+                      ? 'Show player columns on the sides (Esc)'
+                      : 'Hide side columns to make the quiz larger'
+                  }
+                  style={{
+                    marginLeft: 'auto',
+                    padding: '0.5rem 1rem',
+                    fontWeight: 700,
+                    borderRadius: '0.5rem',
+                    border: `2px solid ${liveQuizExpanded ? '#0d9488' : '#6366f1'}`,
+                    background: liveQuizExpanded
+                      ? 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)'
+                      : 'linear-gradient(135deg, #818cf8 0%, #6366f1 100%)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                    pointerEvents: 'auto',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {liveQuizExpanded ? '⇤ Show players' : '⇥ Expand quiz'}
+                </button>
+              )}
             </div>
           )}
           {quizSession && isBattleQuizMode(quizSession.gameMode) && (
@@ -4675,6 +4779,37 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const timeExpired = quizSession.questionEndsAt != null && Date.now() > quizSession.questionEndsAt;
                 const correctIndices = currentQ?.correctIndices ?? (currentQ?.correctIndex !== undefined ? [currentQ.correctIndex] : []);
                 const isBattle = isBattleQuizMode(quizSession.gameMode);
+                const isSingleSelect = correctIndices.length <= 1;
+
+                const submitSelected = async (selected: number[]) => {
+                  if (!currentUser || !currentQ || quizSubmitLockRef.current || quizAnswerSubmitted) return;
+                  quizSubmitLockRef.current = true;
+                  setQuizAnswerSubmitted(true);
+                  try {
+                    const res = await submitQuizResponse(
+                      sessionId,
+                      currentUser.uid,
+                      quizSession.currentQuestionId!,
+                      selected,
+                      quizSession.quizRoundIndex ?? 1
+                    );
+                    if (res.ok) {
+                      setQuizMyResponse({
+                        selectedIndices: selected,
+                        isCorrect: res.isCorrect === true,
+                        pointsAwarded: res.pointsAwarded ?? 0,
+                      });
+                    } else {
+                      setQuizAnswerSubmitted(false);
+                      quizSubmitLockRef.current = false;
+                      if (res.error) alert(res.error);
+                    }
+                  } catch (e) {
+                    setQuizAnswerSubmitted(false);
+                    quizSubmitLockRef.current = false;
+                    alert(e instanceof Error ? e.message : 'Submit failed');
+                  }
+                };
                 const shuffleOn =
                   (quizSession.gameMode === 'battle_royale' && quizSession.battleRoyaleConfig?.shuffleAnswers) ||
                   (quizSession.gameMode === 'team_battle_royale' && quizSession.teamBattleRoyaleConfig?.shuffleAnswers);
@@ -4687,7 +4822,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const myEnergy = quizSession.battleRoyaleState?.energy?.[currentUser?.uid ?? ''] ?? 0;
                 const myStrong = quizSession.battleRoyaleState?.strongUnlocked?.[currentUser?.uid ?? ''] ?? false;
                 const canBrCombat =
-                  isBattle && currentUser && !currentPlayer?.eliminated && !playerLiveEventSkillsLocked;
+                  isBattle && currentUser && !currentPlayerEliminated && !playerLiveEventSkillsLocked;
                 const runBrAction = async (action: BrQuickActionId) => {
                   if (playerLiveEventSkillsLocked) {
                     alert('The host has paused Fight — combat skills are locked until Fight is allowed again.');
@@ -4785,11 +4920,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       question={currentQ}
                       selectedIndices={quizSelectedIndices}
                       onSelect={(idx) => {
-                        if (quizAnswerSubmitted) return;
+                        if (quizAnswerSubmitted || timeExpired || quizSubmitLockRef.current) return;
                         const next = quizSelectedIndices.includes(idx)
                           ? quizSelectedIndices.filter((i) => i !== idx)
                           : [...quizSelectedIndices, idx];
                         setQuizSelectedIndices(next);
+                        if (isSingleSelect && next.length === 1) {
+                          void submitSelected(next);
+                        }
                       }}
                       disabled={quizAnswerSubmitted || timeExpired}
                       reveal={timeExpired || !!quizMyResponse}
@@ -4797,25 +4935,17 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       shuffle={!!shuffleOn}
                       shuffleKey={String(quizSession.quizRoundIndex ?? 0)}
                     />
-                    {!quizAnswerSubmitted && !timeExpired && (
+                    {isSingleSelect && !quizAnswerSubmitted && !timeExpired && !quizMyResponse ? (
+                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                        Single choice: tap an option to submit right away. (Select-all-that-apply still uses Submit.)
+                      </p>
+                    ) : null}
+                    {!quizAnswerSubmitted && !timeExpired && !isSingleSelect && (
                       <button
-                        onClick={async () => {
-                          if (!currentUser || !currentQ || quizAnswerSubmitted) return;
-                          const res = await submitQuizResponse(
-                            sessionId,
-                            currentUser.uid,
-                            quizSession.currentQuestionId!,
-                            quizSelectedIndices.length ? quizSelectedIndices : [0],
-                            quizSession.quizRoundIndex ?? 1
-                          );
-                          if (res.ok) {
-                            setQuizAnswerSubmitted(true);
-                            setQuizMyResponse({
-                              selectedIndices: quizSelectedIndices.length ? quizSelectedIndices : [0],
-                              isCorrect: res.isCorrect === true,
-                              pointsAwarded: res.pointsAwarded ?? 0,
-                            });
-                          } else if (res.error) alert(res.error);
+                        onClick={() => {
+                          if (!currentQ || quizAnswerSubmitted) return;
+                          const selected = quizSelectedIndices.length ? quizSelectedIndices : [0];
+                          void submitSelected(selected);
                         }}
                         disabled={quizSelectedIndices.length === 0}
                         style={{
@@ -4887,12 +5017,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             color: '#065f46',
                             fontWeight: 600,
                           }}>
-                            ⚔️ Spend PP on <strong>quick actions</strong> below or use <strong>Fight</strong> for full skills.
+                            ⚔️ Use <strong>Fight</strong> / <strong>Bag</strong> below, or <strong>Expand quiz</strong> for BR quick actions (PP).
                           </div>
                         )}
                       </div>
                     )}
-                    {canBrCombat && (
+                    {canBrCombat && liveQuizExpanded && (
                       <div style={{ marginTop: '1rem', padding: '1rem', background: '#0f172a', borderRadius: '0.75rem', color: '#e2e8f0' }}>
                         <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>BR quick actions (cost PP)</div>
                         <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.25rem' }}>Target</label>
@@ -4903,7 +5033,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         >
                           <option value="">Select player…</option>
                           {sessionPlayers
-                            .filter((p) => !p.eliminated || p.userId === currentUser?.uid)
+                            .filter(
+                              (p) =>
+                                !isLiveEventPlayerEliminatedForRevive(p) || p.userId === currentUser?.uid
+                            )
                             .map((p) => (
                               <option key={p.userId} value={p.userId}>
                                 {p.displayName}
@@ -5202,10 +5335,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               )}
             </div>
           )}
-          {/* Battle Log and Skills - show when no quiz or when Battle Log tab is selected */}
-          {(!quizSession || centerView === 'battleLog') && (
+          {/* Battle log + Fight/Bag/Vault: hidden while quiz is expanded on Quiz tab; BR quick actions show in the quiz panel instead */}
+          {(!quizSession ||
+            centerView === 'battleLog' ||
+            (!!quizSession &&
+              isBattleQuizMode(quizSession.gameMode) &&
+              centerView === 'quiz' &&
+              !liveQuizExpanded)) && (
           <>
-          {/* Battle Log */}
+          {(!quizSession || centerView === 'battleLog') && (
           <div style={{
             background: '#374151',
             borderRadius: '0.75rem',
@@ -5247,6 +5385,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               )}
             </div>
           </div>
+          )}
 
           {/* Action Buttons */}
           <div style={{
@@ -5282,7 +5421,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   alert('The host has paused Fight. Skills are locked until the host allows Fight again.');
                   return;
                 }
-                if (currentPlayer?.eliminated) {
+                if (currentPlayerEliminated) {
                   alert('You have been eliminated and cannot use skills.');
                   return;
                 }
@@ -5296,7 +5435,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               disabled={
                 !currentPlayer ||
                 (currentPlayer.movesEarned || 0) === 0 ||
-                currentPlayer.eliminated === true ||
+                currentPlayerEliminated ||
                 playerLiveEventSkillsLocked
               }
               style={{
@@ -5304,7 +5443,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 background:
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
-                  currentPlayer.eliminated !== true &&
+                  !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
                   ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
                   : '#9ca3af',
@@ -5317,7 +5456,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 cursor:
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayer.eliminated &&
+                  !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
                     ? 'pointer'
                     : 'not-allowed',
@@ -5325,7 +5464,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 boxShadow:
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayer.eliminated &&
+                  !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
                   ? '0 4px 12px rgba(239, 68, 68, 0.3)'
                   : 'none',
@@ -5334,7 +5473,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                     ? 0.5
                     : currentPlayer &&
                         (currentPlayer.movesEarned || 0) > 0 &&
-                        !currentPlayer.eliminated
+                        !currentPlayerEliminated
                       ? 1
                       : 0.6
               }}
@@ -5342,7 +5481,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 if (
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayer.eliminated &&
+                  !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
                 ) {
                   e.currentTarget.style.transform = 'scale(1.02)';
@@ -5353,7 +5492,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 if (
                   currentPlayer &&
                   (currentPlayer.movesEarned || 0) > 0 &&
-                  !currentPlayer.eliminated &&
+                  !currentPlayerEliminated &&
                   !playerLiveEventSkillsLocked
                 ) {
                   e.currentTarget.style.transform = 'scale(1)';
@@ -5363,7 +5502,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               title={
                 playerLiveEventSkillsLocked
                   ? 'Host paused Fight — skills locked'
-                  : currentPlayer?.eliminated
+                  : currentPlayerEliminated
                     ? 'Eliminated — you cannot use skills'
                     : currentPlayer && (currentPlayer.movesEarned || 0) === 0
                       ? 'No moves available. Earn Par. Pt. to make moves!'
@@ -5373,18 +5512,18 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               ⚔️ FIGHT{' '}
               {playerLiveEventSkillsLocked
                 ? '(Paused)'
-                : currentPlayer?.eliminated
+                : currentPlayerEliminated
                   ? '(Eliminated)'
                   : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
             <button
               onClick={() => {
-                if (playerLiveEventSkillsLocked && !currentPlayer?.eliminated) {
+                if (playerLiveEventSkillsLocked && !currentPlayerEliminated) {
                   alert('The host has paused Fight. Items are locked until the host allows Fight again.');
                   return;
                 }
                 // Eliminated players can still open the bag to use a Revive Potion on themselves.
-                if (currentPlayer?.eliminated) {
+                if (currentPlayerEliminated) {
                   setShowBagModal(true);
                   return;
                 }
@@ -5394,14 +5533,14 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               }}
               disabled={
                 !currentPlayer ||
-                (playerLiveEventSkillsLocked && !currentPlayer.eliminated) ||
-                ((currentPlayer.movesEarned || 0) === 0 && !currentPlayer.eliminated)
+                (playerLiveEventSkillsLocked && !currentPlayerEliminated) ||
+                ((currentPlayer.movesEarned || 0) === 0 && !currentPlayerEliminated)
               }
               style={{
                 width: '100%',
                 background:
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                     ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
                     : '#9ca3af',
@@ -5413,20 +5552,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 fontWeight: 'bold',
                 cursor:
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                     ? 'pointer'
                     : 'not-allowed',
                 transition: 'all 0.2s',
                 boxShadow:
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                     ? '0 4px 12px rgba(245, 158, 11, 0.3)'
                     : 'none',
                 opacity:
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                     ? 1
                     : 0.6
@@ -5434,7 +5573,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               onMouseEnter={(e) => {
                 if (
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                 ) {
                   e.currentTarget.style.transform = 'scale(1.02)';
@@ -5444,7 +5583,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               onMouseLeave={(e) => {
                 if (
                   currentPlayer &&
-                  (currentPlayer.eliminated === true ||
+                  (currentPlayerEliminated ||
                     (!playerLiveEventSkillsLocked && (currentPlayer.movesEarned || 0) > 0))
                 ) {
                   e.currentTarget.style.transform = 'scale(1)';
@@ -5452,9 +5591,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 }
               }}
               title={
-                playerLiveEventSkillsLocked && !currentPlayer?.eliminated
+                playerLiveEventSkillsLocked && !currentPlayerEliminated
                   ? 'Host paused Fight — bag locked'
-                  : currentPlayer?.eliminated
+                  : currentPlayerEliminated
                     ? 'Open your bag to use a Revive Potion on yourself (50% max HP)'
                     : currentPlayer && (currentPlayer.movesEarned || 0) === 0
                       ? 'No moves available. Earn Par. Pt. to use items!'
@@ -5462,7 +5601,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               }
             >
               🎒 BAG{' '}
-              {currentPlayer?.eliminated
+              {currentPlayerEliminated
                 ? '(Revive)'
                 : (!currentPlayer || (currentPlayer.movesEarned || 0) === 0) && '(No Moves)'}
             </button>
@@ -5604,7 +5743,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           </>
         </div>
 
-        {/* Right Side - Players (Scrollable) */}
+        {/* Right Side - Players (Scrollable) — hidden when quiz is expanded */}
+        {!quizFocusLayout ? (
         <div style={{
           background: 'white',
           borderRadius: '0.75rem',
@@ -5637,7 +5777,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             ))}
           </div>
         </div>
+        ) : null}
       </div>
+        );
+      })()}
       </>
 
 
@@ -5713,13 +5856,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 marginBottom: '1rem',
               }}
             >
-              {sessionPlayers.filter((p) => p.eliminated === true).length === 0 ? (
+              {sessionPlayers.filter((p) => isLiveEventPlayerEliminatedForRevive(p)).length === 0 ? (
                 <p style={{ margin: 0, fontSize: '0.875rem', color: '#94a3b8', textAlign: 'center', padding: '0.75rem' }}>
                   No eliminated players in this session.
                 </p>
               ) : (
                 sessionPlayers
-                  .filter((p) => p.eliminated === true)
+                  .filter((p) => isLiveEventPlayerEliminatedForRevive(p))
                   .map((p) => (
                     <label
                       key={p.userId}
@@ -5757,7 +5900,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 disabled={
                   hostReviveSubmitting ||
                   hostReviveSelectedUserIds.length === 0 ||
-                  !sessionPlayers.some((pl) => pl.eliminated === true)
+                  !hostReviveSelectedUserIds.some((id) => {
+                    const pl = sessionPlayers.find((p) => p.userId === id);
+                    return pl && isLiveEventPlayerEliminatedForRevive(pl);
+                  })
                 }
                 onClick={() => void runHostRevive('selected')}
                 style={{
@@ -5776,7 +5922,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </button>
               <button
                 type="button"
-                disabled={hostReviveSubmitting || !sessionPlayers.some((pl) => pl.eliminated === true)}
+                disabled={hostReviveSubmitting || !sessionPlayers.some((pl) => isLiveEventPlayerEliminatedForRevive(pl))}
                 onClick={() => void runHostRevive('all')}
                 style={{
                   padding: '0.65rem 1rem',

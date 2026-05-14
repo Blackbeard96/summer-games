@@ -107,6 +107,11 @@ export interface LiveQuizSession {
   questionIndex: number;       // 0-based current question
   questionOrder: string[];     // questionIds in order
   currentQuestionId: string | null;
+  /**
+   * Correct answer indices for `currentQuestionId`, denormalized when the host serves a question.
+   * Lets clients score submissions without loading the full training question bank (major latency win).
+   */
+  currentQuestionCorrectIndices?: number[];
   /** Increments each time a new question goes live; answers must match this round */
   quizRoundIndex?: number;
   questionStartedAt: number | null;  // server timestamp ms

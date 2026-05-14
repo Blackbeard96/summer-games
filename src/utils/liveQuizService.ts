@@ -17,6 +17,7 @@ import {
   serverTimestamp,
   increment,
   arrayUnion,
+  deleteField,
 } from 'firebase/firestore';
 import type { UpdateData, DocumentData } from 'firebase/firestore';
 import type {
@@ -40,8 +41,30 @@ import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsServi
 import { computeDamageAfterShield } from './liveEventCombatMath';
 import { grantArtifactToPlayer, getArtifactDetails } from './artifactCompensation';
 import { liveEventAwardDebug, truncateId } from './liveEventDebugLogging';
+import type { TrainingQuestion } from '../types/trainingGrounds';
 
 const DEBUG = process.env.REACT_APP_DEBUG_LIVE_QUIZ === 'true';
+
+function correctIndicesFromQuestion(q: TrainingQuestion | undefined): number[] {
+  if (!q) return [];
+  return q.correctIndices ?? (q.correctIndex !== undefined ? [q.correctIndex] : []);
+}
+
+/** One shared in-flight load per quizSetId — many students submit during the same question. */
+const liveQuizQuestionsLoadPromises = new Map<string, Promise<TrainingQuestion[]>>();
+
+function getQuestionsCachedForLiveQuiz(quizId: string): Promise<TrainingQuestion[]> {
+  let p = liveQuizQuestionsLoadPromises.get(quizId);
+  if (!p) {
+    p = getQuestions(quizId);
+    liveQuizQuestionsLoadPromises.set(quizId, p);
+  }
+  return p;
+}
+
+function clearLiveQuizQuestionCache(quizId: string) {
+  liveQuizQuestionsLoadPromises.delete(quizId);
+}
 
 function log(...args: unknown[]) {
   if (DEBUG) console.log('[LiveQuiz]', ...args);
@@ -205,11 +228,12 @@ export async function startQuizSession(
   options?: StartQuizSessionOptions
 ): Promise<{ ok: boolean; error?: string }> {
   try {
+    clearLiveQuizQuestionCache(quizId);
     const quiz = await getQuizSet(quizId);
     if (!quiz) {
       return { ok: false, error: 'Quiz not found' };
     }
-    const questions = await getQuestions(quizId);
+    const questions = await getQuestionsCachedForLiveQuiz(quizId);
     if (questions.length === 0) {
       return { ok: false, error: 'Quiz has no questions' };
     }
@@ -521,27 +545,35 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
 
 /** Launch first question (host). */
 export async function launchFirstQuestion(sessionId: string, hostUid: string): Promise<{ ok: boolean; error?: string }> {
+  const pre = await getDoc(sessionRef(sessionId));
+  if (!pre.exists()) return { ok: false, error: 'No quiz session' };
+  const preSession = pre.data() as LiveQuizSession;
+  if (preSession.hostUid !== hostUid) return { ok: false, error: 'Only host can start' };
+  if (preSession.questionOrder.length === 0) return { ok: false, error: 'No questions' };
+  const bank = await getQuestionsCachedForLiveQuiz(preSession.quizId);
+
   return runTransaction(db, async (tx) => {
     const snap = await tx.get(sessionRef(sessionId));
     if (!snap.exists()) return { ok: false, error: 'No quiz session' };
     const session = snap.data() as LiveQuizSession;
     if (session.hostUid !== hostUid) return { ok: false, error: 'Only host can start' };
     if (session.questionOrder.length === 0) return { ok: false, error: 'No questions' };
-
-    const questionId = session.questionOrder[0];
+    const liveQuestionId = session.questionOrder[0];
+    const correctIndices = correctIndicesFromQuestion(bank.find((q) => q.id === liveQuestionId));
     const now = Date.now();
     const endsAt = now + session.timeLimitSeconds * 1000;
 
     tx.update(sessionRef(sessionId), {
       status: 'question_live',
       questionIndex: 0,
-      currentQuestionId: questionId,
+      currentQuestionId: liveQuestionId,
       quizRoundIndex: 1,
       questionStartedAt: now,
       questionEndsAt: endsAt,
+      currentQuestionCorrectIndices: correctIndices,
       updatedAt: serverTimestamp(),
     });
-    log('question served', { sessionId, questionId, round: 1 });
+    log('question served', { sessionId, questionId: liveQuestionId, round: 1 });
     return { ok: true };
   });
 }
@@ -557,6 +589,11 @@ export async function advanceQuiz(
     const r = d.data() as LiveQuizResponse;
     responsesForCurrentQuestion.push({ uid: d.id, data: r });
   });
+
+  const quizBootstrap = await getDoc(sessionRef(sessionId));
+  if (!quizBootstrap.exists()) return { ok: false, error: 'No quiz session' };
+  const questionBank = await getQuestionsCachedForLiveQuiz((quizBootstrap.data() as LiveQuizSession).quizId);
+  const questionById = new Map(questionBank.map((q) => [q.id, q]));
 
   return runTransaction(db, async (tx) => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
@@ -670,6 +707,7 @@ export async function advanceQuiz(
         currentQuestionId: null,
         questionStartedAt: null,
         questionEndsAt: null,
+        currentQuestionCorrectIndices: deleteField(),
         battleEndReason: mode === 'team_battle_royale' ? 'team_elimination' : 'survivor_threshold',
       });
       log('Battle quiz completed (threshold)', { sessionId, mode });
@@ -696,6 +734,7 @@ export async function advanceQuiz(
           currentQuestionId: null,
           questionStartedAt: null,
           questionEndsAt: null,
+          currentQuestionCorrectIndices: deleteField(),
           ...(battleMode ? { battleEndReason: 'manual_complete' as const } : {}),
         });
         log('Quiz completed', { sessionId });
@@ -706,6 +745,7 @@ export async function advanceQuiz(
     }
 
     const nextQuestionId = nextQuestionOrder[nextQuestionIndex];
+    const nextCorrectIndices = correctIndicesFromQuestion(questionById.get(nextQuestionId));
     const now = Date.now();
     const endsAt = now + session.timeLimitSeconds * 1000;
     const nextRound = activeRound + 1;
@@ -716,6 +756,7 @@ export async function advanceQuiz(
       questionIndex: nextQuestionIndex,
       questionOrder: nextQuestionOrder,
       currentQuestionId: nextQuestionId,
+      currentQuestionCorrectIndices: nextCorrectIndices,
       quizRoundIndex: nextRound,
       questionStartedAt: now,
       questionEndsAt: endsAt,
@@ -758,6 +799,100 @@ type SubmitQuizTxResult = {
   gameMode?: LiveQuizGameMode;
 };
 
+/** Runs after the answer doc is committed — was blocking the client until these finished. */
+async function submitQuizResponseFollowUp(
+  sessionId: string,
+  uid: string,
+  result: SubmitQuizTxResult
+): Promise<void> {
+  if (!result.ok) return;
+  if (!result.isCorrect) {
+    try {
+      const roomSnap = await getDoc(roomRef(sessionId));
+      let displayName: string | undefined;
+      if (roomSnap.exists()) {
+        const players = (roomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>;
+        displayName = players.find((p) => p.userId === uid)?.displayName;
+      }
+      await breakParticipationStreak(sessionId, uid, displayName);
+    } catch (e) {
+      log('breakParticipationStreak failed', e);
+    }
+    return;
+  }
+  const mode = result.gameMode ?? 'regular';
+  const isBattle = isBattleQuizMode(mode);
+  const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : 1;
+
+  const rref = roomRef(sessionId);
+  const qref = sessionRef(sessionId);
+  const firstRoomSnap = await getDoc(rref);
+  const displayName = firstRoomSnap.exists()
+    ? ((firstRoomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>).find(
+        (p) => p.userId === uid
+      )?.displayName
+    : undefined;
+
+  await trackParticipation(sessionId, uid, ppDelta, { playerDisplayName: displayName });
+
+  const [roomAfter, qSnap] = await Promise.all([getDoc(rref), getDoc(qref)]);
+
+  await Promise.all([
+    (async () => {
+      try {
+        const energy =
+          isBattle && qSnap.exists()
+            ? (qSnap.data() as LiveQuizSession).battleRoyaleState?.energy?.[uid]
+            : undefined;
+        if (roomAfter.exists()) {
+          const data = roomAfter.data();
+          const players: Array<{
+            userId: string;
+            participationCount?: number;
+            movesEarned?: number;
+            brEnergy?: number;
+            [k: string]: unknown;
+          }> = data?.players ?? [];
+          const idx = players.findIndex((p) => p.userId === uid);
+          if (idx >= 0) {
+            const p = players[idx];
+            const updatedPlayers = [...players];
+            updatedPlayers[idx] = {
+              ...p,
+              participationCount: (p.participationCount ?? 0) + ppDelta,
+              movesEarned: (p.movesEarned ?? 0) + ppDelta,
+              ...(typeof energy === 'number' ? { brEnergy: energy } : {}),
+            };
+            await updateDoc(rref, {
+              players: updatedPlayers,
+              updatedAt: serverTimestamp(),
+            });
+            log('Session player PP from quiz', { sessionId, uid, ppDelta, isBattle });
+          }
+        }
+      } catch (err) {
+        log('Failed to update session player participation for quiz correct', err);
+      }
+    })(),
+    (async () => {
+      try {
+        const sess = qSnap.exists() ? (qSnap.data() as LiveQuizSession) : null;
+        const end = sess?.questionEndsAt ?? Date.now();
+        const start = sess?.questionStartedAt ?? Date.now();
+        const span = Math.max(1, end - start);
+        const speedRatio = 1 - Math.min(1, Math.max(0, (Date.now() - start) / span));
+        await awardPowerXpForLiveQuizCorrectAnswer(sessionId, uid, {
+          gameMode: mode,
+          pointsAwarded: result.pointsAwarded ?? 0,
+          speedRatio,
+        });
+      } catch (e) {
+        log('Power XP drip (quiz) skipped', e);
+      }
+    })(),
+  ]);
+}
+
 /** Submit answer (player). First answer locks; late answers rejected. Pass quizRoundIndex from the live session doc. */
 export async function submitQuizResponse(
   sessionId: string,
@@ -769,14 +904,17 @@ export async function submitQuizResponse(
   const preSnap = await getDoc(sessionRef(sessionId));
   if (!preSnap.exists()) return { ok: false, error: 'No quiz session' };
   const preSession = preSnap.data() as LiveQuizSession;
-  const quizQuestions = await getQuestions(preSession.quizId);
-  const canonicalQuestion = quizQuestions.find((q) => q.id === questionId);
-  if (!canonicalQuestion) return { ok: false, error: 'Question not found' };
-  const authoritativeCorrectIndices = canonicalQuestion.correctIndices ?? (
-    canonicalQuestion.correctIndex !== undefined ? [canonicalQuestion.correctIndex] : []
-  );
 
-  return runTransaction(db, async (tx): Promise<SubmitQuizTxResult> => {
+  /** Older sessions omit this field — load bank once (cached per quizId). */
+  let legacyCorrectIndices: number[] | null = null;
+  if (preSession.currentQuestionCorrectIndices === undefined) {
+    const bank = await getQuestionsCachedForLiveQuiz(preSession.quizId);
+    const canonical = bank.find((q) => q.id === questionId);
+    if (!canonical) return { ok: false, error: 'Question not found' };
+    legacyCorrectIndices = correctIndicesFromQuestion(canonical);
+  }
+
+  const result = await runTransaction(db, async (tx): Promise<SubmitQuizTxResult> => {
     const sessionSnap = await tx.get(sessionRef(sessionId));
     const roomSnap = await tx.get(roomRef(sessionId));
     if (!sessionSnap.exists()) return { ok: false, error: 'No quiz session' };
@@ -812,6 +950,11 @@ export async function submitQuizResponse(
         if (er === activeRound) return { ok: false, error: 'Already answered' };
       }
     }
+
+    const authoritativeCorrectIndices =
+      session.currentQuestionCorrectIndices !== undefined
+        ? session.currentQuestionCorrectIndices
+        : legacyCorrectIndices!;
 
     const correctSet = new Set(authoritativeCorrectIndices);
     const selectedSet = new Set(selectedIndices);
@@ -875,92 +1018,21 @@ export async function submitQuizResponse(
       mode,
     });
     return { ok: true, pointsAwarded, isCorrect: allCorrect, gameMode: mode };
-  }).then(async (result) => {
-    if (!result.ok) return result;
-    if (!result.isCorrect) {
-      try {
-        const rref = roomRef(sessionId);
-        const roomSnap = await getDoc(rref);
-        let displayName: string | undefined;
-        if (roomSnap.exists()) {
-          const players = (roomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>;
-          displayName = players.find((p) => p.userId === uid)?.displayName;
-        }
-        await breakParticipationStreak(sessionId, uid, displayName);
-      } catch (e) {
-        log('breakParticipationStreak failed', e);
-      }
-      return result;
-    }
-    const mode = result.gameMode ?? 'regular';
-    const isBattle = isBattleQuizMode(mode);
-    const ppDelta = isBattle ? (result.pointsAwarded ?? 0) : 1;
-    let displayName: string | undefined;
-    try {
-      const rref = roomRef(sessionId);
-      const roomSnap = await getDoc(rref);
-      if (roomSnap.exists()) {
-        const players = (roomSnap.data()?.players || []) as Array<{ userId: string; displayName?: string }>;
-        displayName = players.find((p) => p.userId === uid)?.displayName;
-      }
-    } catch {
-      /* ignore */
-    }
-    await trackParticipation(sessionId, uid, ppDelta, { playerDisplayName: displayName });
-    try {
-      const rref = roomRef(sessionId);
-      const roomSnap = await getDoc(rref);
-      const qSnap = await getDoc(sessionRef(sessionId));
-      const energy =
-        isBattle && qSnap.exists()
-          ? (qSnap.data() as LiveQuizSession).battleRoyaleState?.energy?.[uid]
-          : undefined;
-      if (roomSnap.exists()) {
-        const data = roomSnap.data();
-        const players: Array<{
-          userId: string;
-          participationCount?: number;
-          movesEarned?: number;
-          brEnergy?: number;
-          [k: string]: unknown;
-        }> = data?.players ?? [];
-        const idx = players.findIndex((p) => p.userId === uid);
-        if (idx >= 0) {
-          const p = players[idx];
-          const updatedPlayers = [...players];
-          updatedPlayers[idx] = {
-            ...p,
-            participationCount: (p.participationCount ?? 0) + ppDelta,
-            movesEarned: (p.movesEarned ?? 0) + ppDelta,
-            ...(typeof energy === 'number' ? { brEnergy: energy } : {}),
-          };
-          await updateDoc(rref, {
-            players: updatedPlayers,
-            updatedAt: serverTimestamp(),
-          });
-          log('Session player PP from quiz', { sessionId, uid, ppDelta, isBattle });
-        }
-      }
-    } catch (err) {
-      log('Failed to update session player participation for quiz correct', err);
-    }
-    try {
-      const qSnap = await getDoc(sessionRef(sessionId));
-      const sess = qSnap.exists() ? qSnap.data() : null;
-      const end = sess?.questionEndsAt ?? Date.now();
-      const start = sess?.questionStartedAt ?? Date.now();
-      const span = Math.max(1, end - start);
-      const speedRatio = 1 - Math.min(1, Math.max(0, (Date.now() - start) / span));
-      await awardPowerXpForLiveQuizCorrectAnswer(sessionId, uid, {
-        gameMode: mode,
-        pointsAwarded: result.pointsAwarded ?? 0,
-        speedRatio,
-      });
-    } catch (e) {
-      log('Power XP drip (quiz) skipped', e);
-    }
-    return result;
   });
+
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  void submitQuizResponseFollowUp(sessionId, uid, result).catch((e) => {
+    log('submitQuizResponse follow-up failed', e);
+  });
+
+  return {
+    ok: true,
+    pointsAwarded: result.pointsAwarded,
+    isCorrect: result.isCorrect,
+  };
 }
 
 /** Get current response for a player (for their own display). */

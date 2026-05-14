@@ -5,6 +5,7 @@ import {
   purchaseLiveEventMstMktItem,
   type LiveEventMstRuntimeItem,
 } from '../utils/liveEventMktService';
+import { isLiveEventPlayerEliminatedForRevive } from '../utils/liveEventRevive';
 import { resolveConsumableEffectForItem } from '../utils/marketplaceConsumableUtils';
 import { previewConsumableEffectSentence } from '../types/consumableEffects';
 
@@ -30,7 +31,7 @@ function itemDisabled(item: LiveEventMstRuntimeItem, player: SessionPlayer | nul
   if (pp < price) return `Need ${price} PP (you have ${pp})`;
   const eff = resolveConsumableEffectForItem(item);
   if (!eff) return 'Invalid item';
-  const eliminated = player.eliminated === true;
+  const eliminated = isLiveEventPlayerEliminatedForRevive(player);
   if (eff.effectType === 'revive_eliminated_self') {
     return null;
   }
@@ -79,9 +80,9 @@ const LiveEventMstMktModal: React.FC<LiveEventMstMktModalProps> = ({
   if (!isOpen) return null;
 
   const pp = currentPlayer?.powerPoints ?? 0;
-  const buyerEliminated = currentPlayer?.eliminated === true;
+  const buyerEliminated = currentPlayer ? isLiveEventPlayerEliminatedForRevive(currentPlayer) : false;
   const eliminatedOthers = sessionPlayers.filter(
-    (p) => p.userId !== currentUserId && p.eliminated === true
+    (p) => p.userId !== currentUserId && isLiveEventPlayerEliminatedForRevive(p)
   );
 
   const buy = async (itemId: string) => {

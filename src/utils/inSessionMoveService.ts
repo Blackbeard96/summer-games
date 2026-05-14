@@ -29,6 +29,7 @@ import {
   skillUseDebug,
   truncateId,
 } from './liveEventDebugLogging';
+import { isLiveEventPlayerEliminatedForRevive } from './liveEventRevive';
 
 const DEBUG_IN_SESSION_MOVES = process.env.REACT_APP_DEBUG_IN_SESSION_MOVES === 'true' || 
                                  process.env.REACT_APP_DEBUG === 'true';
@@ -280,8 +281,8 @@ export async function applyInSessionMove(params: ApplyMoveParams): Promise<InSes
       // Log what we read (after variables are declared)
       console.log('📖 [applyInSessionMove] Read from Firestore | Target HP:', target.hp, '| Shield:', target.shield, '| Actor PP:', actor.powerPoints);
 
-      // CRITICAL: Prevent eliminated players from acting
-      if (actor.eliminated) {
+      // CRITICAL: Prevent eliminated players from acting (flag or 0 HP+0 shield — same as revive UI)
+      if (isLiveEventPlayerEliminatedForRevive(actor)) {
         throw new Error(`Actor ${actorName} is eliminated and cannot perform actions`);
       }
 

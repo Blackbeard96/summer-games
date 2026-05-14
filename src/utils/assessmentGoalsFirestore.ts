@@ -558,6 +558,28 @@ export async function createPPLedgerEntry(
   return newEntryRef.id;
 }
 
+/** MST Civic Economy — weekly tax, job pay, shutdown (admin-triggered). */
+export async function createPPLedgerEntryCivic(
+  studentId: string,
+  amount: number,
+  notes: string,
+  sourceId: string
+): Promise<string> {
+  const ledgerRef = collection(db, 'ppLedger');
+  const newEntryRef = doc(ledgerRef);
+  const entry: PPLedgerEntry = {
+    id: newEntryRef.id,
+    studentId,
+    sourceType: 'civicEconomy',
+    sourceId,
+    amount,
+    createdAt: Timestamp.now(),
+    notes,
+  };
+  await setDoc(newEntryRef, entry);
+  return newEntryRef.id;
+}
+
 /**
  * Gets PP ledger entries for a student.
  */

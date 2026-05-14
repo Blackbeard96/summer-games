@@ -84,6 +84,15 @@ export async function grantChallengeRewards(
   });
 
   try {
+    const { isCivicShutdownActive } = await import('./mstCivicEconomyGuards');
+    if (await isCivicShutdownActive(userId)) {
+      return {
+        success: false,
+        alreadyClaimed: false,
+        rewardsGranted: { xp: 0, pp: 0, artifacts: [], truthMetal: 0, abilities: [] },
+        error: 'Civic shutdown is active — you cannot earn challenge rewards until the timer ends.',
+      };
+    }
     // Parse rewards - filter to only process supported reward types
     const supportedRewards = rewards.filter(r => 
       r.type === 'xp' || 

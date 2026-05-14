@@ -549,12 +549,12 @@ service cloud.firestore {
         // Student can read their own entries
         request.auth.uid == resource.data.studentId
       );
-      // Only system (via Cloud Functions or admin) can create ledger entries
-      // For now, allow admins to create (will be restricted to Cloud Functions later)
+      // Civic economy + other tools: allow app admins (any email) and live-event / assessment staff.
       allow create: if request.auth != null && 
-        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net'] ||
+        (request.auth.token.email in ['edm21179@gmail.com', 'eddymosley@compscihigh.org', 'admin@mstgames.net', 'eddymosley9@gmail.com'] ||
          request.auth.token.email.matches('.*@mstgames\\.net$') ||
-         request.auth.token.email.matches('.*@compscihigh\\.org$'));
+         request.auth.token.email.matches('.*@compscihigh\\.org$') ||
+         isAppAdminUser());
       // No updates or deletes allowed (ledger is append-only)
       allow update, delete: if false;
     }
@@ -1245,6 +1245,29 @@ service cloud.firestore {
       );
       allow create, update: if productivityQuizWritable();
       allow delete: if isProductivityAdmin();
+    }
+
+    // --- MST Civic Economy (class/staff tooling; align with assessment dashboard + live-event staff) ---
+    match /mstCivicTaxSettings/{docId} {
+      // Students read schedule + base rate for profile countdown; staff configure.
+      allow read: if request.auth != null;
+      allow write: if isAssessmentDashboardStaff();
+    }
+    match /mstCivicRoleAssignments/{id} {
+      allow read, write: if isAssessmentDashboardStaff();
+    }
+    match /mstCivicTaxLedger/{id} {
+      allow read: if isAssessmentDashboardStaff() || (
+        request.auth != null && resource.data.studentId == request.auth.uid
+      );
+      allow write: if isAssessmentDashboardStaff();
+    }
+    // Mirrors permissive vault siege writes so an attacker client can clear bounty + set shutdown on target.
+    match /mstCivicBounties/{userId} {
+      allow read, write: if request.auth != null;
+    }
+    match /mstCivicPlayerState/{userId} {
+      allow read, write: if request.auth != null;
     }
     
     // Default rule - deny all other access

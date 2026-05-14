@@ -17,6 +17,7 @@ import {
   where,
   orderBy,
   limit,
+  Timestamp,
 } from 'firebase/firestore';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { tsMs } from '../utils/productivityTracking';
@@ -51,6 +52,27 @@ import {
   artifactRequiresUxpStyleApproval,
   markUserArtifactPendingStaffApproval,
 } from '../utils/artifactsRequiringStaffApproval';
+import type { MstCivicPlayerState } from '../types/mstCivicEconomy';
+import {
+  getPlayerState,
+  getTaxSettings,
+  nextTaxCollectionMs,
+  refreshShutdownIfExpired,
+} from '../utils/mstCivicEconomyService';
+
+function formatCivicTaxCountdown(targetMs: number, nowMs: number): string {
+  const ms = Math.max(0, targetMs - nowMs);
+  if (ms < 1000) return 'Due now';
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
 
 // Import marketplace items to match legacy items
 const marketplaceItems = [
@@ -209,6 +231,9 @@ const Profile = () => {
   const [productivityActivityLoading, setProductivityActivityLoading] = useState(false);
   const [recentSprintActivity, setRecentSprintActivity] = useState<SprintActivityLog[]>([]);
   const [recentLiveEventQuizActivity, setRecentLiveEventQuizActivity] = useState<QuizActivityLog[]>([]);
+  const [civicState, setCivicState] = useState<MstCivicPlayerState | null | undefined>(undefined);
+  const [profileTaxPreview, setProfileTaxPreview] = useState<{ nextMs: number; owedPp: number } | null>(null);
+  const [, setTaxCountdownTick] = useState(0);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -483,6 +508,56 @@ const Profile = () => {
     );
     return () => unsub();
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setCivicState(undefined);
+      setProfileTaxPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const settings = await getTaxSettings();
+        await refreshShutdownIfExpired(currentUser.uid);
+        const s = await getPlayerState(currentUser.uid);
+        if (!cancelled) setCivicState(s);
+        const nextFromState =
+          s?.nextTaxDate && typeof s.nextTaxDate === 'number' && s.nextTaxDate > Date.now()
+            ? s.nextTaxDate
+            : null;
+        const nextMs = nextFromState ?? nextTaxCollectionMs(settings, Date.now());
+        const disc = Math.min(100, Math.max(0, Math.floor(s?.taxDiscountPercent ?? 0)));
+        const base = Math.max(0, Math.floor(settings.baseWeeklyTaxPp || 0));
+        const owedPp = Math.max(0, Math.floor((base * (100 - disc)) / 100));
+        if (!cancelled) setProfileTaxPreview({ nextMs, owedPp });
+      } catch {
+        if (!cancelled) {
+          setCivicState(null);
+          try {
+            const settings = await getTaxSettings();
+            const nextMs = nextTaxCollectionMs(settings, Date.now());
+            const owedPp = Math.max(0, Math.floor(settings.baseWeeklyTaxPp || 0));
+            if (!cancelled) setProfileTaxPreview({ nextMs, owedPp });
+          } catch {
+            if (!cancelled) setProfileTaxPreview(null);
+          }
+        }
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !profileTaxPreview) return;
+    const id = window.setInterval(() => setTaxCountdownTick((c) => c + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [currentUser, profileTaxPreview?.nextMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1663,6 +1738,117 @@ const Profile = () => {
               )}
             </div>
           )}
+          {currentUser && (
+            <div
+              style={{
+                marginTop: '1.5rem',
+                width: '100%',
+                maxWidth: '380px',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 45%, #f1f5f9 100%)',
+                borderRadius: '0.75rem',
+                padding: '1rem 1.25rem',
+                border: '1px solid #94a3b8',
+                boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
+              }}
+            >
+              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+                Civic Status
+              </h3>
+              {civicState === undefined ? (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>Loading civic status…</p>
+              ) : civicState === null ? (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>
+                  No civic economy record yet. After weekly tax runs, your job, tax, and seat status appear here.
+                </p>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '0.45rem',
+                      fontSize: '0.82rem',
+                      color: '#334155',
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job role: </span>
+                      {civicState.jobRole
+                        ? civicState.jobRole.replace(/_/g, ' ')
+                        : '—'}
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job pay: </span>
+                      {civicState.jobPayRatePp ?? 0} PP
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax discount: </span>
+                      {civicState.taxDiscountPercent ?? 0}%
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Weekly tax (owed): </span>
+                      {civicState.weeklyTaxOwed ?? 0} PP
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax status: </span>
+                      <strong>
+                        {civicState.taxStatus === 'paid'
+                          ? 'Paid'
+                          : civicState.taxStatus === 'due_soon'
+                            ? 'Due Soon'
+                            : civicState.taxStatus === 'unpaid'
+                              ? 'Unpaid'
+                              : civicState.taxStatus === 'defaulted'
+                                ? 'Defaulted'
+                                : civicState.taxStatus === 'shutdown'
+                                  ? 'Shut Down'
+                                  : civicState.taxStatus}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Next tax: </span>
+                      {typeof civicState.nextTaxDate === 'number' && civicState.nextTaxDate > 0
+                        ? new Date(civicState.nextTaxDate).toLocaleString()
+                        : '—'}
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Seat freedom: </span>
+                      {civicState.seatFreedom === 'active' ? 'Active' : 'Restricted'}
+                    </div>
+                    {civicState.taxStatus === 'shutdown' &&
+                    civicState.shutdownEndsAt &&
+                    typeof (civicState.shutdownEndsAt as Timestamp).toMillis === 'function' ? (
+                      <div style={{ color: '#b45309', fontWeight: 700 }}>
+                        Shutdown ends:{' '}
+                        {new Date((civicState.shutdownEndsAt as Timestamp).toMillis()).toLocaleString()}
+                        {' · '}
+                        {Math.max(
+                          0,
+                          Math.ceil(
+                            ((civicState.shutdownEndsAt as Timestamp).toMillis() - Date.now()) / 60000
+                          )
+                        )}
+                        m left
+                      </div>
+                    ) : null}
+                  </div>
+                  {civicState.seatFreedom === 'restricted' &&
+                  (civicState.taxStatus === 'unpaid' || civicState.taxStatus === 'defaulted') ? (
+                    <p
+                      style={{
+                        margin: '0.75rem 0 0',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        color: '#991b1b',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      Seat Choice Restricted — Admin Chooses Seat.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Column - Profile Settings or Skill Tree Settings */}
@@ -2220,13 +2406,25 @@ const Profile = () => {
                 )}
             {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
-              <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div
+                style={{
+                  backgroundColor: '#f3f4f6',
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  textAlign: 'center',
+                }}
+              >
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{userData?.xp || 0}</div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Total XP</div>
-              </div>
-              <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{level}</div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Level</div>
+                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>Total XP</div>
+                <div
+                  style={{
+                    borderTop: '1px solid #e5e7eb',
+                    paddingTop: '0.75rem',
+                  }}
+                >
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{level}</div>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Level</div>
+                </div>
               </div>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
@@ -2246,7 +2444,41 @@ const Profile = () => {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>Power Points</div>
+                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.35rem' }}>Power Points</div>
+                {profileTaxPreview ? (
+                  <div
+                    style={{
+                      marginBottom: '0.65rem',
+                      padding: '0.5rem 0.55rem',
+                      borderRadius: '0.375rem',
+                      background: 'linear-gradient(135deg, #f0fdfa 0%, #ecfeff 100%)',
+                      border: '1px solid #99f6e4',
+                      fontSize: '0.72rem',
+                      lineHeight: 1.45,
+                      color: '#0f766e',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, letterSpacing: '0.02em' }}>
+                      Next civic tax in{' '}
+                      <span style={{ color: '#115e59' }}>
+                        {formatCivicTaxCountdown(profileTaxPreview.nextMs, Date.now())}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: '0.25rem', color: '#134e4a' }}>
+                      Est. deduction: <strong>{profileTaxPreview.owedPp} PP</strong>
+                      {civicState && typeof civicState.taxDiscountPercent === 'number' && civicState.taxDiscountPercent > 0 ? (
+                        <span style={{ fontWeight: 500, color: '#0d9488' }}>
+                          {' '}
+                          (after {civicState.taxDiscountPercent}% role discount)
+                        </span>
+                      ) : null}
+                      <span style={{ display: 'block', fontWeight: 500, color: '#5eead4', marginTop: '0.2rem' }}>
+                        Taken from your vault; won’t drop below 0 PP.
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
                 {/* Want more PP? Button */}
                 <button
                   type="button"
@@ -2287,6 +2519,59 @@ const Profile = () => {
               }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#ffffff' }}>{Math.floor(userData?.truthMetal || 0)}</div>
                 <div style={{ fontSize: '0.875rem', color: '#e5e7eb', fontWeight: '500' }}>Truth Metal Shards</div>
+                <div
+                  style={{
+                    marginTop: '0.85rem',
+                    paddingTop: '0.75rem',
+                    borderTop: '1px solid rgba(255,255,255,0.2)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      color: '#d1d5db',
+                      marginBottom: '0.45rem',
+                    }}
+                  >
+                    Earn more shards
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {[
+                      { label: 'Journey — story & chapter rewards', path: '/chapters' },
+                      { label: 'Daily challenges — Battle power card · Daily tab', path: '/battle' },
+                      { label: 'Battle Pass — seasonal track', path: '/battle-pass' },
+                      { label: 'Island Raid — run rewards', path: '/island-raid' },
+                    ].map((row) => (
+                      <button
+                        key={row.path}
+                        type="button"
+                        onClick={() => navigate(row.path)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '0.35rem 0',
+                          margin: 0,
+                          border: 'none',
+                          background: 'transparent',
+                          color: '#e0f2fe',
+                          fontSize: '0.72rem',
+                          lineHeight: 1.35,
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          textUnderlineOffset: '2px',
+                          fontWeight: 500,
+                        }}
+                      >
+                        {row.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div style={{ backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4f46e5' }}>{Object.values(userData?.challenges || {}).filter(Boolean).length}</div>

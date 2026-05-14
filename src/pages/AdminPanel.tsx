@@ -47,6 +47,7 @@ import VaultRecoveryAdmin from '../components/admin/VaultRecoveryAdmin';
 import RRCandyAdminPage from './admin/RRCandyAdminPage';
 import Level2ManifestBuilderAdmin from '../components/admin/Level2ManifestBuilderAdmin';
 import ProductivityDashboardAdmin from '../components/admin/ProductivityDashboardAdmin';
+import CivicEconomyAdmin from '../components/admin/CivicEconomyAdmin';
 
 interface Classroom {
   id: string;
@@ -224,7 +225,7 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels' | 'productivity-dashboard'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy'>('students');
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1163,6 +1164,7 @@ const AdminPanel: React.FC = () => {
       if (p.get('tab') === 'rr-candies') setActiveTab('rr-candies');
       if (p.get('tab') === 'level2-manifest') setActiveTab('level2-manifest');
       if (p.get('tab') === 'productivity') setActiveTab('productivity-dashboard');
+      if (p.get('tab') === 'civic-economy') setActiveTab('civic-economy');
     } catch (_) {
       /* ignore */
     }
@@ -3041,6 +3043,23 @@ const AdminPanel: React.FC = () => {
           📊 Productivity
         </button>
         <button
+          onClick={() => setActiveTab('civic-economy')}
+          style={{
+            backgroundColor: activeTab === 'civic-economy' ? '#0f766e' : '#e5e7eb',
+            color: activeTab === 'civic-economy' ? 'white' : '#374151',
+            border: 'none',
+            borderRadius: '0.5rem',
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          🏛️ Civic Economy
+        </button>
+        <button
           onClick={() => setActiveTab('training-grounds')}
           style={{
             backgroundColor: activeTab === 'training-grounds' ? '#4f46e5' : '#e5e7eb',
@@ -3242,6 +3261,14 @@ const AdminPanel: React.FC = () => {
             email: s.email,
           }))}
           classrooms={classrooms}
+        />
+      ) : activeTab === 'civic-economy' ? (
+        <CivicEconomyAdmin
+          students={students.map((s) => ({
+            id: s.id,
+            displayName: s.displayName,
+            email: s.email,
+          }))}
         />
       ) : activeTab === 'training-grounds' ? (
         <TrainingGroundsAdmin />

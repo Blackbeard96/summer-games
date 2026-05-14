@@ -53,16 +53,6 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
     return seededOrder(n, `${shuffleKey}|${question.id}`);
   }, [shuffle, shuffleKey, question.id, question.options.length]);
 
-  React.useEffect(() => {
-    if (!shuffle) return;
-    // Temporary BR test log: remove after live validation.
-    console.log('[LiveQuiz] shuffled answers', {
-      questionId: question.id,
-      shuffleKey,
-      displayOrder,
-    });
-  }, [shuffle, question.id, shuffleKey, displayOrder]);
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       <p style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.25rem', fontWeight: 600 }}>

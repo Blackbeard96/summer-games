@@ -1,7 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
-import { applyRevivePotionInLiveEvent, isRevivePotionName } from '../utils/liveEventRevive';
+import {
+  applyRevivePotionInLiveEvent,
+  isLiveEventPlayerEliminatedForRevive,
+  isRevivePotionName,
+} from '../utils/liveEventRevive';
 import {
   consumeOneArtifactFromInventory,
   refundOneArtifactToInventory
@@ -19,7 +23,13 @@ interface BagModalProps {
   onArtifactUsed?: (options?: BagArtifactUsedOptions) => void | Promise<void>;
   /** When set, Revive Potion can target eliminated classmates in this Live Event session. */
   liveSessionId?: string;
-  sessionPlayers?: Array<{ userId: string; displayName: string; eliminated?: boolean }>;
+  sessionPlayers?: Array<{
+    userId: string;
+    displayName: string;
+    eliminated?: boolean;
+    hp?: number;
+    shield?: number;
+  }>;
 }
 
 const STATIC_BATTLE_ITEMS = new Set(['Double PP Boost']);
@@ -69,12 +79,12 @@ const BagModal: React.FC<BagModalProps> = ({
     return sessionPlayers.find((p) => p.userId === currentUser.uid);
   }, [sessionPlayers, currentUser, liveSessionId]);
 
-  const selfEliminated = selfRow?.eliminated === true;
+  const selfEliminated = selfRow ? isLiveEventPlayerEliminatedForRevive(selfRow) : false;
 
   const eliminatedOthers = useMemo(() => {
     if (!currentUser || !liveSessionId) return [];
     return sessionPlayers.filter(
-      (p) => p.userId !== currentUser.uid && p.eliminated === true
+      (p) => p.userId !== currentUser.uid && isLiveEventPlayerEliminatedForRevive(p)
     );
   }, [sessionPlayers, currentUser, liveSessionId]);
 

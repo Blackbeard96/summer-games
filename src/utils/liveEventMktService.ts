@@ -8,6 +8,7 @@ import { debug, debugError } from './inSessionDebug';
 import {
   clearLiveEventEliminationStats,
   formatLiveEventReviveBattleLog,
+  isLiveEventPlayerEliminatedForRevive,
   reviveEliminatedSessionPlayerRow,
 } from './liveEventRevive';
 import { fetchMergedMarketplaceCatalog } from './marketplaceStoreMerge';
@@ -144,7 +145,7 @@ export async function purchaseLiveEventMstMktItem(
 
       if (effect.effectType === 'revive_eliminated_self') {
         const hpPct = Math.max(1, Math.min(100, Math.floor(effect.amount)));
-        const buyerEliminated = row.eliminated === true;
+        const buyerEliminated = isLiveEventPlayerEliminatedForRevive(row);
         const pick = options?.reviveTargetUid;
 
         if (buyerEliminated) {
@@ -167,7 +168,7 @@ export async function purchaseLiveEventMstMktItem(
           const targetRow = { ...(players[tIdx] as Record<string, unknown>) } as Parameters<
             typeof reviveEliminatedSessionPlayerRow
           >[0];
-          if (!targetRow.eliminated) throw new Error('That player is not eliminated');
+          if (!isLiveEventPlayerEliminatedForRevive(targetRow)) throw new Error('That player is not eliminated');
           const tName = (targetRow.displayName as string) || 'Player';
           const newHp = reviveEliminatedSessionPlayerRow(targetRow, hpPct);
           players[tIdx] = targetRow as (typeof players)[number];

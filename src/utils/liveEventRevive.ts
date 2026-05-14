@@ -61,6 +61,25 @@ type SessionPlayerLike = {
   movesEarned?: number;
 };
 
+/**
+ * True if this session row is out of combat (matches applyInSessionMove elimination: hp+shield <= 0),
+ * or the authoritative `eliminated` flag is set. UI often inferred elimination from 0/0 HP+shield before
+ * the flag synced — revive flows must use the same definition.
+ */
+export function isLiveEventPlayerEliminatedForRevive(p: {
+  eliminated?: boolean;
+  hp?: number;
+  shield?: number;
+}): boolean {
+  if (p.eliminated === true) return true;
+  const hp = p.hp;
+  const sh = p.shield;
+  if (typeof hp === 'number' && typeof sh === 'number' && hp + sh <= 0) {
+    return true;
+  }
+  return false;
+}
+
 /** Mutates row: clears elimination and sets HP from percent of max (1–100). */
 export function reviveEliminatedSessionPlayerRow(target: SessionPlayerLike, hpPercent: number = 50): number {
   const pct = Math.max(1, Math.min(100, Math.floor(hpPercent)));
@@ -107,25 +126,27 @@ export async function applyRevivePotionInLiveEvent(
       const selfRevive = actorUid === targetUid;
       const actor = players[aIdx] as SessionPlayerLike;
       const movesAvail = Math.max(0, Math.floor(Number(actor.movesEarned) || 0));
-      if (movesAvail < 1) {
-        throw new Error('No moves available — earn participation to use items.');
-      }
 
       if (selfRevive) {
-        if (!actor.eliminated) {
+        if (!isLiveEventPlayerEliminatedForRevive(actor)) {
           throw new Error('You are not eliminated — revive yourself only when eliminated, or use a potion on a teammate.');
         }
         const target = { ...(players[tIdx] as Record<string, unknown>) } as SessionPlayerLike;
         if (target.userId !== actorUid) throw new Error('Invalid self-revive target');
         const newHp = reviveEliminatedSessionPlayerRow(target, hpPct);
         const maxHp = target.maxHp ?? 100;
-        target.movesEarned = movesAvail - 1;
+        // Self-revive: inventory potion is the cost — do not require participation moves (eliminated players often have 0).
+        if (movesAvail > 0) {
+          target.movesEarned = movesAvail - 1;
+        }
         players[tIdx] = target as (typeof players)[number];
         const battleLog = [...(data.battleLog || [])];
         battleLog.push(
           formatLiveEventReviveBattleLog(
             actorName,
-            'Revive Potion (self — used participation move)',
+            movesAvail > 0
+              ? 'Revive Potion (self — used participation move)'
+              : 'Revive Potion (self — inventory; no participation move spent)',
             `${newHp}/${maxHp} HP`
           )
         );
@@ -137,12 +158,16 @@ export async function applyRevivePotionInLiveEvent(
         return;
       }
 
-      if (actor.eliminated) {
+      if (isLiveEventPlayerEliminatedForRevive(actor)) {
         throw new Error('Eliminated players cannot revive others — use a Revive Potion on yourself if you have one.');
       }
 
+      if (movesAvail < 1) {
+        throw new Error('No moves available — earn participation to revive a teammate.');
+      }
+
       const target = { ...(players[tIdx] as Record<string, unknown>) } as SessionPlayerLike;
-      if (!target.eliminated) throw new Error('That player is not eliminated');
+      if (!isLiveEventPlayerEliminatedForRevive(target)) throw new Error('That player is not eliminated');
 
       const newHp = reviveEliminatedSessionPlayerRow(target, hpPct);
       const maxHp = target.maxHp ?? 100;
@@ -250,7 +275,7 @@ export async function hostReviveEliminatedPlayersInLiveEvent(
 
       for (let i = 0; i < players.length; i++) {
         const row = { ...(players[i] as Record<string, unknown>) } as SessionPlayerLike;
-        if (!row.eliminated) continue;
+        if (!isLiveEventPlayerEliminatedForRevive(row)) continue;
         if (selectedSet && !selectedSet.has(row.userId)) continue;
 
         reviveEliminatedSessionPlayerRow(row, hpPct);

@@ -2054,6 +2054,10 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     try {
+      const { isCivicShutdownActive } = await import('../utils/mstCivicEconomyGuards');
+      if (await isCivicShutdownActive(currentUser.uid)) {
+        return null;
+      }
       const generatorLevel = vault.generatorLevel || 1;
       const rates = getGeneratorRates(generatorLevel);
       
@@ -4795,6 +4799,18 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('Updating target vault with:', updates);
         await updateDoc(targetVaultRef, updates);
         console.log('Target vault updated successfully');
+        const depleted =
+          ppStolen > 0 &&
+          (updates as { vaultHealth?: number }).vaultHealth === 0 &&
+          targetVaultData.vaultHealth > 0;
+        if (depleted) {
+          try {
+            const { onVaultDestroyedTaxBountyTarget } = await import('../utils/mstCivicEconomyService');
+            await onVaultDestroyedTaxBountyTarget(targetUserId);
+          } catch (e) {
+            console.warn('Civic bounty/shutdown hook skipped:', e);
+          }
+        }
         
         // Note: We don't update target student PP - only vault health is affected
         

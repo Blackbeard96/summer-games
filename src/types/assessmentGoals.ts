@@ -249,8 +249,8 @@ export interface HabitSubmission {
 export interface PPLedgerEntry {
   id: string;
   studentId: string;
-  sourceType: 'assessmentGoal'; // Extensible for other sources
-  sourceId: string; // assessmentId
+  sourceType: 'assessmentGoal' | 'civicEconomy';
+  sourceId: string; // assessmentId or weekId / civic op id
   amount: number; // Positive or negative
   createdAt: Timestamp;
   notes?: string; // e.g., "Within 5 points tier", "Exact hit bonus"
