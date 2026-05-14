@@ -1021,9 +1021,6 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               const effectiveMasteryLevel = move.category === 'elemental' && equippedArtifacts 
                 ? getEffectiveMasteryLevel(move, equippedArtifacts)
                 : move.masteryLevel;
-              // Effective move level should match effective mastery level when artifacts boost it
-              const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
-              
               return (
               <button
                 key={move.id}

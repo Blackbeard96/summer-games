@@ -14,6 +14,8 @@ interface LiveQuizAnswerOptionsProps {
   shuffle?: boolean;
   /** Stable key so shuffle order resets per question round */
   shuffleKey?: string;
+  /** Tighter layout in narrow live event column */
+  compact?: boolean;
 }
 
 function answerChoiceLetter(displayIndex: number): string {
@@ -42,10 +44,16 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
   submittedIndices,
   shuffle = false,
   shuffleKey = '',
+  compact = false,
 }) => {
   const correctIndices = question.correctIndices ?? (question.correctIndex !== undefined ? [question.correctIndex] : []);
   const selected = submittedIndices ?? selectedIndices;
   const isMultiple = correctIndices.length > 1;
+  const rowGap = compact ? '0.45rem' : '0.75rem';
+  const btnPad = compact ? '0.65rem 0.85rem' : '1rem 1.25rem';
+  const btnFont = compact ? '0.95rem' : '1.05rem';
+  const letterSize = compact ? '30px' : '36px';
+  const hintSize = compact ? '0.78rem' : '0.875rem';
 
   const displayOrder = useMemo(() => {
     const n = question.options.length;
@@ -54,8 +62,8 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
   }, [shuffle, shuffleKey, question.id, question.options.length]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <p style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.25rem', fontWeight: 600 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: rowGap }}>
+      <p style={{ fontSize: hintSize, color: '#64748b', marginBottom: compact ? '0.05rem' : '0.25rem', fontWeight: 600 }}>
         {isMultiple ? 'Select all that apply' : 'Select one answer'}
       </p>
       {displayOrder.map((canonicalIndex, displayPos) => {
@@ -101,17 +109,17 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
             disabled={disabled}
             style={{
               width: '100%',
-              padding: '1rem 1.25rem',
+              padding: btnPad,
               borderRadius: '0.75rem',
               border,
               background: bg,
               color,
-              fontSize: '1.05rem',
+              fontSize: btnFont,
               textAlign: 'left',
               cursor: disabled ? 'default' : 'pointer',
               display: 'flex',
               alignItems: 'flex-start',
-              gap: '1rem',
+              gap: compact ? '0.65rem' : '1rem',
               fontWeight: 500,
               transition: 'all 0.2s',
               boxShadow: isSelected && !reveal ? '0 2px 8px rgba(79, 70, 229, 0.25)' : '0 1px 3px rgba(0,0,0,0.06)',
@@ -119,8 +127,8 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
           >
             <span
               style={{
-                width: '36px',
-                height: '36px',
+                width: letterSize,
+                height: letterSize,
                 borderRadius: '8px',
                 background: reveal ? 'transparent' : (isSelected ? '#4f46e5' : '#e2e8f0'),
                 color: reveal ? (showCorrect || showIncorrect ? '#fff' : color) : (isSelected ? '#fff' : '#64748b'),
@@ -128,7 +136,7 @@ export const LiveQuizAnswerOptions: React.FC<LiveQuizAnswerOptionsProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontWeight: 'bold',
-                fontSize: '1rem',
+                fontSize: compact ? '0.9rem' : '1rem',
                 flexShrink: 0,
                 marginTop: '0.15rem',
               }}

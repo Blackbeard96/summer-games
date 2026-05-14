@@ -26,9 +26,18 @@ export function isElementalSkillMove(move: Pick<Move, 'category'>): boolean {
   return move.category === 'elemental';
 }
 
-/** Skill level used for pricing / cooldown (not mastery rank). */
-export function getSkillLevelForCooldownCost(move: Pick<Move, 'level'>): number {
-  return Math.max(1, Math.floor(Number(move.level) || 1));
+/**
+ * Skill **tier** on the move row (`move.level`) used for pricing / cooldown — not mastery rank.
+ * Manifest skills cap at tier 10 (max canonical PP base 5); elemental/other use the raw tier ≥ 1.
+ */
+export function getSkillLevelForCooldownCost(
+  move: Pick<Move, 'level' | 'id' | 'category' | 'effectKey'>
+): number {
+  const raw = Math.max(1, Math.floor(Number(move.level) || 1));
+  if (isManifestSkillMove(move)) {
+    return Math.min(10, raw);
+  }
+  return raw;
 }
 
 export function getManifestSkillCooldownOrCostForLevel(level: number): number {

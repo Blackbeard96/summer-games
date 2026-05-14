@@ -110,6 +110,7 @@ import type { LiveEventModeType } from '../types/season1';
 import type { Assessment } from '../types/assessmentGoals';
 import { getEnergyTypeForMode } from '../utils/season1Energy';
 import { getResolvedMoveEnergyType } from '../constants/energyTypes';
+import { getSkillLevelForCooldownCost } from '../utils/skillCooldownCost';
 import { getAssessmentsByClass } from '../utils/assessmentGoalsFirestore';
 import { LiveQuizQuestionCard, LiveQuizAnswerOptions, LiveQuizLeaderboard, type LeaderboardEntry } from './liveQuiz';
 import LiveEventReflectionPanel from './LiveEventReflectionPanel';
@@ -423,6 +424,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [brQuickTargetUid, setBrQuickTargetUid] = useState<string | null>(null);
   /** Dedupe auto-advance per question round (`quizRoundIndex:questionId`). */
   const brAutoAdvanceDedupeRef = useRef<string | null>(null);
+  /** Bumped when the host manually advances (or effect re-schedules) so a stale setTimeout cannot call advanceQuiz after a manual advance. */
+  const brAutoAdvanceGenerationRef = useRef(0);
   /** Seconds until auto-advance after the answer timer ends (Battle Royale / Team BR; all clients). */
   const [brInterQuestionSecondsLeft, setBrInterQuestionSecondsLeft] = useState<number | null>(null);
   const [quizSelectedIndices, setQuizSelectedIndices] = useState<number[]>([]);
@@ -1273,7 +1276,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     const prevIdx = quizSession.questionIndex ?? 0;
     const total = quizSession.questionOrder?.length ?? 0;
 
+    const generationAtSchedule = brAutoAdvanceGenerationRef.current;
     const timer = window.setTimeout(async () => {
+      if (generationAtSchedule !== brAutoAdvanceGenerationRef.current) return;
       if (brAutoAdvanceDedupeRef.current === dedupeKey) return;
       brAutoAdvanceDedupeRef.current = dedupeKey;
       try {
@@ -2303,6 +2308,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
     }
     return { total, alive, teamsAlive };
   }, [quizSession, sessionPlayers]);
+
+  /** BR / Team BR with player columns visible: tighten layout so quiz + answers fit above Fight row */
+  const compactLiveEventFightRow =
+    !!quizSession &&
+    centerView === 'quiz' &&
+    !liveQuizExpanded &&
+    isBattleQuizMode(quizSession.gameMode);
+  const compactFightBtnPad = compactLiveEventFightRow ? '0.65rem' : '1rem';
+  const compactFightBtnFont = compactLiveEventFightRow ? '1rem' : '1.125rem';
 
   useEffect(() => {
     const isEliminatedNow = currentPlayerEliminated;
@@ -4532,8 +4546,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
         style={{
           display: 'flex',
           gap: quizFocusLayout ? '0' : '1rem',
-          height: 'calc(100vh - 200px)',
-          minHeight: '600px',
+          height: 'calc(100vh - 180px)',
+          maxHeight: 'calc(100vh - 180px)',
+          minHeight: 'min(600px, calc(100vh - 160px))',
+          alignItems: 'stretch',
         }}
       >
         {/* Left Side - Players (Scrollable) — hidden when quiz is expanded */}
@@ -4546,7 +4562,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           width: '348px',
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          minHeight: 0,
         }}>
           <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>Players</h2>
           <div style={{ 
@@ -4591,8 +4608,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           flex: 1, 
           display: 'flex', 
           flexDirection: 'column', 
-          gap: '1rem',
+          gap:
+            quizSession && centerView === 'quiz' && !liveQuizExpanded
+              ? '0.45rem'
+              : '1rem',
           minWidth: 0,
+          minHeight: 0,
+          overflow: 'hidden',
           position: 'relative'
         }}>
           {currentUser && (
@@ -4746,6 +4768,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <div
               style={{
                 flexShrink: 0,
+                position: 'relative',
+                zIndex: 25,
                 background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
                 borderRadius: '0.75rem',
                 border: '1px solid #4b5563',
@@ -4763,13 +4787,15 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '0.75rem',
-                  padding: '0.65rem 1rem',
+                  padding: compactLiveEventFightRow ? '0.45rem 0.65rem' : '0.65rem 1rem',
                   margin: 0,
                   border: 'none',
                   background: 'transparent',
                   cursor: 'pointer',
                   textAlign: 'left',
                   flexWrap: 'wrap',
+                  position: 'relative',
+                  zIndex: 1,
                 }}
               >
                 <span
@@ -4878,8 +4904,20 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           )}
           <>
           {quizSession && centerView === 'quiz' && (
-            /* Live Quiz Mode panel - full area when Quiz tab is selected */
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', position: 'relative' }}>
+            /* Live Quiz Mode panel — flex:1 + minHeight:0 so question/answers scroll above action buttons when not expanded */
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: !liveQuizExpanded ? '0.45rem' : '1rem',
+                position: 'relative',
+                zIndex: 2,
+                WebkitOverflowScrolling: 'touch',
+              }}
+            >
               {showEliminatedQuizOverlay && (
                 <div
                   style={{
@@ -4927,6 +4965,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 const correctIndices = currentQ?.correctIndices ?? (currentQ?.correctIndex !== undefined ? [currentQ.correctIndex] : []);
                 const isBattle = isBattleQuizMode(quizSession.gameMode);
                 const isSingleSelect = correctIndices.length <= 1;
+                const compactQuizChrome = !liveQuizExpanded;
 
                 const submitSelected = async (selected: number[]) => {
                   if (!currentUser || !currentQ || quizSubmitLockRef.current || quizAnswerSubmitted) return;
@@ -4992,6 +5031,60 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 };
                 return currentQ ? (
                   <div key={`${quizSession.currentQuestionId}-${quizSession.quizRoundIndex ?? 0}`}>
+                    {compactQuizChrome && isBattle && currentUser && currentPlayer ? (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'stretch',
+                          gap: '0.35rem',
+                          marginBottom: '0.4rem',
+                        }}
+                      >
+                        <div
+                          style={{
+                            flex: '1 1 130px',
+                            fontSize: '0.72rem',
+                            padding: '0.32rem 0.5rem',
+                            borderRadius: '0.4rem',
+                            background: currentPlayer.flowStateActive ? '#dbeafe' : '#f0f9ff',
+                            color: '#0c4a6e',
+                            border: currentPlayer.flowStateActive ? '1px solid #38bdf8' : '1px solid #bae6fd',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          Streak <strong>{currentPlayer.successStreak ?? 0}</strong>
+                          {currentPlayer.flowStateActive ? (
+                            <span style={{ marginLeft: '0.25rem', fontWeight: 800, color: '#0369a1' }}>· FLOW</span>
+                          ) : (currentPlayer.successStreak ?? 0) > 0 ? (
+                            <span style={{ marginLeft: '0.25rem', color: '#64748b', fontSize: '0.65rem' }}>
+                              (
+                              {Math.max(0, FLOW_STATE_SUCCESS_THRESHOLD - (currentPlayer.successStreak ?? 0))} to Flow)
+                            </span>
+                          ) : null}
+                        </div>
+                        <div
+                          style={{
+                            flex: '2 1 200px',
+                            padding: '0.32rem 0.55rem',
+                            background: '#1e293b',
+                            color: '#e2e8f0',
+                            borderRadius: '0.4rem',
+                            fontSize: '0.72rem',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          <strong>{quizSession.gameMode === 'battle_royale' ? 'Battle Royale' : 'Team BR'}</strong>
+                          {' · '}
+                          Cmb {myStreak} · NRG {myEnergy}
+                          {myStrong ? ' · Strong' : ''}
+                          {currentPlayer.flowStateActive ? (
+                            <span style={{ color: '#38bdf8' }}> · Flow</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
                     {currentUser && currentPlayer && (
                       <div
                         style={{
@@ -5031,6 +5124,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         ) : null}
                       </div>
                     )}
+                      </>
+                    )}
                     {isBattle &&
                       (() => {
                         const gapMs =
@@ -5062,6 +5157,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       totalQuestions={quizSession.questionOrder?.length ?? 0}
                       countdownSeconds={quizCountdown}
                       timeExpired={timeExpired}
+                      compact={compactQuizChrome}
                     />
                     <LiveQuizAnswerOptions
                       question={currentQ}
@@ -5081,6 +5177,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       submittedIndices={quizMyResponse?.selectedIndices}
                       shuffle={!!shuffleOn}
                       shuffleKey={String(quizSession.quizRoundIndex ?? 0)}
+                      compact={compactQuizChrome}
                     />
                     {isSingleSelect && !quizAnswerSubmitted && !timeExpired && !quizMyResponse ? (
                       <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
@@ -5230,6 +5327,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         <button
                           onClick={async () => {
                             if (!currentUser) return;
+                            brAutoAdvanceGenerationRef.current += 1;
                             const prevIdx = quizSession.questionIndex ?? 0;
                             const total = quizSession.questionOrder?.length ?? 0;
                             const res = await advanceQuiz(sessionId, currentUser.uid);
@@ -5259,6 +5357,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         <button
                           onClick={async () => {
                             if (!currentUser) return;
+                            brAutoAdvanceGenerationRef.current += 1;
                             const res = await endQuizSession(sessionId, currentUser.uid);
                             if (res.ok) await appendBattleLog('📋 Quiz ended by host.');
                             if (res.error) alert(res.error);
@@ -5271,7 +5370,31 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       </div>
                     )}
                   </div>
-                ) : null;
+                ) : (
+                  <div
+                    style={{
+                      padding: '2rem 1rem',
+                      textAlign: 'center',
+                      color: '#64748b',
+                      fontSize: '0.95rem',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {quizQuestions.length === 0 ? (
+                      <>Loading quiz…</>
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: 600, color: '#334155', marginBottom: '0.35rem' }}>
+                          Syncing question…
+                        </div>
+                        <div style={{ fontSize: '0.85rem' }}>
+                          If this persists, this question id may be missing from the quiz set:{' '}
+                          <code style={{ wordBreak: 'break-all' }}>{quizSession.currentQuestionId}</code>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
               })()}
               {quizSession.status === 'completed' && (() => {
                 const placements = (quizSession.rewardConfig?.placements ?? {}) as LiveQuizRewardConfig['placements'];
@@ -5472,8 +5595,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 </div>
                 );
               })()}
-              {/* Mini leaderboard during quiz (right side or below) */}
-              {quizSession.status === 'question_live' && Object.keys(quizSession.leaderboard ?? {}).length > 0 && (
+              {/* Mini leaderboard during quiz — hidden in narrow BR column so question + answers stay visible */}
+              {quizSession.status === 'question_live' &&
+                Object.keys(quizSession.leaderboard ?? {}).length > 0 &&
+                (liveQuizExpanded || !isBattleQuizMode(quizSession.gameMode)) && (
                 <LiveQuizLeaderboard
                   entries={sessionPlayers.map((p) => ({
                     uid: p.userId,
@@ -5495,6 +5620,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               centerView === 'quiz' &&
               !liveQuizExpanded)) && (
           <>
+          <div style={{ flexShrink: 0, width: '100%' }}>
           {(!quizSession || centerView === 'battleLog') && (
           <div style={{
             background: '#374151',
@@ -5543,7 +5669,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           <div style={{
             display: 'flex',
             flexDirection: 'column',
-            gap: '0.75rem',
+            gap: compactLiveEventFightRow ? '0.45rem' : '0.75rem',
             zIndex: 2
           }}>
             {playerLiveEventSkillsLocked ? (
@@ -5602,8 +5728,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 color: 'white',
                 border: '3px solid #8B4513',
                 borderRadius: '0.5rem',
-                padding: '1rem',
-                fontSize: '1.125rem',
+                padding: compactFightBtnPad,
+                fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor:
                   currentPlayer &&
@@ -5699,8 +5825,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 color: 'white',
                 border: '3px solid #8B4513',
                 borderRadius: '0.5rem',
-                padding: '1rem',
-                fontSize: '1.125rem',
+                padding: compactFightBtnPad,
+                fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor:
                   currentPlayer &&
@@ -5778,8 +5904,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 color: 'white',
                 border: '3px solid #8B4513',
                 borderRadius: '0.5rem',
-                padding: '1rem',
-                fontSize: '1.125rem',
+                padding: compactFightBtnPad,
+                fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor:
                   currentUser &&
@@ -5824,8 +5950,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 color: 'white',
                 border: '3px solid #8B4513',
                 borderRadius: '0.5rem',
-                padding: '1rem',
-                fontSize: '1.125rem',
+                padding: compactFightBtnPad,
+                fontSize: compactFightBtnFont,
                 fontWeight: 'bold',
                 cursor: 'pointer',
                 transition: 'all 0.2s',
@@ -5842,6 +5968,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             >
               🏰 VAULT
             </button>
+          </div>
           </div>
 
           {/* BattleEngine - Hidden UI but functional for battle logic */}
@@ -5905,7 +6032,8 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           width: '348px',
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          minHeight: 0,
         }}>
           <h2 style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937', fontWeight: '600' }}>Players</h2>
           <div style={{ 
@@ -6303,7 +6431,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                       const selLe = computeLiveEventParticipationSkillCost(selectedMove as BattleMove, equippedArtifacts, null, 0);
                       return (
                         <span style={{ fontSize: '0.7rem' }}>
-                          Lv.{selectedMove.level} • Mastery {getEffectiveMasteryLevel(selectedMove, equippedArtifacts)} • Skill Cost (PP): {selLe.finalCost} (base {selLe.baseCost}, reduction {selLe.reductionFromArtifacts + selLe.reductionFromEffects})
+                          Lv.{getSkillLevelForCooldownCost(selectedMove as BattleMove)} • Mastery {getEffectiveMasteryLevel(selectedMove, equippedArtifacts)} • Skill Cost (PP): {selLe.finalCost} (base {selLe.baseCost}, reduction {selLe.reductionFromArtifacts + selLe.reductionFromEffects})
                         </span>
                       );
                     })()}
@@ -6487,7 +6615,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             {manifestAndArtifactMoves.map((move) => {
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
-                              const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
+                              const skillTierForCostAndLabel = getSkillLevelForCooldownCost(move as BattleMove);
                               
                               // Helper to get move damage value
                               const getMoveDamageValue = (m: any): number => {
@@ -6625,7 +6753,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           {move.type.toUpperCase()}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
+                                          Lv.{skillTierForCostAndLabel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
                                           PP Cost: {le.finalCost} (base {le.baseCost}, −{le.reductionFromArtifacts + le.reductionFromEffects})
@@ -6677,7 +6805,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             {elementalMoves.map((move) => {
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
-                              const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
+                              const skillTierForCostAndLabel = getSkillLevelForCooldownCost(move as BattleMove);
                               
                               // Helper to get move damage value
                               const getMoveDamageValue = (m: any): number => {
@@ -6822,7 +6950,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           </span>
                                         )}
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
+                                          Lv.{skillTierForCostAndLabel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
                                           PP Cost: {leEl.finalCost} (base {leEl.baseCost}, −{leEl.reductionFromArtifacts + leEl.reductionFromEffects})
@@ -6960,7 +7088,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                               const rrCandyDisplayName = getRRCandyDisplayName(move as any);
                               // Calculate move stats
                               const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
-                              const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
+                              const skillTierForCostAndLabel = getSkillLevelForCooldownCost(move as BattleMove);
                               
                               // Helper to get move damage value
                               const getMoveDamageValue = (m: any): number => {
@@ -7138,7 +7266,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                                           {move.type.toUpperCase()}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
-                                          Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
+                                          Lv.{skillTierForCostAndLabel} • Mastery {effectiveMasteryLevel}
                                         </span>
                                         <span style={{ fontSize: '0.65rem' }}>
                                           PP Cost: {leRr.finalCost} (base {leRr.baseCost}, −{leRr.reductionFromArtifacts + leRr.reductionFromEffects})

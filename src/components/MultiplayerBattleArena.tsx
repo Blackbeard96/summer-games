@@ -24,7 +24,7 @@ import {
   computeLiveEventParticipationSkillCost,
   getSkillCostReductionFromBattleEffects,
 } from '../utils/liveEventSkillCost';
-import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
+import { getSkillCooldownOrCost, getSkillLevelForCooldownCost } from '../utils/skillCooldownCost';
 import type { ElementType } from '../types/elementTypes';
 import { normalizeElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
@@ -1145,8 +1145,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                   const blockedByRules = avail && !avail.canUse;
                   const moveColor = getMoveTypeColor(move);
                   const effectiveMasteryLevel = getEffectiveMasteryLevel(move, equippedArtifacts);
-                  // Effective move level should match effective mastery level when artifacts boost it
-                  const effectiveMoveLevel = effectiveMasteryLevel > move.masteryLevel ? effectiveMasteryLevel : move.level;
+                  const skillTierForCostAndLabel = getSkillLevelForCooldownCost(move);
                   
                   // Calculate stats
                   let damageRange = null;
@@ -1303,7 +1302,7 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                               );
                             })()}
                             <span style={{ fontSize: '0.65rem' }}>
-                              Lv.{effectiveMoveLevel} • Mastery {effectiveMasteryLevel}
+                              Lv.{skillTierForCostAndLabel} • Mastery {effectiveMasteryLevel}
                             </span>
                             <span style={{ fontSize: '0.65rem' }}>
                               {liveLe
