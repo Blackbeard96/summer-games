@@ -89,21 +89,17 @@ export function computePPChange(
     // Find the matching reward tier by label
     matchingRewardTier = assessment.rewardTiers.find(tier => tier.label === matchingTierLabel);
   } else {
-    // Other assessment types: Use threshold-based system
+    // Other assessment types: threshold-based rewards only when meeting/exceeding the goal.
+    // Below goal uses missPenaltyTiers (reward tiers describe how close above/at goal is, not consolation pay).
     if (actualScore >= goalScore) {
       outcome = actualScore > goalScore ? 'exceed' : 'hit';
-    } else if (absDiff <= 2 && meetsMinimumRequirement) {
-      // Within 2 points and meets minimum - treat as hit
-      outcome = 'hit';
+      const sortedTiers = [...assessment.rewardTiers].sort((a, b) => (a.threshold || 0) - (b.threshold || 0));
+      matchingRewardTier = sortedTiers.find((tier) => absDiff <= (tier.threshold ?? Infinity));
+      if (!matchingRewardTier && sortedTiers.length > 0) {
+        matchingRewardTier = sortedTiers[sortedTiers.length - 1];
+      }
     } else {
       outcome = 'miss';
-    }
-    
-    // Find matching tier by threshold
-    const sortedTiers = [...assessment.rewardTiers].sort((a, b) => (a.threshold || 0) - (b.threshold || 0));
-    matchingRewardTier = sortedTiers.find(tier => absDiff <= (tier.threshold || Infinity));
-    if (!matchingRewardTier && sortedTiers.length > 0) {
-      matchingRewardTier = sortedTiers[sortedTiers.length - 1]; // Use worst tier
     }
   }
   

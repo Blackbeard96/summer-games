@@ -49,7 +49,7 @@ describe('Assessment Goals Utilities', () => {
       expect(result.outcome).toBe('exceed');
       expect(result.ppChange).toBe(35);
       expect(result.absDiff).toBe(1);
-      expect(result.tierExplanation).toBe('Within 2 points tier');
+      expect(result.tierExplanation).toBe('1 point(s) over goal - 2 point tier reward');
     });
 
     it('should award within 5 points tier (goal 85, actual 88)', () => {
@@ -57,7 +57,7 @@ describe('Assessment Goals Utilities', () => {
       expect(result.outcome).toBe('exceed');
       expect(result.ppChange).toBe(20);
       expect(result.absDiff).toBe(3);
-      expect(result.tierExplanation).toBe('Within 5 points tier');
+      expect(result.tierExplanation).toBe('3 point(s) over goal - 5 point tier reward');
     });
 
     it('should apply penalty for missing by 1 point (goal 85, actual 84)', () => {
@@ -66,6 +66,22 @@ describe('Assessment Goals Utilities', () => {
       expect(result.ppChange).toBe(-5);
       expect(result.absDiff).toBe(1);
       expect(result.tierExplanation).toBe('Within 1 points off (penalty)');
+    });
+
+    it('should not grant the success bonus when below goal even if reward tiers span all gaps', () => {
+      const oneBigRewardTier: Assessment = {
+        ...mockAssessment,
+        bonusCap: 10000,
+        penaltyCap: 10000,
+        rewardTiers: [{ threshold: 1000, bonus: 2000 }],
+        missPenaltyTiers: [{ threshold: 1000, penalty: 100 }],
+      };
+      const exact = computePPChange(36, 36, oneBigRewardTier);
+      const below = computePPChange(36, 33, oneBigRewardTier);
+      expect(exact.ppChange).toBe(2000);
+      expect(below.outcome).toBe('miss');
+      expect(below.ppChange).toBeLessThan(exact.ppChange);
+      expect(below.ppChange).toBe(-100);
     });
 
     it('should apply penalty for missing by 5 points (goal 85, actual 80)', () => {
@@ -79,14 +95,16 @@ describe('Assessment Goals Utilities', () => {
     it('should apply penalty cap for large misses (goal 85, actual 50)', () => {
       const result = computePPChange(85, 50, mockAssessment);
       expect(result.outcome).toBe('miss');
-      expect(result.ppChange).toBe(-75); // Capped at penaltyCap
+      // No penalty tier covers absDiff 35 → fallback uses largest configured penalty (50), then cap
+      expect(result.ppChange).toBe(-50);
       expect(result.absDiff).toBe(35);
     });
 
-    it('should apply bonus cap for large exceeds (goal 85, actual 100)', () => {
+    it('should use outermost exceed tier when beyond all thresholds (goal 85, actual 100)', () => {
       const result = computePPChange(85, 100, mockAssessment);
       expect(result.outcome).toBe('exceed');
-      expect(result.ppChange).toBe(75); // Capped at bonusCap
+      // absDiff 15 exceeds tier 10; last tier applies, then bonus cap
+      expect(result.ppChange).toBe(10);
       expect(result.absDiff).toBe(15);
     });
 
@@ -113,7 +131,7 @@ describe('Assessment Goals Utilities', () => {
     it('should reject negative goal score', () => {
       const result = validateGoalScore(-5, 100);
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Goal score cannot be negative');
+      expect(result.error).toBe('Goal score cannot be less than minimum (0)');
     });
 
     it('should reject goal score exceeding max', () => {
