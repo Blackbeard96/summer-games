@@ -95,6 +95,7 @@ const AssessmentGoalsAdmin: React.FC = () => {
           ? 100
           : assessmentData.maxScore || 100,
       isLocked: assessmentData.isLocked || false,
+      loginGoalReminder: assessmentData.loginGoalReminder !== false,
       rewardTiers: assessmentData.rewardTiers || [],
       missPenaltyTiers: assessmentData.missPenaltyTiers || [],
       penaltyCap: assessmentData.penaltyCap || 75,

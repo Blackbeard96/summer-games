@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -7,7 +7,7 @@ import {
   getAssessmentGoal,
   getHabitSubmission
 } from '../utils/assessmentGoalsFirestore';
-import { Assessment, AssessmentWithGoal } from '../types/assessmentGoals';
+import { Assessment } from '../types/assessmentGoals';
 
 const AssessmentGoalsNotifier: React.FC = () => {
   const { currentUser } = useAuth();
@@ -42,6 +42,10 @@ const AssessmentGoalsNotifier: React.FC = () => {
         const pending: Assessment[] = [];
         for (const assessment of allAssessments) {
           if (!assessment.isLocked && assessment.gradingStatus === 'open') {
+            // Admins can disable login modal for this assessment (default: remind)
+            if (assessment.loginGoalReminder === false) {
+              continue;
+            }
             let hasGoal = false;
             
             if (assessment.type === 'habits') {

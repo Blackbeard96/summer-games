@@ -97,6 +97,11 @@ export interface Assessment {
   createdBy: string; // Admin uid
   isLocked: boolean; // Once locked, students can't change goals
   gradingStatus: GradingStatus;
+  /**
+   * When true (default), students who have not set a goal may see this assessment in the login "Set your goals" modal.
+   * Set to false to suppress that announcement for this assessment only.
+   */
+  loginGoalReminder?: boolean;
   
   // Reward/Penalty Configuration
   rewardMode: 'pp' | 'pp_and_artifacts'; // PP only or PP + artifacts

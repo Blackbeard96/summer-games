@@ -130,6 +130,9 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
   const [maxScore, setMaxScore] = useState(initialData?.maxScore || 100);
   const [minGoalScore, setMinGoalScore] = useState<number | ''>(initialData?.minGoalScore ?? 0);
   const [isLocked, setIsLocked] = useState(initialData?.isLocked || false);
+  const [loginGoalReminder, setLoginGoalReminder] = useState(
+    initialData?.loginGoalReminder !== false
+  );
   const [bonusCap, setBonusCap] = useState(initialData?.bonusCap || 75);
   const [penaltyCap, setPenaltyCap] = useState(initialData?.penaltyCap || 75);
   
@@ -398,6 +401,7 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
       maxScore,
       minGoalScore: minGoalScore === '' ? undefined : Number(minGoalScore),
       isLocked,
+      loginGoalReminder,
       rewardTiers,
       missPenaltyTiers,
       bonusCap,
@@ -942,6 +946,35 @@ const CreateAssessmentForm: React.FC<CreateAssessmentFormProps> = ({
               onChange={(e) => setIsLocked(e.target.checked)}
             />
             <span style={{ fontWeight: 'bold' }}>Locked (students cannot change goals)</span>
+          </label>
+        </div>
+
+        <div
+          style={{
+            marginBottom: '1.5rem',
+            padding: '0.85rem 1rem',
+            background: '#f0f9ff',
+            borderRadius: '0.5rem',
+            border: '1px solid #7dd3fc',
+          }}
+        >
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={loginGoalReminder}
+              onChange={(e) => setLoginGoalReminder(e.target.checked)}
+              style={{ marginTop: '0.2rem' }}
+            />
+            <span>
+              <span style={{ fontWeight: 'bold', display: 'block', color: '#0c4a6e' }}>
+                Announce on login if students still need a goal
+              </span>
+              <span style={{ fontSize: '0.875rem', color: '#0369a1', lineHeight: 1.45 }}>
+                When checked, players who have not set a goal for this assessment may see it in the &quot;Set your
+                assessment goals&quot; reminder after they log in. Uncheck to hide this assessment from that
+                notification only (they can still set goals from the Assessment Goals page).
+              </span>
+            </span>
           </label>
         </div>
 
