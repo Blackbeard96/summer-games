@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, query, where, getDocs, onSnapshot, doc, getDoc } from 'firebase/firestore';
@@ -27,6 +27,43 @@ import { habitEvidenceTracksLiveEvents } from '../utils/habitLiveEventEvidenceSe
 import ResultsSummaryCard from './ResultsSummaryCard';
 import AssessmentResultModal from './AssessmentResultModal';
 
+const GOALS_SORT_STORAGE_KEY = 'assessmentGoalsStudent.sort';
+
+type StudentGoalsSortKey = 'datePosted' | 'type' | 'alphabetical';
+
+function readStoredSortKey(): StudentGoalsSortKey {
+  try {
+    const v = typeof window !== 'undefined' ? window.sessionStorage.getItem(GOALS_SORT_STORAGE_KEY) : null;
+    if (v === 'datePosted' || v === 'type' || v === 'alphabetical') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'datePosted';
+}
+
+/** Firestore Timestamp or plain { seconds } from older docs. */
+function firestoreTsToMs(ts: unknown): number {
+  if (ts == null) return 0;
+  const t = ts as { toMillis?: () => number; seconds?: number };
+  if (typeof t.toMillis === 'function') return t.toMillis();
+  if (typeof t.seconds === 'number') return t.seconds * 1000;
+  return 0;
+}
+
+/** When the student’s goal or habit commitment was first posted (best available). */
+function goalPostedMs(a: AssessmentWithGoal, habits: Map<string, HabitSubmission>): number {
+  if (a.type === 'habits') {
+    const h = habits.get(a.id);
+    if (h) {
+      return firestoreTsToMs(h.createdAt) || firestoreTsToMs(h.startAt);
+    }
+  }
+  if (a.goal) {
+    return firestoreTsToMs(a.goal.createdAt);
+  }
+  return firestoreTsToMs(a.createdAt) || firestoreTsToMs(a.date);
+}
+
 const AssessmentGoalsStudent: React.FC = () => {
   const { currentUser } = useAuth();
   const [classes, setClasses] = useState<any[]>([]);
@@ -38,6 +75,41 @@ const AssessmentGoalsStudent: React.FC = () => {
   const [showResultModal, setShowResultModal] = useState(false);
   const [resultModalData, setResultModalData] = useState<{ result: AssessmentResult; assessment: Assessment; goalScore?: number; textGoal?: string } | null>(null);
   const [habitSubmissions, setHabitSubmissions] = useState<Map<string, HabitSubmission>>(new Map());
+  const [sortKey, setSortKey] = useState<StudentGoalsSortKey>(readStoredSortKey);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(GOALS_SORT_STORAGE_KEY, sortKey);
+    } catch {
+      /* ignore */
+    }
+  }, [sortKey]);
+
+  const sortedAssessments = useMemo(() => {
+    const list = [...assessments];
+    const titleCmp = (a: AssessmentWithGoal, b: AssessmentWithGoal) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+    if (sortKey === 'alphabetical') {
+      list.sort(titleCmp);
+      return list;
+    }
+    if (sortKey === 'type') {
+      list.sort((a, b) => {
+        const c = formatAssessmentTypeLabel(a).localeCompare(formatAssessmentTypeLabel(b), undefined, {
+          sensitivity: 'base',
+        });
+        return c !== 0 ? c : titleCmp(a, b);
+      });
+      return list;
+    }
+    list.sort((a, b) => {
+      const da = goalPostedMs(a, habitSubmissions);
+      const db = goalPostedMs(b, habitSubmissions);
+      if (db !== da) return db - da;
+      return titleCmp(a, b);
+    });
+    return list;
+  }, [assessments, habitSubmissions, sortKey]);
 
   // Fetch classes for current student
   useEffect(() => {
@@ -242,7 +314,40 @@ const AssessmentGoalsStudent: React.FC = () => {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {assessments.map(assessment => (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              flexWrap: 'wrap',
+              padding: '0.65rem 0.85rem',
+              background: '#f8fafc',
+              borderRadius: '0.5rem',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <label htmlFor="assessment-goals-sort" style={{ fontWeight: 700, color: '#334155' }}>
+              Sort goals &amp; habits by
+            </label>
+            <select
+              id="assessment-goals-sort"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as StudentGoalsSortKey)}
+              style={{
+                padding: '0.45rem 0.75rem',
+                borderRadius: '0.5rem',
+                border: '1px solid #cbd5e1',
+                fontSize: '0.95rem',
+                minWidth: '220px',
+                background: 'white',
+              }}
+            >
+              <option value="datePosted">Date posted (newest first)</option>
+              <option value="type">Type (A–Z)</option>
+              <option value="alphabetical">Title (A–Z)</option>
+            </select>
+          </div>
+          {sortedAssessments.map(assessment => (
             <div
               key={assessment.id}
               style={{

@@ -38,6 +38,7 @@ import {
 import {
   formatReflectionResponsesAsEvidence,
   hasStructuredReflectionQuestions,
+  isReflectionAssessmentType,
 } from './assessmentTypeHelpers';
 import { arrayUnion, runTransaction } from 'firebase/firestore';
 import { updateHeroJourneyProgress } from './heroJourneyProgress';
@@ -1619,6 +1620,28 @@ export async function submitLiveEventGoalSettingToAssessment(params: {
 }
 
 /**
+ * Live Event reflection appends to `assessmentGoals` evidence/responses.
+ * Reflection-type assessments may have no row yet if the student never opened Assessment Goals — create a minimal row.
+ * Written / numeric / story assessments still require an explicit goal first.
+ */
+async function ensureAssessmentGoalRowForLiveReflectionEvidence(
+  assessment: Assessment,
+  assessmentId: string,
+  studentId: string,
+  classId: string
+): Promise<AssessmentGoal> {
+  const existing = await getAssessmentGoal(assessmentId, studentId);
+  if (existing) return existing;
+  if (!isReflectionAssessmentType(assessment.type)) {
+    throw new Error('NO_GOAL');
+  }
+  await setAssessmentGoal(assessmentId, studentId, undefined, classId, null, undefined, undefined);
+  const created = await getAssessmentGoal(assessmentId, studentId);
+  if (!created) throw new Error('Goal row could not be created.');
+  return created;
+}
+
+/**
  * Student submits Live Event **reflection** text as **evidence** they are meeting their goal
  * (habits → Evidence on habit submission; numeric / story → Evidence on assessmentGoals row).
  *
@@ -1799,13 +1822,12 @@ export async function submitLiveEventReflectionToAssessment(params: {
           }
         }
       }
-      const goal = await getAssessmentGoal(assessmentId, studentId);
-      if (!goal) {
-        return {
-          ok: false,
-          error: 'No goal found for this assessment. Set your goal under Assessment Goals first.',
-        };
-      }
+      const goal = await ensureAssessmentGoalRowForLiveReflectionEvidence(
+        assessment,
+        assessmentId,
+        studentId,
+        classId
+      );
       const block = formatReflectionResponsesAsEvidence(structuredQs, answers as Record<string, string>);
       const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, block, sessionLabel);
       const prev = goal.reflectionResponses || {};
@@ -1833,13 +1855,12 @@ export async function submitLiveEventReflectionToAssessment(params: {
     if (!text) return { ok: false, error: 'Reflection cannot be empty.' };
     if (text.length > 4000) return { ok: false, error: 'Reflection is too long (max 4000 characters).' };
 
-    const goal = await getAssessmentGoal(assessmentId, studentId);
-    if (!goal) {
-      return {
-        ok: false,
-        error: 'No goal found for this assessment. Set your goal under Assessment Goals first.',
-      };
-    }
+    const goal = await ensureAssessmentGoalRowForLiveReflectionEvidence(
+      assessment,
+      assessmentId,
+      studentId,
+      classId
+    );
     const merged = mergeReflectionIntoEvidence(goal.evidence ?? null, text, sessionLabel);
     await appendEvidenceToAssessmentGoalDoc(assessmentId, studentId, merged);
     await awardReflectionXp(text);
@@ -1855,7 +1876,10 @@ export async function submitLiveEventReflectionToAssessment(params: {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg === 'NO_GOAL') {
-      return { ok: false, error: 'No goal document found. Set your goal under Assessment Goals first.' };
+      return {
+        ok: false,
+        error: 'No goal found for this assessment. Set your goal under Assessment Goals first.',
+      };
     }
     return { ok: false, error: msg || 'Failed to save reflection.' };
   }

@@ -599,6 +599,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const onStudentReflectionSavedDismiss = useCallback(() => {
     setLiveEventReflectionStudentDismissed(true);
     setCenterView('battleLog');
+    requestAnimationFrame(() => {
+      document.getElementById('live-event-battle-log')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    });
   }, [setCenterView]);
 
   // Restore tab choice from sessionStorage when sessionId or quiz appears (so toggling back to Quiz works after remount/navigation)
@@ -4614,7 +4620,10 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               : '1rem',
           minWidth: 0,
           minHeight: 0,
-          overflow: 'hidden',
+          /** Tall Reflection / Goal panels + battle chrome must scroll; overflow:hidden clipped the submit controls. */
+          overflowX: 'hidden',
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
           position: 'relative'
         }}>
           {currentUser && (
@@ -5622,19 +5631,22 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
           <>
           <div style={{ flexShrink: 0, width: '100%' }}>
           {(!quizSession || centerView === 'battleLog') && (
-          <div style={{
-            background: '#374151',
-            borderRadius: '0.75rem',
-            padding: '1.5rem',
-            border: '2px solid #1f2937',
-            flex: 1,
-            minHeight: '200px',
-            maxHeight: '400px',
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            zIndex: 2
-          }}>
+          <div
+            id="live-event-battle-log"
+            style={{
+              background: '#374151',
+              borderRadius: '0.75rem',
+              padding: '1.5rem',
+              border: '2px solid #1f2937',
+              flex: 1,
+              minHeight: '200px',
+              maxHeight: '400px',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              zIndex: 2,
+            }}
+          >
             <h3 style={{ 
               fontSize: '1rem', 
               marginBottom: '1rem', 

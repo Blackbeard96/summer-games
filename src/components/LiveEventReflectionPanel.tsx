@@ -25,7 +25,7 @@ export interface LiveEventReflectionPanelProps {
   displayName: string;
   /** Append a line to the live battle log */
   onAppendBattleLog?: (line: string) => void | Promise<void>;
-  /** After a successful student reflection submit (not host link-save); parent can hide the form and show battle log. */
+  /** After successful evidence submit: parent appends to Battle Log view, dismisses the student reflection panel (host keeps link/prompt UI). */
   onStudentReflectionSaved?: () => void;
 }
 
@@ -233,15 +233,12 @@ const LiveEventReflectionPanel: React.FC<LiveEventReflectionPanelProps> = ({
         setStructuredAnswers(next);
       }
     }
-    setMessage('Evidence saved to Assessment Goals. Your teacher can review it on the dashboard.');
+    const assessmentTitle = assessment?.title?.trim() || 'linked assessment';
     if (onAppendBattleLog) {
-      await onAppendBattleLog(
-        `📝 ${displayName} updated and submitted their reflection (Assessment Goals).`
-      );
+      await onAppendBattleLog(`🪞 ${displayName} submitted reflection evidence · ${assessmentTitle}`);
     }
-    if (!isSessionHost) {
-      onStudentReflectionSaved?.();
-    }
+    setMessage('Evidence saved to Assessment Goals. Your teacher can review it on the dashboard.');
+    onStudentReflectionSaved?.();
   };
 
   const habitsSubmitDisabled = assessment?.type === 'habits' && !evidenceText.trim();
