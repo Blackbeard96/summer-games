@@ -8,7 +8,7 @@ export type PowerStatBranch = 'physical' | 'mental' | 'emotional' | 'spiritual';
 /** Shown on hover in Profile / player card — what progresses each stat */
 export const POWER_STAT_EVENT_DESCRIPTION: Record<PowerStatBranch, string> = {
   physical: 'Leveled by Battle Royale live events.',
-  mental: 'Leveled by Quiz live events.',
+  mental: 'Leveled by Quiz and Exam live events.',
   emotional: 'Leveled by Reflection live events and strong, goal-linked writing.',
   spiritual: 'Leveled by achieving goals: habits, assessment goals, and story goals.',
 };
@@ -18,6 +18,7 @@ export type LiveEventPowerSourceType =
   | 'battle_royale'
   | 'team_battle_royale'
   | 'quiz'
+  | 'exam'
   | 'reflection'
   | 'goal_setting'
   /** Alias for goal-setting flows (same Spiritual progression). */

@@ -1,6 +1,6 @@
 /**
  * MST productivity analytics: Class Flow sprints + Training Ground / live quizzes.
- * Aggregates in productivityStats/{userId}; sprintProductivityLogs / quizProductivityLogs for history.
+ * Aggregates in productivityStats/{userId}; sprint / quiz / exam productivity logs for history.
  */
 
 import { db } from '../firebase';
@@ -144,6 +144,9 @@ export type ProductivityStatDoc = {
   totalQuizzesCompleted: number;
   averageQuizScore: number;
   quizScoreSum?: number;
+  totalExamsCompleted: number;
+  averageExamScore: number;
+  examScoreSum?: number;
   currentStreak: number;
   bestStreak: number;
   streakAnchorWeekId?: string | null;
@@ -158,6 +161,8 @@ export type ProductivityStatDoc = {
   weekSprintCompleted?: number;
   weekQuizCompletes?: number;
   weekQuizScoreSum?: number;
+  weekExamCompletes?: number;
+  weekExamScoreSum?: number;
   /** Physical / Mental / Emotional / Spiritual work counters (MST). */
   workStats?: PlayerWorkStats;
 };
@@ -232,6 +237,7 @@ function mergeClassId(draft: DraftStats, classId?: string): void {
 
 const sprintLogs = () => collection(db, 'sprintProductivityLogs');
 const quizLogs = () => collection(db, 'quizProductivityLogs');
+const examLogs = () => collection(db, 'examProductivityLogs');
 
 type DraftStats = {
   userId: string;
@@ -242,11 +248,16 @@ type DraftStats = {
   totalQuizzesCompleted: number;
   averageQuizScore: number;
   quizScoreSum: number;
+  totalExamsCompleted: number;
+  averageExamScore: number;
+  examScoreSum: number;
   activeWeekId?: string;
   weekSprintJoined: number;
   weekSprintCompleted: number;
   weekQuizCompletes: number;
   weekQuizScoreSum: number;
+  weekExamCompletes: number;
+  weekExamScoreSum: number;
   currentStreak: number;
   bestStreak: number;
   streakAnchorWeekId: string | null;
@@ -275,6 +286,9 @@ async function applyProductivityTransaction(
       totalQuizzesCompleted: Number((raw as { totalQuizzesCompleted?: number }).totalQuizzesCompleted || 0),
       averageQuizScore: Number((raw as { averageQuizScore?: number }).averageQuizScore || 0),
       quizScoreSum: Number((raw as { quizScoreSum?: number }).quizScoreSum || 0),
+      totalExamsCompleted: Number((raw as { totalExamsCompleted?: number }).totalExamsCompleted || 0),
+      averageExamScore: Number((raw as { averageExamScore?: number }).averageExamScore || 0),
+      examScoreSum: Number((raw as { examScoreSum?: number }).examScoreSum || 0),
       activeWeekId: typeof (raw as { activeWeekId?: string }).activeWeekId === 'string'
         ? (raw as { activeWeekId: string }).activeWeekId
         : undefined,
@@ -282,6 +296,8 @@ async function applyProductivityTransaction(
       weekSprintCompleted: Number((raw as { weekSprintCompleted?: number }).weekSprintCompleted || 0),
       weekQuizCompletes: Number((raw as { weekQuizCompletes?: number }).weekQuizCompletes || 0),
       weekQuizScoreSum: Number((raw as { weekQuizScoreSum?: number }).weekQuizScoreSum || 0),
+      weekExamCompletes: Number((raw as { weekExamCompletes?: number }).weekExamCompletes || 0),
+      weekExamScoreSum: Number((raw as { weekExamScoreSum?: number }).weekExamScoreSum || 0),
       currentStreak: Number((raw as { currentStreak?: number }).currentStreak || 0),
       bestStreak: Number((raw as { bestStreak?: number }).bestStreak || 0),
       streakAnchorWeekId:
@@ -298,6 +314,8 @@ async function applyProductivityTransaction(
       draft.weekSprintCompleted = 0;
       draft.weekQuizCompletes = 0;
       draft.weekQuizScoreSum = 0;
+      draft.weekExamCompletes = 0;
+      draft.weekExamScoreSum = 0;
     }
 
     mutate(draft, tx);
@@ -307,8 +325,13 @@ async function applyProductivityTransaction(
       draft.totalQuizzesCompleted > 0
         ? Math.round((draft.quizScoreSum / draft.totalQuizzesCompleted) * 10) / 10
         : 0;
+    const examAvg =
+      draft.totalExamsCompleted > 0
+        ? Math.round((draft.examScoreSum / draft.totalExamsCompleted) * 10) / 10
+        : 0;
     draft.sprintCompletionRate = sprintRate;
     draft.averageQuizScore = quizAvg;
+    draft.averageExamScore = examAvg;
 
     const wQuizAvg =
       draft.weekQuizCompletes > 0
@@ -351,11 +374,16 @@ async function applyProductivityTransaction(
         totalQuizzesCompleted: draft.totalQuizzesCompleted,
         averageQuizScore: quizAvg,
         quizScoreSum: draft.quizScoreSum,
+        totalExamsCompleted: draft.totalExamsCompleted,
+        averageExamScore: examAvg,
+        examScoreSum: draft.examScoreSum,
         activeWeekId: weekIdNow,
         weekSprintJoined: draft.weekSprintJoined,
         weekSprintCompleted: draft.weekSprintCompleted,
         weekQuizCompletes: draft.weekQuizCompletes,
         weekQuizScoreSum: draft.weekQuizScoreSum,
+        weekExamCompletes: draft.weekExamCompletes,
+        weekExamScoreSum: draft.weekExamScoreSum,
         weeklyProductivityRating: weeklyRating,
         overallProductivityRating: overallRating,
         productivityRank: getProductivityRank(overallRating),
@@ -712,6 +740,71 @@ export async function recordQuizProductivityAttempt(args: {
     }).catch(() => {});
   } catch (e) {
     console.warn('[productivityTracking] quiz', e);
+  }
+}
+
+export async function recordExamProductivityAttempt(args: {
+  userId: string;
+  sessionId: string;
+  examQuizSetId: string;
+  attemptId: string;
+  classId?: string;
+  title: string;
+  quizTopic?: string;
+  assessmentId?: string;
+  assessmentTitle?: string;
+  scorePercent: number;
+  correctAnswers: number;
+  totalQuestions: number;
+  timeTakenMs: number;
+  completedAtMs: number;
+}): Promise<void> {
+  const { examProductivityDocId } = await import('./examProfileHistory');
+  const weekId = getWeekId(new Date(args.completedAtMs));
+  const logId = examProductivityDocId(args.userId, args.sessionId);
+  const logRef = doc(db, 'examProductivityLogs', logId);
+
+  let created = false;
+  try {
+    await runTransaction(db, async (tx) => {
+      const ls = await tx.get(logRef);
+      if (ls.exists()) return;
+      created = true;
+      tx.set(logRef, {
+        userId: args.userId,
+        sessionId: args.sessionId,
+        examQuizSetId: args.examQuizSetId,
+        quizId: args.examQuizSetId,
+        attemptId: args.attemptId,
+        classId: args.classId ?? '',
+        title: args.title,
+        quizTopic: args.quizTopic ?? args.title,
+        assessmentId: args.assessmentId ?? '',
+        assessmentTitle: args.assessmentTitle ?? '',
+        scorePercent: args.scorePercent,
+        correctAnswers: args.correctAnswers,
+        totalQuestions: args.totalQuestions,
+        timeTakenMs: args.timeTakenMs,
+        completedAt: Timestamp.fromMillis(args.completedAtMs),
+        weekId,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    if (!created) return;
+
+    await applyProductivityTransaction(
+      args.userId,
+      (draft) => {
+        draft.totalExamsCompleted += 1;
+        draft.examScoreSum += args.scorePercent;
+        draft.weekExamCompletes += 1;
+        draft.weekExamScoreSum += args.scorePercent;
+      },
+      { classId: args.classId }
+    );
+  } catch (e) {
+    console.warn('[productivityTracking] exam', e);
   }
 }
 

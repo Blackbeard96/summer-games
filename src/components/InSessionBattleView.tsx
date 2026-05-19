@@ -5,6 +5,8 @@ import { db } from '../firebase';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { getLevelFromXP } from '../utils/leveling';
 import InSessionBattle from './InSessionBattle';
+import LiveEventExam from './LiveEventExam';
+import { isExamLiveEventMode } from '../types/liveEventExam';
 
 interface Student {
   id: string;
@@ -191,6 +193,22 @@ const InSessionBattleView: React.FC = () => {
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <div>Session not found.</div>
       </div>
+    );
+  }
+
+  if (isExamLiveEventMode(session.liveEventMode)) {
+    return (
+      <LiveEventExam
+        sessionId={sessionId!}
+        classId={session.classId || ''}
+        className={session.className}
+        students={students.map((s) => ({
+          id: s.id,
+          displayName: s.displayName,
+          email: s.email,
+        }))}
+        onEndSession={() => navigate('/home')}
+      />
     );
   }
 

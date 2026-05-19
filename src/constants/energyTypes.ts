@@ -21,6 +21,7 @@ export const LIVE_EVENT_ENERGY_TYPES: Record<string, BattleEnergyType> = {
   /** Team BR uses same Physical work bucket as FFA BR (combat + quiz layer). */
   team_battle_royale: ENERGY_TYPES.PHYSICAL,
   quiz: ENERGY_TYPES.MENTAL,
+  exam: ENERGY_TYPES.MENTAL,
   reflection: ENERGY_TYPES.EMOTIONAL,
   goals: ENERGY_TYPES.SPIRITUAL,
   goal_setting: ENERGY_TYPES.SPIRITUAL,
@@ -143,11 +144,12 @@ export function inferEnergyTypeForAssessment(assessmentType: string | undefined)
   switch (assessmentType) {
     case 'written_assessment':
     case 'test':
-    case 'exam':
     case 'quiz':
     case 'habits':
     case 'story-goal':
       return ENERGY_TYPES.SPIRITUAL;
+    case 'exam':
+      return ENERGY_TYPES.MENTAL;
     case 'weekly_deliverable':
       return ENERGY_TYPES.PHYSICAL;
     case 'reflection':

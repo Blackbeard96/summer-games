@@ -97,7 +97,17 @@ import {
   isBattleQuizMode,
   type BrQuickActionId,
 } from '../utils/liveQuizService';
-import { getPublishedQuizSets, getQuestions, syncLiveEventQuizToTrainingAttempt } from '../utils/trainingGroundsService';
+import {
+  getPublishedQuizSets,
+  getPublishedQuizSetsForClass,
+  getQuestions,
+  syncLiveEventQuizToTrainingAttempt,
+} from '../utils/trainingGroundsService';
+import { activateExamLiveEvent } from '../utils/liveEventExamService';
+import {
+  DEFAULT_LIVE_EVENT_EXAM_SETTINGS,
+  isExamLiveEventMode,
+} from '../types/liveEventExam';
 import type {
   LiveQuizSession as LiveQuizSessionType,
   LiveQuizRewardConfig,
@@ -412,6 +422,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [reflectionPickPrompt, setReflectionPickPrompt] = useState('');
   const [goalSettingPickAssessmentId, setGoalSettingPickAssessmentId] = useState('');
   const [goalSettingPickPrompt, setGoalSettingPickPrompt] = useState('');
+  const [examPickAssessmentId, setExamPickAssessmentId] = useState('');
+  const [examUseTimeLimit, setExamUseTimeLimit] = useState(false);
+  const [examTimeLimitMinutes, setExamTimeLimitMinutes] = useState(30);
   const [reflectionModalAssessments, setReflectionModalAssessments] = useState<Assessment[]>([]);
   const [brHostConfig, setBrHostConfig] = useState<BattleRoyaleHostConfig>(() => ({
     ...DEFAULT_BATTLE_ROYALE_HOST_CONFIG,
@@ -468,7 +481,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   useEffect(() => {
     if (
       !quizModalOpen ||
-      (liveEventLaunchMode !== 'reflection' && liveEventLaunchMode !== 'goal_setting') ||
+      (liveEventLaunchMode !== 'reflection' &&
+        liveEventLaunchMode !== 'goal_setting' &&
+        liveEventLaunchMode !== 'exam') ||
       !classId
     )
       return;
@@ -3642,7 +3657,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             <button
               onClick={() => {
                 setQuizModalOpen(true);
-                getPublishedQuizSets()
+                (classId ? getPublishedQuizSetsForClass(classId) : getPublishedQuizSets())
                   .then((sets) => {
                     setQuizList(sets.map((s) => ({ id: s.id, title: s.title, questionCount: s.questionCount || 0 })));
                     if (sets.length > 0 && !selectedQuizId) setSelectedQuizId(sets[0].id);
@@ -3789,6 +3804,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
 
       {!quizSession &&
         roomReflectionMeta.liveEventMode !== 'reflection' &&
+        !isExamLiveEventMode(roomReflectionMeta.liveEventMode) &&
         (isSessionHost || roomClassFlowSprint) &&
         currentUser && (
         <LiveEventSprintPanel
@@ -3851,6 +3867,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                   { id: 'class_flow' as const, label: 'Class Flow' },
                   { id: 'battle_royale' as const, label: 'Battle Royale' },
                   { id: 'quiz' as const, label: 'Quiz' },
+                  { id: 'exam' as const, label: 'Exam Mode' },
                   { id: 'reflection' as const, label: 'Reflection' },
                   { id: 'goal_setting' as const, label: 'Goal setting' },
                 ]).map(({ id, label }) => (
@@ -4197,6 +4214,80 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               </div>
             )}
 
+            {liveEventLaunchMode === 'exam' && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem',
+                  background: '#eef2ff',
+                  borderRadius: '0.5rem',
+                  fontSize: '0.875rem',
+                  color: '#312e81',
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Exam Mode</strong> — full-screen Training Grounds CFU. Students work at their own pace; scores and
+                question review appear when they finish. No combat or battle UI. Counts as <strong>Mental</strong> work.
+                <div style={{ marginTop: '0.75rem' }}>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>
+                    Training Grounds CFU (published for this class) *
+                  </label>
+                  <select
+                    value={selectedQuizId}
+                    onChange={(e) => setSelectedQuizId(e.target.value)}
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8, marginBottom: 10 }}
+                  >
+                    <option value="">Select question set…</option>
+                    {quizList.map((q) => (
+                      <option key={q.id} value={q.id}>
+                        {q.title} ({q.questionCount} questions)
+                      </option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'block', fontWeight: 700, marginBottom: 6 }}>
+                    Linked assessment (optional)
+                  </label>
+                  <select
+                    value={examPickAssessmentId}
+                    onChange={(e) => setExamPickAssessmentId(e.target.value)}
+                    style={{ width: '100%', padding: '0.45rem', borderRadius: 8 }}
+                  >
+                    <option value="">None</option>
+                    {reflectionModalAssessments.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title} ({a.type})
+                      </option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={examUseTimeLimit}
+                      onChange={(e) => setExamUseTimeLimit(e.target.checked)}
+                    />
+                    Time limit (whole exam)
+                  </label>
+                  {examUseTimeLimit ? (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={240}
+                        value={examTimeLimitMinutes}
+                        onChange={(e) =>
+                          setExamTimeLimitMinutes(
+                            Math.max(1, Math.min(240, parseInt(e.target.value, 10) || 30))
+                          )
+                        }
+                        style={{ width: 72, padding: '0.35rem', borderRadius: 6 }}
+                      />
+                      <span style={{ color: '#64748b' }}>minutes (students see a countdown)</span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
             {(liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && (
               <>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Quiz</label>
@@ -4341,11 +4432,46 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                 disabled={
                   quizStartLoading ||
                   ((liveEventLaunchMode === 'quiz' || liveEventLaunchMode === 'battle_royale') && !selectedQuizId) ||
+                  (liveEventLaunchMode === 'exam' && !selectedQuizId) ||
                   (liveEventLaunchMode === 'reflection' && !reflectionPickAssessmentId.trim()) ||
                   (liveEventLaunchMode === 'goal_setting' && !goalSettingPickAssessmentId.trim())
                 }
                 onClick={async () => {
                   if (!currentUser) return;
+                  if (liveEventLaunchMode === 'exam') {
+                    if (!selectedQuizId) return;
+                    setQuizStartLoading(true);
+                    try {
+                      const qs = await getQuestions(selectedQuizId);
+                      if (qs.length === 0) {
+                        alert('That question set has no questions.');
+                        setQuizStartLoading(false);
+                        return;
+                      }
+                      await activateExamLiveEvent({
+                        sessionId,
+                        examQuizSetId: selectedQuizId,
+                        examAssessmentId: examPickAssessmentId.trim() || undefined,
+                        examSettings: {
+                          ...DEFAULT_LIVE_EVENT_EXAM_SETTINGS,
+                          timeLimitMinutes: examUseTimeLimit
+                            ? Math.max(1, Math.min(240, Math.round(examTimeLimitMinutes) || 30))
+                            : 0,
+                        },
+                        totalQuestions: qs.length,
+                      });
+                      await appendBattleLog(
+                        `📝 Exam Mode started: ${quizList.find((q) => q.id === selectedQuizId)?.title ?? 'Exam'} (${qs.length} questions, Mental work)`
+                      );
+                      setQuizModalOpen(false);
+                    } catch (e) {
+                      console.error(e);
+                      alert('Failed to start Exam Mode.');
+                    } finally {
+                      setQuizStartLoading(false);
+                    }
+                    return;
+                  }
                   if (
                     liveEventLaunchMode === 'reflection' ||
                     liveEventLaunchMode === 'goal_setting' ||
@@ -4501,9 +4627,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
               >
                 {quizStartLoading
                   ? 'Starting...'
-                  : liveEventLaunchMode === 'reflection' || liveEventLaunchMode === 'goal_setting'
+                  : liveEventLaunchMode === 'reflection' ||
+                      liveEventLaunchMode === 'goal_setting' ||
+                      liveEventLaunchMode === 'class_flow'
                     ? 'Activate mode'
-                    : 'Start'}
+                    : liveEventLaunchMode === 'exam'
+                      ? 'Start Exam Mode'
+                      : 'Start'}
               </button>
             </div>
           </div>

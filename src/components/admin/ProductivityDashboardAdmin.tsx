@@ -76,6 +76,8 @@ const emptyStats = (userId: string): ProductivityStatDoc => ({
   sprintCompletionRate: 0,
   totalQuizzesCompleted: 0,
   averageQuizScore: 0,
+  totalExamsCompleted: 0,
+  averageExamScore: 0,
   currentStreak: 0,
   bestStreak: 0,
   weeklyProductivityRating: 0,

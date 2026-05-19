@@ -30,6 +30,20 @@ export interface InSessionRoom {
   reflectionCollectEvidence?: boolean;
   goalSettingAssessmentId?: string;
   goalSettingPrompt?: string | null;
+  /** Exam mode — Training Grounds question bank id */
+  examQuizSetId?: string;
+  /** Optional linked assessment for scoring / dashboard */
+  examAssessmentId?: string;
+  workType?: 'mental' | string;
+  examSettings?: {
+    fullScreen?: boolean;
+    allowCombat?: boolean;
+    allowSkills?: boolean;
+    allowItems?: boolean;
+    awardPP?: boolean;
+    awardXP?: boolean;
+  };
+  liveEventMode?: string;
 }
 
 export interface InSessionPlayer {

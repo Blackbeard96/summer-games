@@ -820,6 +820,34 @@ service cloud.firestore {
         );
         allow delete: if isLiveEventStaff();
       }
+
+      // Exam Mode — per-player progress (answers, score, question index)
+      match /examProgress/{playerId} {
+        allow read: if canReadInSessionRoomSession(sessionId) && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          request.auth.uid == playerId
+        );
+        allow create: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          (
+            request.auth.uid == playerId &&
+            canReadInSessionRoomSession(sessionId) &&
+            request.resource.data.playerId == request.auth.uid
+          )
+        );
+        allow update: if request.auth != null && (
+          isLiveEventStaff() ||
+          isInSessionRoomHost(sessionId) ||
+          (
+            request.auth.uid == playerId &&
+            canReadInSessionRoomSession(sessionId) &&
+            resource.data.playerId == request.auth.uid
+          )
+        );
+        allow delete: if isLiveEventStaff();
+      }
     }
     
     // Challenge completions collection - allow users to read/write their own completions
@@ -1241,6 +1269,15 @@ service cloud.firestore {
     }
 
     match /quizProductivityLogs/{logId} {
+      allow read: if request.auth != null && (
+        isAssessmentDashboardStaff() ||
+        resource.data.userId == request.auth.uid
+      );
+      allow create, update: if productivityQuizWritable();
+      allow delete: if isProductivityAdmin();
+    }
+
+    match /examProductivityLogs/{logId} {
       allow read: if request.auth != null && (
         isAssessmentDashboardStaff() ||
         resource.data.userId == request.auth.uid

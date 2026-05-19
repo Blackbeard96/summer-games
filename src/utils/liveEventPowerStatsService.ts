@@ -169,6 +169,7 @@ export function getPowerTypeForEvent(eventType: string): PowerStatBranch {
     case 'team_battle_royale':
       return 'physical';
     case 'quiz':
+    case 'exam':
       return 'mental';
     case 'reflection':
       return 'emotional';
@@ -187,7 +188,8 @@ function liveModeToPowerSource(mode: string | undefined): LiveEventPowerSourceTy
     case 'battle_royale':
       return 'battle_royale';
     case 'quiz':
-      return 'quiz';
+    case 'exam':
+      return 'exam';
     case 'reflection':
       return 'reflection';
     case 'goal_setting':

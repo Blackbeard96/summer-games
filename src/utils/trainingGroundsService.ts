@@ -79,6 +79,23 @@ export function isTrainingQuizAcceptingSoloCompletions(quiz: TrainingQuizSet): b
   return quiz.playerCompletionsEnabled !== false;
 }
 
+/** Live Event / Exam Mode can use this CFU when unset or true. */
+export function isTrainingQuizLiveEventCompatible(quiz: TrainingQuizSet): boolean {
+  return quiz.isLiveEventCompatible !== false;
+}
+
+/** Published CFUs assigned to a class (Training Grounds bank for live exam). */
+export async function getPublishedQuizSetsForClass(classId: string): Promise<TrainingQuizSet[]> {
+  const trimmed = classId.trim();
+  if (!trimmed) return getPublishedQuizSets();
+  const all = await getPublishedQuizSets();
+  return all.filter(
+    (quiz) =>
+      isTrainingQuizLiveEventCompatible(quiz) &&
+      isTrainingQuizVisibleToStudentClasses(quiz, [trimmed])
+  );
+}
+
 function quizCreatedAtMs(quiz: TrainingQuizSet): number {
   const ts = quiz.createdAt as { toMillis?: () => number } | number | undefined;
   if (ts && typeof (ts as { toMillis?: () => number }).toMillis === 'function') {
@@ -194,15 +211,25 @@ export async function addQuestion(quizSetId: string, question: Omit<TrainingQues
 
 export async function getQuestions(quizSetId: string): Promise<TrainingQuestion[]> {
   const questionsRef = collection(db, 'trainingQuizSets', quizSetId, 'questions');
-  const q = query(questionsRef, orderBy('order', 'asc'));
-  const snapshot = await getDocs(q);
-  
-  const questions: TrainingQuestion[] = [];
-  snapshot.forEach(doc => {
-    questions.push({ id: doc.id, ...doc.data() } as TrainingQuestion);
-  });
-  
-  return questions;
+
+  const parseSnapshot = (snapshot: { forEach: (fn: (d: { id: string; data: () => Record<string, unknown> }) => void) => void }) => {
+    const questions: TrainingQuestion[] = [];
+    snapshot.forEach((docSnap) => {
+      questions.push({ id: docSnap.id, ...docSnap.data() } as TrainingQuestion);
+    });
+    questions.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return questions;
+  };
+
+  try {
+    const q = query(questionsRef, orderBy('order', 'asc'));
+    const snapshot = await getDocs(q);
+    return parseSnapshot(snapshot);
+  } catch (error) {
+    console.warn('[trainingGrounds] getQuestions orderBy failed, loading all questions', error);
+    const snapshot = await getDocs(questionsRef);
+    return parseSnapshot(snapshot);
+  }
 }
 
 export async function updateQuestion(quizSetId: string, questionId: string, updates: Partial<TrainingQuestion>): Promise<void> {

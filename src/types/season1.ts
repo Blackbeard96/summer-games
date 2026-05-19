@@ -13,7 +13,8 @@ export type LiveEventModeType =
   | 'quiz'
   | 'reflection'
   | 'goal_setting'
-  | 'neutral_flow';
+  | 'neutral_flow'
+  | 'exam';
 
 /** Timed goal sprint for Class Flow — stored on inSessionRooms.classFlowSprint */
 export type ClassFlowSprintStatus = 'live' | 'closed';

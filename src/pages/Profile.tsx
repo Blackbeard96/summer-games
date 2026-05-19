@@ -21,6 +21,12 @@ import {
 } from 'firebase/firestore';
 import type { ProductivityStatDoc } from '../utils/productivityTracking';
 import { tsMs } from '../utils/productivityTracking';
+import {
+  formatExamDurationMs,
+  loadExamHistoryForUser,
+  isLegacyExamQuizAttemptId,
+} from '../utils/examProfileHistory';
+import type { ExamProductivityLog } from '../types/examProductivity';
 import { ENERGY_TYPES, type BattleEnergyType } from '../constants/energyTypes';
 import { parseWorkStatsFromDoc, workCompletionRatePct, WORK_ENERGY_ORDER } from '../utils/workStatsTracking';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -182,6 +188,7 @@ const Profile = () => {
 
   type QuizActivityLog = {
     id: string;
+    attemptId?: string;
     quizTopic?: string;
     scorePercent?: number;
     completedAt?: unknown;
@@ -231,6 +238,8 @@ const Profile = () => {
   const [productivityActivityLoading, setProductivityActivityLoading] = useState(false);
   const [recentSprintActivity, setRecentSprintActivity] = useState<SprintActivityLog[]>([]);
   const [recentLiveEventQuizActivity, setRecentLiveEventQuizActivity] = useState<QuizActivityLog[]>([]);
+  const [examHistory, setExamHistory] = useState<ExamProductivityLog[]>([]);
+  const [showAllExamHistory, setShowAllExamHistory] = useState(false);
   const [civicState, setCivicState] = useState<MstCivicPlayerState | null | undefined>(undefined);
   const [profileTaxPreview, setProfileTaxPreview] = useState<{ nextMs: number; owedPp: number } | null>(null);
   const [, setTaxCountdownTick] = useState(0);
@@ -565,6 +574,7 @@ const Profile = () => {
       if (!currentUser) {
         setRecentSprintActivity([]);
         setRecentLiveEventQuizActivity([]);
+        setExamHistory([]);
         return;
       }
       setProductivityActivityLoading(true);
@@ -615,20 +625,36 @@ const Profile = () => {
           })
           .slice(0, 8);
         const allQuizRows = quizDocs.docs
-          .map((d) => ({ id: d.id, ...(d.data() as object) } as QuizActivityLog))
+          .map((d) => {
+            const data = d.data() as Record<string, unknown>;
+            return {
+              id: d.id,
+              ...(data as object),
+              attemptId: typeof data.attemptId === 'string' ? data.attemptId : undefined,
+            } as QuizActivityLog;
+          })
           .sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0));
         const liveQuizRows = allQuizRows
-          .filter((q) => q.mode === 'live')
+          .filter(
+            (q) =>
+              q.mode === 'live' &&
+              !isLegacyExamQuizAttemptId(q.attemptId) &&
+              !q.id.includes('__live_exam_')
+          )
           .slice(0, 3);
+
+        const exams = await loadExamHistoryForUser(currentUser.uid, 24);
 
         if (cancelled) return;
         setRecentSprintActivity(sprintRows);
         setRecentLiveEventQuizActivity(liveQuizRows);
+        setExamHistory(exams);
       } catch (error) {
         console.warn('Profile: unable to load productivity activity logs', error);
         if (!cancelled) {
           setRecentSprintActivity([]);
           setRecentLiveEventQuizActivity([]);
+          setExamHistory([]);
         }
       } finally {
         if (!cancelled) setProductivityActivityLoading(false);
@@ -1462,6 +1488,8 @@ const Profile = () => {
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint Completion Rate</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.sprintCompletionRate || 0)}%</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Quizzes Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalQuizzesCompleted || 0}</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Quiz Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageQuizScore || 0)}%</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Live Exams Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalExamsCompleted || 0}</div></div>
+                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Exam Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageExamScore || 0)}%</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Current Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Best Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.bestStreak ?? 0} wk</div></div>
                     <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.weeklyProductivityRating || 0)}%</div></div>
@@ -1728,6 +1756,80 @@ const Profile = () => {
                         </ul>
                       )}
                     </div>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: '0.85rem',
+                      padding: '0.75rem',
+                      background: 'linear-gradient(135deg, rgba(238,242,255,0.95) 0%, rgba(224,231,255,0.85) 100%)',
+                      borderRadius: '0.55rem',
+                      border: '1px solid rgba(79, 70, 229, 0.35)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#312e81' }}>Live Event Exam History</div>
+                      {examHistory.length > 5 ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllExamHistory((v) => !v)}
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            color: '#4f46e5',
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                          }}
+                        >
+                          {showAllExamHistory ? 'Show less' : `View all (${examHistory.length})`}
+                        </button>
+                      ) : null}
+                    </div>
+                    {productivityActivityLoading ? (
+                      <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>Loading exam history…</div>
+                    ) : examHistory.length === 0 ? (
+                      <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>
+                        No completed live exams yet. Finish an Exam Mode live event to see scores here.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {(showAllExamHistory ? examHistory : examHistory.slice(0, 5)).map((exam) => {
+                          const pct = Math.round(exam.scorePercent ?? 0);
+                          const whenMs = tsMs(exam.completedAt);
+                          const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
+                          const scoreColor = pct >= 90 ? '#059669' : pct >= 70 ? '#2563eb' : pct >= 50 ? '#d97706' : '#dc2626';
+                          return (
+                            <div
+                              key={exam.id}
+                              style={{
+                                background: 'rgba(255,255,255,0.75)',
+                                borderRadius: '0.45rem',
+                                padding: '0.5rem 0.6rem',
+                                border: '1px solid rgba(99, 102, 241, 0.25)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#1e293b' }}>{exam.title}</div>
+                                <div style={{ fontWeight: 800, fontSize: '0.95rem', color: scoreColor }}>{pct}%</div>
+                              </div>
+                              <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: 4 }}>
+                                {exam.correctAnswers}/{exam.totalQuestions} correct
+                                {exam.timeTakenMs ? ` · ${formatExamDurationMs(exam.timeTakenMs)}` : ''}
+                              </div>
+                              {exam.assessmentTitle ? (
+                                <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 2 }}>
+                                  Linked assessment: {exam.assessmentTitle}
+                                </div>
+                              ) : null}
+                              {whenStr ? (
+                                <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 4 }}>{whenStr}</div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (

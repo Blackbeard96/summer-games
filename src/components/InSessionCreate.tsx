@@ -10,6 +10,7 @@ import {
   getBattleEnergyTypeForLiveEventMode,
 } from '../constants/energyTypes';
 import { buildLiveEventTargeting, type LiveEventType } from '../utils/liveEventEligibility';
+import { DEFAULT_LIVE_EVENT_EXAM_SETTINGS } from '../types/liveEventExam';
 
 interface ClassroomOption {
   id: string;
@@ -121,6 +122,12 @@ const InSessionCreate: React.FC = () => {
         energyType: battleEnergyType,
         energyTypeAwarded,
         ...(liveEventMode === 'neutral_flow' ? { neutralFlowEnergyType: neutralEnergyOverride } : {}),
+        ...(liveEventMode === 'exam'
+          ? {
+              workType: 'mental',
+              examSettings: DEFAULT_LIVE_EVENT_EXAM_SETTINGS,
+            }
+          : {}),
         players: [{
           userId: currentUser.uid,
           displayName: currentUser.displayName || 'Teacher',
@@ -277,6 +284,7 @@ const InSessionCreate: React.FC = () => {
             <option value="quiz">Quiz — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('quiz'))}</option>
             <option value="reflection">Reflection — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('reflection'))}</option>
             <option value="goal_setting">Goal Setting — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('goal_setting'))}</option>
+            <option value="exam">Exam Mode — {battleEnergyDisplayLabel(getBattleEnergyTypeForLiveEventMode('exam'))}</option>
             <option value="neutral_flow">Neutral Flow — pick track below</option>
           </select>
           <p style={{ margin: '6px 0 0', fontSize: '0.85rem', color: '#4b5563' }}>
