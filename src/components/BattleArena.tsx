@@ -25,6 +25,10 @@ import { formatOpponentName } from '../utils/opponentNameFormatter';
 import { statusEffectVisualClass } from '../skillAnimation/statusVisuals';
 import { parseFirestoreDate, vaultHealthCooldownEnd } from '../utils/vaultDisplayNormalize';
 import type { SkillAvailabilityResult } from '../utils/skillAvailability';
+import {
+  isActionDisabledByStoryRestrictions,
+  type StoryBattleRestrictions,
+} from '../utils/storyBattleRestrictions';
 import './skillAnimation/skillAnimation.css';
 
 interface BattleArenaProps {
@@ -51,6 +55,8 @@ interface BattleArenaProps {
   onArtifactUsed?: () => void; // Callback when an artifact is used (e.g., Health Potion ends turn)
   /** Universal Law Skill Tree — same lines as Skill Mastery / combat math */
   universalLawBoonLines?: string[];
+  /** Story Mode / tutorial loadout restrictions */
+  storyBattleRestrictions?: StoryBattleRestrictions | null;
 }
 
 const BattleArena: React.FC<BattleArenaProps> = ({
@@ -74,6 +80,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
   opponentEffects = [],
   onArtifactUsed,
   universalLawBoonLines = [],
+  storyBattleRestrictions = null,
 }) => {
   const { currentUser } = useAuth();
   const { vault } = useBattle();
@@ -1004,8 +1011,33 @@ const BattleArena: React.FC<BattleArenaProps> = ({
               Selected: {selectedMove?.name || 'Unknown'}
             </div>
           )}
+          {storyBattleRestrictions?.tutorialMessage && (
+            <div style={{
+              fontSize: '0.75rem',
+              color: '#1e40af',
+              marginBottom: '0.5rem',
+              textAlign: 'center',
+              padding: '0.5rem',
+              background: 'rgba(59, 130, 246, 0.12)',
+              borderRadius: '0.35rem',
+              border: '1px solid rgba(59, 130, 246, 0.35)',
+              lineHeight: 1.4,
+            }}>
+              {storyBattleRestrictions.tutorialMessage}
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-            {availableMoves.map((move, index) => {
+            {availableMoves.length === 0 ? (
+              <div style={{
+                gridColumn: '1 / -1',
+                textAlign: 'center',
+                color: '#92400e',
+                fontSize: '0.8rem',
+                padding: '0.75rem',
+              }}>
+                No Manifest moves available. Select your Manifest, then return to this fight.
+              </div>
+            ) : availableMoves.map((move, index) => {
               const onCooldown = (move.currentCooldown ?? 0) > 0;
               const avail = skillAvailabilityByMoveId?.[move.id];
               const disabledMove = avail != null ? !avail.canUse : onCooldown;
@@ -1457,7 +1489,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           </button>
         )}
         {/* BAG button - only show when not in menus */}
-        {!showMoveMenu && !showTargetMenu && (
+        {!showMoveMenu && !showTargetMenu && !isActionDisabledByStoryRestrictions('bag', storyBattleRestrictions) && (
           <button
             type="button"
             onClick={(e) => {
@@ -1489,7 +1521,7 @@ const BattleArena: React.FC<BattleArenaProps> = ({
           </button>
         )}
         {/* VAULT button - only show when not in menus */}
-        {!showMoveMenu && !showTargetMenu && (
+        {!showMoveMenu && !showTargetMenu && !isActionDisabledByStoryRestrictions('vault', storyBattleRestrictions) && (
           <button
             type="button"
             onClick={(e) => {

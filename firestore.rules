@@ -144,18 +144,35 @@ service cloud.firestore {
       allow write: if request.auth != null && 
         (request.auth.uid == userId || isAdmin() || canSquadMateUpdateOtherUserPpOnly(userId));
       
-      // Protect rewardClaims subcollection - prevent deletion (idempotency protection)
+      // Protect rewardClaims subcollection - prevent deletion (idempotency protection).
+      // Admins write claims for test-account impersonation (auth.uid is admin, userId is the test player).
       match /rewardClaims/{challengeId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
-        allow create, update: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+        allow create, update: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
         // Prevent deletion to maintain idempotency records
         allow delete: if isAdmin();
       }
 
-      // Mission sequence reflections (when not merged into assessmentGoals) — self only
+      // Mission sequence reflections (when not merged into assessmentGoals) — self or admin (test accounts)
       match /missionReflectionResponses/{docId} {
-        allow read, create: if request.auth != null && request.auth.uid == userId;
-        allow update, delete: if request.auth != null && request.auth.uid == userId;
+        allow read, create: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
+        allow update, delete: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdmin() ||
+          isAppAdminUser()
+        );
       }
     }
     
@@ -195,14 +212,24 @@ service cloud.firestore {
           get(/databases/$(database)/documents/userRoles/$(request.auth.uid)).data.roles.hasAny(['scorekeeper'])));
     }
 
-    // Per-student settings (e.g. Live Feed privacy — liveFeedPrivacy.ts)
+    // Per-student settings (e.g. Live Feed privacy — liveFeedPrivacy.ts).
+    // Admins included so test-account impersonation can read/write settings under the test uid.
     match /students/{userId}/settings/{settingsDocId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
     }
 
-    // Per-student daily challenge progress (not covered by students/{userId} alone — subcollections need their own rule)
+    // Per-student daily challenge progress (not covered by students/{userId} alone — subcollections need their own rule).
+    // Owners always; admins need access for "switch to test account" (auth.uid stays admin, data is under students/{testAccountId}/...).
     match /students/{userId}/dailyChallenges/{progressDocId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
     }
 
     // Weekly player goals (Live Event metrics + custom admin-verified)
@@ -1089,8 +1116,11 @@ service cloud.firestore {
     // Player skill tree & battle loadout (NOT in-session battle players under inSessionRooms)
     // Path: players/{userId}/skill_state/main — equippedSkillIds, unlocked nodes, etc.
     match /players/{userId}/skill_state/{stateDocId} {
-      allow read, write: if request.auth != null &&
-        (request.auth.uid == userId || isAdmin());
+      allow read, write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
     }
 
     // Training Grounds attempts — users create/read own; staff read all (admin analytics).
@@ -1132,6 +1162,12 @@ service cloud.firestore {
       allow create, update, delete: if request.auth != null && (isAdmin() || isAppAdminUser());
     }
 
+    // Preview/modal images for Core Journey challenges (CHAPTERS) — Mission Admin uploads
+    match /journeyChallengeMedia/{challengeId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && (isAdmin() || isAppAdminUser());
+    }
+
     match /playerMissions/{playerMissionId} {
       // Single-doc reads (MissionRunner, status checks).
       allow get: if request.auth != null && (
@@ -1140,10 +1176,20 @@ service cloud.firestore {
       );
       // Queries: students use where('userId','==', auth.uid). Admins query by missionId only for bulk reset —
       // that list must be allowed without tying list permission to resource (see Firestore "secure queries").
+      // Admins also list with where('userId','==', testAccountId) while impersonating test players.
       allow list: if request.auth != null && (isAdmin() || isAppAdminUser());
       allow list: if request.auth != null && resource.data.userId == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow update: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Create/update for own missions; admins may act as test accounts (auth.uid stays admin, field userId is the test uid).
+      allow create: if request.auth != null && (
+        request.resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
+      allow update: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
       allow delete: if request.auth != null && (
         resource.data.userId == request.auth.uid ||
         isAdmin() || isAppAdminUser()
@@ -1151,7 +1197,11 @@ service cloud.firestore {
     }
 
     match /playerStoryProgress/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isAppAdminUser()
+      );
     }
 
     // Island Raid co-op / chapter battles (Timu Island, Squad Up, Island Raid lobby flow)
@@ -1159,6 +1209,8 @@ service cloud.firestore {
       // Allow get when the doc is missing (MissionRunner / solo rooms use the same gameId only under islandRaidBattleRooms).
       // Without this, exists() is false but rules still evaluate and deny reads on non-existent docs.
       allow read: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
         !exists(/databases/$(database)/documents/islandRaidGames/$(gameId)) ||
         (
           request.auth.uid == resource.data.hostId ||
@@ -1166,10 +1218,14 @@ service cloud.firestore {
         )
       );
       allow create: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
         request.auth.uid == request.resource.data.hostId ||
         (request.resource.data.players is list && request.auth.uid in request.resource.data.players)
       );
       allow update, delete: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
         request.auth.uid == resource.data.hostId ||
         (resource.data.players is list && request.auth.uid in resource.data.players)
       );
@@ -1178,6 +1234,8 @@ service cloud.firestore {
     match /islandRaidBattleRooms/{gameId} {
       function canAccessIslandRaidBattleRoomData() {
         return request.auth != null && (
+          isAdmin() ||
+          isAppAdminUser() ||
           (resource.data.players is list && request.auth.uid in resource.data.players) ||
           (
             exists(/databases/$(database)/documents/islandRaidGames/$(gameId)) &&
@@ -1193,10 +1251,18 @@ service cloud.firestore {
           (resource.data.status == 'active' || resource.data.status == 'wave_complete');
       }
       allow read: if canAccessIslandRaidBattleRoomData() || islandRaidBattleRoomJoinableRead();
-      allow create: if request.auth != null &&
-        request.resource.data.players is list &&
-        request.auth.uid in request.resource.data.players;
+      // MissionRunner writes players: [testAccountUid] while Firebase Auth stays on the admin.
+      allow create: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          request.resource.data.players is list &&
+          request.auth.uid in request.resource.data.players
+        )
+      );
       allow update, delete: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
         canAccessIslandRaidBattleRoomData() ||
         (request.resource.data.players is list && request.auth.uid in request.resource.data.players)
       );
@@ -1222,11 +1288,18 @@ service cloud.firestore {
     // Shared battle session state (Squad Up / BattleEngine) — participantUids set in app for rule checks
     match /battleSessions/{battleId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null &&
-        request.auth.uid == request.resource.data.hostId &&
-        request.resource.data.participantUids is list &&
-        request.auth.uid in request.resource.data.participantUids;
+      allow create: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
+        (
+          request.auth.uid == request.resource.data.hostId &&
+          request.resource.data.participantUids is list &&
+          request.auth.uid in request.resource.data.participantUids
+        )
+      );
       allow update, delete: if request.auth != null && (
+        isAdmin() ||
+        isAppAdminUser() ||
         request.auth.uid == resource.data.hostId ||
         (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
       );

@@ -11,6 +11,14 @@ import { Timestamp } from 'firebase/firestore';
 // Core Types
 // ============================================================================
 
+/** Habit commitment text length (live events, Set Goal modal, Firestore validation). */
+export const HABIT_TEXT_MIN_LENGTH = 3;
+export const HABIT_TEXT_MAX_LENGTH = 180;
+
+/** Story-goal text length. */
+export const STORY_GOAL_TEXT_MIN_LENGTH = 3;
+export const STORY_GOAL_TEXT_MAX_LENGTH = 500;
+
 export type WrittenAssessmentKind = 'test' | 'exam' | 'quiz';
 
 /** One prompt in a Reflection-type assessment (admin-configured). */

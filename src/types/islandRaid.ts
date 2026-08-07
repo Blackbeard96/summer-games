@@ -162,6 +162,12 @@ export interface IslandRaidBattleRoom {
   coopBattleMode?: CoopBattleMode;
   /** Mission sequence battle step config echo (optional). */
   missionCoop?: MissionBattleCoopConfig;
+  /** Mission-runner battles: custom arena backdrop URL from the BATTLE step. */
+  battleBackgroundUrl?: string;
+  isMissionBattle?: boolean;
+  missionId?: string;
+  stepId?: string;
+  playerMissionId?: string;
 }
 
 /** Admin-defined enemy template for one wave (count copies spawned). */

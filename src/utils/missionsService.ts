@@ -505,7 +505,68 @@ export async function acceptMission(
     return { success: true, playerMissionId: playerMissionRef.id };
   } catch (error) {
     console.error('Error accepting mission:', error);
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? String((error as { code?: string }).code)
+        : '';
+    if (code === 'permission-denied') {
+      return {
+        success: false,
+        error:
+          'Permission denied while accepting this mission. If you are using a test account, deploy updated Firestore rules so admins can write playerMissions for test players.',
+      };
+    }
     return { success: false, error: 'Failed to accept mission' };
+  }
+}
+
+/**
+ * Reopen a completed DEMO mission for practice (resets sequence progress; does not re-grant first-time rewards if claim ids already used).
+ */
+export async function redoDemoMission(
+  userId: string,
+  missionId: string,
+  source: MissionSource = 'HUB_NPC'
+): Promise<{ success: boolean; error?: string; playerMissionId?: string }> {
+  try {
+    const mission = await getMissionTemplate(missionId);
+    if (!mission) {
+      return { success: false, error: 'Mission not found' };
+    }
+    if (mission.missionCategory !== 'DEMO') {
+      return { success: false, error: 'Only Demo missions can be redone.' };
+    }
+
+    const playerMissions = await getPlayerMissions(userId);
+    const existing =
+      playerMissions.find((pm) => pm.missionId === missionId && pm.status === 'completed') ||
+      playerMissions.find((pm) => pm.missionId === missionId);
+
+    if (!existing) {
+      return acceptMission(userId, missionId, source);
+    }
+    if (existing.status === 'active') {
+      return { success: true, playerMissionId: existing.id };
+    }
+    if (existing.status !== 'completed') {
+      return { success: false, error: 'Mission cannot be redone right now.' };
+    }
+
+    await updateDoc(doc(db, 'playerMissions', existing.id), {
+      status: 'active',
+      source,
+      acceptedAt: serverTimestamp(),
+      completedAt: deleteField(),
+      sequencePlayheadIndex: deleteField(),
+      sequenceStepCompletion: deleteField(),
+      progress: {},
+      missionRewardChoicesPending: deleteField(),
+    });
+
+    return { success: true, playerMissionId: existing.id };
+  } catch (error) {
+    console.error('Error redoing demo mission:', error);
+    return { success: false, error: 'Failed to restart demo mission' };
   }
 }
 
@@ -782,7 +843,7 @@ export async function setPlayerMissionSequencePlayheadIndex(
 export async function markMissionSequenceStepComplete(
   playerMissionId: string,
   stepId: string,
-  extras?: { skillId?: string }
+  extras?: { skillId?: string; manifestId?: string; element?: string }
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const ref = doc(db, 'playerMissions', playerMissionId);
@@ -794,6 +855,8 @@ export async function markMissionSequenceStepComplete(
       [`sequenceStepCompletion.${stepId}`]: {
         completedAt: serverTimestamp(),
         ...(extras?.skillId ? { skillId: extras.skillId } : {}),
+        ...(extras?.manifestId ? { manifestId: extras.manifestId } : {}),
+        ...(extras?.element ? { element: extras.element } : {}),
       },
     });
     return { success: true };

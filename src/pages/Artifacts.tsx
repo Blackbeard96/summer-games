@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -26,6 +26,8 @@ import {
 } from '../utils/battleSkillsService';
 import { getPowerLevelBonusForRarity, normalizeArtifactRarity } from '../constants/artifactRarity';
 import { ARTIFACT_PERK_OPTIONS, type ArtifactPerkOption } from '../constants/artifactPerks';
+import { selectPlayerElement } from '../utils/elementSelectionService';
+import { formatElementDisplayLabel } from '../utils/elementDisplay';
 import {
   ELEMENTAL_ACCESS_ELEMENT_OPTIONS,
   hasElementalAccessPerkEquipped,
@@ -188,6 +190,16 @@ interface EquippedArtifacts {
 const Artifacts: React.FC = () => {
   const { currentUser, loading: authLoading } = useAuth();
   const { unlockElementalMoves } = useBattle();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnMissionId = searchParams.get('returnMission');
+  const missionPpGranted = searchParams.get('missionPp');
+  const fromMission =
+    !!returnMissionId && /^[a-zA-Z0-9_-]+$/.test(returnMissionId);
+  const safeReturnMissionPath = fromMission
+    ? `/mission/${encodeURIComponent(returnMissionId!)}/play`
+    : null;
+
   const [equippedArtifacts, setEquippedArtifacts] = useState<EquippedArtifacts>({});
   const [availableArtifacts, setAvailableArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -564,7 +576,7 @@ const Artifacts: React.FC = () => {
     );
   }
 
-  if (!artifactsUnlocked) {
+  if (!artifactsUnlocked && !fromMission) {
     return (
       <div style={{ 
         padding: '2rem', 
@@ -1193,62 +1205,27 @@ const Artifacts: React.FC = () => {
     setSelectedElement(element);
     
     try {
+      const result = await selectPlayerElement(currentUser.uid, element);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to select element');
+      }
+
+      // Refresh equipped artifacts from students doc for local UI
       const studentRef = doc(db, 'students', currentUser.uid);
       const studentDoc = await getDoc(studentRef);
-      
       if (studentDoc.exists()) {
         const studentData = studentDoc.data();
-        const elementLower = element.toLowerCase();
-        
-        // Create the Elemental Ring artifact object
-        const elementalRing: Artifact = {
-          id: 'elemental-ring-level-1',
-          name: `Elemental Ring: ${element} (Level 1)`,
-          slot: 'ring1',
-          level: 1,
-          image: '/images/Elemental Ring.png',
-          stats: {} // No stat bonuses, just the perk
-        };
-        
-        // Update equipped artifacts - equip to Ring 1 slot
-        const currentEquipped = studentData.equippedArtifacts || {};
-        const updatedEquippedArtifacts = {
-          ...currentEquipped,
-          ring1: elementalRing
-        };
-        
-        // Update student data with chosen element and equipped ring
-        const updatedArtifacts = {
-          ...(studentData.artifacts || {}),
-          elemental_ring_level_1: true,
-          elemental_ring_modal_seen: true,
-          chosen_element: elementLower
-        };
-        
-        // Update elementalAffinity if not already set
-        const updateData: any = {
-          artifacts: updatedArtifacts,
-          equippedArtifacts: updatedEquippedArtifacts
-        };
-        
-        if (!studentData.elementalAffinity) {
-          updateData.elementalAffinity = elementLower;
-        }
-        
-        await updateDoc(studentRef, updateData);
-        
-        // Update local state
-        setEquippedArtifacts(updatedEquippedArtifacts);
-        
-        // Unlock elemental moves for the chosen element
-        await unlockElementalMoves(elementLower);
-        
-        // Close modal after a brief delay to show success
-        setTimeout(() => {
-          setShowElementalRingModal(false);
-          alert(`🔥 ${element} elemental moves unlocked! You can now use ${element} moves in battle!`);
-        }, 500);
+        setEquippedArtifacts(studentData.equippedArtifacts || {});
       }
+
+      // Keep BattleContext moves in sync (selectPlayerElement already unlocked in Firestore)
+      await unlockElementalMoves(element.toLowerCase());
+
+      setTimeout(() => {
+        setShowElementalRingModal(false);
+        const label = formatElementDisplayLabel(element);
+        alert(`${label} elemental moves unlocked! You can now use ${label} moves in battle!`);
+      }, 500);
     } catch (error) {
       console.error('Error selecting element:', error);
       alert('Failed to select element. Please try again.');
@@ -1449,6 +1426,51 @@ const Artifacts: React.FC = () => {
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1600px', margin: '0 auto' }}>
+      {safeReturnMissionPath && (
+        <div
+          style={{
+            marginBottom: '1.25rem',
+            padding: '1rem 1.25rem',
+            borderRadius: '0.75rem',
+            background: 'linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%)',
+            border: '2px solid #8b5cf6',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+          }}
+        >
+          <div style={{ color: '#5b21b6', fontSize: '0.95rem', lineHeight: 1.45 }}>
+            <strong>Mission: Artifacts</strong>
+            {missionPpGranted && Number(missionPpGranted) > 0 ? (
+              <span>
+                {' '}
+                — +{Number(missionPpGranted).toLocaleString()} PP from this step. Equip gear, then return.
+              </span>
+            ) : (
+              <span> — Equip and edit your gear, then return to continue the mission.</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(safeReturnMissionPath)}
+            style={{
+              padding: '0.65rem 1.15rem',
+              background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              fontWeight: 800,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Return to mission
+          </button>
+        </div>
+      )}
+
       {/* Elemental Ring Reward Modal */}
       {showElementalRingModal && (
         <div style={{

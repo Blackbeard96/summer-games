@@ -357,12 +357,18 @@ export async function updateProgressOnChallengeComplete(
  * 1. Scans all completed challenges
  * 2. Ensures next challenges are properly unlocked
  * 3. Ensures completed chapters unlock next chapters
+ * 4. Detects unlock-without-completion gaps (next available but previous incomplete)
+ * 5. Backfills missing isCompleted/status when later challenges are already done
+ * Does NOT claw back rewards — only marks completion / unlocks.
  */
 export async function repairUserProgression(userId: string): Promise<{
   success: boolean;
   challengesRepaired: number;
   chaptersRepaired: number;
+  completionRecordsRepaired: number;
+  unlockGapsFixed: number;
   errors: string[];
+  findings: string[];
 }> {
   const DEBUG_PROGRESS = process.env.REACT_APP_DEBUG_PROGRESS === 'true';
   
@@ -371,8 +377,11 @@ export async function repairUserProgression(userId: string): Promise<{
   }
   
   const errors: string[] = [];
+  const findings: string[] = [];
   let challengesRepaired = 0;
   let chaptersRepaired = 0;
+  let completionRecordsRepaired = 0;
+  let unlockGapsFixed = 0;
   
   try {
     const userRef = doc(db, 'users', userId);
@@ -383,7 +392,10 @@ export async function repairUserProgression(userId: string): Promise<{
         success: false,
         challengesRepaired: 0,
         chaptersRepaired: 0,
-        errors: ['User document does not exist']
+        completionRecordsRepaired: 0,
+        unlockGapsFixed: 0,
+        errors: ['User document does not exist'],
+        findings: [],
       };
     }
     
@@ -395,47 +407,85 @@ export async function repairUserProgression(userId: string): Promise<{
     // Process each chapter
     for (const chapter of CHAPTERS) {
       const chapterKey = String(chapter.id);
-      const chapterProgress = chapters[chapterKey] || {};
-      const challenges = chapterProgress.challenges || {};
+      const chapterProgress = chapters[chapterKey] || chapters[chapter.id] || {};
+      const challenges = { ...(chapterProgress.challenges || {}) };
       
-      // Check each challenge in order
+      // Gap repair: if a later challenge is completed, mark earlier ones complete when missing
+      let sawIncomplete = false;
+      for (let i = 0; i < chapter.challenges.length; i++) {
+        const challenge = chapter.challenges[i];
+        const challengeProgress = challenges[challenge.id] || {};
+        const isCompleted = challengeProgress.isCompleted === true || challengeProgress.status === 'approved';
+
+        if (!isCompleted) {
+          // Look ahead: if any later challenge is completed, backfill this one
+          const laterComplete = chapter.challenges.slice(i + 1).some((later) => {
+            const p = challenges[later.id];
+            return p?.isCompleted === true || p?.status === 'approved';
+          });
+          if (laterComplete) {
+            findings.push(
+              `Ch${chapter.id}: ${challenge.id} missing completion but later mission complete — backfilling completion record (rewards NOT re-granted)`
+            );
+            challenges[challenge.id] = {
+              ...challengeProgress,
+              isCompleted: true,
+              status: 'approved',
+              completedAt: challengeProgress.completedAt || serverTimestamp(),
+              repairedCompletion: true,
+            };
+            completionRecordsRepaired++;
+            unlockGapsFixed++;
+            needsUpdate = true;
+          } else {
+            sawIncomplete = true;
+          }
+        } else if (
+          challengeProgress.isCompleted === true &&
+          challengeProgress.status !== 'approved'
+        ) {
+          // Normalize status so UI never treats completed as merely available
+          challenges[challenge.id] = {
+            ...challengeProgress,
+            status: 'approved',
+          };
+          completionRecordsRepaired++;
+          needsUpdate = true;
+          findings.push(`Ch${chapter.id}: ${challenge.id} had isCompleted without status=approved — normalized`);
+        }
+      }
+
+      // Ensure next challenge slots exist after completed ones
       for (let i = 0; i < chapter.challenges.length; i++) {
         const challenge = chapter.challenges[i];
         const challengeProgress = challenges[challenge.id] || {};
         const isCompleted = challengeProgress.isCompleted === true || challengeProgress.status === 'approved';
         
         if (isCompleted) {
-          // Challenge is completed - ensure next challenge exists (even if locked)
           if (i < chapter.challenges.length - 1) {
             const nextChallenge = chapter.challenges[i + 1];
-            if (!updatedChapters[chapterKey]) {
-              updatedChapters[chapterKey] = { ...chapterProgress };
-            }
-            if (!updatedChapters[chapterKey].challenges) {
-              updatedChapters[chapterKey].challenges = { ...challenges };
-            }
-            if (!updatedChapters[chapterKey].challenges[nextChallenge.id]) {
-              updatedChapters[chapterKey].challenges[nextChallenge.id] = {};
+            if (!challenges[nextChallenge.id]) {
+              challenges[nextChallenge.id] = {};
               challengesRepaired++;
               needsUpdate = true;
+              findings.push(`Ch${chapter.id}: ensured next slot for ${nextChallenge.id}`);
             }
           } else {
-            // Last challenge - check if chapter should be marked complete and next chapter unlocked
-            const allCompleted = areAllChallengesCompleted(chapter.id, {
-              ...chapterProgress,
-              challenges: updatedChapters[chapterKey]?.challenges || challenges
+            const allCompleted = chapter.challenges.every((c) => {
+              const p = challenges[c.id];
+              return p?.isCompleted === true || p?.status === 'approved';
             });
             
             if (allCompleted && !chapterProgress.isCompleted) {
-              if (!updatedChapters[chapterKey]) {
-                updatedChapters[chapterKey] = { ...chapterProgress };
-              }
-              updatedChapters[chapterKey].isCompleted = true;
-              updatedChapters[chapterKey].completionDate = chapterProgress.completionDate || serverTimestamp();
-              updatedChapters[chapterKey].isActive = false;
+              updatedChapters[chapterKey] = {
+                ...chapterProgress,
+                challenges,
+                isCompleted: true,
+                completionDate: chapterProgress.completionDate || serverTimestamp(),
+                isActive: false,
+              };
               needsUpdate = true;
               
-              // Unlock next chapter
               const nextChapterId = chapter.id + 1;
               const nextChapter = CHAPTERS.find(c => c.id === nextChapterId);
               
@@ -451,8 +501,11 @@ export async function repairUserProgression(userId: string): Promise<{
                   chaptersRepaired++;
                   needsUpdate = true;
                 } else if (!updatedChapters[nextChapterKey].isActive) {
-                  updatedChapters[nextChapterKey].isActive = true;
-                  updatedChapters[nextChapterKey].unlockDate = updatedChapters[nextChapterKey].unlockDate || serverTimestamp();
+                  updatedChapters[nextChapterKey] = {
+                    ...updatedChapters[nextChapterKey],
+                    isActive: true,
+                    unlockDate: updatedChapters[nextChapterKey].unlockDate || serverTimestamp(),
+                  };
                   chaptersRepaired++;
                   needsUpdate = true;
                 }
@@ -460,6 +513,21 @@ export async function repairUserProgression(userId: string): Promise<{
             }
           }
         }
+      }
+
+      if (!updatedChapters[chapterKey] || updatedChapters[chapterKey].challenges !== challenges) {
+        updatedChapters[chapterKey] = {
+          ...(updatedChapters[chapterKey] || chapterProgress),
+          challenges,
+          // Ch1/Ch2 stay active for journey access
+          isActive: chapter.id === 1 || chapter.id === 2
+            ? true
+            : (updatedChapters[chapterKey]?.isActive ?? chapterProgress.isActive ?? false),
+        };
+      }
+
+      if (sawIncomplete && DEBUG_PROGRESS) {
+        console.log(`[Progression] Chapter ${chapter.id} still has incomplete challenges`);
       }
     }
     
@@ -476,7 +544,9 @@ export async function repairUserProgression(userId: string): Promise<{
       if (DEBUG_PROGRESS) {
         console.log(`[Progression] Repair complete:`, {
           challengesRepaired,
-          chaptersRepaired
+          chaptersRepaired,
+          completionRecordsRepaired,
+          unlockGapsFixed,
         });
       }
     }
@@ -485,7 +555,10 @@ export async function repairUserProgression(userId: string): Promise<{
       success: true,
       challengesRepaired,
       chaptersRepaired,
-      errors
+      completionRecordsRepaired,
+      unlockGapsFixed,
+      errors,
+      findings,
     };
   } catch (error: any) {
     console.error(`[Progression] Error repairing progression:`, error);
@@ -494,7 +567,10 @@ export async function repairUserProgression(userId: string): Promise<{
       success: false,
       challengesRepaired,
       chaptersRepaired,
-      errors
+      completionRecordsRepaired,
+      unlockGapsFixed,
+      errors,
+      findings,
     };
   }
 }

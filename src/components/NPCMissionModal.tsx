@@ -2,7 +2,7 @@
  * NPC Mission Modal
  * 
  * Shows missions available from a specific NPC (Sonido, Zeke, Luz, Kon)
- * Displays STORY missions pinned at top, then Sovereign lore, Profile, and Side missions below
+ * Displays STORY missions pinned at top, then Demo / Sovereign lore, Profile, and Side missions below
  */
 
 import React, { useState, useEffect } from 'react';
@@ -13,6 +13,7 @@ import {
   getPlayerMissions, 
   getPlayerStoryProgress,
   acceptMission,
+  redoDemoMission,
   getMissionStatus,
   getActiveStoryMissionForChapter,
   getProfileJourneyContent,
@@ -82,6 +83,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const navigate = useNavigate();
   const [sideMissions, setSideMissions] = useState<MissionTemplate[]>([]);
   const [sovereignMissions, setSovereignMissions] = useState<MissionTemplate[]>([]);
+  const [demoMissions, setDemoMissions] = useState<MissionTemplate[]>([]);
   const [storyMissions, setStoryMissions] = useState<MissionTemplate[]>([]);
   const [profileMissions, setProfileMissions] = useState<MissionTemplate[]>([]);
   const [playerMissions, setPlayerMissions] = useState<PlayerMission[]>([]);
@@ -92,6 +94,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const [activeStoryMission, setActiveStoryMission] = useState<PlayerMission | null>(null);
   const [loading, setLoading] = useState(true);
   const [acceptingMissionId, setAcceptingMissionId] = useState<string | null>(null);
+  const [redoingMissionId, setRedoingMissionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -129,7 +132,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
         setPlayerMissions(playerMissionsData);
 
-        // Fetch all HUB_NPC missions for this NPC (SIDE, SOVEREIGN, STORY, PROFILE) in one query
+        // Fetch all HUB_NPC missions for this NPC (SIDE, DEMO, SOVEREIGN, STORY, PROFILE) in one query
         const allMissionsData = await getMissionTemplates({
           npc,
           deliveryChannel: 'HUB_NPC'
@@ -139,6 +142,9 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
         );
         setSovereignMissions(
           sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'SOVEREIGN'))
+        );
+        setDemoMissions(
+          sortMissionsForHubList(allMissionsData.filter((m) => m.missionCategory === 'DEMO'))
         );
         const profileList = allMissionsData.filter(m => m.missionCategory === 'PROFILE');
         setProfileMissions(profileList);
@@ -201,6 +207,13 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
           );
           setActiveStoryMission(active);
         }
+
+        // Demo missions with a sequence should start immediately after accept
+        const demoMission = demoMissions.find((m) => m.id === missionId);
+        if (demoMission?.sequence && demoMission.sequence.length > 0) {
+          onClose();
+          navigate(`/mission/${encodeURIComponent(missionId)}/play`);
+        }
       } else {
         alert(result.error || 'Failed to accept mission');
       }
@@ -209,6 +222,32 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
       alert('Failed to accept mission');
     } finally {
       setAcceptingMissionId(null);
+    }
+  };
+
+  const handleRedoDemoMission = async (mission: MissionTemplate) => {
+    if (!currentUser || redoingMissionId || acceptingMissionId) return;
+    if (!(mission.sequence && mission.sequence.length > 0)) {
+      alert('This demo has no playable steps yet.');
+      return;
+    }
+
+    setRedoingMissionId(mission.id);
+    try {
+      const result = await redoDemoMission(currentUser.uid, mission.id, 'HUB_NPC');
+      if (!result.success) {
+        alert(result.error || 'Failed to restart demo');
+        return;
+      }
+      const playerMissionsData = await getPlayerMissions(currentUser.uid);
+      setPlayerMissions(playerMissionsData);
+      onClose();
+      navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+    } catch (error) {
+      console.error('Error redoing demo mission:', error);
+      alert('Failed to restart demo');
+    } finally {
+      setRedoingMissionId(null);
     }
   };
 
@@ -263,6 +302,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
   const noNpcMissionsAvailable =
     storyMissions.length === 0 &&
     sovereignMissions.length === 0 &&
+    demoMissions.length === 0 &&
     sideMissions.length === 0 &&
     profileMissions.length === 0;
 
@@ -495,6 +535,148 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                             >
                               Track in Journey
                             </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Demo Missions — showcase what MST can do */}
+            {demoMissions.length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{ color: '#67e8f9', marginBottom: '0.35rem', fontSize: '1.25rem' }}>
+                  Demo Missions
+                </h3>
+                <p style={{ color: '#9ca3af', fontSize: '0.8rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
+                  Try features and see what the MST Game is about.
+                </p>
+                {demoMissions.map((mission, demoIndex) => {
+                  const status = getMissionPlayerStatus(mission.id);
+                  const displayNum = demoIndex + 1;
+                  return (
+                    <div
+                      key={mission.id}
+                      style={{
+                        backgroundColor: 'rgba(6, 182, 212, 0.12)',
+                        border: '2px solid #06b6d4',
+                        borderRadius: '0.5rem',
+                        padding: '1rem',
+                        marginBottom: '1rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                        <h4 style={{ color: 'white', margin: 0, fontSize: '1rem' }}>
+                          <span style={{ color: '#a5f3fc', fontWeight: 800, marginRight: '0.35rem' }}>
+                            {displayNum}.
+                          </span>
+                          {mission.title}
+                        </h4>
+                        {status === 'active' && (
+                          <span style={{
+                            backgroundColor: '#0891b2',
+                            color: 'white',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ACTIVE
+                          </span>
+                        )}
+                        {status === 'completed' && (
+                          <span style={{
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}>
+                            ✓ COMPLETED
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ color: '#d1d5db', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                        {mission.description}
+                      </p>
+                      <MissionRewardsPreview mission={mission} />
+                      {status === 'available' && (
+                        <button
+                          onClick={() => handleAcceptMission(mission.id)}
+                          disabled={acceptingMissionId === mission.id}
+                          style={{
+                            backgroundColor: '#0891b2',
+                            color: 'white',
+                            border: 'none',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor: acceptingMissionId === mission.id ? 'not-allowed' : 'pointer',
+                            fontWeight: 'bold',
+                            opacity: acceptingMissionId === mission.id ? 0.5 : 1
+                          }}
+                        >
+                          {acceptingMissionId === mission.id ? 'Starting…' : 'Start Demo'}
+                        </button>
+                      )}
+                      {status === 'active' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                navigate(`/mission/${encodeURIComponent(mission.id)}/play`);
+                              }}
+                              style={{
+                                backgroundColor: '#67e8f9',
+                                color: '#0f172a',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Continue demo →
+                            </button>
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>
+                              This demo has no playable steps yet. Check back later or contact an admin.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {status === 'completed' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {mission.sequence && mission.sequence.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleRedoDemoMission(mission)}
+                              disabled={redoingMissionId === mission.id || acceptingMissionId === mission.id}
+                              style={{
+                                backgroundColor: 'transparent',
+                                color: '#67e8f9',
+                                border: '1px solid #06b6d4',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '0.5rem',
+                                cursor:
+                                  redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                fontWeight: 'bold',
+                                opacity:
+                                  redoingMissionId === mission.id || acceptingMissionId === mission.id
+                                    ? 0.5
+                                    : 1,
+                              }}
+                            >
+                              {redoingMissionId === mission.id ? 'Restarting…' : 'Redo demo'}
+                            </button>
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#9ca3af' }}>Completed.</p>
                           )}
                         </div>
                       )}
@@ -892,7 +1074,7 @@ const NPCMissionModal: React.FC<NPCMissionModalProps> = ({
                 </p>
                 <p style={{ margin: 0, fontSize: '0.8rem' }}>
                   In Mission Admin, set <strong style={{ color: '#e5e7eb' }}>NPC</strong> to {npcName},{' '}
-                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, Sovereign, SIDE, and
+                  check <strong style={{ color: '#e5e7eb' }}>HUB_NPC</strong>, and save. STORY, Demo, Sovereign, SIDE, and
                   Profile missions all appear here once assigned.
                 </p>
               </div>

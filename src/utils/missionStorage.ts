@@ -46,6 +46,108 @@ export async function uploadMissionImage(
   return { url, storagePath };
 }
 
+/**
+ * Upload a background image for a mission BATTLE step.
+ * Separate path from story slides so battle and slide assets do not overwrite each other.
+ */
+export async function uploadMissionBattleBackground(
+  missionId: string,
+  stepId: string,
+  imageFile: File
+): Promise<{ url: string; storagePath: string }> {
+  const fileExtension = imageFile.name.split('.').pop() || 'png';
+  const storagePath = `missions/${missionId}/battles/${stepId}-bkg.${fileExtension}`;
+  const storageRef = ref(storage, storagePath);
+
+  await uploadBytes(storageRef, imageFile, {
+    contentType: imageFile.type,
+    customMetadata: {
+      uploadedAt: new Date().toISOString(),
+      missionId,
+      stepId,
+      kind: 'battle-background',
+    },
+  });
+
+  const url = await getDownloadURL(storageRef);
+  return { url, storagePath };
+}
+
+/**
+ * Upload a result image for one option on a CHOICE mission step.
+ * Path is unique per choice so options on the same step do not overwrite each other.
+ */
+export async function uploadMissionChoiceResultImage(
+  missionId: string,
+  stepId: string,
+  choiceId: string,
+  imageFile: File
+): Promise<{ url: string; storagePath: string }> {
+  const validationError = validateMissionPreviewImage(imageFile);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+  const fileExtension = imageFile.name.split('.').pop() || 'png';
+  const safeChoiceId = choiceId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const storagePath = `missions/${missionId}/choices/${stepId}_${safeChoiceId}.${fileExtension}`;
+  const storageRef = ref(storage, storagePath);
+
+  await uploadBytes(storageRef, imageFile, {
+    contentType: imageFile.type,
+    customMetadata: {
+      uploadedAt: new Date().toISOString(),
+      missionId,
+      stepId,
+      choiceId,
+    },
+  });
+
+  const url = await getDownloadURL(storageRef);
+  return { url, storagePath };
+}
+
+const PREVIEW_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const PREVIEW_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export function validateMissionPreviewImage(file: File): string | null {
+  if (!PREVIEW_IMAGE_TYPES.has(file.type) && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) {
+    return 'Invalid file type. Use JPG, PNG, WebP, or GIF.';
+  }
+  if (file.size > PREVIEW_MAX_BYTES) {
+    return 'Image must be 5 MB or smaller.';
+  }
+  return null;
+}
+
+/**
+ * Upload Journey preview or modal image for a mission template.
+ */
+export async function uploadMissionPreviewImage(
+  missionId: string,
+  kind: 'preview' | 'modal',
+  imageFile: File
+): Promise<{ url: string; storagePath: string }> {
+  const validationError = validateMissionPreviewImage(imageFile);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+  const fileExtension = imageFile.name.split('.').pop() || 'png';
+  const storagePath = `missions/${missionId}/${kind}.${fileExtension}`;
+  const storageRef = ref(storage, storagePath);
+
+  await uploadBytes(storageRef, imageFile, {
+    contentType: imageFile.type || 'image/png',
+    customMetadata: {
+      uploadedAt: new Date().toISOString(),
+      missionId,
+      kind,
+    },
+  });
+
+  const url = await getDownloadURL(storageRef);
+  return { url, storagePath };
+}
+
 const VIDEO_MIME: Record<string, string> = {
   mp4: 'video/mp4',
   webm: 'video/webm',

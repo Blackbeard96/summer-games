@@ -38,7 +38,16 @@ const Login = () => {
       }
       navigate('/profile');
     } catch (error: any) {
-      setError(error.message || 'An error occurred');
+      const code = error?.code as string | undefined;
+      if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+        setError(
+          'Email or password is incorrect. Use your full school email (e.g. name@compscihigh.org), complete the password reset link from your inbox, then sign in with the new password—not your old one.'
+        );
+      } else if (code === 'auth/too-many-requests') {
+        setError('Too many attempts. Wait a few minutes, then try again or use Forgot your password.');
+      } else {
+        setError(error.message || 'An error occurred');
+      }
     } finally {
       setLoading(false);
     }

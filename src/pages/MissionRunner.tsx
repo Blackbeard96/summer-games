@@ -53,9 +53,18 @@ import MissionLevel2ManifestStepPanel, {
   computeLevel2StepReady,
   fetchPlayerMissionCompletion,
 } from '../components/mission/MissionLevel2ManifestStepPanel';
+import MissionChooseManifestStepPanel from '../components/mission/MissionChooseManifestStepPanel';
+import MissionSkillsMasteryStepPanel from '../components/mission/MissionSkillsMasteryStepPanel';
+import MissionArtifactsStepPanel from '../components/mission/MissionArtifactsStepPanel';
+import MissionElementalSkillsStepPanel from '../components/mission/MissionElementalSkillsStepPanel';
+import MissionPowerCardStepPanel from '../components/mission/MissionPowerCardStepPanel';
 import { getLevel2ManifestState } from '../services/level2ManifestService';
 import { DEFAULT_MAX_ALLIED_PARTICIPANTS } from '../constants/coopBattle';
 import { stripUndefinedDeep } from '../utils/firestoreSanitize';
+import {
+  grantMissionChoiceArtifacts,
+  resolveArtifactNames,
+} from '../utils/missionChoiceArtifactGrant';
 
 /**
  * Mission Admin difficulty scales enemy health, shields, and attack damage from a single baseline (EASY = 1×).
@@ -120,6 +129,10 @@ const MissionRunner: React.FC = () => {
   const [reflectionHabitEvidenceType, setReflectionHabitEvidenceType] = useState<HabitEvidenceType>('other');
   const [reflectionStoryTextGoal, setReflectionStoryTextGoal] = useState('');
   const [reflectionStoryEvidence, setReflectionStoryEvidence] = useState('');
+  const [choiceSelectedId, setChoiceSelectedId] = useState<string | null>(null);
+  const [choiceGrantBusy, setChoiceGrantBusy] = useState(false);
+  const [choiceGrantPreviewNames, setChoiceGrantPreviewNames] = useState<Record<string, string>>({});
+
   const [reflectionLinkCtx, setReflectionLinkCtx] = useState<{
     loading: boolean;
     assessmentTitle: string | null;
@@ -219,6 +232,32 @@ const MissionRunner: React.FC = () => {
 
   const currentStep = mission?.sequence?.[currentStepIndex];
   const isLastStep = mission?.sequence ? currentStepIndex === mission.sequence.length - 1 : false;
+
+  const selectedChoice =
+    currentStep?.type === 'CHOICE' && choiceSelectedId
+      ? currentStep.choices.find((c) => c.id === choiceSelectedId) ?? null
+      : null;
+  const choiceBlocksNext = currentStep?.type === 'CHOICE' && !selectedChoice;
+
+  useEffect(() => {
+    setChoiceSelectedId(null);
+    setChoiceGrantPreviewNames({});
+  }, [currentStepIndex, currentStep?.id]);
+
+  useEffect(() => {
+    const ids = selectedChoice?.result?.grantArtifactIds?.filter((id) => id?.trim()) || [];
+    if (ids.length === 0) {
+      setChoiceGrantPreviewNames({});
+      return;
+    }
+    let cancelled = false;
+    void resolveArtifactNames(ids).then((names) => {
+      if (!cancelled) setChoiceGrantPreviewNames(names);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedChoice?.id, selectedChoice?.result?.grantArtifactIds]);
   const reflectionAssessmentLinkId =
     currentStep?.type === 'REFLECTION' ? currentStep.linkedAssessmentId : undefined;
 
@@ -446,6 +485,31 @@ const MissionRunner: React.FC = () => {
 
   const l2BlocksNext = currentStep?.type === 'LEVEL2_MANIFEST' && !l2StepReady;
 
+  const chooseManifestBlocksNext =
+    currentStep?.type === 'CHOOSE_MANIFEST' &&
+    currentStep.requireSelection !== false &&
+    !missionStepCompletion[currentStep.id];
+
+  const skillsMasteryBlocksNext =
+    currentStep?.type === 'SKILLS_MASTERY' &&
+    currentStep.requireVisit !== false &&
+    !missionStepCompletion[currentStep.id];
+
+  const artifactsBlocksNext =
+    currentStep?.type === 'ARTIFACTS' &&
+    currentStep.requireVisit !== false &&
+    !missionStepCompletion[currentStep.id];
+
+  const elementalSkillsBlocksNext =
+    currentStep?.type === 'ELEMENTAL_SKILLS' &&
+    currentStep.requireSelection !== false &&
+    !missionStepCompletion[currentStep.id];
+
+  const powerCardBlocksNext =
+    currentStep?.type === 'POWER_CARD' &&
+    currentStep.requireVisit !== false &&
+    !missionStepCompletion[currentStep.id];
+
   const missionPayoutTotals = useMemo(
     () => (mission ? computeMissionFixedRewardTotals(mission) : { xp: 0, pp: 0, truthMetal: 0 }),
     [mission]
@@ -539,6 +603,73 @@ const MissionRunner: React.FC = () => {
       if (l2BlocksNext) return;
     }
 
+    if (currentStep.type === 'CHOOSE_MANIFEST') {
+      if (chooseManifestBlocksNext) return;
+    }
+
+    if (currentStep.type === 'SKILLS_MASTERY') {
+      if (skillsMasteryBlocksNext) return;
+    }
+
+    if (currentStep.type === 'ARTIFACTS') {
+      if (artifactsBlocksNext) return;
+    }
+
+    if (currentStep.type === 'ELEMENTAL_SKILLS') {
+      if (elementalSkillsBlocksNext) return;
+    }
+
+    if (currentStep.type === 'POWER_CARD') {
+      if (powerCardBlocksNext) return;
+    }
+
+    if (currentStep.type === 'CHOICE') {
+      if (!selectedChoice) return;
+      const grantIds = (selectedChoice.result.grantArtifactIds || []).filter((id) => id?.trim());
+      if (grantIds.length > 0 && currentUser) {
+        setChoiceGrantBusy(true);
+        try {
+          await grantMissionChoiceArtifacts({
+            userId: currentUser.uid,
+            artifactIds: grantIds,
+            missionId: missionId!,
+            stepId: currentStep.id,
+            choiceId: selectedChoice.id,
+          });
+        } catch (e) {
+          console.error('Failed to grant choice artifacts', e);
+          alert(e instanceof Error ? e.message : 'Failed to grant artifacts from this choice.');
+          setChoiceGrantBusy(false);
+          return;
+        } finally {
+          setChoiceGrantBusy(false);
+        }
+      }
+      const jumpId = selectedChoice.goToStepId?.trim();
+      let nextIndex: number | null = null;
+      if (jumpId && mission.sequence) {
+        const idx = mission.sequence.findIndex((s) => s.id === jumpId);
+        if (idx >= 0) nextIndex = idx;
+      }
+      if (nextIndex == null) {
+        if (isLastStep) {
+          await handleComplete();
+          return;
+        }
+        nextIndex = currentStepIndex + 1;
+      }
+      if (playerMissionId) {
+        try {
+          await setPlayerMissionSequencePlayheadIndex(playerMissionId, nextIndex);
+        } catch (e) {
+          console.error('Failed to save mission step position', e);
+        }
+      }
+      setChoiceSelectedId(null);
+      setCurrentStepIndex(nextIndex);
+      return;
+    }
+
     if (isLastStep) {
       await handleComplete();
     } else {
@@ -561,6 +692,10 @@ const MissionRunner: React.FC = () => {
   };
 
   const handleBack = async () => {
+    if (currentStep?.type === 'CHOICE' && choiceSelectedId) {
+      setChoiceSelectedId(null);
+      return;
+    }
     if (currentStepIndex <= 0) return;
     const prevIndex = currentStepIndex - 1;
     if (playerMissionId) {
@@ -681,6 +816,14 @@ const MissionRunner: React.FC = () => {
       const mergedCpuOpponents = await loadMergedCpuOpponents();
       const opponentById = new Map(mergedCpuOpponents.map((o) => [o.id, o]));
 
+      // Pre-sync Manifest skills so Fight menu never opens empty for demos / missions
+      try {
+        const { ensureManifestSkillsForBattle } = await import('../utils/battleMovesManifestSync');
+        await ensureManifestSkillsForBattle(currentUser.uid);
+      } catch (skillPrepErr) {
+        console.warn('Mission battle skill prep:', skillPrepErr);
+      }
+
       const gameId = `mission-battle-${missionId}-${currentStep.id}-${Date.now()}`;
       const battleConfig = currentStep.battle;
       if (!battleConfig) {
@@ -726,6 +869,31 @@ const MissionRunner: React.FC = () => {
         return out;
       };
 
+      /**
+       * Legacy enemy types that should spawn from the CPU Opponent catalog
+       * (stats, moves, image) instead of the generic stub template.
+       */
+      const LEGACY_TYPE_TO_CPU_ID: Record<string, string> = {
+        AHINTA_TUMI: 'ahinta-tumi',
+      };
+
+      const partitionLegacyTokens = (typeTokens: string[]) => {
+        const cpuIds: string[] = [];
+        const genericTypes: string[] = [];
+        for (const t of typeTokens) {
+          const cpuId = LEGACY_TYPE_TO_CPU_ID[t] || LEGACY_TYPE_TO_CPU_ID[t.toUpperCase()];
+          if (cpuId && opponentById.has(cpuId)) {
+            cpuIds.push(cpuId);
+          } else if (cpuId) {
+            // Catalog not loaded / missing — still try CPU id so image/name resolve when possible
+            cpuIds.push(cpuId);
+          } else {
+            genericTypes.push(t);
+          }
+        }
+        return { cpuIds, genericTypes };
+      };
+
       /** Expand CPU spawns from opponentIds + opponentCounts; cap at maxPerWave. */
       const expandCpuSpawns = (opponentIds: string[], opponentCounts?: Record<string, number>): string[] => {
         const out: string[] = [];
@@ -741,15 +909,44 @@ const MissionRunner: React.FC = () => {
       };
 
       const generateEnemiesForWave = (waveNum: number, enemyTypes: string[]) => {
-        const enemies: any[] = [];
-        const count = Math.min(maxPerWave, Math.max(1, enemyTypes.length * 2));
         const types = enemyTypes.length ? enemyTypes : battleConfig.enemySet;
+        // Prefer catalog-backed spawns for types like AHINTA_TUMI; keep legacy 2× padding for pure stubs.
+        const { cpuIds, genericTypes } = partitionLegacyTokens(types);
+        if (cpuIds.length > 0 && genericTypes.length === 0) {
+          // Expand each catalog type twice to match historical generateEnemiesForWave density.
+          const doubled: string[] = [];
+          for (const id of cpuIds) {
+            doubled.push(id, id);
+            if (doubled.length >= maxPerWave) break;
+          }
+          return generateEnemiesFromExpandedCpuIds(waveNum, doubled.slice(0, maxPerWave));
+        }
+        if (cpuIds.length > 0) {
+          const fromCpu = generateEnemiesFromExpandedCpuIds(waveNum, cpuIds);
+          const stubCount = Math.min(
+            maxPerWave - fromCpu.length,
+            Math.max(0, genericTypes.length * 2)
+          );
+          const stubTokens: string[] = [];
+          for (let i = 0; i < stubCount; i++) {
+            stubTokens.push(genericTypes[i % genericTypes.length]);
+          }
+          const fromGeneric = generateEnemiesFromExpandedTypes(waveNum, stubTokens).map((e, i) => ({
+            ...e,
+            id: `enemy_${waveNum}_legacy_${cpuIds.length + i}`,
+          }));
+          return [...fromCpu, ...fromGeneric].slice(0, maxPerWave);
+        }
+        const enemies: any[] = [];
+        const count = Math.min(maxPerWave, Math.max(1, types.length * 2));
         for (let i = 0; i < count; i++) {
           const enemyType = types[i % types.length];
+          const displayName =
+            enemyType === 'AHINTA_TUMI' ? 'Ahinta Tumi' : enemyType.replace(/_/g, ' ');
           enemies.push({
             id: `enemy_${waveNum}_${i}`,
             type: enemyType.toLowerCase(),
-            name: `${enemyType} ${i + 1}`,
+            name: `${displayName} ${i + 1}`,
             health,
             maxHealth: health,
             shieldStrength: shield,
@@ -760,7 +957,10 @@ const MissionRunner: React.FC = () => {
             position: { x: Math.random() * 100, y: Math.random() * 100 },
             spawnTime: new Date(),
             waveNumber: waveNum,
-            image: `/images/${enemyType}.png`
+            image:
+              enemyType === 'AHINTA_TUMI'
+                ? '/images/Ahinta Tumi Agent.png'
+                : `/images/${enemyType}.png`,
           });
         }
         return enemies;
@@ -770,10 +970,12 @@ const MissionRunner: React.FC = () => {
         const enemies: any[] = [];
         for (let i = 0; i < typeTokens.length; i++) {
           const enemyType = typeTokens[i];
+          const displayName =
+            enemyType === 'AHINTA_TUMI' ? 'Ahinta Tumi' : enemyType.replace(/_/g, ' ');
           enemies.push({
             id: `enemy_${waveNum}_${i}`,
             type: enemyType.toLowerCase(),
-            name: `${enemyType} ${i + 1}`,
+            name: `${displayName} ${i + 1}`,
             health,
             maxHealth: health,
             shieldStrength: shield,
@@ -784,10 +986,25 @@ const MissionRunner: React.FC = () => {
             position: { x: Math.random() * 100, y: Math.random() * 100 },
             spawnTime: new Date(),
             waveNumber: waveNum,
-            image: `/images/${enemyType}.png`
+            image:
+              enemyType === 'AHINTA_TUMI'
+                ? '/images/Ahinta Tumi Agent.png'
+                : `/images/${enemyType}.png`,
           });
         }
         return enemies;
+      };
+
+      /** Resolve legacy type tokens, routing catalog-backed types (e.g. Ahinta Tumi) through CPU spawns. */
+      const generateEnemiesFromLegacyTokens = (waveNum: number, typeTokens: string[]) => {
+        const { cpuIds, genericTypes } = partitionLegacyTokens(typeTokens);
+        const fromCpu = cpuIds.length > 0 ? generateEnemiesFromExpandedCpuIds(waveNum, cpuIds) : [];
+        // Offset generic ids so they do not collide with CPU rows from the same wave index.
+        const fromGeneric = generateEnemiesFromExpandedTypes(waveNum, genericTypes).map((e, i) => ({
+          ...e,
+          id: `enemy_${waveNum}_legacy_${cpuIds.length + i}`,
+        }));
+        return [...fromCpu, ...fromGeneric];
       };
 
       const generateEnemiesFromExpandedCpuIds = (waveNum: number, spawnIds: string[]) => {
@@ -906,7 +1123,7 @@ const MissionRunner: React.FC = () => {
             );
             customWaves[waveNum] =
               typeTokens.length > 0
-                ? generateEnemiesFromExpandedTypes(waveNum, typeTokens)
+                ? generateEnemiesFromLegacyTokens(waveNum, typeTokens)
                 : generateEnemiesForWave(waveNum, waveConfig.enemySet || battleConfig.enemySet);
           }
         }
@@ -950,6 +1167,10 @@ const MissionRunner: React.FC = () => {
         roundNumber: 1,
         hostPlayerId: currentUser.uid,
       };
+      const bgUrl = battleConfig.backgroundImage?.url?.trim();
+      if (bgUrl) {
+        battleRoomData.battleBackgroundUrl = bgUrl;
+      }
       if (customWaves) {
         battleRoomData.customWaves = customWaves;
       }
@@ -1262,6 +1483,169 @@ const MissionRunner: React.FC = () => {
             stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
             onRefreshCompletion={() => void refreshMissionStepProgress()}
           />
+        )}
+
+        {currentStep.type === 'CHOOSE_MANIFEST' && currentUser && (
+          <MissionChooseManifestStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
+        {currentStep.type === 'SKILLS_MASTERY' && currentUser && (
+          <MissionSkillsMasteryStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            missionId={missionId!}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
+        {currentStep.type === 'ARTIFACTS' && currentUser && (
+          <MissionArtifactsStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            missionId={missionId!}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
+        {currentStep.type === 'ELEMENTAL_SKILLS' && currentUser && (
+          <MissionElementalSkillsStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
+        {currentStep.type === 'POWER_CARD' && currentUser && (
+          <MissionPowerCardStepPanel
+            step={currentStep}
+            userId={currentUser.uid}
+            missionId={missionId!}
+            playerMissionId={playerMissionId}
+            stepAlreadyComplete={!!missionStepCompletion[currentStep.id]}
+            onRefreshCompletion={() => void refreshMissionStepProgress()}
+          />
+        )}
+
+        {currentStep.type === 'CHOICE' && (
+          <div>
+            {currentStep.title && <h2 style={{ marginBottom: '1rem' }}>{currentStep.title}</h2>}
+            {currentStep.bodyText && (
+              <p
+                style={{
+                  fontSize: '1.05rem',
+                  lineHeight: 1.6,
+                  whiteSpace: 'pre-wrap',
+                  marginBottom: '1.25rem',
+                  color: '#374151',
+                }}
+              >
+                {currentStep.bodyText}
+              </p>
+            )}
+
+            {!selectedChoice ? (
+              <>
+                <p style={{ fontWeight: 700, marginBottom: '1rem', fontSize: '1.15rem', lineHeight: 1.45 }}>
+                  {currentStep.prompt}
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {currentStep.choices.map((choice) => (
+                    <button
+                      key={choice.id}
+                      type="button"
+                      onClick={() => setChoiceSelectedId(choice.id)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '1rem 1.15rem',
+                        background: '#fdf2f8',
+                        border: '2px solid #f9a8d4',
+                        borderRadius: '0.75rem',
+                        cursor: 'pointer',
+                        color: '#831843',
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{choice.label}</div>
+                      {choice.description?.trim() && (
+                        <div style={{ marginTop: '0.35rem', fontSize: '0.9rem', color: '#9d174d' }}>
+                          {choice.description}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div
+                style={{
+                  padding: '1.25rem',
+                  background: '#fff7ed',
+                  border: '1px solid #fdba74',
+                  borderRadius: '0.75rem',
+                }}
+              >
+                <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 700, color: '#9a3412' }}>
+                  You chose: {selectedChoice.label}
+                </p>
+                {selectedChoice.result.title?.trim() && (
+                  <h3 style={{ margin: '0 0 0.75rem', color: '#9a3412' }}>{selectedChoice.result.title}</h3>
+                )}
+                {selectedChoice.result.imageUrl?.trim() && (
+                  <img
+                    src={selectedChoice.result.imageUrl}
+                    alt={selectedChoice.result.title || selectedChoice.label}
+                    style={{
+                      width: '100%',
+                      maxHeight: '320px',
+                      objectFit: 'contain',
+                      borderRadius: '0.5rem',
+                      marginBottom: '1rem',
+                      background: '#fff',
+                    }}
+                  />
+                )}
+                <p style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.65, whiteSpace: 'pre-wrap', color: '#374151' }}>
+                  {selectedChoice.result.bodyText}
+                </p>
+                {((selectedChoice.result.grantArtifactIds || []).filter((id) => id?.trim()).length > 0) && (
+                  <div
+                    style={{
+                      marginTop: '1rem',
+                      padding: '0.75rem 0.9rem',
+                      background: '#ecfdf5',
+                      border: '1px solid #6ee7b7',
+                      borderRadius: '0.5rem',
+                    }}
+                  >
+                    <p style={{ margin: '0 0 0.35rem', fontWeight: 700, fontSize: '0.85rem', color: '#065f46' }}>
+                      Artifact reward
+                    </p>
+                    <ul style={{ margin: 0, paddingLeft: '1.1rem', color: '#047857', fontSize: '0.95rem' }}>
+                      {(selectedChoice.result.grantArtifactIds || [])
+                        .filter((id) => id?.trim())
+                        .map((id) => (
+                          <li key={id}>{choiceGrantPreviewNames[id] || choiceGrantPreviewNames[id.trim()] || id}</li>
+                        ))}
+                    </ul>
+                    <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#065f46' }}>
+                      Continue to claim {((selectedChoice.result.grantArtifactIds || []).filter((id) => id?.trim()).length === 1) ? 'this artifact' : 'these artifacts'}.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {currentStep.type === 'REFLECTION' && (
@@ -1605,14 +1989,20 @@ const MissionRunner: React.FC = () => {
         }}>
           <button
             onClick={handleBack}
-            disabled={currentStepIndex === 0}
+            disabled={currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)}
             style={{
               padding: '0.75rem 1.5rem',
-              background: currentStepIndex === 0 ? '#e5e7eb' : '#6b7280',
+              background:
+                currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)
+                  ? '#e5e7eb'
+                  : '#6b7280',
               color: 'white',
               border: 'none',
               borderRadius: '0.5rem',
-              cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer',
+              cursor:
+                currentStepIndex === 0 && !(currentStep.type === 'CHOICE' && choiceSelectedId)
+                  ? 'not-allowed'
+                  : 'pointer',
               fontWeight: 'bold'
             }}
           >
@@ -1632,33 +2022,64 @@ const MissionRunner: React.FC = () => {
           >
             Exit
           </button>
-          {currentStep.type !== 'BATTLE' && (
+          {currentStep.type !== 'BATTLE' && (() => {
+            const nextCompletes =
+              currentStep.type === 'CHOICE'
+                ? !!selectedChoice &&
+                  !(
+                    selectedChoice.goToStepId &&
+                    mission.sequence?.some((s) => s.id === selectedChoice.goToStepId)
+                  ) &&
+                  isLastStep
+                : isLastStep;
+            const nextBlocked =
+              trainingBlocksNext ||
+              reflectionBlocksNext ||
+              reflectionSaving ||
+              l2BlocksNext ||
+              choiceBlocksNext ||
+              choiceGrantBusy ||
+              chooseManifestBlocksNext ||
+              elementalSkillsBlocksNext ||
+              skillsMasteryBlocksNext ||
+              artifactsBlocksNext ||
+              powerCardBlocksNext;
+            return (
             <button
               onClick={() => void handleNext()}
-              disabled={
-                trainingBlocksNext || reflectionBlocksNext || reflectionSaving || l2BlocksNext
-              }
+              disabled={nextBlocked}
               style={{
                 padding: '0.75rem 1.5rem',
-                background:
-                  trainingBlocksNext || reflectionBlocksNext || reflectionSaving || l2BlocksNext
-                    ? '#9ca3af'
-                    : isLastStep
-                      ? '#10b981'
-                      : '#3b82f6',
+                background: nextBlocked ? '#9ca3af' : nextCompletes ? '#10b981' : '#3b82f6',
                 color: 'white',
                 border: 'none',
                 borderRadius: '0.5rem',
-                cursor:
-                  trainingBlocksNext || reflectionBlocksNext || reflectionSaving || l2BlocksNext
-                    ? 'not-allowed'
-                    : 'pointer',
+                cursor: nextBlocked ? 'not-allowed' : 'pointer',
                 fontWeight: 'bold',
               }}
             >
-              {reflectionSaving ? 'Saving…' : isLastStep ? 'Complete Mission ✓' : 'Next →'}
+              {reflectionSaving
+                ? 'Saving…'
+                : choiceGrantBusy
+                  ? 'Claiming…'
+                  : currentStep.type === 'CHOICE' && !selectedChoice
+                  ? 'Choose an option'
+                  : chooseManifestBlocksNext
+                    ? 'Choose a manifest'
+                    : elementalSkillsBlocksNext
+                      ? 'Awaken Elemental Skills'
+                      : skillsMasteryBlocksNext
+                        ? 'Open Skills & Mastery'
+                        : artifactsBlocksNext
+                          ? 'Open Artifacts'
+                          : powerCardBlocksNext
+                            ? 'Open Power Card'
+                            : nextCompletes
+                              ? 'Complete Mission ✓'
+                              : 'Next →'}
             </button>
-          )}
+            );
+          })()}
         </div>
       </div>
 

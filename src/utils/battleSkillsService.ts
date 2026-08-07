@@ -28,6 +28,7 @@ import {
 } from './universalLawBoons';
 import { getActiveLevel2ManifestMove } from '../services/level2ManifestService';
 import { applyCanonicalSkillCostAndCooldown } from './skillCooldownCost';
+import { hasElementalMoveAccess } from './elementalAccess';
 
 // Prevent console log spam; only emit a small number of Magical Paintbrush debug lines.
 let artifactPaintbrushDebugEmitted = false;
@@ -570,6 +571,69 @@ function sortBattlePoolSkills(skills: Move[]): void {
   });
 }
 
+/** Prefer Manifest → elemental → other; deprioritize base vault system skills in loadouts. */
+function pickPreferredLoadout(unlocked: Move[], maxSlots: number): Move[] {
+  const sorted = [...unlocked];
+  sortBattlePoolSkills(sorted);
+  const nonVaultSystem = sorted.filter(
+    (m) =>
+      !(
+        m.category === 'system' &&
+        (m.name === 'Vault Hack' || m.name === 'Shield Restoration')
+      )
+  );
+  const pool = nonVaultSystem.length > 0 ? nonVaultSystem : sorted;
+  return pool.slice(0, maxSlots);
+}
+
+function isBaseVaultSystemMove(m: Move): boolean {
+  return (
+    m.category === 'system' &&
+    (m.name === 'Vault Hack' || m.name === 'Shield Restoration')
+  );
+}
+
+async function resolveUserManifestId(userId: string, studentData: Record<string, unknown>): Promise<string | null> {
+  const { normalizeManifestId } = await import('./battleMovesManifestSync');
+
+  const fromRecord = (data: Record<string, unknown> | undefined | null): string | null => {
+    if (!data) return null;
+    const m = data.manifest;
+    if (m && typeof m === 'object' && typeof (m as { manifestId?: unknown }).manifestId === 'string') {
+      return normalizeManifestId((m as { manifestId: string }).manifestId);
+    }
+    if (typeof m === 'string' && m.trim()) return normalizeManifestId(m);
+    return null;
+  };
+
+  const fromStudent = fromRecord(studentData);
+  if (fromStudent) return fromStudent;
+
+  try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    if (userSnap.exists()) {
+      const fromUser = fromRecord(userSnap.data() as Record<string, unknown>);
+      if (fromUser) return fromUser;
+    }
+  } catch (e) {
+    console.warn('[battleSkillsService] users.manifest lookup failed:', e);
+  }
+  return null;
+}
+
+function persistEquippedSkillIds(userId: string, ids: string[]): void {
+  const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
+  setDoc(
+    skillStateRef,
+    {
+      equippedSkillIds: ids,
+      lastUpdated: serverTimestamp(),
+      version: 'v1',
+    },
+    { merge: true }
+  ).catch(() => {});
+}
+
 /**
  * Get all unlocked skills eligible for battle
  * 
@@ -589,50 +653,115 @@ export async function getUserUnlockedSkillsForBattle(
   battleMoves?: Move[]
 ): Promise<Move[]> {
   try {
-    // Fetch moves from Firestore if not provided
-    let allMoves: Move[] = battleMoves || [];
-    
-    if (allMoves.length === 0) {
+    // Always prefer Firestore for the target userId. Optional `battleMoves` is only a cache when
+    // the caller is sure it matches this userId — never accept it alone if Firestore has data.
+    let allMoves: Move[] = [];
+    try {
       const movesRef = doc(db, 'battleMoves', userId);
       const movesDoc = await getDoc(movesRef);
-      allMoves = movesDoc.exists() ? (movesDoc.data().moves || []) : [];
+      if (movesDoc.exists()) {
+        allMoves = (movesDoc.data().moves || []) as Move[];
+      }
+    } catch (e) {
+      console.warn('[battleSkillsService] firestore battleMoves fetch failed, using optional cache if provided', e);
+    }
+    if (allMoves.length === 0 && battleMoves && battleMoves.length > 0) {
+      allMoves = battleMoves;
     }
 
-    // Get user's RR Candy status
-    const rrCandyStatus = await getRRCandyStatusAsync(userId);
-    const rrCandyUnlocked = rrCandyStatus.unlocked;
-    const rrCandyType = rrCandyStatus.candyType;
+    // Get user's RR Candy status (never hard-fail the whole skill load for this)
+    let rrCandyUnlocked = false;
+    let rrCandyType: string | null = null;
+    try {
+      const rrCandyStatus = await getRRCandyStatusAsync(userId);
+      rrCandyUnlocked = rrCandyStatus.unlocked;
+      rrCandyType = rrCandyStatus.candyType;
+    } catch (e) {
+      console.warn('[battleSkillsService] RR Candy status skipped:', e);
+    }
 
     const [studentDoc, catalogData] = await Promise.all([
-      getDoc(doc(db, 'students', userId)),
+      getDoc(doc(db, 'students', userId)).catch(() => null),
       getDoc(doc(db, 'adminSettings', 'equippableArtifacts'))
         .then((s) => (s.exists() ? (s.data() as Record<string, unknown>) : null))
         .catch(() => null),
     ]);
-    const studentData = studentDoc.exists() ? studentDoc.data() : {};
-    const artifactSkillMoves = await getArtifactSkillMovesForStudentData(studentData, catalogData);
+    const studentData = (studentDoc && studentDoc.exists() ? studentDoc.data() : {}) as Record<string, unknown>;
+    let artifactSkillMoves: Move[] = [];
+    try {
+      artifactSkillMoves = await getArtifactSkillMovesForStudentData(studentData, catalogData);
+    } catch (e) {
+      console.warn('[battleSkillsService] artifact skills skipped:', e);
+    }
 
-    let userManifest: string | null = null;
-    if (studentData.manifest && typeof studentData.manifest === 'object' && studentData.manifest.manifestId) {
-      userManifest = studentData.manifest.manifestId;
-    } else if (studentData.manifest && typeof studentData.manifest === 'string') {
-      userManifest = studentData.manifest;
+    const userManifest = await resolveUserManifestId(userId, studentData);
+
+    // Self-heal: empty/wrong battleMoves, or no unlocked moves for the chosen Manifest.
+    // Always end with in-memory template moves if Firestore is empty or out of date.
+    if (userManifest) {
+      const unlockedManifest = allMoves.filter((m) => m.category === 'manifest' && m.unlocked);
+      const mismatched =
+        unlockedManifest.length > 0 &&
+        unlockedManifest.some(
+          (m) =>
+            m.manifestType &&
+            m.manifestType.toString().toLowerCase() !== userManifest
+        );
+      const noneForChosen =
+        allMoves.length === 0 ||
+        unlockedManifest.length === 0 ||
+        !unlockedManifest.some(
+          (m) => (m.manifestType || '').toString().toLowerCase() === userManifest
+        );
+      if (mismatched || noneForChosen) {
+        try {
+          const {
+            syncBattleMovesForManifest,
+            buildBattleMovesForManifest,
+          } = await import('./battleMovesManifestSync');
+          try {
+            allMoves = await syncBattleMovesForManifest(userId, userManifest);
+          } catch (syncErr) {
+            console.warn('[battleSkillsService] auto-sync battleMoves failed, using templates:', syncErr);
+            allMoves = buildBattleMovesForManifest(userManifest, {
+              existingMoves: allMoves,
+              canUseElemental: hasElementalMoveAccess(studentData),
+              userElement: (
+                (studentData.artifacts as Record<string, unknown> | undefined)?.chosen_element ||
+                studentData.elementalAffinity ||
+                userElement ||
+                ''
+              )
+                .toString()
+                .toLowerCase(),
+            });
+          }
+        } catch (e) {
+          console.warn('[battleSkillsService] auto-sync battleMoves to manifest failed:', e);
+        }
+      }
     }
 
     if (!userManifest) {
       console.warn(`[battleSkillsService] No valid manifest for user ${userId}; returning non-manifest + artifact skills (+ RR Candy when unlocked)`);
-      const base = allMoves.filter(move => move.category !== 'manifest');
+      const canUseElemental = hasElementalMoveAccess(studentData as Record<string, unknown>);
+      const base = allMoves.filter(
+        (move) =>
+          move.category !== 'manifest' &&
+          (move.category !== 'elemental' || (canUseElemental && move.unlocked))
+      );
       const uniqueSkills = new Map<string, Move>();
       base.forEach(s => uniqueSkills.set(s.id, s));
       artifactSkillMoves.forEach(s => uniqueSkills.set(s.id, s));
       let rrCandySkills: Move[] = [];
       if (rrCandyUnlocked && rrCandyType) {
+        const candyType = rrCandyType;
         try {
           rrCandySkills = await getUserRRCandySkills(userId, allMoves);
           rrCandySkills = rrCandySkills.filter((skill) => {
             const id = (skill.id || '').toLowerCase();
             if (!id.startsWith('rr-candy-')) return false;
-            const userT = rrCandyType.toLowerCase().replace(/_/g, '-');
+            const userT = candyType.toLowerCase().replace(/_/g, '-');
             if (userT === 'config') return id.includes('konfig');
             const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
             const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
@@ -668,41 +797,73 @@ export async function getUserUnlockedSkillsForBattle(
         : '';
 
     // Filter Manifest Skills
-    const manifestSkills = allMoves.filter(move => {
+    let manifestSkills = allMoves.filter(move => {
       if (move.category !== 'manifest') return false;
       if (!move.unlocked) return false;
       // Only include moves that match user's manifest
-      if (move.manifestType && move.manifestType !== userManifest) return false;
+      if (
+        move.manifestType &&
+        move.manifestType.toString().toLowerCase() !== userManifest
+      ) {
+        return false;
+      }
       return true;
     });
 
-    // Filter Elemental Skills (primary + Elemental Access secondary)
-    const elementalSkills = allMoves.filter(move => {
-      if (move.category !== 'elemental') return false;
-      if (!move.unlocked) return false;
-      const aff = (move.elementalAffinity || '').toString().toLowerCase();
-      if (!aff) return false;
-      if (element && aff === element) return true;
-      if (secondaryElement && aff === secondaryElement) return true;
-      return false;
-    });
+    // Guaranteed Manifest kit when firestore unlocks are still empty (demo / new test accounts)
+    if (manifestSkills.length === 0) {
+      try {
+        const { getManifestSkillsFromTemplates, buildBattleMovesForManifest } = await import(
+          './battleMovesManifestSync'
+        );
+        manifestSkills = getManifestSkillsFromTemplates(userManifest);
+        if (allMoves.length === 0) {
+          allMoves = buildBattleMovesForManifest(userManifest, {
+            existingMoves: [],
+            canUseElemental: hasElementalMoveAccess(studentData),
+            userElement: element,
+          });
+        }
+      } catch (e) {
+        console.warn('[battleSkillsService] template Manifest fallback failed:', e);
+      }
+    }
+
+    // Elemental skills require Chapter 1-8 Elemental Ring (artifacts.elemental_ring_level_1)
+    const canUseElemental = hasElementalMoveAccess(studentData as Record<string, unknown>);
+    const elementalSkills = canUseElemental
+      ? allMoves.filter(move => {
+          if (move.category !== 'elemental') return false;
+          if (!move.unlocked) return false;
+          const aff = (move.elementalAffinity || '').toString().toLowerCase();
+          if (!aff) return false;
+          if (element && aff === element) return true;
+          if (secondaryElement && aff === secondaryElement) return true;
+          return false;
+        })
+      : [];
 
     // Get RR Candy Skills (using shared service)
     let rrCandySkills: Move[] = [];
     if (rrCandyUnlocked && rrCandyType) {
-      rrCandySkills = await getUserRRCandySkills(userId, allMoves);
-      // Filter to only include skills for the user's candy type
-      rrCandySkills = rrCandySkills.filter((skill) => {
-        const id = (skill.id || '').toLowerCase();
-        if (!id.startsWith('rr-candy-')) return false;
-        const userT = rrCandyType.toLowerCase().replace(/_/g, '-');
-        if (userT === 'config') return id.includes('konfig');
-        const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
-        const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
-        const normalizedSkillType = skillCandyType?.toLowerCase().replace(/_/g, '-');
-        const normalizedUserType = userT;
-        return normalizedSkillType === normalizedUserType;
-      });
+      const candyType = rrCandyType;
+      try {
+        rrCandySkills = await getUserRRCandySkills(userId, allMoves);
+        // Filter to only include skills for the user's candy type
+        rrCandySkills = rrCandySkills.filter((skill) => {
+          const id = (skill.id || '').toLowerCase();
+          if (!id.startsWith('rr-candy-')) return false;
+          const userT = candyType.toLowerCase().replace(/_/g, '-');
+          if (userT === 'config') return id.includes('konfig');
+          const skillCandyMatch = skill.id.match(/^rr-candy-([^-]+(?:-[^-]+)?)-/);
+          const skillCandyType = skillCandyMatch ? skillCandyMatch[1] : null;
+          const normalizedSkillType = skillCandyType?.toLowerCase().replace(/_/g, '-');
+          const normalizedUserType = userT;
+          return normalizedSkillType === normalizedUserType;
+        });
+      } catch (e) {
+        console.warn('[battleSkillsService] RR Candy skill load skipped:', e);
+      }
     }
 
     const battleSkills: Move[] = [
@@ -712,12 +873,16 @@ export async function getUserUnlockedSkillsForBattle(
       ...artifactSkillMoves,
     ];
 
-    const lawEffects = await getPlayerUniversalLawEffects(userId);
-    if (lawEffects.unlockedSpecificSkillIds.length > 0) {
-      const bonusSkills = allMoves.filter((m) =>
-        lawEffects.unlockedSpecificSkillIds.includes(m.id)
-      );
-      battleSkills.push(...bonusSkills);
+    try {
+      const lawEffects = await getPlayerUniversalLawEffects(userId);
+      if (lawEffects.unlockedSpecificSkillIds.length > 0) {
+        const bonusSkills = allMoves.filter((m) =>
+          lawEffects.unlockedSpecificSkillIds.includes(m.id)
+        );
+        battleSkills.push(...bonusSkills);
+      }
+    } catch (e) {
+      console.warn('[battleSkillsService] universal law bonuses skipped:', e);
     }
 
     const uniqueSkills = new Map<string, Move>();
@@ -727,8 +892,20 @@ export async function getUserUnlockedSkillsForBattle(
       }
     });
 
-    const finalSkills = Array.from(uniqueSkills.values());
+    let finalSkills = Array.from(uniqueSkills.values());
     sortBattlePoolSkills(finalSkills);
+
+    // Absolute last resort: always deliver L1 Manifest skills when the player has a Manifest
+    if (finalSkills.filter((s) => s.category === 'manifest').length === 0) {
+      try {
+        const { getManifestSkillsFromTemplates } = await import('./battleMovesManifestSync');
+        const local = getManifestSkillsFromTemplates(userManifest);
+        finalSkills = [...local, ...finalSkills];
+        sortBattlePoolSkills(finalSkills);
+      } catch {
+        /* ignore */
+      }
+    }
 
     if (process.env.NODE_ENV === 'development') {
       console.log('🎯 getUserUnlockedSkillsForBattle:', {
@@ -783,18 +960,59 @@ export async function getEquippedSkillsForBattle(
   battleMoves?: Move[]
 ): Promise<Move[]> {
   try {
-    const [skillState, unlocked, lawEffects] = await Promise.all([
-      getPlayerSkillState(userId),
-      getUserUnlockedSkillsForBattle(userId, userElement, battleMoves),
-      getPlayerUniversalLawEffects(userId),
-    ]);
-    const maxSlots = getMaxLoadoutSlotsFromEffects(lawEffects);
+    let skillState: Awaited<ReturnType<typeof getPlayerSkillState>> = {
+      unlockedNodeIds: [],
+      equippedSkillIds: [],
+      skillUpgrades: {},
+      version: 'v1',
+    };
+    let unlocked: Move[] = [];
+    let maxSlots = 6;
+
+    try {
+      skillState = await getPlayerSkillState(userId);
+    } catch (e) {
+      console.warn('[getEquippedSkillsForBattle] skill_state skipped:', e);
+    }
+
+    try {
+      unlocked = await getUserUnlockedSkillsForBattle(userId, userElement, battleMoves);
+    } catch (e) {
+      console.error('[getEquippedSkillsForBattle] unlocked skills failed:', e);
+      unlocked = [];
+    }
+
+    // Template Manifest fallback if unlocked is still empty (e.g. no firestore profile yet)
+    if (unlocked.filter((m) => m.category === 'manifest').length === 0) {
+      try {
+        const { loadPlayerManifest } = await import('./playerManifestSelection');
+        const { getManifestSkillsFromTemplates } = await import('./battleMovesManifestSync');
+        const m = await loadPlayerManifest(userId);
+        if (m?.manifestId) {
+          unlocked = [
+            ...getManifestSkillsFromTemplates(m.manifestId).map(applyCanonicalSkillCostAndCooldown),
+            ...unlocked,
+          ];
+        }
+      } catch (e) {
+        console.warn('[getEquippedSkillsForBattle] template fallback failed:', e);
+      }
+    }
+
+    try {
+      const lawEffects = await getPlayerUniversalLawEffects(userId);
+      maxSlots = getMaxLoadoutSlotsFromEffects(lawEffects);
+    } catch (e) {
+      console.warn('[getEquippedSkillsForBattle] law slots defaulted to 6:', e);
+      maxSlots = 6;
+    }
+
     const equippedIds = skillState.equippedSkillIds || [];
 
     const byId = new Map<string, Move>();
     unlocked.forEach(m => byId.set(m.id, m));
 
-    /** RR Candy + L2 manifest are not stored in equippedSkillIds; append here so battle matches unlock state. */
+    /** RR Candy, L2, and unlocked elementals are often missing from equippedSkillIds; append so battle matches unlock state. */
     const appendRrCandyAndLevel2Meta = async (base: Move[]): Promise<Move[]> => {
       let out = [...base];
       const rrExtras = unlocked.filter(
@@ -802,6 +1020,12 @@ export async function getEquippedSkillsForBattle(
       );
       if (rrExtras.length > 0) {
         out = [...out, ...rrExtras];
+      }
+      const elementalExtras = unlocked.filter(
+        (m) => m.category === 'elemental' && !out.some((b) => b.id === m.id)
+      );
+      if (elementalExtras.length > 0) {
+        out = [...out, ...elementalExtras];
       }
       try {
         const l2 = await getActiveLevel2ManifestMove(userId);
@@ -812,40 +1036,67 @@ export async function getEquippedSkillsForBattle(
       return out;
     };
 
+    const unlockedManifest = unlocked.filter((m) => m.category === 'manifest');
+    const rebuildPreferred = (): Move[] => {
+      const preferred = pickPreferredLoadout(unlocked, maxSlots);
+      if (preferred.length > 0) {
+        persistEquippedSkillIds(
+          userId,
+          preferred.map((m) => m.id)
+        );
+      }
+      return preferred;
+    };
+
+    // Demo / onboarding: if player has Manifest skills at all, never return an empty fight menu —
+    // always surface at least their Manifest kit (full preferred loadout, not a stale empty equip list).
+    if (unlockedManifest.length > 0) {
+      if (equippedIds.length > 0) {
+        const result: Move[] = [];
+        for (const id of equippedIds.slice(0, maxSlots)) {
+          const move = byId.get(id);
+          if (move) result.push(move);
+        }
+        const hasManifestEquipped = result.some((m) => m.category === 'manifest');
+        const onlyVaultSystem =
+          result.length > 0 && result.every((m) => isBaseVaultSystemMove(m));
+        if (hasManifestEquipped && !onlyVaultSystem && result.length > 0) {
+          return appendRrCandyAndLevel2Meta(result);
+        }
+      }
+      const preferred = rebuildPreferred();
+      if (preferred.length > 0) {
+        return appendRrCandyAndLevel2Meta(preferred);
+      }
+      // Prefer every unlocked Manifest skill over empty
+      return appendRrCandyAndLevel2Meta(unlockedManifest.slice(0, maxSlots));
+    }
+
     if (equippedIds.length > 0) {
       const result: Move[] = [];
-      const cappedIds = equippedIds.slice(0, maxSlots);
-      for (const id of cappedIds) {
+      for (const id of equippedIds.slice(0, maxSlots)) {
         const move = byId.get(id);
         if (move) result.push(move);
       }
-      if (process.env.NODE_ENV === 'development') {
-        console.log('🎯 getEquippedSkillsForBattle (equipped):', { count: result.length, ids: equippedIds });
+      if (result.length > 0) {
+        return appendRrCandyAndLevel2Meta(result);
       }
-      return appendRrCandyAndLevel2Meta(result);
     }
 
-    const fallback = unlocked.slice(0, maxSlots);
-    if (fallback.length > 0) {
-      const ids = fallback.map(m => m.id);
-      const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-      setDoc(
-        skillStateRef,
-        {
-          equippedSkillIds: ids,
-          lastUpdated: serverTimestamp(),
-          version: 'v1',
-        },
-        { merge: true }
-      ).catch(() => {});
-      if (process.env.NODE_ENV === 'development') {
-        console.log('🎯 getEquippedSkillsForBattle (fallback, persisted):', { count: fallback.length, ids });
-      }
-      return appendRrCandyAndLevel2Meta(fallback);
-    }
-    return appendRrCandyAndLevel2Meta([]);
+    return appendRrCandyAndLevel2Meta(rebuildPreferred());
   } catch (error) {
     console.error('Error getEquippedSkillsForBattle:', error);
+    // Last-chance: templates from saved Manifest so demo fights are never unusable
+    try {
+      const { loadPlayerManifest } = await import('./playerManifestSelection');
+      const { getManifestSkillsFromTemplates } = await import('./battleMovesManifestSync');
+      const m = await loadPlayerManifest(userId);
+      if (m?.manifestId) {
+        return getManifestSkillsFromTemplates(m.manifestId).map(applyCanonicalSkillCostAndCooldown);
+      }
+    } catch {
+      /* ignore */
+    }
     return [];
   }
 }

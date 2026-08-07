@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 interface GiantIceGolemCutsceneProps {
   isOpen: boolean;
@@ -8,13 +8,26 @@ interface GiantIceGolemCutsceneProps {
 const GiantIceGolemCutscene: React.FC<GiantIceGolemCutsceneProps> = ({ isOpen, onComplete }) => {
   const [phase, setPhase] = useState<'combining' | 'giant-appears' | 'hela-dialogue' | 'ice-rain' | 'blackout'>('combining');
   const [showText, setShowText] = useState(false);
+  // Keep latest callback without re-running the timed sequence on every parent render
+  const onCompleteRef = useRef(onComplete);
+  const completedRef = useRef(false);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     if (!isOpen) {
       setPhase('combining');
       setShowText(false);
+      completedRef.current = false;
       return;
     }
+
+    // Fresh open: restart sequence from the beginning
+    setPhase('combining');
+    setShowText(false);
+    completedRef.current = false;
 
     // Phase 1: Golems combining (2 seconds)
     const timer1 = setTimeout(() => {
@@ -40,7 +53,9 @@ const GiantIceGolemCutscene: React.FC<GiantIceGolemCutsceneProps> = ({ isOpen, o
 
     // Phase 5: Blackout, then complete (1 second)
     const timer5 = setTimeout(() => {
-      onComplete();
+      if (completedRef.current) return;
+      completedRef.current = true;
+      onCompleteRef.current();
     }, 11000);
 
     return () => {
@@ -50,7 +65,7 @@ const GiantIceGolemCutscene: React.FC<GiantIceGolemCutsceneProps> = ({ isOpen, o
       clearTimeout(timer4);
       clearTimeout(timer5);
     };
-  }, [isOpen, onComplete]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -302,4 +317,3 @@ const GiantIceGolemCutscene: React.FC<GiantIceGolemCutsceneProps> = ({ isOpen, o
 };
 
 export default GiantIceGolemCutscene;
-

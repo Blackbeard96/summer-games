@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Assessment, HabitDuration } from '../types/assessmentGoals';
+import {
+  type Assessment,
+  type HabitDuration,
+  HABIT_TEXT_MAX_LENGTH,
+  HABIT_TEXT_MIN_LENGTH,
+  STORY_GOAL_TEXT_MAX_LENGTH,
+  STORY_GOAL_TEXT_MIN_LENGTH,
+} from '../types/assessmentGoals';
 import {
   getAssessment,
   getAssessmentsByClass,
@@ -220,16 +227,44 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
     }
   };
 
-  const submitDisabled =
-    !assessment ||
-    assessmentLoading ||
-    (assessment.type === 'habits' && (habitText.trim().length < 3 || habitText.trim().length > 180)) ||
-    (assessment.type === 'story-goal' &&
-      (textGoal.trim().length < 3 || textGoal.trim().length > 500)) ||
-    (assessment.type !== 'habits' &&
+  const getSubmitBlockReason = (): string | null => {
+    if (!assessment || assessmentLoading) return null;
+    if (assessment.isLocked) {
+      return 'This assessment is locked. You cannot change your goal.';
+    }
+    if (assessment.type === 'habits') {
+      const len = habitText.trim().length;
+      if (len < HABIT_TEXT_MIN_LENGTH) {
+        return `Habit commitment must be at least ${HABIT_TEXT_MIN_LENGTH} characters.`;
+      }
+      if (len > HABIT_TEXT_MAX_LENGTH) {
+        return `Shorten your habit commitment to ${HABIT_TEXT_MAX_LENGTH} characters or fewer (${len}/${HABIT_TEXT_MAX_LENGTH}).`;
+      }
+    }
+    if (assessment.type === 'story-goal') {
+      const len = textGoal.trim().length;
+      if (len < STORY_GOAL_TEXT_MIN_LENGTH) {
+        return `Your goal must be at least ${STORY_GOAL_TEXT_MIN_LENGTH} characters.`;
+      }
+      if (len > STORY_GOAL_TEXT_MAX_LENGTH) {
+        return `Shorten your goal to ${STORY_GOAL_TEXT_MAX_LENGTH} characters or fewer (${len}/${STORY_GOAL_TEXT_MAX_LENGTH}).`;
+      }
+    }
+    if (
+      assessment.type !== 'habits' &&
       assessment.type !== 'story-goal' &&
-      assessment.type !== 'weekly_deliverable' &&
-      (goalScore.trim() === '' || Number.isNaN(parseFloat(goalScore))));
+      assessment.type !== 'weekly_deliverable'
+    ) {
+      if (goalScore.trim() === '' || Number.isNaN(parseFloat(goalScore))) {
+        return 'Enter a valid target score.';
+      }
+    }
+    return null;
+  };
+
+  const submitBlockReason = getSubmitBlockReason();
+  const submitDisabled =
+    !assessment || assessmentLoading || assessment.isLocked || submitBlockReason !== null;
 
   if (!isGoalSetting) return null;
 
@@ -345,26 +380,61 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
             <p style={{ fontSize: '0.88rem', fontWeight: 600 }}>Loading form…</p>
           ) : !assessment ? (
             <p style={{ fontSize: '0.85rem', color: '#b91c1c' }}>Could not load this assessment.</p>
+          ) : assessment.isLocked ? (
+            <p style={{ fontSize: '0.88rem', color: '#b91c1c', margin: '0 0 0.75rem', fontWeight: 600 }}>
+              This assessment is locked. You cannot change your goal.
+            </p>
           ) : assessment.type === 'habits' ? (
             <>
               <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>
-                Habit commitment (3–180 characters)
+                Habit commitment ({HABIT_TEXT_MIN_LENGTH}–{HABIT_TEXT_MAX_LENGTH} characters)
               </label>
               <textarea
                 value={habitText}
                 onChange={(e) => setHabitText(e.target.value)}
                 rows={3}
+                minLength={HABIT_TEXT_MIN_LENGTH}
+                maxLength={HABIT_TEXT_MAX_LENGTH}
                 placeholder="What will you practice this week?"
+                disabled={loading}
                 style={{
                   width: '100%',
                   padding: '0.65rem',
                   borderRadius: 8,
-                  border: '2px solid #a78bfa',
-                  marginBottom: 12,
+                  border: `2px solid ${
+                    habitText.trim().length > HABIT_TEXT_MAX_LENGTH ||
+                    (habitText.trim().length > 0 && habitText.trim().length < HABIT_TEXT_MIN_LENGTH)
+                      ? '#f87171'
+                      : '#a78bfa'
+                  }`,
+                  marginBottom: 4,
                   fontSize: '0.95rem',
                   boxSizing: 'border-box',
                 }}
               />
+              <p
+                style={{
+                  margin: '0 0 12px',
+                  fontSize: '0.8rem',
+                  color:
+                    habitText.trim().length > HABIT_TEXT_MAX_LENGTH ||
+                    (habitText.trim().length > 0 && habitText.trim().length < HABIT_TEXT_MIN_LENGTH)
+                      ? '#b91c1c'
+                      : '#6b7280',
+                  fontWeight:
+                    habitText.trim().length > HABIT_TEXT_MAX_LENGTH ||
+                    (habitText.trim().length > 0 && habitText.trim().length < HABIT_TEXT_MIN_LENGTH)
+                      ? 600
+                      : 400,
+                }}
+              >
+                {habitText.trim().length}/{HABIT_TEXT_MAX_LENGTH} characters
+                {habitText.trim().length > HABIT_TEXT_MAX_LENGTH
+                  ? ' — shorten your text to save'
+                  : habitText.trim().length > 0 && habitText.trim().length < HABIT_TEXT_MIN_LENGTH
+                    ? ` — at least ${HABIT_TEXT_MIN_LENGTH} characters required`
+                    : ''}
+              </p>
               <label style={{ display: 'block', fontWeight: 700, fontSize: '0.9rem', marginBottom: 6 }}>Duration</label>
               <select
                 value={duration}
@@ -488,19 +558,35 @@ const LiveEventGoalSettingPanel: React.FC<LiveEventGoalSettingPanelProps> = ({
               />
             </>
           )}
+          {submitBlockReason && !assessmentLoading && assessment && (
+            <p
+              role="alert"
+              style={{
+                margin: '0 0 0.65rem',
+                fontSize: '0.85rem',
+                color: '#b91c1c',
+                fontWeight: 600,
+                lineHeight: 1.4,
+              }}
+            >
+              {submitBlockReason}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => void submitGoal()}
             disabled={loading || assessmentLoading || submitDisabled}
+            title={submitBlockReason ?? undefined}
             style={{
               padding: '0.55rem 1.35rem',
               borderRadius: 8,
               border: 'none',
-              background: '#6d28d9',
+              background: loading || assessmentLoading || submitDisabled ? '#a78bfa' : '#6d28d9',
               color: '#fff',
               fontWeight: 700,
               fontSize: '0.95rem',
               cursor: loading || assessmentLoading || submitDisabled ? 'not-allowed' : 'pointer',
+              opacity: loading || assessmentLoading || submitDisabled ? 0.85 : 1,
             }}
           >
             {loading ? 'Saving…' : 'Save to Assessment Goals'}

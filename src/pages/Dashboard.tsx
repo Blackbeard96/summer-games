@@ -152,71 +152,24 @@ const Dashboard = () => {
   const handleManifestSelect = async (manifestId: string) => {
     if (!currentUser) return;
 
-    const manifest = MANIFESTS.find(m => m.id === manifestId);
-    if (!manifest) return;
-
-    // CRITICAL FIX: Preserve existing manifest data (level, xp, unlockedLevels) when changing manifest
-    // Only reset to defaults if this is the first time selecting a manifest
-    const existingManifest = playerManifest;
-    const isFirstTimeSelection = !existingManifest || !existingManifest.manifestId;
-    
-    const newPlayerManifest: PlayerManifest = {
-      manifestId,
-      // Preserve existing level and xp if manifest already exists, otherwise use defaults
-      currentLevel: existingManifest?.currentLevel || 1,
-      xp: existingManifest?.xp || 0,
-      catalyst: manifest.catalyst,
-      // Preserve existing veil if manifest exists, otherwise use default
-      veil: existingManifest?.veil || 'Fear of inadequacy',
-      signatureMove: manifest.signatureMove,
-      // Preserve existing unlocked levels if manifest exists, otherwise use default
-      unlockedLevels: existingManifest?.unlockedLevels || [1],
-      // Only update lastAscension if this is a new manifest selection
-      lastAscension: isFirstTimeSelection ? serverTimestamp() : (existingManifest?.lastAscension || serverTimestamp()),
-      // Preserve existing usage tracking
-      abilityUsage: existingManifest?.abilityUsage || {},
-      moveUsage: existingManifest?.moveUsage || {},
-      unclaimedMilestones: existingManifest?.unclaimedMilestones || {}
-    };
-
-    // Warn user if they're changing an existing manifest (not first time)
-    if (!isFirstTimeSelection && existingManifest.manifestId !== manifestId) {
-      const confirmChange = window.confirm(
-        `⚠️ Warning: You are changing your manifest from "${MANIFESTS.find(m => m.id === existingManifest.manifestId)?.name || existingManifest.manifestId}" to "${manifest.name}".\n\n` +
-        `Your current level (${existingManifest.currentLevel}), XP (${existingManifest.xp}), and unlocked levels will be preserved.\n\n` +
-        `Continue?`
-      );
-      if (!confirmChange) {
-        return;
-      }
-    }
-
     try {
-      // Save to students collection (primary) using setDoc with merge to handle missing documents
-      const studentRef = doc(db, 'students', currentUser.uid);
-      await setDoc(studentRef, { manifest: newPlayerManifest }, { merge: true });
-      
-      // Also save to users collection for consistency with challenge system
-      const userRef = doc(db, 'users', currentUser.uid);
-      await setDoc(userRef, { manifest: newPlayerManifest }, { merge: true });
-      
+      const { savePlayerManifestSelection } = await import('../utils/playerManifestSelection');
+      const newPlayerManifest = await savePlayerManifestSelection(
+        currentUser.uid,
+        manifestId,
+        playerManifest
+      );
       setPlayerManifest(newPlayerManifest);
       setShowManifestSelection(false);
-      
-      // Recalculate power level after manifest selection
-      try {
-        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
-        await recalculatePowerLevel(currentUser.uid);
-      } catch (plError) {
-        console.error('Error recalculating power level after manifest selection:', plError);
-        // Don't throw - power level recalculation is non-critical
-      }
     } catch (error) {
+      if (error instanceof Error && error.message === 'Manifest change cancelled') {
+        return;
+      }
       console.error('Error setting manifest:', error);
       if (error instanceof Error && error.message.includes('permission')) {
         alert('Permission error: Please check your Firebase security rules. Contact admin if this persists.');
       } else {
-        alert('Failed to set manifest. Please try again.');
+        alert(error instanceof Error ? error.message : 'Failed to set manifest. Please try again.');
       }
     }
   };

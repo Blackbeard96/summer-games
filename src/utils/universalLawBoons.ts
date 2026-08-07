@@ -298,21 +298,26 @@ export function getMaxLoadoutSlotsFromEffects(effects: UniversalLawBoonEffects):
 export async function getPlayerUniversalLawProgress(
   userId: string
 ): Promise<PlayerUniversalLawProgress> {
-  const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
-  const snap = await getDoc(skillStateRef);
-  if (!snap.exists()) return defaultProgressFromUnlocked([]);
-  const state = snap.data() as PlayerSkillState & {
-    universalLawProgress?: PlayerUniversalLawProgress;
-  };
-  const explicit = state.universalLawProgress;
-  if (explicit) {
-    const clean = sanitizeUniversalLawProgress(explicit);
-    if (clean.unlockedNodeIds.length > 0) return clean;
+  try {
+    const skillStateRef = doc(db, 'players', userId, 'skill_state', 'main');
+    const snap = await getDoc(skillStateRef);
+    if (!snap.exists()) return defaultProgressFromUnlocked([]);
+    const state = snap.data() as PlayerSkillState & {
+      universalLawProgress?: PlayerUniversalLawProgress;
+    };
+    const explicit = state.universalLawProgress;
+    if (explicit) {
+      const clean = sanitizeUniversalLawProgress(explicit);
+      if (clean.unlockedNodeIds.length > 0) return clean;
+    }
+    const learned = Array.isArray(state.learnedNodeIds)
+      ? state.learnedNodeIds.filter((x): x is string => typeof x === 'string')
+      : [];
+    return defaultProgressFromUnlocked(learned);
+  } catch (e) {
+    console.warn('[getPlayerUniversalLawProgress] fallback empty progress:', e);
+    return defaultProgressFromUnlocked([]);
   }
-  const learned = Array.isArray(state.learnedNodeIds)
-    ? state.learnedNodeIds.filter((x): x is string => typeof x === 'string')
-    : [];
-  return defaultProgressFromUnlocked(learned);
 }
 
 export async function getPlayerUniversalLawEffects(userId: string): Promise<UniversalLawBoonEffects> {

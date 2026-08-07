@@ -19,6 +19,12 @@ import { SessionStats, SessionSummary } from '../types/inSessionStats';
 import { debug, debugError } from './inSessionDebug';
 import { applyParticipationStreakAward, breakParticipationStreakMessage } from './participationStreak';
 import { evaluateFlowStateAfterSuccess, mergeFlowClearIntoRow } from './liveEventFlowState';
+import {
+  applyFlowPpRewardMultiplier,
+  flowStateToFirestore,
+  getNewlyReachedBoonThresholds,
+  parseFlowStateFromPlayerRow,
+} from './liveEventFlowBoons';
 import type { LiveEventPowerGain } from '../types/playerPowerStats';
 import {
   awardPowerXpForElimination,
@@ -275,7 +281,16 @@ export async function trackElimination(
     } catch (vaultErr) {
       debugError('inSessionStats', `Could not read vault for eliminated player ${eliminatedId}`, vaultErr);
     }
-    const ppFromElimination = LIVE_EVENT_PP_BASE_PER_ELIMINATION + Math.max(0, eliminatedVaultPP);
+    let ppFromElimination = LIVE_EVENT_PP_BASE_PER_ELIMINATION + Math.max(0, eliminatedVaultPP);
+
+    const sessionRef = doc(db, 'inSessionRooms', sessionId);
+    const sessionDocPre = await getDoc(sessionRef);
+    if (sessionDocPre.exists()) {
+      const players = (sessionDocPre.data()?.players || []) as Array<Record<string, unknown>>;
+      const row = players.find((p) => p?.userId === eliminatorId);
+      const flow = parseFlowStateFromPlayerRow(row);
+      ppFromElimination = applyFlowPpRewardMultiplier(ppFromElimination, flow);
+    }
 
     await runTransaction(db, async (transaction) => {
       // Increment eliminator's elimination count and add PP (base + vault)
@@ -457,7 +472,7 @@ async function deductPPFromStudentUserVault(userId: string, amount: number): Pro
 }
 
 /** Credits PP to students / users / vault (vault currentPP clamped to capacity). */
-async function creditPPToStudentUserVault(userId: string, amount: number): Promise<void> {
+export async function creditPPToStudentUserVault(userId: string, amount: number): Promise<void> {
   if (amount <= 0) return;
   try {
     const studentRef = doc(db, 'students', userId);
@@ -574,7 +589,7 @@ export async function trackParticipation(
   sessionId: string,
   playerId: string,
   participationAmount: number,
-  options?: { playerDisplayName?: string; eventEnergyType?: string }
+  options?: { playerDisplayName?: string; eventEnergyType?: string; skipStreakIncrement?: boolean }
 ): Promise<boolean> {
   try {
     const statsRef = doc(db, 'inSessionRooms', sessionId, 'stats', playerId);
@@ -595,15 +610,18 @@ export async function trackParticipation(
       const stats = statsDoc.data() as SessionStats;
       const newParticipation = (stats.participationEarned || 0) + participationAmount;
       const newMovesEarned = Math.floor(newParticipation / 1); // 1 participation = 1 move
-      const ppFromParticipation = participationAmount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
-      const newPPEarned = (stats.ppEarned || 0) + ppFromParticipation;
+      let ppFromParticipation = participationAmount * LIVE_EVENT_PP_PER_PARTICIPATION_POINT;
 
       const prevConsecutive = stats.consecutiveParticipationAwards ?? 0;
       const name = options?.playerDisplayName || stats.playerName || 'Player';
-      const streakState = { consecutiveAwards: prevConsecutive };
-      const { next, battleLogLine } = applyParticipationStreakAward(streakState, name, participationAmount);
-      nextConsecutive = next.consecutiveAwards;
-      streakLogLine = battleLogLine;
+      if (options?.skipStreakIncrement) {
+        nextConsecutive = prevConsecutive;
+      } else {
+        const streakState = { consecutiveAwards: prevConsecutive };
+        const { next, battleLogLine } = applyParticipationStreakAward(streakState, name, participationAmount);
+        nextConsecutive = next.consecutiveAwards;
+        streakLogLine = battleLogLine;
+      }
 
       const sessionRow = sessionDoc.exists()
         ? (sessionDoc.data() as Record<string, unknown>)
@@ -621,6 +639,29 @@ export async function trackParticipation(
         ...prevTotals,
         [eventEnergyType]: (prevTotals[eventEnergyType] || 0) + participationAmount,
       };
+
+      let flowParsed = parseFlowStateFromPlayerRow(null);
+      if (sessionDoc.exists()) {
+        const playersForFlow = [...((sessionDoc.data()?.players || []) as Array<Record<string, unknown>>)];
+        const flowRow = playersForFlow.find((p) => p && (p as { userId?: string }).userId === playerId);
+        flowParsed = parseFlowStateFromPlayerRow(flowRow);
+        if (!options?.skipStreakIncrement) {
+          const newly = getNewlyReachedBoonThresholds(
+            prevConsecutive,
+            nextConsecutive,
+            flowParsed.claimedThresholds
+          );
+          if (newly.length > 0 && flowParsed.pendingThreshold == null) {
+            flowParsed = {
+              ...flowParsed,
+              pendingThreshold: Math.min(...newly) as import('../types/liveEventFlowBoons').FlowBoonThreshold,
+              activated: true,
+            };
+          }
+        }
+      }
+      ppFromParticipation = applyFlowPpRewardMultiplier(ppFromParticipation, flowParsed);
+      const newPPEarned = (stats.ppEarned || 0) + ppFromParticipation;
 
       transaction.update(statsRef, {
         participationEarned: newParticipation,
@@ -645,8 +686,9 @@ export async function trackParticipation(
           const row = { ...players[pIdx] } as Record<string, unknown>;
           const flowEval = evaluateFlowStateAfterSuccess(row, prevConsecutive, nextConsecutive);
           const { flowEntered, ...flowForStore } = flowEval;
-          void flowEntered;
+          if (flowEntered) flowEnteredThisCall = true;
           row.powerPoints = Math.max(0, (Number(row.powerPoints) || 0) + ppFromParticipation);
+          row.flowState = flowStateToFirestore(flowParsed);
           players[pIdx] = { ...row, ...flowForStore } as (typeof players)[number];
           sessionPatch.players = players;
         }
@@ -715,7 +757,20 @@ export async function breakParticipationStreak(
       if (pIdx >= 0) {
         const row = { ...players[pIdx] } as Record<string, unknown>;
         const flowClear = mergeFlowClearIntoRow(row);
-        players[pIdx] = { ...row, ...flowClear } as (typeof players)[number];
+        const flowParsed = parseFlowStateFromPlayerRow(row);
+        const clearedFlow = {
+          ...flowParsed,
+          activated: false,
+          pendingThreshold: null,
+          ppMultiplier: 1 as const,
+          questionPointMultiplier: 1 as const,
+          damageBoostPercent: 0 as const,
+        };
+        players[pIdx] = {
+          ...row,
+          ...flowClear,
+          flowState: flowStateToFirestore(clearedFlow),
+        } as (typeof players)[number];
         patch.players = players;
       }
       if (patch.battleLog !== undefined || patch.players !== undefined) {

@@ -2,6 +2,7 @@ import { getLevelFromXP } from './leveling';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { mergeChaptersProgressMaps } from './mergeChapterProgress';
+import { extractElementOrNull, formatElementDisplayLabel } from './elementDisplay';
 
 /**
  * Normalized player data structure matching Profile page display
@@ -154,47 +155,11 @@ function extractManifest(
 }
 
 /**
- * Extract element from various possible sources (matches Profile.tsx logic)
+ * Extract element from various possible sources (matches Profile.tsx logic).
+ * Returns empty string when no Element has been chosen — never invents Fire.
  */
 function extractElement(userData: any, studentData: any): string {
-  // Priority order matches Profile.tsx:
-  // 1. artifacts.chosen_element (from students collection)
-  if (studentData?.artifacts?.chosen_element) {
-    return studentData.artifacts.chosen_element;
-  }
-  
-  // 2. userData.elementalAffinity
-  if (userData?.elementalAffinity) {
-    return userData.elementalAffinity;
-  }
-  
-  // 3. studentData.elementalAffinity
-  if (studentData?.elementalAffinity) {
-    return studentData.elementalAffinity;
-  }
-  
-  // 4. userData.manifestationType
-  if (userData?.manifestationType) {
-    return userData.manifestationType;
-  }
-  
-  // 5. studentData.manifestationType
-  if (studentData?.manifestationType) {
-    return studentData.manifestationType;
-  }
-  
-  // 6. userData.style
-  if (userData?.style) {
-    return userData.style;
-  }
-  
-  // 7. studentData.style
-  if (studentData?.style) {
-    return studentData.style;
-  }
-  
-  // Default to Fire
-  return 'Fire';
+  return extractElementOrNull(userData, studentData) || '';
 }
 
 /**
@@ -259,10 +224,11 @@ export function normalizePlayerData(
   // Manifest - extract using same logic as Profile
   const manifest = extractManifest(userData, studentData, playerManifest);
   
-  // Element - extract using same logic as Profile
+  // Element - extract using same logic as Profile (empty / Unawakened when unset)
   const elementRaw = extractElement(userData, studentData);
-  // Capitalize first letter (matches Profile.tsx)
-  const element = elementRaw.charAt(0).toUpperCase() + elementRaw.slice(1);
+  const element = elementRaw
+    ? elementRaw.charAt(0).toUpperCase() + elementRaw.slice(1)
+    : formatElementDisplayLabel(null);
   
   // Badges count
   const badges = studentData?.badges || userData?.badges || [];

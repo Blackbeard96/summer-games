@@ -1138,7 +1138,17 @@ const MultiplayerBattleArena: React.FC<MultiplayerBattleArenaProps> = ({
                 </div>
               )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {availableMoves.map((move) => {
+                {availableMoves.length === 0 ? (
+                  <div style={{
+                    textAlign: 'center',
+                    color: '#92400e',
+                    fontSize: '0.85rem',
+                    padding: '0.75rem',
+                    lineHeight: 1.4,
+                  }}>
+                    No Manifest moves available. Complete Choose Your Manifest in the demo, then re-enter the battle.
+                  </div>
+                ) : availableMoves.map((move) => {
                   const isSelected = selectedMove?.id === move.id;
                   const avail = skillAvailabilityByMoveId?.[move.id];
                   const onCooldown = (move.currentCooldown ?? 0) > 0;

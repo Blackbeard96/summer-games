@@ -225,11 +225,33 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             : aSh > vSh
               ? Math.min(aSh, cap)
               : Math.min(vSh, aSh, cap);
+
+        const vHpRaw = vault.vaultHealth;
+        const aHpRaw = a.vaultHealth;
+        const vHp =
+          vHpRaw !== undefined && vHpRaw !== null ? Math.max(0, Math.floor(Number(vHpRaw) || 0)) : null;
+        const aHp =
+          aHpRaw !== undefined && aHpRaw !== null ? Math.max(0, Math.floor(Number(aHpRaw) || 0)) : null;
+        // Prefer the more-damaged value so a stale vault refresh cannot undo CPU hits.
+        // If the ally row is ahead (heal applied in-engine first), keep the higher ally HP.
+        let nextHp: number | undefined;
+        if (aHp === null && vHp === null) {
+          nextHp = undefined;
+        } else if (aHp === null) {
+          nextHp = vHp ?? undefined;
+        } else if (vHp === null) {
+          nextHp = aHp;
+        } else if (aHp > vHp) {
+          nextHp = aHp;
+        } else {
+          nextHp = Math.min(vHp, aHp);
+        }
+
         const n = {
           ...a,
           maxShieldStrength: cap,
           shieldStrength: nextSh,
-          vaultHealth: vault.vaultHealth ?? a.vaultHealth,
+          vaultHealth: nextHp !== undefined ? nextHp : a.vaultHealth,
           maxVaultHealth: vault.maxVaultHealth ?? a.maxVaultHealth,
           currentPP: vault.currentPP ?? a.currentPP,
           maxPP: vault.capacity ?? a.maxPP,
@@ -1985,7 +2007,13 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
 
   // Handle battle end (for manual battle end scenarios)
   const handleBattleEnd = async (result: 'victory' | 'defeat' | 'escape') => {
-    if (!battleRoom) return;
+    if (!battleRoom) {
+      // No room yet — still leave so MissionRunner / lobby can recover (e.g. demo mission)
+      if (result === 'escape' || result === 'defeat') {
+        onLeave();
+      }
+      return;
+    }
 
     try {
       const battleRoomRef = doc(db, 'islandRaidBattleRooms', gameId);
@@ -1997,15 +2025,15 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           updatedAt: serverTimestamp()
         });
         setBattleLog(prev => [...prev, 'You escaped from the battle...']);
-        // Leave the battle immediately
         onLeave();
       } else if (result === 'defeat') {
-        // Defeat
+        // Defeat — return to mission runner (or island raid lobby) on Continue
         await updateDoc(battleRoomRef, {
           status: 'defeated',
           updatedAt: serverTimestamp()
         });
         setBattleLog(prev => [...prev, 'Your team has been defeated...']);
+        onLeave();
       } else if (result === 'victory' && waveNumber >= (battleRoom.maxWaves || 5)) {
         // All waves complete (fallback if auto-detection didn't trigger)
         await updateDoc(battleRoomRef, {
@@ -2017,8 +2045,8 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
       // Note: Wave progression is now handled automatically by the useEffect above
     } catch (error) {
       console.error('Error updating battle room:', error);
-      // If escape fails to update, still leave the battle
-      if (result === 'escape') {
+      // Escape/defeat must still leave the battle view so missions are not stuck
+      if (result === 'escape' || result === 'defeat') {
         onLeave();
       }
     }
@@ -2589,6 +2617,12 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
               
               if (ally.vaultHealth !== undefined) {
                 updates.vaultHealth = ally.vaultHealth;
+                if (ally.vaultHealth === 0) {
+                  const prevHp = vaultData.vaultHealth;
+                  if (prevHp === undefined || prevHp === null || Number(prevHp) > 0) {
+                    updates.vaultHealthCooldown = new Date();
+                  }
+                }
               }
               if (ally.shieldStrength !== undefined) {
                 const vaultCap = Math.max(0, Math.floor(Number(vaultData.maxShieldStrength) || 0));
@@ -2784,6 +2818,7 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
             initialBattleLog={battleLog}
             gameId={gameId}
             candyChoice={(battleRoom as any)?.candyChoice}
+            customBackgroundUrl={battleRoom?.battleBackgroundUrl || undefined}
           />
         );
       })()}

@@ -33,8 +33,9 @@ interface RequireAdminProps {
 const RequireAdmin: React.FC<RequireAdminProps> = ({ children }) => {
   const { isAdmin, loadingRole, loading } = useAuth();
 
-  // Show loading state while auth or role is loading
-  if (loading || loadingRole) {
+  // Only gate the first paint. Once we know the user is admin, keep the Admin tree mounted —
+  // briefly flipping loadingRole (e.g. Auth token refresh) must not unmount Mission Admin forms.
+  if ((loading || loadingRole) && !isAdmin) {
     return (
       <div style={{
         display: 'flex',

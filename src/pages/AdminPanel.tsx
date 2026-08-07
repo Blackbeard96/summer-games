@@ -92,7 +92,10 @@ const ProgressionRepairTool: React.FC = () => {
     success: boolean;
     challengesRepaired: number;
     chaptersRepaired: number;
+    completionRecordsRepaired?: number;
+    unlockGapsFixed?: number;
     errors: string[];
+    findings?: string[];
   } | null>(null);
 
   const handleRepair = async () => {
@@ -190,6 +193,22 @@ const ProgressionRepairTool: React.FC = () => {
           </h3>
           <p>Challenges Repaired: {result.challengesRepaired}</p>
           <p>Chapters Repaired: {result.chaptersRepaired}</p>
+          {typeof result.completionRecordsRepaired === 'number' && (
+            <p>Completion Records Repaired: {result.completionRecordsRepaired}</p>
+          )}
+          {typeof result.unlockGapsFixed === 'number' && (
+            <p>Unlock Gaps Fixed: {result.unlockGapsFixed}</p>
+          )}
+          {result.findings && result.findings.length > 0 && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <strong>Findings:</strong>
+              <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                {result.findings.map((f, idx) => (
+                  <li key={idx}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {result.errors.length > 0 && (
             <div style={{ marginTop: '0.5rem' }}>
               <strong>Errors:</strong>
@@ -225,7 +244,31 @@ const AdminPanel: React.FC = () => {
   const [showTestAccountLogin, setShowTestAccountLogin] = useState(false);
   const [showFirebaseRulesChecker, setShowFirebaseRulesChecker] = useState(false);
   const [showManifestAdmin, setShowManifestAdmin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management' | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup' | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts' | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds' | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions' | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy'>('students');
+  type AdminTab =
+    | 'students' | 'badges' | 'setup' | 'submissions' | 'assignments' | 'classroom' | 'classroom-management'
+    | 'manifests' | 'level2-manifest' | 'story-progress' | 'roles' | 'scorekeeper' | 'pp-approval' | 'role-setup'
+    | 'banner' | 'mindforge' | 'cpu-opponent-moves' | 'elemental-moves' | 'action-cards' | 'artifacts'
+    | 'artifact-compensation' | 'daily-challenges' | 'assessment-goals' | 'weekly-goals-review' | 'training-grounds'
+    | 'season1' | 'rr-candies' | 'progression-repair' | 'vault-recovery' | 'uxp-approval' | 'missions'
+    | 'island-raid-levels' | 'productivity-dashboard' | 'civic-economy';
+  const ADMIN_TAB_STORAGE_KEY = 'adminPanel.activeTab.v1';
+  const readStoredAdminTab = (): AdminTab => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const urlTab = p.get('tab');
+      if (urlTab === 'missions') return 'missions';
+      if (urlTab === 'rr-candies') return 'rr-candies';
+      if (urlTab === 'level2-manifest') return 'level2-manifest';
+      if (urlTab === 'productivity') return 'productivity-dashboard';
+      if (urlTab === 'civic-economy') return 'civic-economy';
+      const stored = sessionStorage.getItem(ADMIN_TAB_STORAGE_KEY) as AdminTab | null;
+      if (stored) return stored;
+    } catch {
+      /* ignore */
+    }
+    return 'students';
+  };
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => readStoredAdminTab());
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const [showBatchSuccess, setShowBatchSuccess] = useState(false);
   const [batchMessage, setBatchMessage] = useState('');
@@ -1160,11 +1203,27 @@ const AdminPanel: React.FC = () => {
 
   useEffect(() => {
     try {
+      sessionStorage.setItem(ADMIN_TAB_STORAGE_KEY, activeTab);
+      const url = new URL(window.location.href);
+      const tabParam =
+        activeTab === 'productivity-dashboard'
+          ? 'productivity'
+          : activeTab;
+      url.searchParams.set('tab', tabParam);
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      /* ignore */
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    try {
       const p = new URLSearchParams(window.location.search);
       if (p.get('tab') === 'rr-candies') setActiveTab('rr-candies');
       if (p.get('tab') === 'level2-manifest') setActiveTab('level2-manifest');
       if (p.get('tab') === 'productivity') setActiveTab('productivity-dashboard');
       if (p.get('tab') === 'civic-economy') setActiveTab('civic-economy');
+      if (p.get('tab') === 'missions') setActiveTab('missions');
     } catch (_) {
       /* ignore */
     }
@@ -2236,52 +2295,7 @@ const AdminPanel: React.FC = () => {
         }
       }
       
-      // 3. If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
-      if (sub.challengeId === 'ep1-combat-drill') {
-        try {
-          // Get user's element from student data
-          const studentDoc = await getDoc(doc(db, 'students', sub.userId));
-          if (studentDoc.exists()) {
-            const studentData = studentDoc.data();
-            const userElement = studentData.elementalAffinity?.toLowerCase() || 
-                               studentData.manifestationType?.toLowerCase() || 
-                               'fire';
-            
-            // Unlock elemental moves for this user
-            const movesRef = doc(db, 'battleMoves', sub.userId);
-            const movesDoc = await getDoc(movesRef);
-            
-            if (movesDoc.exists()) {
-              const movesData = movesDoc.data();
-              const currentMoves = movesData.moves || [];
-              
-              // Unlock level 1 moves for the user's element
-              const updatedMoves = currentMoves.map((move: any) => {
-                if (move.category === 'elemental' && 
-                    move.elementalAffinity === userElement && 
-                    move.level === 1) {
-                  return { ...move, unlocked: true };
-                }
-                return move;
-              });
-              
-              await updateDoc(movesRef, { moves: updatedMoves });
-              
-              // Add notification about elemental moves unlock
-              await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
-                type: 'elemental_moves_unlocked',
-                message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
-                timestamp: serverTimestamp(),
-                read: false
-              });
-            }
-          }
-        } catch (error) {
-          console.error('Error unlocking elemental moves:', error);
-        }
-      }
-
-      // 4. Add notification to notifications subcollection
+      // 3. Add notification to notifications subcollection
       await addDoc(collection(db, 'students', sub.userId, 'notifications'), {
         type: 'challenge_approved',
         message: `Your submission for "${sub.challengeName}" was approved! You earned ${sub.xpReward || 10} XP and ${sub.ppReward || 5} PP.`,
@@ -2293,7 +2307,7 @@ const AdminPanel: React.FC = () => {
         read: false
       });
       
-      // 5. Remove from UI
+      // 4. Remove from UI
       setSubmissions(prev => prev.filter(s => s.id !== sub.id));
     } catch (err: any) {
       setRowError(prev => ({ ...prev, [sub.id]: 'Failed to approve. Try again.' }));

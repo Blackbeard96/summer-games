@@ -72,7 +72,7 @@ interface MovesDisplayProps {
   maxOfflineMoves: number;
   onUpgradeMove: (moveId: string) => Promise<void> | void;
   onResetMoveLevel?: (moveId: string) => void;
-  onUnlockElementalMoves?: (elementalAffinity: string) => void;
+  onUnlockElementalMoves?: (elementalAffinity: string) => void | Promise<void>;
   onForceUnlockAllMoves?: () => void;
   onResetMovesWithElementFilter?: () => void;
   onApplyElementFilterToExistingMoves?: () => void;
@@ -123,6 +123,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const [userManifest, setUserManifest] = useState<string | null>(null);
   const [equippedSkillIds, setEquippedSkillIds] = useState<string[]>([]);
   const [loadoutBusy, setLoadoutBusy] = useState(false);
+  const [elementalUnlockBusy, setElementalUnlockBusy] = useState(false);
+  const [elementalUnlockMsg, setElementalUnlockMsg] = useState<string | null>(null);
   /** Legendary artifact-granted skills (catalog merge + _purchase resolution). */
   const [artifactMoves, setArtifactMoves] = useState<Move[]>([]);
   /** Same doc as equippable catalog — for Elemental Access perk gating. */
@@ -452,30 +454,25 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   // Filter moves by category and unlocked status - memoized for performance
   // CRITICAL: Only show manifest moves that match the user's actual manifest type
   const manifestMoves = useMemo(() => {
-    const filtered = moves.filter(move => {
-      // Only filter by category - show all manifest moves that match user's manifest
-      if (move.category !== 'manifest') {
-        return false;
-      }
-      
-      // If userManifest is provided, ONLY show moves matching that manifest (strict filtering)
-      if (userManifest) {
-        const moveManifest = move.manifestType?.toLowerCase();
-        const userManifestLower = userManifest.toLowerCase();
-        const matches = moveManifest === userManifestLower;
-        
-        // Log for debugging
-        if (!matches) {
-          console.log(`MovesDisplay: Manifest move filtered out - ${move.name} (manifestType: ${move.manifestType}, userManifest: ${userManifest})`);
-        }
-        
-        return matches;
-      }
-      
-      // If no userManifest provided, show all manifest moves (fallback for backwards compatibility)
-      return true;
-    });
-    
+    const manifestOnly = moves.filter(move => move.category === 'manifest');
+    const userManifestLower = (userManifest || '').toLowerCase();
+
+    const ownManifest = userManifestLower
+      ? manifestOnly.filter(move => {
+          const moveManifest = (move.manifestType || '').toLowerCase();
+          const matches = moveManifest === userManifestLower;
+          if (!matches) {
+            console.log(`MovesDisplay: Manifest move filtered out - ${move.name} (manifestType: ${move.manifestType}, userManifest: ${userManifest})`);
+          }
+          return matches;
+        })
+      : manifestOnly;
+
+    // battleMoves holds a row for every Manifest template and only unlocks the player's own,
+    // so `unlocked` identifies the chosen Manifest when the profile lookup returns nothing.
+    const unlocked = ownManifest.filter(move => move.unlocked);
+    const filtered = unlocked.length > 0 ? unlocked : ownManifest;
+
     console.log('MovesDisplay: Filtered manifest moves:', {
       totalMoves: moves.length,
       manifestMoves: filtered.length,
@@ -2886,22 +2883,59 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             Unlock Your {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Element Skills
           </h4>
           <p style={{ color: '#6b7280', marginBottom: '1rem' }}>
-            As a {userElement} element user, you can unlock powerful {userElement} skills to enhance your battle capabilities!
+            As a {userElement} element user, unlock your Level 1 {userElement} skills and equip them to your
+            battle loadout.
           </p>
+          {elementalUnlockMsg && (
+            <p
+              style={{
+                color: elementalUnlockMsg.startsWith('Failed') ? '#b91c1c' : '#047857',
+                fontWeight: 600,
+                marginBottom: '0.75rem',
+              }}
+            >
+              {elementalUnlockMsg}
+            </p>
+          )}
           <button
-            onClick={() => onUnlockElementalMoves(userElement)}
+            type="button"
+            disabled={elementalUnlockBusy}
+            onClick={() => {
+              void (async () => {
+                if (!onUnlockElementalMoves || elementalUnlockBusy) return;
+                setElementalUnlockBusy(true);
+                setElementalUnlockMsg(null);
+                try {
+                  await onUnlockElementalMoves(userElement);
+                  if (currentUser) {
+                    const state = await getPlayerSkillState(currentUser.uid);
+                    setEquippedSkillIds(state.equippedSkillIds || []);
+                  }
+                  setElementalUnlockMsg(
+                    `${userElement.charAt(0).toUpperCase() + userElement.slice(1)} skills unlocked and added to your loadout.`
+                  );
+                } catch (e) {
+                  setElementalUnlockMsg(
+                    e instanceof Error ? `Failed: ${e.message}` : 'Failed to unlock elemental skills.'
+                  );
+                } finally {
+                  setElementalUnlockBusy(false);
+                }
+              })();
+            }}
             style={{
-              background: getElementalColor(userElement),
+              background: elementalUnlockBusy ? '#9ca3af' : getElementalColor(userElement),
               color: 'white',
               border: 'none',
               padding: '0.75rem 1.5rem',
               borderRadius: '0.5rem',
-              cursor: 'pointer',
+              cursor: elementalUnlockBusy ? 'not-allowed' : 'pointer',
               fontSize: '1rem',
               fontWeight: 'bold',
               transition: 'all 0.2s'
             }}
             onMouseOver={(e) => {
+              if (elementalUnlockBusy) return;
               e.currentTarget.style.opacity = '0.9';
               e.currentTarget.style.transform = 'translateY(-2px)';
             }}
@@ -2910,7 +2944,9 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
-            {getElementalIcon(userElement)} Unlock {userElement.charAt(0).toUpperCase() + userElement.slice(1)} Skills
+            {elementalUnlockBusy
+              ? 'Unlocking…'
+              : `${getElementalIcon(userElement)} Unlock & Equip ${userElement.charAt(0).toUpperCase() + userElement.slice(1)} Skills`}
           </button>
         </div>
       )}

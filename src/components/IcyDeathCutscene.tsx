@@ -16,6 +16,11 @@ const IcyDeathCutscene: React.FC<IcyDeathCutsceneProps> = ({ isOpen, onComplete 
       return;
     }
 
+    // Fresh open: restart sequence from the beginning
+    // Do not depend on onComplete — parent re-renders would restart timers and loop the intro
+    setPhase('black');
+    setTextVisible(false);
+
     // Phase 1: Black screen (1 second)
     const timer1 = setTimeout(() => {
       setPhase('text');
@@ -53,7 +58,7 @@ const IcyDeathCutscene: React.FC<IcyDeathCutsceneProps> = ({ isOpen, onComplete 
       clearTimeout(timer4);
       clearTimeout(timer5);
     };
-  }, [isOpen, onComplete]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -280,4 +285,3 @@ const IcyDeathCutscene: React.FC<IcyDeathCutsceneProps> = ({ isOpen, onComplete 
 };
 
 export default IcyDeathCutscene;
-

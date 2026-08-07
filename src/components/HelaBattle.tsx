@@ -46,15 +46,18 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
       setBattlePhase('hela_awakened_intro');
       setShowBattleEngine(false);
       setPlayerChoice(null);
+      setShowCutscene(false);
     } else if (isOpen && !propIsIceGolemBattle) {
       setBattlePhase('intro');
       setShowBattleEngine(false);
       setPlayerChoice(null);
+      setShowCutscene(false);
     } else if (!isOpen) {
       // Reset all state when modal is closed
       setBattlePhase(propIsIceGolemBattle ? 'hela_awakened_intro' : 'intro');
       setShowBattleEngine(false);
       setPlayerChoice(null);
+      setShowCutscene(false);
     }
   }, [isOpen, propIsIceGolemBattle]);
 
@@ -109,13 +112,13 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
     }
   };
 
-  const handleIceGolemDefeated = () => {
+  const handleIceGolemDefeated = React.useCallback(() => {
     // Pause battle and show cutscene
     setShowBattleEngine(false);
     setShowCutscene(true);
-  };
+  }, []);
 
-  const handleCutsceneComplete = async () => {
+  const handleCutsceneComplete = React.useCallback(() => {
     // After cutscene, mark Challenge 7 as complete and navigate to Challenge 8
     setShowCutscene(false);
     
@@ -127,7 +130,7 @@ const HelaBattle: React.FC<HelaBattleProps> = ({
     setTimeout(() => {
       onClose();
     }, 500);
-  };
+  }, [onVictory, onClose]);
 
   // Hela opponent configuration for BattleEngine
   const helaOpponent = {

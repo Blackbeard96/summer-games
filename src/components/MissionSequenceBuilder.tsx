@@ -1,13 +1,13 @@
 /**
  * Mission Sequence Builder Component
  * 
- * Allows admins to build and edit mission sequences: slides, video, battle, training, reflection, Level 2 Manifest.
+ * Allows admins to build and edit mission sequences: slides, video, battle, training, reflection, choice, choose manifest (Demo), Level 2 Manifest.
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { MissionSequenceStep } from '../types/missions';
+import { MissionSequenceStep, type MissionChoiceOption, type MissionCategory } from '../types/missions';
 import type { TrainingQuizSet } from '../types/trainingGrounds';
-import { uploadMissionImage, uploadMissionVideoResumable, uploadMissionPoster, isVideoFile } from '../utils/missionStorage';
+import { uploadMissionImage, uploadMissionChoiceResultImage, uploadMissionBattleBackground, uploadMissionVideoResumable, uploadMissionPoster, isVideoFile } from '../utils/missionStorage';
 import { getAllQuizSets } from '../utils/trainingGroundsService';
 import { listAssessmentsForMissionLinking, type AssessmentPickItem } from '../utils/assessmentGoalsFirestore';
 import { fetchCpuOpponentsMergedWithDefaults, type CPUOpponent } from '../utils/cpuOpponentsCatalog';
@@ -20,10 +20,20 @@ interface MissionSequenceBuilderProps {
   missionId?: string; // For uploads (undefined during creation)
   /** When set, only story slides + videos (e.g. CPU awakening animation in admin). */
   variant?: 'mission' | 'cpuAwakeningMedia';
+  /** Used to gate Demo-only step types (e.g. Choose Manifest). */
+  missionCategory?: MissionCategory;
 }
 
 /** All enemy types admins can assign per wave in battle steps. */
-const ALL_ENEMY_TYPES = ['ZOMBIE', 'APPRENTICE', 'SOVEREIGN', 'UNVEILED'] as const;
+const ALL_ENEMY_TYPES = ['ZOMBIE', 'APPRENTICE', 'SOVEREIGN', 'UNVEILED', 'AHINTA_TUMI'] as const;
+
+const ENEMY_TYPE_LABELS: Record<(typeof ALL_ENEMY_TYPES)[number], string> = {
+  ZOMBIE: 'ZOMBIE',
+  APPRENTICE: 'APPRENTICE',
+  SOVEREIGN: 'SOVEREIGN',
+  UNVEILED: 'UNVEILED',
+  AHINTA_TUMI: 'AHINTA TUMI',
+};
 type EnemyType = typeof ALL_ENEMY_TYPES[number];
 
 const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
@@ -31,8 +41,10 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
   onChange,
   missionId,
   variant = 'mission',
+  missionCategory,
 }) => {
   const isMediaOnly = variant === 'cpuAwakeningMedia';
+  const isDemoMission = missionCategory === 'DEMO';
   const [editingStep, setEditingStep] = useState<MissionSequenceStep | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -128,6 +140,46 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
     setEditingStep(newStep);
   };
 
+  const makeChoiceOption = (label: string, resultBody: string): MissionChoiceOption => ({
+    id: generateStepId(),
+    label,
+    description: '',
+    result: { title: '', bodyText: resultBody },
+  });
+
+  const addChoice = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'CHOICE',
+      order: sequence.length,
+      title: 'Choice',
+      bodyText: '',
+      prompt: 'What do you do?',
+      choices: [
+        makeChoiceOption('Option A', 'Describe what happens if they pick Option A.'),
+        makeChoiceOption('Option B', 'Describe what happens if they pick Option B.'),
+      ],
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
+  const addChooseManifest = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'CHOOSE_MANIFEST',
+      order: sequence.length,
+      title: 'Choose Your Manifest',
+      bodyText:
+        'In the Nine Knowings Universe, ordinary skills become extraordinary through mastery, intent, and will. Pick the path that resonates with you.',
+      prompt: 'Select the manifest that resonates with your inner truth.',
+      requireSelection: true,
+      allowReselect: true,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
   const addLevel2Manifest = () => {
     const newStep: MissionSequenceStep = {
       id: generateStepId(),
@@ -142,6 +194,70 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
       autoUnlockBuilderOnEntry: true,
       requireSkillCreation: true,
       requireSkillEquip: false,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
+  const addSkillsMastery = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'SKILLS_MASTERY',
+      order: sequence.length,
+      title: 'Skills & Mastery',
+      captions: [
+        'Open Skills & Mastery to review your Manifest moves, spend PP to level skills, and equip your loadout.',
+      ],
+      grantPP: 100,
+      requireVisit: true,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
+  const addArtifacts = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'ARTIFACTS',
+      order: sequence.length,
+      title: 'Artifacts',
+      captions: [
+        'Open your Artifacts menu to equip gear, upgrade items, and set your loadout. Return here when you are ready to continue.',
+      ],
+      grantPP: 0,
+      requireVisit: true,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
+  const addElementalSkills = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'ELEMENTAL_SKILLS',
+      order: sequence.length,
+      title: 'Awaken Elemental Skills',
+      bodyText:
+        'The Elemental Ring answers to your nature. Choose Fire, Water, Earth, or Air to unlock your Level 1 elemental skills for battle.',
+      prompt: 'Which element most aligns with your nature?',
+      requireSelection: true,
+      allowReselect: false,
+    };
+    onChange([...sequence, newStep]);
+    setEditingStep(newStep);
+  };
+
+  const addPowerCard = () => {
+    const newStep: MissionSequenceStep = {
+      id: generateStepId(),
+      type: 'POWER_CARD',
+      order: sequence.length,
+      title: 'Power Card',
+      captions: [
+        'Open your Power Card on Profile to review your stats, customize your card, and check your journey progress. Return here when you are ready to continue.',
+      ],
+      grantPP: 0,
+      requireVisit: true,
     };
     onChange([...sequence, newStep]);
     setEditingStep(newStep);
@@ -192,11 +308,12 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
         return step.bodyText?.substring(0, 60) || step.title || `Video (${step.video.sourceType})`;
       case "BATTLE": {
         const wc = step.battle.waveConfigs;
+        const bkg = step.battle.backgroundImage?.url ? ' · 🖼 bg' : '';
         if (!wc?.length) {
           return (
             step.bodyText?.substring(0, 60) ||
             step.title ||
-            `Battle: ${step.battle.difficulty} – ${step.battle.waves || 3} waves, ${step.battle.enemySet.join(', ')}`
+            `Battle: ${step.battle.difficulty} – ${step.battle.waves || 3} waves, ${step.battle.enemySet.join(', ')}${bkg}`
           );
         }
         type W = (typeof wc)[number];
@@ -207,12 +324,12 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
               .join(',') || '';
           const leg =
             (w.enemySet || [])
-              .map((t: 'ZOMBIE' | 'APPRENTICE' | 'SOVEREIGN' | 'UNVEILED') => `${w.enemyTypeCounts?.[t] ?? 1}×${t}`)
+              .map((t: 'ZOMBIE' | 'APPRENTICE' | 'SOVEREIGN' | 'UNVEILED' | 'AHINTA_TUMI') => `${w.enemyTypeCounts?.[t] ?? 1}×${t}`)
               .join(',') || '';
           return [cpu && `CPU:${cpu}`, leg].filter(Boolean).join(' ') || '—';
         };
         const waveSummary = wc.map((w, i) => `W${i + 1}: ${part(w)}`).join(' · ');
-        return step.bodyText?.substring(0, 60) || step.title || `Battle: ${step.battle.difficulty} – ${waveSummary}`;
+        return step.bodyText?.substring(0, 60) || step.title || `Battle: ${step.battle.difficulty} – ${waveSummary}${bkg}`;
       }
       case "TRAINING_ASSIGNMENT": {
         const min = step.training.minimumPassPercent;
@@ -236,6 +353,53 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
           step.title ||
           'Level 2 Manifest'
         );
+      case "CHOICE":
+        return (
+          step.prompt.substring(0, 60) ||
+          step.title ||
+          `Choice (${step.choices.length} options)`
+        );
+      case "CHOOSE_MANIFEST":
+        return (
+          step.prompt?.substring(0, 60) ||
+          step.bodyText?.substring(0, 60) ||
+          step.title ||
+          'Choose Manifest'
+        );
+      case "SKILLS_MASTERY": {
+        const cap = step.captions?.find((c) => c.trim())?.substring(0, 50) || '';
+        const pp = Math.max(0, Math.floor(Number(step.grantPP) || 0));
+        return (
+          cap ||
+          step.title ||
+          `Skills & Mastery${pp > 0 ? ` (+${pp} PP)` : ''}`
+        );
+      }
+      case "ARTIFACTS": {
+        const cap = step.captions?.find((c) => c.trim())?.substring(0, 50) || '';
+        const pp = Math.max(0, Math.floor(Number(step.grantPP) || 0));
+        return (
+          cap ||
+          step.title ||
+          `Artifacts${pp > 0 ? ` (+${pp} PP)` : ''}`
+        );
+      }
+      case "ELEMENTAL_SKILLS":
+        return (
+          step.prompt?.substring(0, 60) ||
+          step.bodyText?.substring(0, 60) ||
+          step.title ||
+          'Awaken Elemental Skills'
+        );
+      case "POWER_CARD": {
+        const cap = step.captions?.find((c) => c.trim())?.substring(0, 50) || '';
+        const pp = Math.max(0, Math.floor(Number(step.grantPP) || 0));
+        return (
+          cap ||
+          step.title ||
+          `Power Card${pp > 0 ? ` (+${pp} PP)` : ''}`
+        );
+      }
       default: {
         const _exhaustive: never = step;
         return _exhaustive;
@@ -251,6 +415,12 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
       case "TRAINING_ASSIGNMENT": return "🎓 Training";
       case "REFLECTION": return "💭 Reflection";
       case "LEVEL2_MANIFEST": return "🜂 L2 Manifest";
+      case "CHOICE": return "🔀 Choice";
+      case "CHOOSE_MANIFEST": return "✨ Choose Manifest";
+      case "SKILLS_MASTERY": return "🎯 Skills & Mastery";
+      case "ARTIFACTS": return "💎 Artifacts";
+      case "ELEMENTAL_SKILLS": return "🔥 Elemental Skills";
+      case "POWER_CARD": return "🃏 Power Card";
     }
   };
 
@@ -414,6 +584,109 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
           >
             + Add Reflection
           </button>
+          <button
+            type="button"
+            onClick={addChoice}
+            style={{
+              padding: '0.5rem 1rem',
+              background: '#db2777',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+            }}
+          >
+            + Add Choice
+          </button>
+          <button
+            type="button"
+            onClick={addSkillsMastery}
+            title="Sends players to Battle Arena → Skills & Mastery; optional PP grant + captions"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #2563eb 0%, #0f766e 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+            }}
+          >
+            + Add Skills & Mastery
+          </button>
+          <button
+            type="button"
+            onClick={addArtifacts}
+            title="Sends players to Artifacts to equip/edit gear, then return to the mission"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '500',
+            }}
+          >
+            + Add Artifacts
+          </button>
+          <button
+            type="button"
+            onClick={addElementalSkills}
+            title="Players choose Fire / Water / Earth / Air to awaken Level 1 elemental skills"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #ea580c 0%, #0284c7 55%, #65a30d 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '600',
+            }}
+          >
+            + Add Elemental Skills
+          </button>
+          <button
+            type="button"
+            onClick={addPowerCard}
+            title="Sends players to Profile / Power Card, then return to the mission"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #1d4ed8 0%, #4f46e5 55%, #7c3aed 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: '600',
+            }}
+          >
+            + Add Power Card
+          </button>
+          {isDemoMission && (
+            <button
+              type="button"
+              onClick={addChooseManifest}
+              title="Demo Missions only — opens the real Choose Manifest experience for new players"
+              style={{
+                padding: '0.5rem 1rem',
+                background: 'linear-gradient(135deg, #d97706 0%, #7c3aed 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: '600',
+              }}
+            >
+              + Add Choose Manifest
+            </button>
+          )}
             </>
           )}
         </div>
@@ -489,7 +762,19 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                             ? '#ede9fe'
                             : step.type === 'LEVEL2_MANIFEST'
                               ? '#ffedd5'
-                              : '#ccfbf1',
+                              : step.type === 'CHOICE'
+                                ? '#fce7f3'
+                                : step.type === 'CHOOSE_MANIFEST'
+                                  ? '#ede9fe'
+                                  : step.type === 'SKILLS_MASTERY'
+                                    ? '#dbeafe'
+                                    : step.type === 'ARTIFACTS'
+                                      ? '#f3e8ff'
+                                      : step.type === 'ELEMENTAL_SKILLS'
+                                        ? '#ffedd5'
+                                        : step.type === 'POWER_CARD'
+                                          ? '#dbeafe'
+                                          : '#ccfbf1',
                   color:
                     step.type === 'STORY_SLIDE'
                       ? '#1e40af'
@@ -501,7 +786,19 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
                             ? '#5b21b6'
                             : step.type === 'LEVEL2_MANIFEST'
                               ? '#9a3412'
-                              : '#0f766e',
+                              : step.type === 'CHOICE'
+                                ? '#9d174d'
+                                : step.type === 'CHOOSE_MANIFEST'
+                                  ? '#5b21b6'
+                                  : step.type === 'SKILLS_MASTERY'
+                                    ? '#1e40af'
+                                    : step.type === 'ARTIFACTS'
+                                      ? '#6b21a8'
+                                      : step.type === 'ELEMENTAL_SKILLS'
+                                        ? '#c2410c'
+                                        : step.type === 'POWER_CARD'
+                                          ? '#1e40af'
+                                          : '#0f766e',
                   borderRadius: '0.25rem',
                   fontSize: '0.75rem',
                   fontWeight: 'bold'
@@ -595,6 +892,7 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
       {editingStep && (
         <StepEditorModal
           step={editingStep}
+          allSteps={sequence}
           onSave={updateStep}
           onCancel={() => setEditingStep(null)}
           onDraftPersist={persistStepDraftToParent}
@@ -610,6 +908,8 @@ const MissionSequenceBuilder: React.FC<MissionSequenceBuilderProps> = ({
 
 interface StepEditorModalProps {
   step: MissionSequenceStep;
+  /** Full mission sequence — used for Choice branch targets. */
+  allSteps: MissionSequenceStep[];
   onSave: (step: MissionSequenceStep) => void;
   onCancel: () => void;
   /** Merge this step into the mission sequence + keep modal open (used after Storage uploads). */
@@ -622,6 +922,7 @@ interface StepEditorModalProps {
 
 const StepEditorModal: React.FC<StepEditorModalProps> = ({
   step,
+  allSteps,
   onSave,
   onCancel,
   onDraftPersist,
@@ -740,6 +1041,30 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
     return s.type === 'LEVEL2_MANIFEST';
   };
 
+  const isChoice = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'CHOICE' }> => {
+    return s.type === 'CHOICE';
+  };
+
+  const isChooseManifest = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'CHOOSE_MANIFEST' }> => {
+    return s.type === 'CHOOSE_MANIFEST';
+  };
+
+  const isSkillsMastery = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'SKILLS_MASTERY' }> => {
+    return s.type === 'SKILLS_MASTERY';
+  };
+
+  const isArtifacts = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'ARTIFACTS' }> => {
+    return s.type === 'ARTIFACTS';
+  };
+
+  const isElementalSkills = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'ELEMENTAL_SKILLS' }> => {
+    return s.type === 'ELEMENTAL_SKILLS';
+  };
+
+  const isPowerCard = (s: MissionSequenceStep): s is Extract<MissionSequenceStep, { type: 'POWER_CARD' }> => {
+    return s.type === 'POWER_CARD';
+  };
+
   const artifactSelectChoices = useMemo(() => {
     const base: ArtifactOption[] = [...artifactOptions];
     const seen = new Set(base.map((a) => a.id));
@@ -757,6 +1082,24 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
           rarity: 'common',
           source: 'static',
         });
+      }
+    }
+    if (editedStep.type === 'CHOICE') {
+      for (const c of editedStep.choices || []) {
+        for (const id of c.result?.grantArtifactIds || []) {
+          if (!id?.trim() || seen.has(id)) continue;
+          seen.add(id);
+          base.push({
+            id,
+            name: `${id} (not in loaded catalog)`,
+            description: '',
+            icon: '❔',
+            image: '',
+            category: 'unknown',
+            rarity: 'common',
+            source: 'static',
+          });
+        }
       }
     }
     base.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
@@ -788,6 +1131,80 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
     } catch (error) {
       console.error('Error uploading image:', error);
       alert('Failed to upload image');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleChoiceResultImageUpload = async (choiceId: string, file: File) => {
+    if (!missionId) {
+      alert('Please save the mission first before uploading images.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const { url, storagePath } = await uploadMissionChoiceResultImage(
+        missionId,
+        step.id,
+        choiceId,
+        file
+      );
+      const prev = editedStepRef.current;
+      if (!isChoice(prev)) return;
+      const next: Extract<MissionSequenceStep, { type: 'CHOICE' }> = {
+        ...prev,
+        choices: prev.choices.map((c) =>
+          c.id === choiceId
+            ? {
+                ...c,
+                result: {
+                  ...c.result,
+                  imageUrl: url,
+                  imageStoragePath: storagePath,
+                },
+              }
+            : c
+        ),
+      };
+      setEditedStep(next);
+      editedStepRef.current = next;
+      onDraftPersist(next);
+    } catch (error) {
+      console.error('Error uploading choice result image:', error);
+      const message = error instanceof Error ? error.message : 'Failed to upload image';
+      alert(message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleBattleBackgroundUpload = async (file: File) => {
+    if (!missionId) {
+      alert('Please save the mission first before uploading images.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const { url, storagePath } = await uploadMissionBattleBackground(missionId, step.id, file);
+      const prev = editedStepRef.current;
+      if (!isBattle(prev)) return;
+      const next: Extract<MissionSequenceStep, { type: 'BATTLE' }> = {
+        ...prev,
+        battle: {
+          ...prev.battle,
+          backgroundImage: {
+            url,
+            storagePath,
+            alt: prev.battle.backgroundImage?.alt,
+          },
+        },
+      };
+      setEditedStep(next);
+      editedStepRef.current = next;
+      onDraftPersist(next);
+    } catch (error) {
+      console.error('Error uploading battle background:', error);
+      alert(error instanceof Error ? error.message : 'Failed to upload background image');
     } finally {
       setUploading(false);
     }
@@ -1396,10 +1813,105 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
             </p>
           </div>
 
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+              Battle background (optional)
+            </label>
+            <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+              Shown behind the arena during this mission battle. Leave empty to use the default Island Raid background.
+            </p>
+            {missionId ? (
+              <>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleBattleBackgroundUpload(file);
+                    e.target.value = '';
+                  }}
+                  disabled={uploading}
+                  style={{ marginBottom: '0.5rem' }}
+                />
+                {uploading && (
+                  <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>Uploading…</p>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: '0.75rem', background: '#fef3c7', borderRadius: '0.5rem', marginBottom: '0.5rem' }}>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#92400e' }}>
+                  Save the mission first to enable background uploads, or paste a URL below.
+                </p>
+              </div>
+            )}
+            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+              Background image URL
+            </label>
+            <input
+              type="text"
+              value={isBattle(editedStep) ? editedStep.battle.backgroundImage?.url || '' : ''}
+              onChange={(e) => {
+                if (!isBattle(editedStep)) return;
+                const url = e.target.value.trim();
+                setEditedStep({
+                  ...editedStep,
+                  battle: {
+                    ...editedStep.battle,
+                    backgroundImage: url
+                      ? {
+                          url,
+                          storagePath: editedStep.battle.backgroundImage?.storagePath,
+                          alt: editedStep.battle.backgroundImage?.alt,
+                        }
+                      : undefined,
+                  },
+                });
+              }}
+              placeholder="/images/Island Raid BKG.png or https://…"
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+            {isBattle(editedStep) && editedStep.battle.backgroundImage?.url ? (
+              <div style={{ marginTop: '0.75rem' }}>
+                <img
+                  src={editedStep.battle.backgroundImage.url}
+                  alt={editedStep.battle.backgroundImage.alt || 'Battle background preview'}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '160px',
+                    objectFit: 'cover',
+                    borderRadius: '0.5rem',
+                    border: '1px solid #e5e7eb',
+                    display: 'block',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isBattle(editedStep)) return;
+                    const { backgroundImage: _removed, ...restBattle } = editedStep.battle;
+                    setEditedStep({ ...editedStep, battle: restBattle });
+                  }}
+                  style={{
+                    marginTop: '0.5rem',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '0.35rem',
+                    border: '1px solid #fca5a5',
+                    background: '#fef2f2',
+                    color: '#b91c1c',
+                    cursor: 'pointer',
+                    fontSize: '0.8125rem',
+                  }}
+                >
+                  Remove background
+                </button>
+              </div>
+            ) : null}
+          </div>
+
           {(() => {
             if (!isBattle(editedStep)) return null;
             const b = editedStep.battle;
-            type WaveEnemyType = 'ZOMBIE' | 'APPRENTICE' | 'SOVEREIGN' | 'UNVEILED';
+            type WaveEnemyType = 'ZOMBIE' | 'APPRENTICE' | 'SOVEREIGN' | 'UNVEILED' | 'AHINTA_TUMI';
             type WaveEntry = {
               enemySet: WaveEnemyType[];
               enemyTypeCounts?: Partial<Record<WaveEnemyType, number>>;
@@ -1544,7 +2056,7 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
                                     setWaveEnemySet(idx, nextSet as WaveEnemyType[]);
                                   }}
                                 />
-                                <span>{enemyType}</span>
+                                <span>{ENEMY_TYPE_LABELS[enemyType]}</span>
                               </label>
                               {wave.enemySet.includes(enemyType) ? (
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', color: '#374151' }}>
@@ -2290,6 +2802,1376 @@ const StepEditorModal: React.FC<StepEditorModalProps> = ({
               style={{
                 padding: '0.75rem 1.5rem',
                 background: canSave ? '#b45309' : '#9ca3af',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: canSave ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+              }}
+            >
+              Save Step
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'CHOICE' && isChoice(editedStep)) {
+    const canSave =
+      editedStep.prompt.trim().length > 0 &&
+      editedStep.choices.length >= 2 &&
+      editedStep.choices.every(
+        (c) => c.label.trim().length > 0 && c.result.bodyText.trim().length > 0
+      );
+
+    const updateChoice = (choiceId: string, patch: Partial<MissionChoiceOption>) => {
+      setEditedStep({
+        ...editedStep,
+        choices: editedStep.choices.map((c) =>
+          c.id === choiceId
+            ? {
+                ...c,
+                ...patch,
+                result: patch.result ? { ...c.result, ...patch.result } : c.result,
+              }
+            : c
+        ),
+      });
+    };
+
+    const addOption = () => {
+      const n = editedStep.choices.length + 1;
+      setEditedStep({
+        ...editedStep,
+        choices: [
+          ...editedStep.choices,
+          {
+            id: crypto.randomUUID ? crypto.randomUUID() : `choice_${Date.now()}_${n}`,
+            label: `Option ${String.fromCharCode(64 + n)}`,
+            description: '',
+            result: { title: '', bodyText: '' },
+          },
+        ],
+      });
+    };
+
+    const removeOption = (choiceId: string) => {
+      if (editedStep.choices.length <= 2) return;
+      setEditedStep({
+        ...editedStep,
+        choices: editedStep.choices.filter((c) => c.id !== choiceId),
+      });
+    };
+
+    const jumpTargets = allSteps.filter((s) => s.id !== editedStep.id);
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '640px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Choice</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280' }}>
+            Players pick one option, see that option&apos;s result, then continue (next step or a jump target).
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Intro (optional)</label>
+            <textarea
+              value={editedStep.bodyText || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, bodyText: e.target.value })}
+              rows={2}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Prompt *</label>
+            <textarea
+              value={editedStep.prompt}
+              onChange={(e) => setEditedStep({ ...editedStep, prompt: e.target.value })}
+              rows={3}
+              placeholder="What do you do?"
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <strong>Options ({editedStep.choices.length})</strong>
+            <button
+              type="button"
+              onClick={addOption}
+              style={{
+                padding: '0.35rem 0.75rem',
+                background: '#db2777',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+              }}
+            >
+              + Add option
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+            {editedStep.choices.map((choice, idx) => (
+              <div
+                key={choice.id}
+                style={{
+                  padding: '1rem',
+                  border: '1px solid #f9a8d4',
+                  borderRadius: '0.5rem',
+                  background: '#fdf2f8',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <span style={{ fontWeight: 700, color: '#9d174d' }}>Option {idx + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeOption(choice.id)}
+                    disabled={editedStep.choices.length <= 2}
+                    style={{
+                      padding: '0.25rem 0.5rem',
+                      background: editedStep.choices.length <= 2 ? '#e5e7eb' : '#ef4444',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.25rem',
+                      cursor: editedStep.choices.length <= 2 ? 'not-allowed' : 'pointer',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Label *
+                  </label>
+                  <input
+                    type="text"
+                    value={choice.label}
+                    onChange={(e) => updateChoice(choice.id, { label: e.target.value })}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Hint (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={choice.description || ''}
+                    onChange={(e) => updateChoice(choice.id, { description: e.target.value })}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Result title (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={choice.result.title || ''}
+                    onChange={(e) =>
+                      updateChoice(choice.id, { result: { ...choice.result, title: e.target.value } })
+                    }
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Result text *
+                  </label>
+                  <textarea
+                    value={choice.result.bodyText}
+                    onChange={(e) =>
+                      updateChoice(choice.id, { result: { ...choice.result, bodyText: e.target.value } })
+                    }
+                    rows={3}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Result image (optional)
+                  </label>
+                  {missionId ? (
+                    <>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void handleChoiceResultImageUpload(choice.id, file);
+                          e.target.value = '';
+                        }}
+                        disabled={uploading}
+                        style={{ marginBottom: '0.5rem', display: 'block' }}
+                      />
+                      <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                        {uploading
+                          ? 'Uploading…'
+                          : 'Upload JPG, PNG, WebP, or GIF (max 5 MB). You can also paste a URL below.'}
+                      </p>
+                    </>
+                  ) : (
+                    <div
+                      style={{
+                        padding: '0.75rem',
+                        background: '#fef3c7',
+                        borderRadius: '0.5rem',
+                        marginBottom: '0.5rem',
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: '#92400e' }}>
+                        Save the mission first to enable image uploads. You can still paste a temporary URL.
+                      </p>
+                    </div>
+                  )}
+                  {choice.result.imageUrl ? (
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      <img
+                        src={choice.result.imageUrl}
+                        alt={choice.result.title || choice.label || 'Result'}
+                        style={{
+                          maxWidth: '100%',
+                          maxHeight: '160px',
+                          objectFit: 'contain',
+                          borderRadius: '0.375rem',
+                          background: '#fff',
+                          border: '1px solid #e5e7eb',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateChoice(choice.id, {
+                            result: {
+                              ...choice.result,
+                              imageUrl: undefined,
+                              imageStoragePath: undefined,
+                            },
+                          })
+                        }
+                        disabled={uploading}
+                        style={{
+                          display: 'block',
+                          marginTop: '0.35rem',
+                          padding: '0.25rem 0.5rem',
+                          background: '#f3f4f6',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '0.25rem',
+                          cursor: uploading ? 'not-allowed' : 'pointer',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        Remove image
+                      </button>
+                    </div>
+                  ) : null}
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                    Or image URL
+                  </label>
+                  <input
+                    type="url"
+                    value={choice.result.imageUrl || ''}
+                    onChange={(e) =>
+                      updateChoice(choice.id, {
+                        result: {
+                          ...choice.result,
+                          imageUrl: e.target.value,
+                          imageStoragePath: e.target.value ? choice.result.imageStoragePath : undefined,
+                        },
+                      })
+                    }
+                    placeholder="https://…"
+                    disabled={uploading}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    Grant artifacts (optional)
+                  </label>
+                  <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                    Players receive these when they continue after this result.
+                  </p>
+                  {(choice.result.grantArtifactIds || []).map((artId, artIdx) => (
+                    <div
+                      key={`${choice.id}-art-${artIdx}-${artId}`}
+                      style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}
+                    >
+                      <select
+                        value={artId}
+                        onChange={(e) => {
+                          const next = [...(choice.result.grantArtifactIds || [])];
+                          next[artIdx] = e.target.value;
+                          updateChoice(choice.id, {
+                            result: { ...choice.result, grantArtifactIds: next.filter(Boolean) },
+                          });
+                        }}
+                        style={{ flex: 1, padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                      >
+                        <option value="">Select artifact…</option>
+                        {artifactSelectChoices.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.icon} {a.name} ({a.id})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = (choice.result.grantArtifactIds || []).filter((_, i) => i !== artIdx);
+                          updateChoice(choice.id, {
+                            result: {
+                              ...choice.result,
+                              grantArtifactIds: next.length ? next : undefined,
+                            },
+                          });
+                        }}
+                        style={{
+                          padding: '0.35rem 0.6rem',
+                          background: '#fee2e2',
+                          color: '#991b1b',
+                          border: '1px solid #fecaca',
+                          borderRadius: '0.25rem',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateChoice(choice.id, {
+                        result: {
+                          ...choice.result,
+                          grantArtifactIds: [...(choice.result.grantArtifactIds || []), ''],
+                        },
+                      })
+                    }
+                    style={{
+                      padding: '0.35rem 0.75rem',
+                      background: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    + Add artifact grant
+                  </button>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 600 }}>
+                    After result, go to
+                  </label>
+                  <select
+                    value={choice.goToStepId || ''}
+                    onChange={(e) =>
+                      updateChoice(choice.id, {
+                        goToStepId: e.target.value || undefined,
+                      })
+                    }
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+                  >
+                    <option value="">Next step in order</option>
+                    {jumpTargets.map((s) => {
+                      const orderLabel = allSteps.findIndex((x) => x.id === s.id) + 1;
+                      return (
+                        <option key={s.id} value={s.id}>
+                          #{orderLabel} — {s.title || s.type} ({s.type})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() => onSave(editedStep)}
+              disabled={!canSave || uploading}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: canSave && !uploading ? '#db2777' : '#9ca3af',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: canSave && !uploading ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+              }}
+            >
+              {uploading ? 'Uploading…' : 'Save Step'}
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'CHOOSE_MANIFEST' && isChooseManifest(editedStep)) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '560px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Choose Manifest</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280' }}>
+            Demo Missions only. Players open the real Choose Manifest picker and their selection is saved to their
+            profile.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Intro (optional)</label>
+            <textarea
+              value={editedStep.bodyText || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, bodyText: e.target.value })}
+              rows={3}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Prompt (optional)</label>
+            <textarea
+              value={editedStep.prompt || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, prompt: e.target.value })}
+              rows={2}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '0.75rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.requireSelection !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, requireSelection: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Require confirming a manifest before Next</span>
+          </label>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.allowReselect !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, allowReselect: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Allow choosing again after completing this step</span>
+          </label>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() => onSave(editedStep)}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'linear-gradient(135deg, #d97706 0%, #7c3aed 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Save Step
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'SKILLS_MASTERY' && isSkillsMastery(editedStep)) {
+    const captions = Array.isArray(editedStep.captions) ? editedStep.captions : [''];
+    const canSave =
+      typeof editedStep.grantPP === 'number' &&
+      Number.isFinite(editedStep.grantPP) &&
+      editedStep.grantPP >= 0;
+
+    const setCaptionAt = (index: number, value: string) => {
+      const next = [...captions];
+      next[index] = value;
+      setEditedStep({ ...editedStep, captions: next });
+    };
+
+    const addCaption = () => {
+      setEditedStep({ ...editedStep, captions: [...captions, ''] });
+    };
+
+    const removeCaption = (index: number) => {
+      if (captions.length <= 1) {
+        setEditedStep({ ...editedStep, captions: [''] });
+        return;
+      }
+      setEditedStep({ ...editedStep, captions: captions.filter((_, i) => i !== index) });
+    };
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Skills &amp; Mastery</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280', lineHeight: 1.5 }}>
+            Sends players to Battle Arena → Skills &amp; Mastery. Optionally grant PP once when they open it,
+            and show instructional captions on the mission step.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+              PP to grant (once)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={editedStep.grantPP}
+              onChange={(e) =>
+                setEditedStep({
+                  ...editedStep,
+                  grantPP: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                })
+              }
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+              0 = no grant. Claimed only once per player mission step.
+            </p>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <label style={{ fontWeight: 'bold' }}>Captions</label>
+              <button
+                type="button"
+                onClick={addCaption}
+                style={{
+                  padding: '0.35rem 0.75rem',
+                  background: '#2563eb',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                }}
+              >
+                + Add caption
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {captions.map((cap, i) => (
+                <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <textarea
+                    value={cap}
+                    onChange={(e) => setCaptionAt(i, e.target.value)}
+                    rows={3}
+                    placeholder={`Caption ${i + 1}`}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #d1d5db',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCaption(i)}
+                    style={{
+                      padding: '0.5rem 0.65rem',
+                      background: '#fee2e2',
+                      color: '#991b1b',
+                      border: '1px solid #fecaca',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.requireVisit !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, requireVisit: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Require opening Skills &amp; Mastery before Next</span>
+          </label>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() =>
+                onSave({
+                  ...editedStep,
+                  captions: captions.map((c) => c.trim()).filter(Boolean).length
+                    ? captions.map((c) => c.trim()).filter(Boolean)
+                    : [''],
+                  grantPP: Math.max(0, Math.floor(Number(editedStep.grantPP) || 0)),
+                })
+              }
+              disabled={!canSave}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: canSave ? 'linear-gradient(135deg, #2563eb 0%, #0f766e 100%)' : '#9ca3af',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: canSave ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+              }}
+            >
+              Save Step
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'ARTIFACTS' && isArtifacts(editedStep)) {
+    const captions = Array.isArray(editedStep.captions) ? editedStep.captions : [''];
+    const canSave =
+      typeof editedStep.grantPP === 'number' &&
+      Number.isFinite(editedStep.grantPP) &&
+      editedStep.grantPP >= 0;
+
+    const setCaptionAt = (index: number, value: string) => {
+      const next = [...captions];
+      next[index] = value;
+      setEditedStep({ ...editedStep, captions: next });
+    };
+
+    const addCaption = () => {
+      setEditedStep({ ...editedStep, captions: [...captions, ''] });
+    };
+
+    const removeCaption = (index: number) => {
+      if (captions.length <= 1) {
+        setEditedStep({ ...editedStep, captions: [''] });
+        return;
+      }
+      setEditedStep({ ...editedStep, captions: captions.filter((_, i) => i !== index) });
+    };
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Artifacts</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280', lineHeight: 1.5 }}>
+            Sends players to the Artifacts menu to equip and edit gear. Optionally grant PP once when they open it,
+            and show instructional captions on the mission step.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+              PP to grant (once)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={editedStep.grantPP}
+              onChange={(e) =>
+                setEditedStep({
+                  ...editedStep,
+                  grantPP: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                })
+              }
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+              0 = no grant. Claimed only once per player mission step.
+            </p>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <label style={{ fontWeight: 'bold' }}>Captions</label>
+              <button
+                type="button"
+                onClick={addCaption}
+                style={{
+                  padding: '0.35rem 0.75rem',
+                  background: '#7c3aed',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                }}
+              >
+                + Add caption
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {captions.map((cap, i) => (
+                <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <textarea
+                    value={cap}
+                    onChange={(e) => setCaptionAt(i, e.target.value)}
+                    rows={3}
+                    placeholder={`Caption ${i + 1}`}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #d1d5db',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCaption(i)}
+                    style={{
+                      padding: '0.5rem 0.65rem',
+                      background: '#fee2e2',
+                      color: '#991b1b',
+                      border: '1px solid #fecaca',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.requireVisit !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, requireVisit: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Require opening Artifacts before Next</span>
+          </label>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() =>
+                onSave({
+                  ...editedStep,
+                  captions: captions.map((c) => c.trim()).filter(Boolean).length
+                    ? captions.map((c) => c.trim()).filter(Boolean)
+                    : [''],
+                  grantPP: Math.max(0, Math.floor(Number(editedStep.grantPP) || 0)),
+                })
+              }
+              disabled={!canSave}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: canSave ? 'linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)' : '#9ca3af',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: canSave ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+              }}
+            >
+              Save Step
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'ELEMENTAL_SKILLS' && isElementalSkills(editedStep)) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '560px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Elemental Skills</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280' }}>
+            Players choose Fire, Water, Earth, or Air. Selection grants the Elemental Ring and unlocks Level 1
+            elemental skills for battle.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Intro (optional)</label>
+            <textarea
+              value={editedStep.bodyText || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, bodyText: e.target.value })}
+              rows={3}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Prompt (optional)</label>
+            <textarea
+              value={editedStep.prompt || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, prompt: e.target.value })}
+              rows={2}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '0.75rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.requireSelection !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, requireSelection: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Require awakening an Element before Next</span>
+          </label>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.allowReselect === true}
+              onChange={(e) => setEditedStep({ ...editedStep, allowReselect: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>
+              Allow changing Element after completing this step (overwrites affinity)
+            </span>
+          </label>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() => onSave(editedStep)}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'linear-gradient(135deg, #ea580c 0%, #0284c7 55%, #65a30d 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Save Step
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.type === 'POWER_CARD' && isPowerCard(editedStep)) {
+    const captions = Array.isArray(editedStep.captions) ? editedStep.captions : [''];
+    const canSave =
+      typeof editedStep.grantPP === 'number' &&
+      Number.isFinite(editedStep.grantPP) &&
+      editedStep.grantPP >= 0;
+
+    const setCaptionAt = (index: number, value: string) => {
+      const next = [...captions];
+      next[index] = value;
+      setEditedStep({ ...editedStep, captions: next });
+    };
+
+    const addCaption = () => {
+      setEditedStep({ ...editedStep, captions: [...captions, ''] });
+    };
+
+    const removeCaption = (index: number) => {
+      if (captions.length <= 1) {
+        setEditedStep({ ...editedStep, captions: [''] });
+        return;
+      }
+      setEditedStep({ ...editedStep, captions: captions.filter((_, i) => i !== index) });
+    };
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20000,
+          padding: '2rem',
+        }}
+        onClick={onCancel}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginBottom: '0.5rem' }}>Edit Power Card</h3>
+          <p style={{ margin: '0 0 1.25rem', fontSize: '0.875rem', color: '#6b7280', lineHeight: 1.5 }}>
+            Sends players to Profile / Power Card. Optionally grant PP once when they open it, and show instructional
+            captions on the mission step.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Title (optional)</label>
+            <input
+              type="text"
+              value={editedStep.title || ''}
+              onChange={(e) => setEditedStep({ ...editedStep, title: e.target.value })}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+              PP to grant (once)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={editedStep.grantPP}
+              onChange={(e) =>
+                setEditedStep({
+                  ...editedStep,
+                  grantPP: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                })
+              }
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #d1d5db' }}
+            />
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+              0 = no grant. Claimed only once per player mission step.
+            </p>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <label style={{ fontWeight: 'bold' }}>Captions</label>
+              <button
+                type="button"
+                onClick={addCaption}
+                style={{
+                  padding: '0.35rem 0.75rem',
+                  background: '#4f46e5',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                }}
+              >
+                + Add caption
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {captions.map((cap, i) => (
+                <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <textarea
+                    value={cap}
+                    onChange={(e) => setCaptionAt(i, e.target.value)}
+                    rows={3}
+                    placeholder={`Caption ${i + 1}`}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      borderRadius: '0.25rem',
+                      border: '1px solid #d1d5db',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCaption(i)}
+                    style={{
+                      padding: '0.5rem 0.65rem',
+                      background: '#fee2e2',
+                      color: '#991b1b',
+                      border: '1px solid #fecaca',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={editedStep.requireVisit !== false}
+              onChange={(e) => setEditedStep({ ...editedStep, requireVisit: e.target.checked })}
+            />
+            <span style={{ fontSize: '0.9rem' }}>Require opening Power Card before Next</span>
+          </label>
+
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={() =>
+                onSave({
+                  ...editedStep,
+                  captions: captions.map((c) => c.trim()).filter(Boolean).length
+                    ? captions.map((c) => c.trim()).filter(Boolean)
+                    : [''],
+                  grantPP: Math.max(0, Math.floor(Number(editedStep.grantPP) || 0)),
+                })
+              }
+              disabled={!canSave}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: canSave
+                  ? 'linear-gradient(135deg, #1d4ed8 0%, #4f46e5 55%, #7c3aed 100%)'
+                  : '#9ca3af',
                 color: 'white',
                 border: 'none',
                 borderRadius: '0.5rem',

@@ -812,7 +812,8 @@ export async function recordExamProductivityAttempt(args: {
 export async function updateUserProductivityStats(userId: string): Promise<void> {
   const logsS = query(sprintLogs(), where('userId', '==', userId), limit(400));
   const logsQ = query(quizLogs(), where('userId', '==', userId), limit(800));
-  const [ss, qs] = await Promise.all([getDocs(logsS), getDocs(logsQ)]);
+  const logsE = query(examLogs(), where('userId', '==', userId), limit(80));
+  const [ss, qs, es] = await Promise.all([getDocs(logsS), getDocs(logsQ), getDocs(logsE)]);
 
   const joined = ss.size;
   let completed = 0;
@@ -828,12 +829,21 @@ export async function updateUserProductivityStats(userId: string): Promise<void>
     quizzes += 1;
   });
 
+  let exams = 0;
+  let esum = 0;
+  es.forEach((ed) => {
+    esum += Number((ed.data() as { scorePercent?: number }).scorePercent ?? 0);
+    exams += 1;
+  });
+
   const statsRef = doc(db, 'productivityStats', userId);
   const wkNow = getWeekId();
   let wj = 0;
   let wc = 0;
   let wq = 0;
   let wqsum = 0;
+  let we = 0;
+  let wesum = 0;
   ss.forEach((d) => {
     const x = d.data() as { weekId?: string; status?: string };
     if (x.weekId !== wkNow) return;
@@ -846,9 +856,16 @@ export async function updateUserProductivityStats(userId: string): Promise<void>
     wq += 1;
     wqsum += Number(x.scorePercent || 0);
   });
+  es.forEach((d) => {
+    const x = d.data() as { weekId?: string; scorePercent?: number };
+    if (x.weekId !== wkNow) return;
+    we += 1;
+    wesum += Number(x.scorePercent || 0);
+  });
 
   const sprintRate = calculateSprintCompletionRate(joined, completed);
   const quizAvg = quizzes > 0 ? Math.round((qsum / quizzes) * 10) / 10 : 0;
+  const examAvg = exams > 0 ? Math.round((esum / exams) * 10) / 10 : 0;
   const wsRate = calculateSprintCompletionRate(wj, wc);
   const wQuizAvg = wq > 0 ? Math.round((wqsum / wq) * 10) / 10 : 0;
   const c = consistencyFromWeeklyTotals(wj, wc, wq);
@@ -875,11 +892,16 @@ export async function updateUserProductivityStats(userId: string): Promise<void>
         totalQuizzesCompleted: quizzes,
         averageQuizScore: quizAvg,
         quizScoreSum: qsum,
+        totalExamsCompleted: exams,
+        averageExamScore: examAvg,
+        examScoreSum: esum,
         activeWeekId: wkNow,
         weekSprintJoined: wj,
         weekSprintCompleted: wc,
         weekQuizCompletes: wq,
         weekQuizScoreSum: wqsum,
+        weekExamCompletes: we,
+        weekExamScoreSum: wesum,
         weeklyProductivityRating: weeklyRating,
         overallProductivityRating: overallRating,
         productivityRank: getProductivityRank(overallRating),

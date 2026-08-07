@@ -137,3 +137,115 @@ export async function loadExamHistoryForUser(
     .sort((a, b) => rowSortKey(b) - rowSortKey(a))
     .slice(0, maxRows);
 }
+
+/** All completed exams for one live event session (`examProductivityLogs`). */
+export async function loadExamHistoryForSession(
+  sessionId: string,
+  maxRows = 80
+): Promise<ExamProductivityLog[]> {
+  const sid = sessionId.trim();
+  if (!sid) return [];
+
+  const runQuery = async (withOrder: boolean) => {
+    const q = withOrder
+      ? query(
+          collection(db, 'examProductivityLogs'),
+          where('sessionId', '==', sid),
+          orderBy('completedAt', 'desc'),
+          limit(maxRows)
+        )
+      : query(
+          collection(db, 'examProductivityLogs'),
+          where('sessionId', '==', sid),
+          limit(maxRows * 2)
+        );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => normalizeExamDoc(d.id, d.data() as Record<string, unknown>));
+  };
+
+  try {
+    const rows = await runQuery(true);
+    return rows.sort((a, b) => rowSortKey(b) - rowSortKey(a));
+  } catch {
+    try {
+      const rows = await runQuery(false);
+      return rows.sort((a, b) => rowSortKey(b) - rowSortKey(a)).slice(0, maxRows);
+    } catch (e) {
+      console.warn('[examProfileHistory] session exams', e);
+      return [];
+    }
+  }
+}
+
+export type ExamSessionSummary = {
+  sessionId: string;
+  title: string;
+  classId?: string;
+  completedCount: number;
+  lastCompletedAt: unknown;
+};
+
+/** Recent live events that had at least one completed exam (for admin pickers). */
+export async function loadRecentExamSessionsForClass(
+  classId: string,
+  maxSessions = 24
+): Promise<ExamSessionSummary[]> {
+  const cid = classId.trim();
+  if (!cid) return [];
+
+  const runQuery = async (withOrder: boolean) => {
+    const q = withOrder
+      ? query(
+          collection(db, 'examProductivityLogs'),
+          where('classId', '==', cid),
+          orderBy('completedAt', 'desc'),
+          limit(200)
+        )
+      : query(
+          collection(db, 'examProductivityLogs'),
+          where('classId', '==', cid),
+          limit(200)
+        );
+    return getDocs(q);
+  };
+
+  let snap;
+  try {
+    snap = await runQuery(true);
+  } catch {
+    try {
+      snap = await runQuery(false);
+    } catch (e) {
+      console.warn('[examProfileHistory] recent exam sessions', e);
+      return [];
+    }
+  }
+
+  const bySession = new Map<string, ExamSessionSummary>();
+  snap.docs.forEach((d) => {
+    const row = normalizeExamDoc(d.id, d.data() as Record<string, unknown>);
+    if (!row.sessionId) return;
+    const existing = bySession.get(row.sessionId);
+    const when = rowSortKey(row);
+    if (!existing) {
+      bySession.set(row.sessionId, {
+        sessionId: row.sessionId,
+        title: row.title || row.assessmentTitle || 'Live Event Exam',
+        classId: row.classId,
+        completedCount: 1,
+        lastCompletedAt: row.completedAt,
+      });
+      return;
+    }
+    existing.completedCount += 1;
+    const prevWhen = tsMs(existing.lastCompletedAt) || 0;
+    if (when >= prevWhen) {
+      existing.lastCompletedAt = row.completedAt;
+      if (row.title?.trim()) existing.title = row.title;
+    }
+  });
+
+  return Array.from(bySession.values())
+    .sort((a, b) => (tsMs(b.lastCompletedAt) || 0) - (tsMs(a.lastCompletedAt) || 0))
+    .slice(0, maxSessions);
+}

@@ -15,6 +15,13 @@ import {
   workCompletionRatePct,
   WORK_ENERGY_ORDER,
 } from '../../utils/workStatsTracking';
+import {
+  formatExamDurationMs,
+  loadExamHistoryForSession,
+  loadRecentExamSessionsForClass,
+  type ExamSessionSummary,
+} from '../../utils/examProfileHistory';
+import type { ExamProductivityLog } from '../../types/examProductivity';
 
 type Classroom = { id: string; name: string; students: string[] };
 
@@ -144,6 +151,8 @@ type QuizLog = Record<string, unknown> & {
   questionTags?: string[];
 };
 
+type ExamLog = ExamProductivityLog;
+
 const ProductivityDashboardAdmin: React.FC<{
   students: StudentLite[];
   classrooms: Classroom[];
@@ -158,7 +167,7 @@ const ProductivityDashboardAdmin: React.FC<{
   const [studentSearch, setStudentSearch] = useState('');
   const [rankFilter, setRankFilter] = useState<ProductivityRankLabel | 'all'>('all');
   const [sortKey, setSortKey] = useState<
-    'overall' | 'sprintRate' | 'quiz' | 'streak' | 'name'
+    'overall' | 'sprintRate' | 'quiz' | 'exam' | 'streak' | 'name'
   >('overall');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [workTypeFilter, setWorkTypeFilter] = useState<BattleEnergyType | 'all'>('all');
@@ -168,7 +177,12 @@ const ProductivityDashboardAdmin: React.FC<{
   const [detailUid, setDetailUid] = useState<string | null>(null);
   const [detailSprints, setDetailSprints] = useState<SprintLog[]>([]);
   const [detailQuizzes, setDetailQuizzes] = useState<QuizLog[]>([]);
+  const [detailExams, setDetailExams] = useState<ExamLog[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [liveEventSessionId, setLiveEventSessionId] = useState('');
+  const [liveEventExams, setLiveEventExams] = useState<ExamLog[]>([]);
+  const [liveEventExamsLoading, setLiveEventExamsLoading] = useState(false);
+  const [recentExamSessions, setRecentExamSessions] = useState<ExamSessionSummary[]>([]);
 
   const loadStats = useCallback(async () => {
     setLoading(true);
@@ -199,9 +213,10 @@ const ProductivityDashboardAdmin: React.FC<{
         return;
       }
       try {
-        const [sSnap, qSnap] = await Promise.all([
+        const [sSnap, qSnap, eSnap] = await Promise.all([
           getDocs(query(collection(db, 'sprintProductivityLogs'), where('weekId', '==', weekFilter), limit(500))),
           getDocs(query(collection(db, 'quizProductivityLogs'), where('weekId', '==', weekFilter), limit(500))),
+          getDocs(query(collection(db, 'examProductivityLogs'), where('weekId', '==', weekFilter), limit(500))),
         ]);
         const u = new Set<string>();
         sSnap.docs.forEach((d) => {
@@ -209,6 +224,10 @@ const ProductivityDashboardAdmin: React.FC<{
           if (typeof uid === 'string') u.add(uid);
         });
         qSnap.docs.forEach((d) => {
+          const uid = (d.data() as { userId?: string }).userId;
+          if (typeof uid === 'string') u.add(uid);
+        });
+        eSnap.docs.forEach((d) => {
           const uid = (d.data() as { userId?: string }).userId;
           if (typeof uid === 'string') u.add(uid);
         });
@@ -227,23 +246,43 @@ const ProductivityDashboardAdmin: React.FC<{
     if (!detailUid) {
       setDetailSprints([]);
       setDetailQuizzes([]);
+      setDetailExams([]);
       return;
     }
     let cancelled = false;
     setDetailLoading(true);
     (async () => {
       try {
-        const [sSnap, qSnap] = await Promise.all([
+        const [sSnap, qSnap, eSnap] = await Promise.all([
           getDocs(query(collection(db, 'sprintProductivityLogs'), where('userId', '==', detailUid), limit(200))),
           getDocs(query(collection(db, 'quizProductivityLogs'), where('userId', '==', detailUid), limit(400))),
+          getDocs(query(collection(db, 'examProductivityLogs'), where('userId', '==', detailUid), limit(80))),
         ]);
         const sp = sSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as SprintLog[];
         const qu = qSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as QuizLog[];
+        const ex = eSnap.docs.map((d) => ({
+          id: d.id,
+          userId: String((d.data() as { userId?: string }).userId || ''),
+          sessionId: String((d.data() as { sessionId?: string }).sessionId || ''),
+          examQuizSetId: String((d.data() as { examQuizSetId?: string }).examQuizSetId || ''),
+          attemptId: String((d.data() as { attemptId?: string }).attemptId || ''),
+          title: String((d.data() as { title?: string }).title || 'Exam'),
+          quizTopic: (d.data() as { quizTopic?: string }).quizTopic,
+          assessmentTitle: (d.data() as { assessmentTitle?: string }).assessmentTitle,
+          scorePercent: Number((d.data() as { scorePercent?: number }).scorePercent) || 0,
+          correctAnswers: Number((d.data() as { correctAnswers?: number }).correctAnswers) || 0,
+          totalQuestions: Number((d.data() as { totalQuestions?: number }).totalQuestions) || 0,
+          timeTakenMs: Number((d.data() as { timeTakenMs?: number }).timeTakenMs) || 0,
+          completedAt: (d.data() as { completedAt?: unknown }).completedAt,
+          weekId: String((d.data() as { weekId?: string }).weekId || ''),
+        })) as ExamLog[];
         sp.sort((a, b) => (tsMs(b.completedAt || b.joinedAt || b.missedAt) || 0) - (tsMs(a.completedAt || a.joinedAt || a.missedAt) || 0));
         qu.sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0));
+        ex.sort((a, b) => (tsMs(b.completedAt) || 0) - (tsMs(a.completedAt) || 0));
         if (!cancelled) {
           setDetailSprints(sp);
           setDetailQuizzes(qu);
+          setDetailExams(ex);
         }
       } finally {
         if (!cancelled) setDetailLoading(false);
@@ -253,6 +292,38 @@ const ProductivityDashboardAdmin: React.FC<{
       cancelled = true;
     };
   }, [detailUid]);
+
+  useEffect(() => {
+    if (classFilter === 'all') {
+      setRecentExamSessions([]);
+      return;
+    }
+    let cancelled = false;
+    void loadRecentExamSessionsForClass(classFilter, 24).then((rows) => {
+      if (!cancelled) setRecentExamSessions(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [classFilter]);
+
+  const loadLiveEventExams = useCallback(async () => {
+    const sid = liveEventSessionId.trim();
+    if (!sid) {
+      setLiveEventExams([]);
+      return;
+    }
+    setLiveEventExamsLoading(true);
+    try {
+      const rows = await loadExamHistoryForSession(sid, 80);
+      setLiveEventExams(rows);
+    } catch (e) {
+      console.warn('[ProductivityDashboard] live event exams', e);
+      setLiveEventExams([]);
+    } finally {
+      setLiveEventExamsLoading(false);
+    }
+  }, [liveEventSessionId]);
 
   const studentClassLabel = useCallback(
     (studentId: string) => {
@@ -330,6 +401,7 @@ const ProductivityDashboardAdmin: React.FC<{
       } else if (sortKey === 'overall') cmp = (a.overallProductivityRating || 0) - (b.overallProductivityRating || 0);
       else if (sortKey === 'sprintRate') cmp = (a.sprintCompletionRate || 0) - (b.sprintCompletionRate || 0);
       else if (sortKey === 'quiz') cmp = (a.averageQuizScore || 0) - (b.averageQuizScore || 0);
+      else if (sortKey === 'exam') cmp = (a.averageExamScore || 0) - (b.averageExamScore || 0);
       else if (sortKey === 'streak') cmp = (a.currentStreak || 0) - (b.currentStreak || 0);
       return sortDir === 'desc' ? -cmp : cmp;
     });
@@ -377,6 +449,8 @@ const ProductivityDashboardAdmin: React.FC<{
     let sprintDoneWeek = 0;
     let quizSumWeek = 0;
     let quizNWeek = 0;
+    let examSumWeek = 0;
+    let examNWeek = 0;
     const wk = getWeekId();
 
     list.forEach((r) => {
@@ -386,11 +460,14 @@ const ProductivityDashboardAdmin: React.FC<{
         sprintDoneWeek += r.weekSprintCompleted || 0;
         quizNWeek += r.weekQuizCompletes || 0;
         quizSumWeek += r.weekQuizScoreSum || 0;
+        examNWeek += r.weekExamCompletes || 0;
+        examSumWeek += r.weekExamScoreSum || 0;
       }
     });
 
     const avgClass = n > 0 ? Math.round((sum / n) * 10) / 10 : 0;
     const avgQuizWeek = quizNWeek > 0 ? Math.round((quizSumWeek / quizNWeek) * 10) / 10 : 0;
+    const avgExamWeek = examNWeek > 0 ? Math.round((examSumWeek / examNWeek) * 10) / 10 : 0;
 
     const sortedByRating = [...list].sort(
       (a, b) => (b.overallProductivityRating || 0) - (a.overallProductivityRating || 0)
@@ -401,6 +478,8 @@ const ProductivityDashboardAdmin: React.FC<{
       avgClass,
       sprintDoneWeek,
       avgQuizWeek,
+      avgExamWeek,
+      examNWeek,
       topStudent: sortedByRating[0] || null,
       mostImproved: sortedByDelta[0] || null,
     };
@@ -435,7 +514,7 @@ const ProductivityDashboardAdmin: React.FC<{
       (s) => s.status === 'missed' || (s.status === 'joined' && !s.completedAt)
     );
 
-    const recent: { kind: 'sprint' | 'quiz'; label: string; when: number; extra?: string }[] = [];
+    const recent: { kind: 'sprint' | 'quiz' | 'exam'; label: string; when: number; extra?: string }[] = [];
     detailSprints.slice(0, 12).forEach((s) => {
       const t = tsMs(s.completedAt || s.joinedAt || s.missedAt) || 0;
       recent.push({
@@ -452,12 +531,20 @@ const ProductivityDashboardAdmin: React.FC<{
         when: tsMs(q.completedAt) || 0,
       });
     });
+    detailExams.slice(0, 12).forEach((e) => {
+      recent.push({
+        kind: 'exam',
+        label: `${e.title} (${Math.round(e.scorePercent)}%)`,
+        when: tsMs(e.completedAt) || 0,
+        extra: e.sessionId ? `Session ${e.sessionId.slice(0, 8)}…` : undefined,
+      });
+    });
     recent.sort((a, b) => b.when - a.when);
 
     const st = statsByUser[detailUid || ''];
 
     return { strengths, growth, missedSprints, recent: recent.slice(0, 15), profileStats: st };
-  }, [detailQuizzes, detailSprints, detailUid, statsByUser]);
+  }, [detailQuizzes, detailExams, detailSprints, detailUid, statsByUser]);
 
   const toggleSort = (k: typeof sortKey) => {
     if (sortKey === k) setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
@@ -473,7 +560,8 @@ const ProductivityDashboardAdmin: React.FC<{
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 800, margin: 0, color: '#111827' }}>Productivity Dashboard</h2>
           <p style={{ color: '#6b7280', marginTop: '0.35rem', maxWidth: 640 }}>
-            Class Flow sprint completion, Training Grounds / live quizzes, weekly consistency, and composite productivity.
+            Class Flow sprint completion, Training Grounds / live quizzes, Live Event Exam Mode results, weekly
+            consistency, and composite productivity.
           </p>
         </div>
         <button
@@ -522,6 +610,15 @@ const ProductivityDashboardAdmin: React.FC<{
               </div>
             </div>
             <div style={{ background: 'white', borderRadius: 12, padding: '1rem', border: '1px solid #e5e7eb' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Avg exam score (this week, tracked)</div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: '#7c3aed' }}>
+                {summary.avgExamWeek > 0 ? `${summary.avgExamWeek}%` : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                {summary.examNWeek > 0 ? `${summary.examNWeek} exam(s) submitted` : 'No exams this week'}
+              </div>
+            </div>
+            <div style={{ background: 'white', borderRadius: 12, padding: '1rem', border: '1px solid #e5e7eb' }}>
               <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Most productive</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>
                 {summary.topStudent?.displayName || summary.topStudent?.email || summary.topStudent?.id || '—'}
@@ -545,6 +642,122 @@ const ProductivityDashboardAdmin: React.FC<{
               </div>
             </div>
           </div>
+
+
+          <h3 style={{ margin: '1.5rem 0 0.5rem', fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>
+            Live Event Exam Results
+          </h3>
+          <p style={{ margin: '0 0 0.75rem', fontSize: 13, color: '#6b7280', maxWidth: 720 }}>
+            View every completed Exam Mode submission for a live event session (from productivity logs). Use the
+            session ID from the live event URL (<code>/live-events/SESSION_ID</code>) or pick a recent session for the
+            selected class.
+          </p>
+          <div
+            style={{
+              padding: '0.85rem',
+              background: '#f5f3ff',
+              borderRadius: 12,
+              border: '1px solid #ddd6fe',
+              marginBottom: '1rem',
+            }}
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 220px' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#5b21b6' }}>Live event session ID</span>
+                <input
+                  value={liveEventSessionId}
+                  onChange={(e) => setLiveEventSessionId(e.target.value)}
+                  placeholder="inSessionRooms document id"
+                  style={{ padding: '0.4rem 0.55rem', borderRadius: 8, border: '1px solid #c4b5fd' }}
+                />
+              </label>
+              {classFilter !== 'all' && recentExamSessions.length > 0 ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 260px' }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#5b21b6' }}>Recent exam sessions (class)</span>
+                  <select
+                    value={liveEventSessionId}
+                    onChange={(e) => setLiveEventSessionId(e.target.value)}
+                    style={{ padding: '0.4rem 0.55rem', borderRadius: 8, border: '1px solid #c4b5fd' }}
+                  >
+                    <option value="">Select session…</option>
+                    {recentExamSessions.map((s) => (
+                      <option key={s.sessionId} value={s.sessionId}>
+                        {s.title} · {s.completedCount} submitted
+                        {tsMs(s.lastCompletedAt)
+                          ? ` · ${new Date(tsMs(s.lastCompletedAt)!).toLocaleDateString()}`
+                          : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void loadLiveEventExams()}
+                disabled={liveEventExamsLoading || !liveEventSessionId.trim()}
+                style={{
+                  padding: '0.45rem 1rem',
+                  background: '#7c3aed',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  cursor: liveEventExamsLoading ? 'wait' : 'pointer',
+                  opacity: !liveEventSessionId.trim() ? 0.6 : 1,
+                }}
+              >
+                {liveEventExamsLoading ? 'Loading…' : 'Load results'}
+              </button>
+            </div>
+            {liveEventSessionId.trim() ? (
+              <p style={{ margin: '0.5rem 0 0', fontSize: 12, color: '#6b7280' }}>
+                Session: <code style={{ fontSize: 11 }}>{liveEventSessionId.trim()}</code>
+              </p>
+            ) : null}
+          </div>
+          {liveEventExams.length > 0 ? (
+            <div style={{ overflowX: 'auto', background: 'white', borderRadius: 12, border: '1px solid #e5e7eb', marginBottom: '0.5rem' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#f5f3ff', textAlign: 'left' }}>
+                    <th style={{ padding: '0.6rem' }}>Student</th>
+                    <th style={{ padding: '0.6rem' }}>Exam</th>
+                    <th style={{ padding: '0.6rem' }}>Score</th>
+                    <th style={{ padding: '0.6rem' }}>Correct</th>
+                    <th style={{ padding: '0.6rem' }}>Time</th>
+                    <th style={{ padding: '0.6rem' }}>Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveEventExams.map((ex) => {
+                    const st = students.find((s) => s.id === ex.userId);
+                    const whenMs = tsMs(ex.completedAt);
+                    return (
+                      <tr key={ex.id} style={{ borderTop: '1px solid #f3f4f6' }}>
+                        <td style={{ padding: '0.6rem', fontWeight: 600 }}>
+                          {st?.displayName || st?.email || ex.userId.slice(0, 10)}
+                        </td>
+                        <td style={{ padding: '0.6rem' }}>{ex.title}</td>
+                        <td style={{ padding: '0.6rem', fontWeight: 700 }}>{Math.round(ex.scorePercent)}%</td>
+                        <td style={{ padding: '0.6rem' }}>
+                          {ex.correctAnswers}/{ex.totalQuestions}
+                        </td>
+                        <td style={{ padding: '0.6rem' }}>{formatExamDurationMs(ex.timeTakenMs)}</td>
+                        <td style={{ padding: '0.6rem', fontSize: 12, color: '#6b7280' }}>
+                          {whenMs ? new Date(whenMs).toLocaleString() : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : liveEventSessionId.trim() && !liveEventExamsLoading ? (
+            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: '1rem' }}>
+              No completed exam productivity logs for this session yet. Students must submit the exam (Exam Mode) for
+              results to appear here.
+            </p>
+          ) : null}
 
           <h3 style={{ margin: '1.25rem 0 0.5rem', fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>
             4 Work Types (MST)
@@ -738,6 +951,10 @@ const ProductivityDashboardAdmin: React.FC<{
                     Quiz avg
                   </th>
                   <th style={{ padding: '0.6rem' }}># Quiz</th>
+                  <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('exam')}>
+                    Exam avg
+                  </th>
+                  <th style={{ padding: '0.6rem' }}># Exam</th>
                   <th style={{ padding: '0.6rem', cursor: 'pointer' }} onClick={() => toggleSort('streak')}>
                     Streak
                   </th>
@@ -797,6 +1014,13 @@ const ProductivityDashboardAdmin: React.FC<{
                         </div>
                       </td>
                       <td style={{ padding: '0.6rem' }}>{r.totalQuizzesCompleted}</td>
+                      <td style={{ padding: '0.6rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <MiniBar pct={r.averageExamScore} color="#8b5cf6" />
+                          <span>{Math.round(r.averageExamScore)}%</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: '0.6rem' }}>{r.totalExamsCompleted}</td>
                       <td style={{ padding: '0.6rem' }}>{r.currentStreak} wk</td>
                       <td style={{ padding: '0.6rem' }}>
                         <div style={{ fontWeight: 700 }}>
@@ -871,6 +1095,8 @@ const ProductivityDashboardAdmin: React.FC<{
                 <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                   <StatPill label="Weekly score" value={`${Math.round(detailAnalysis.profileStats?.weeklyProductivityRating || 0)}%`} />
                   <StatPill label="Overall score" value={`${Math.round(detailAnalysis.profileStats?.overallProductivityRating || 0)}%`} />
+                  <StatPill label="Exams" value={String(detailAnalysis.profileStats?.totalExamsCompleted || 0)} />
+                  <StatPill label="Exam avg" value={`${Math.round(detailAnalysis.profileStats?.averageExamScore || 0)}%`} />
                   <StatPill label="Rank" value={detailAnalysis.profileStats?.productivityRank || '—'} />
                 </div>
                 <section style={{ marginTop: '1rem' }}>
@@ -911,6 +1137,28 @@ const ProductivityDashboardAdmin: React.FC<{
                         <li key={`${String(s.sessionId)}-${String(s.sprintId)}-${i}`}>
                           {(s.status || '').toUpperCase()} — {s.sprintTitle || 'Sprint'}
                           {typeof s.weekId === 'string' ? ` · ${s.weekId}` : ''}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </section>
+
+                <section style={{ marginTop: '1rem' }}>
+                  <h4 style={{ margin: '0 0 0.5rem', fontSize: 14, color: '#374151' }}>Live Event exam history</h4>
+                  <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: 13 }}>
+                    {detailExams.length === 0 ? (
+                      <li style={{ color: '#9ca3af' }}>No completed live exams yet</li>
+                    ) : (
+                      detailExams.slice(0, 20).map((e, i) => (
+                        <li key={`${e.sessionId}-${i}`}>
+                          {e.title} — {Math.round(e.scorePercent)}%
+                          {e.correctAnswers != null && e.totalQuestions
+                            ? ` (${e.correctAnswers}/${e.totalQuestions})`
+                            : ''}
+                          {e.timeTakenMs ? ` · ${formatExamDurationMs(e.timeTakenMs)}` : ''}
+                          {e.sessionId ? (
+                            <span style={{ color: '#6b7280' }}> · session {e.sessionId.slice(0, 8)}…</span>
+                          ) : null}
                         </li>
                       ))
                     )}

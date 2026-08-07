@@ -38,6 +38,11 @@ import { getAssessmentsByClass, getAssessment } from '../utils/assessmentGoalsFi
 import { isWrittenAssessmentType } from '../utils/assessmentTypeHelpers';
 import type { TrainingQuestion } from '../types/trainingGrounds';
 import type { Assessment } from '../types/assessmentGoals';
+import {
+  formatExamDurationMs,
+  loadExamHistoryForSession,
+} from '../utils/examProfileHistory';
+import type { ExamProductivityLog } from '../types/examProductivity';
 
 interface StudentRoster {
   id: string;
@@ -94,6 +99,7 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
   const [clockTick, setClockTick] = useState(() => Date.now());
   const autoSubmitTriggeredRef = useRef(false);
   const [linkedAssessment, setLinkedAssessment] = useState<Assessment | null>(null);
+  const [productivityExamRows, setProductivityExamRows] = useState<ExamProductivityLog[]>([]);
 
   const examQuizSetId = typeof room?.examQuizSetId === 'string' ? room.examQuizSetId : '';
   const examAssessmentId = typeof room?.examAssessmentId === 'string' ? room.examAssessmentId : '';
@@ -512,6 +518,23 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
     return map;
   }, [allProgress]);
 
+  const refreshProductivityExams = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const rows = await loadExamHistoryForSession(sessionId, 80);
+      setProductivityExamRows(rows);
+    } catch (e) {
+      console.warn('[LiveEventExam] productivity exam rows', e);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!isSessionHost || !examQuizSetId || !sessionId) return;
+    void refreshProductivityExams();
+    const id = window.setInterval(() => void refreshProductivityExams(), 15000);
+    return () => window.clearInterval(id);
+  }, [isSessionHost, examQuizSetId, sessionId, refreshProductivityExams]);
+
   const rosterRows = useMemo(() => {
     const ids = new Set<string>();
     students.forEach((s) => ids.add(s.id));
@@ -751,8 +774,71 @@ const LiveEventExam: React.FC<LiveEventExamProps> = ({
               </table>
             </div>
             <p style={{ marginTop: '1rem', color: '#64748b', fontSize: '0.85rem' }}>
-              Students see a full-screen exam only — combat and skills are disabled.
+              Students see a full-screen exam only — combat and skills are disabled. Submitted scores sync to MST
+              Productivity (Admin → Productivity → Live Event Exam Results).
             </p>
+            {productivityExamRows.length > 0 ? (
+              <div style={{ marginTop: '1.25rem' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    flexWrap: 'wrap',
+                    marginBottom: '0.5rem',
+                  }}
+                >
+                  <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#312e81' }}>
+                    Submitted exams (Productivity)
+                  </h2>
+                  <button type="button" onClick={() => void refreshProductivityExams()} style={secondaryBtn}>
+                    Refresh
+                  </button>
+                </div>
+                <div
+                  style={{
+                    overflowX: 'auto',
+                    background: '#fff',
+                    borderRadius: '0.75rem',
+                    border: '1px solid #e2e8f0',
+                  }}
+                >
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                    <thead>
+                      <tr style={{ background: '#f5f3ff', textAlign: 'left' }}>
+                        <th style={thStyle}>Player</th>
+                        <th style={thStyle}>Score</th>
+                        <th style={thStyle}>Correct</th>
+                        <th style={thStyle}>Time</th>
+                        <th style={thStyle}>Submitted</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productivityExamRows.map((ex) => {
+                        const student = students.find((s) => s.id === ex.userId);
+                        const whenMs = tsMs(ex.completedAt);
+                        return (
+                          <tr key={ex.id} style={{ borderTop: '1px solid #e2e8f0' }}>
+                            <td style={tdStyle}>
+                              {student?.displayName || ex.userId.slice(0, 8)}
+                            </td>
+                            <td style={tdStyle}>{Math.round(ex.scorePercent)}%</td>
+                            <td style={tdStyle}>
+                              {ex.correctAnswers}/{ex.totalQuestions}
+                            </td>
+                            <td style={tdStyle}>{formatExamDurationMs(ex.timeTakenMs)}</td>
+                            <td style={tdStyle}>
+                              {whenMs ? new Date(whenMs).toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
           </>
         )}
       </ExamShell>

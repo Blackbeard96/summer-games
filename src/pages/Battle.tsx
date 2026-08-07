@@ -108,6 +108,13 @@ const Battle: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromSkillLoadoutTutorial = searchParams.get('tutorial') === 'skill-loadout';
+  const returnMissionId = searchParams.get('returnMission');
+  const missionPpGranted = searchParams.get('missionPp');
+  const safeReturnMissionPath =
+    returnMissionId &&
+    /^[a-zA-Z0-9_-]+$/.test(returnMissionId)
+      ? `/mission/${encodeURIComponent(returnMissionId)}/play`
+      : null;
 
   // Check URL hash to set initial tab
   // Support both "moves" and "skills" routes for backward compatibility
@@ -146,6 +153,24 @@ const Battle: React.FC = () => {
     }
   };
 
+  // Ensure Manifest skills exist in battleMoves (demo / test accounts often open Skills & Mastery
+  // before BattleContext has created the document — without this, upgrade fails with "Move not found").
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { ensureManifestSkillsForBattle } = await import('../utils/battleMovesManifestSync');
+        await ensureManifestSkillsForBattle(currentUser.uid);
+      } catch (e) {
+        if (!cancelled) console.warn('Battle: ensureManifestSkillsForBattle', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
   // Fetch user's element from profile
   useEffect(() => {
     const fetchUserElement = async () => {
@@ -168,19 +193,15 @@ const Battle: React.FC = () => {
             fullArtifacts: userData.artifacts
           });
           
-          // Prioritize chosen_element, then elementalAffinity, then manifestationType
-          // Only use 'fire' as fallback if NONE of these are set
-          const element = chosenElement?.toLowerCase() || 
-                         elementalAffinity?.toLowerCase() || 
-                         manifestationType?.toLowerCase() || 
-                         null; // Don't default to fire - let the user choose
+          // Prioritize chosen_element / elementalAffinity — never invent Fire
+          const { extractElementOrNull } = await import('../utils/elementDisplay');
+          const element = extractElementOrNull({}, userData);
           
           if (element) {
             console.log('Battle: User element set to:', element);
             setUserElement(element);
           } else {
-            console.warn('Battle: No element found for user, not setting userElement (will show all elemental moves)');
-            // Don't set a default - this way if no element is chosen, all moves show (or we could show a message)
+            console.warn('Battle: No element found for user — Element remains Unawakened');
           }
         }
       } catch (error) {
@@ -470,6 +491,52 @@ const Battle: React.FC = () => {
           🔧 Force Migration (Update Cards)
         </button>
       </div>
+
+      {safeReturnMissionPath && (
+        <div
+          style={{
+            marginBottom: '1.25rem',
+            padding: '1rem 1.25rem',
+            borderRadius: '0.75rem',
+            background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+            border: '2px solid #3b82f6',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+          }}
+        >
+          <div style={{ color: '#1e3a8a', fontSize: '0.95rem', lineHeight: 1.45 }}>
+            <strong>Mission: Skills &amp; Mastery</strong>
+            {missionPpGranted && Number(missionPpGranted) > 0 ? (
+              <span>
+                {' '}
+                — +{Number(missionPpGranted).toLocaleString()} PP from this step
+                {activeTab === 'moves' ? ' is ready to spend on skill upgrades.' : '.'}
+              </span>
+            ) : (
+              <span> — Level skills and equip your loadout, then return to continue.</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(safeReturnMissionPath)}
+            style={{
+              padding: '0.65rem 1.15rem',
+              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              fontWeight: 800,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Return to mission
+          </button>
+        </div>
+      )}
 
       {success && (
         <div style={{ 

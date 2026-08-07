@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import BattleEngine from './BattleEngine';
+import {
+  TRUTH_METAL_BATTLE_RESTRICTIONS,
+  TRUTH_METAL_OPPONENT,
+} from '../utils/storyBattleRestrictions';
 
 interface TruthBattleProps {
   isOpen: boolean;
@@ -10,14 +14,13 @@ interface TruthBattleProps {
   onClose: () => void;
 }
 
-
-
 const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, onClose }) => {
   const { currentUser } = useAuth();
-  const { moves, vault } = useBattle();
+  const { moves } = useBattle();
   
   const [battlePhase, setBattlePhase] = useState<'intro' | 'battle' | 'victory' | 'defeat'>('intro');
   const [showBattleEngine, setShowBattleEngine] = useState(false);
+  const [victoryHandled, setVictoryHandled] = useState(false);
 
   // Truth revelations based on player's choices
   const truthRevelations = [
@@ -33,11 +36,14 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
 
   useEffect(() => {
     if (isOpen) {
-      // Start intro sequence
-      setTimeout(() => {
+      setVictoryHandled(false);
+      setBattlePhase('intro');
+      setShowBattleEngine(false);
+      const timer = setTimeout(() => {
         setBattlePhase('battle');
         setShowBattleEngine(true);
       }, 3000);
+      return () => clearTimeout(timer);
     }
   }, [isOpen]);
 
@@ -45,15 +51,15 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
     setShowBattleEngine(false);
     
     if (result === 'victory') {
+      if (victoryHandled) return;
+      setVictoryHandled(true);
       setBattlePhase('victory');
-      // Select random truth revelation
       const revealedTruth = truthRevelations[Math.floor(Math.random() * truthRevelations.length)];
       
       setTimeout(() => {
         onVictory(revealedTruth);
       }, 2000);
     } else if (result === 'escape') {
-      // Handle escape - close the battle immediately without completing the challenge
       setTimeout(() => {
         onClose();
       }, 1000);
@@ -65,18 +71,14 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
     }
   };
 
-  // Truth opponent configuration
-  const truthOpponent = {
-    id: 'truth',
-    name: 'Truth',
-    currentPP: 100,
-    maxPP: 100,
-    shieldStrength: 50,
-    maxShieldStrength: 50,
-    level: 5
-  };
+  // Soft onboarding opponent (~2–4 Manifest actions)
+  const truthOpponent = { ...TRUTH_METAL_OPPONENT };
 
   if (!isOpen) return null;
+
+  const hasManifestMove = (moves || []).some(
+    (m) => m.unlocked && m.category === 'manifest' && (m.level == null || m.level === 1)
+  );
 
   return (
     <>
@@ -97,6 +99,10 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
           @keyframes glow {
             0%, 100% { box-shadow: 0 0 5px #dc2626; }
             50% { box-shadow: 0 0 20px #dc2626, 0 0 30px #dc2626; }
+          }
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
           }
         `}
       </style>
@@ -126,7 +132,6 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
           animation: 'slideInUp 0.4s ease-out',
           border: '2px solid #374151'
         }}>
-          {/* Close Button */}
           <button
             onClick={onClose}
             style={{
@@ -200,10 +205,30 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
                 fontSize: '1rem',
                 color: '#fbbf24',
                 fontStyle: 'italic',
-                fontWeight: '500'
+                fontWeight: '500',
+                marginBottom: '1rem'
               }}>
                 "I am Truth. I am everything you fear about yourself. Defeat me, and you will know yourself truly."
               </p>
+
+              <p style={{
+                fontSize: '0.95rem',
+                color: '#93c5fd',
+                lineHeight: '1.5',
+                maxWidth: '32rem',
+                margin: '0 auto 1.5rem'
+              }}>
+                {TRUTH_METAL_BATTLE_RESTRICTIONS.tutorialMessage}
+              </p>
+
+              {!currentUser && (
+                <p style={{ color: '#f87171' }}>Missing player profile — please refresh and try again.</p>
+              )}
+              {currentUser && !hasManifestMove && (
+                <p style={{ color: '#fbbf24' }}>
+                  Select your Manifest before this fight so your innate power can appear in the Fight menu.
+                </p>
+              )}
 
               <div style={{
                 display: 'flex',
@@ -236,6 +261,7 @@ const TruthBattle: React.FC<TruthBattleProps> = ({ isOpen, onVictory, onDefeat, 
               <BattleEngine
                 onBattleEnd={handleBattleEnd}
                 opponent={truthOpponent}
+                storyBattleRestrictions={TRUTH_METAL_BATTLE_RESTRICTIONS}
               />
             </div>
           )}

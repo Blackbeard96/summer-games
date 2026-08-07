@@ -25,18 +25,24 @@ interface LevelUpProviderProps {
 }
 
 export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, isSwitchingIdentity } = useAuth();
   const [previousXP, setPreviousXP] = useState<number>(-1);
   const [currentXP, setCurrentXP] = useState<number>(-1);
   const [showNotification, setShowNotification] = useState(false);
   
   // Use refs to track previous values without causing re-renders
   const previousLevelRef = useRef<number>(-1);
+  const currentXPRef = useRef<number>(-1);
   const isInitializedRef = useRef<boolean>(false);
 
   // Listen to user's XP changes
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || isSwitchingIdentity) {
+      isInitializedRef.current = false;
+      previousLevelRef.current = -1;
+      currentXPRef.current = -1;
+      return;
+    }
 
     const userRef = doc(db, 'students', currentUser.uid);
     const unsubscribe = onSnapshot(userRef, (docSnapshot) => {
@@ -47,6 +53,7 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
         
         // Initialize on first load
         if (!isInitializedRef.current) {
+          currentXPRef.current = newXP;
           setCurrentXP(newXP);
           setPreviousXP(newXP);
           previousLevelRef.current = newLevel;
@@ -60,10 +67,11 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
           console.log('🎉 Level up detected!', { 
             previousLevel: previousLevelRef.current, 
             newLevel, 
-            previousXP: currentXP, 
+            previousXP: currentXPRef.current, 
             newXP 
           });
-          setPreviousXP(currentXP);
+          setPreviousXP(currentXPRef.current);
+          currentXPRef.current = newXP;
           setCurrentXP(newXP);
           previousLevelRef.current = newLevel;
           setShowNotification(true);
@@ -110,6 +118,7 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
           })();
         } else {
           // Same level or level decreased, just update XP
+          currentXPRef.current = newXP;
           setCurrentXP(newXP);
           previousLevelRef.current = newLevel;
         }
@@ -117,7 +126,7 @@ export const LevelUpProvider: React.FC<LevelUpProviderProps> = ({ children }) =>
     });
 
     return () => unsubscribe();
-  }, [currentUser, currentXP]); // Only depend on currentUser and currentXP
+  }, [currentUser, isSwitchingIdentity]); // Do not depend on currentXP — that remounts the listener every XP tick
 
   const handleCloseNotification = () => {
     setShowNotification(false);

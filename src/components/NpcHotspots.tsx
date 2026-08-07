@@ -23,7 +23,8 @@ const NPC_HOTSPOTS: NpcHotspot[] = [
     name: 'Sonido',
     icon: '📻',
     x: 10,
-    y: 28,
+    // Home BKG anchors near top so Sonido’s face stays visible; label sits on torso
+    y: 34,
     color: '#667eea',
     glowColor: 'rgba(102, 126, 234, 0.6)'
   },
@@ -31,8 +32,9 @@ const NPC_HOTSPOTS: NpcHotspot[] = [
     id: 'zeke',
     name: 'Zeke',
     icon: '⚡',
-    x: 34,
-    y: 50,
+    x: 32,
+    // Above the Daily Challenges / Power Card panel so the button stays fully visible
+    y: 38,
     color: '#f5576c',
     glowColor: 'rgba(245, 87, 108, 0.6)'
   },
@@ -40,9 +42,9 @@ const NPC_HOTSPOTS: NpcHotspot[] = [
     id: 'luz',
     name: 'Luz',
     icon: '💡',
-    x: 55,
-    // Higher than Zeke/Kon: centered horizontally she sits over the Power Card; lower % = further up, clear of the panel
-    y: 38,
+    x: 58,
+    // Above her head — not over her face; still clear of the Power Card
+    y: 26,
     color: '#4facfe',
     glowColor: 'rgba(79, 172, 254, 0.6)'
   },
@@ -51,7 +53,7 @@ const NPC_HOTSPOTS: NpcHotspot[] = [
     name: 'Kon',
     icon: '🛡️',
     x: 83,
-    y: 55,
+    y: 58,
     color: '#fa709a',
     glowColor: 'rgba(250, 112, 154, 0.6)'
   }

@@ -128,6 +128,10 @@ import LiveEventGoalSettingPanel from './LiveEventGoalSettingPanel';
 import LiveEventSprintPanel from './LiveEventSprintPanel';
 import LiveEventMstMktModal from './LiveEventMstMktModal';
 import FlowStateActivationOverlay from './liveEvent/FlowStateActivationOverlay';
+import FlowStateBoonModal from './liveEvent/FlowStateBoonModal';
+import { parseFlowStateFromPlayerRow } from '../utils/liveEventFlowBoons';
+import { selectFlowStateBoon } from '../utils/liveEventFlowBoonService';
+import type { FlowBoonId, FlowBoonThreshold } from '../types/liveEventFlowBoons';
 import LiveEventEconomyHud from './liveEvent/LiveEventEconomyHud';
 import LiveEventBattleLogLine from './liveEvent/LiveEventBattleLogLine';
 import './liveEvent/flowState.css';
@@ -445,7 +449,13 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
   const [quizAnswerSubmitted, setQuizAnswerSubmitted] = useState(false);
   /** Prevents double-submit (e.g. rapid taps on auto-submit single-choice). */
   const quizSubmitLockRef = useRef(false);
-  const [quizMyResponse, setQuizMyResponse] = useState<{ selectedIndices: number[]; isCorrect: boolean; pointsAwarded: number } | null>(null);
+  const [quizMyResponse, setQuizMyResponse] = useState<{
+    selectedIndices: number[];
+    isCorrect: boolean;
+    pointsAwarded: number;
+    flowBoostApplied?: boolean;
+  } | null>(null);
+  const [flowBoonSaving, setFlowBoonSaving] = useState(false);
   const [quizResponseCount, setQuizResponseCount] = useState(0);
   const [showEliminatedQuizOverlay, setShowEliminatedQuizOverlay] = useState(false);
   const [showPlayerInspectModal, setShowPlayerInspectModal] = useState(false);
@@ -1805,6 +1815,9 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
             speed: 50,
             movesEarned: player.movesEarned ?? 0,
             eliminated: isLiveEventPlayerEliminatedForRevive(player),
+            liveEventFlowDamageBoost: parseFlowStateFromPlayerRow(
+              player as unknown as Record<string, unknown>
+            ).damageBoostPercent,
           };
         }),
     [sessionPlayers, currentUser?.uid, students, userProfiles, playerVaultData, vault]
@@ -2292,6 +2305,47 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       }, 2800);
     });
   }, [currentUser?.uid, currentPlayer]);
+
+  const myFlowState = useMemo(
+    () => parseFlowStateFromPlayerRow(currentPlayer as unknown as Record<string, unknown> | undefined),
+    [currentPlayer]
+  );
+  const flowBoonPendingThreshold: FlowBoonThreshold | null =
+    myFlowState.pendingThreshold === 3 || myFlowState.pendingThreshold === 5 || myFlowState.pendingThreshold === 9
+      ? myFlowState.pendingThreshold
+      : null;
+
+  const handleFlowBoonSelect = useCallback(
+    async (boonId: FlowBoonId) => {
+      if (!sessionId || !currentUser?.uid || !flowBoonPendingThreshold) return;
+      setFlowBoonSaving(true);
+      try {
+        const res = await selectFlowStateBoon(
+          sessionId,
+          currentUser.uid,
+          flowBoonPendingThreshold,
+          boonId,
+          currentUser.displayName || currentPlayer?.displayName
+        );
+        if (!res.ok) {
+          alert(res.error);
+          return;
+        }
+        setLiveEventFloatToasts((prev) =>
+          [
+            ...prev,
+            {
+              id: `flow-boon-${Date.now()}`,
+              text: `Flow State Activated! ${res.feedback}`,
+            },
+          ].slice(-16)
+        );
+      } finally {
+        setFlowBoonSaving(false);
+      }
+    },
+    [sessionId, currentUser?.uid, currentUser?.displayName, flowBoonPendingThreshold, currentPlayer?.displayName]
+  );
 
   /** Battle / Team BR: eliminated players and eliminator names for the center column */
   const battleRoyaleEliminations = useMemo(() => {
@@ -3387,6 +3441,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
       <FlowStateActivationOverlay
         visible={flowActivationVisible}
         displayName={currentUser?.displayName || currentPlayer?.displayName || 'You'}
+      />
+      <FlowStateBoonModal
+        open={!!flowBoonPendingThreshold && !isSessionHost}
+        threshold={flowBoonPendingThreshold ?? 3}
+        saving={flowBoonSaving}
+        onSelect={handleFlowBoonSelect}
       />
       {sessionId && currentUser?.uid && currentPlayer ? (
         <LiveEventEconomyHud
@@ -5123,6 +5183,7 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                         selectedIndices: selected,
                         isCorrect: res.isCorrect === true,
                         pointsAwarded: res.pointsAwarded ?? 0,
+                        flowBoostApplied: res.flowBoostApplied === true,
                       });
                     } else {
                       setQuizAnswerSubmitted(false);
@@ -5367,8 +5428,12 @@ const InSessionBattle: React.FC<InSessionBattleProps> = ({
                             </>
                           ) : (
                             <>
-                              {quizMyResponse.pointsAwarded} pts
-                              {quizMyResponse.isCorrect && (
+                              {quizMyResponse.isCorrect && quizMyResponse.flowBoostApplied
+                                ? `Correct! +${quizMyResponse.pointsAwarded} Points (Flow Boost)`
+                                : quizMyResponse.isCorrect
+                                  ? `Correct! +${quizMyResponse.pointsAwarded} Points`
+                                  : `${quizMyResponse.pointsAwarded} pts`}
+                              {quizMyResponse.isCorrect && !quizMyResponse.flowBoostApplied && (
                                 <>
                                   <span style={{ margin: '0 0.35rem' }}>•</span>
                                   <strong style={{ color: '#059669' }}>+1 Participation Point</strong>

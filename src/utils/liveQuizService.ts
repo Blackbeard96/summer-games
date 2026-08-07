@@ -37,6 +37,7 @@ import type {
 import { getQuizSet, getQuestions } from './trainingGroundsService';
 import { mirrorProfileXpToProgressionSystems } from './playerProgressionRewards';
 import { calculateLiveQuizPoints, computeBattleRoyaleStreakRewards } from './liveQuizScoring';
+import { applyFlowPpRewardMultiplier, applyFlowQuestionPointMultiplier, parseFlowStateFromPlayerRow } from './liveEventFlowBoons';
 import { trackParticipation, trackElimination, breakParticipationStreak, deductParticipationPowerForBattleQuizIncorrect } from './inSessionStatsService';
 import { awardPowerXpForLiveQuizCorrectAnswer } from './liveEventPowerStatsService';
 import { computeDamageAfterShield } from './liveEventCombatMath';
@@ -430,6 +431,14 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       .sort((a, b) => b.score - a.score);
     const rankByUid = buildRankByScore(leaderboard);
 
+    const roomSnap = await getDoc(roomRef(sessionId));
+    const roomPlayers = (roomSnap.exists() ? roomSnap.data()?.players : []) as Array<Record<string, unknown>>;
+    const scaledFlowPp = (uid: string, base: number) => {
+      if (base <= 0) return 0;
+      const row = roomPlayers.find((p) => p?.userId === uid);
+      return applyFlowPpRewardMultiplier(base, parseFlowStateFromPlayerRow(row));
+    };
+
     let grantedCount = 0;
 
     if (isLegacyConfig(config)) {
@@ -450,9 +459,10 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
         let didGrant = false;
         const studentUpdates: UpdateData<DocumentData> = {};
         const userUpdates: UpdateData<DocumentData> = {};
-        if (config.rewardTypes.pp && config.ppAmount > 0) {
-          studentUpdates.powerPoints = increment(config.ppAmount);
-          userUpdates.powerPoints = increment(config.ppAmount);
+        const ppGrant = config.rewardTypes.pp && config.ppAmount > 0 ? scaledFlowPp(uid, config.ppAmount) : 0;
+        if (ppGrant > 0) {
+          studentUpdates.powerPoints = increment(ppGrant);
+          userUpdates.powerPoints = increment(ppGrant);
           didGrant = true;
         }
         if (config.rewardTypes.xp && config.xpAmount > 0) {
@@ -477,13 +487,13 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
           const userDoc = await getDoc(userRef);
           if (userDoc.exists()) await updateDoc(userRef, userUpdates);
         }
-        if (config.rewardTypes.pp && config.ppAmount > 0) {
+        if (ppGrant > 0) {
           const vaultDoc = await getDoc(vaultRef);
           if (vaultDoc.exists()) {
             const v = vaultDoc.data();
             const cur = v?.currentPP ?? 0;
             const cap = v?.capacity ?? 1000;
-            await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + config.ppAmount) });
+            await updateDoc(vaultRef, { currentPP: Math.min(cap, cur + ppGrant) });
           }
         }
         if (didGrant) {
@@ -492,7 +502,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
             eventId: truncateId(sessionId),
             eventType: 'live_quiz_legacy',
             playerId: truncateId(uid),
-            pointsAwarded: config.rewardTypes.pp ? config.ppAmount : 0,
+            pointsAwarded: ppGrant,
             xpAwarded: config.rewardTypes.xp ? config.xpAmount : 0,
             artifactsAwarded: config.rewardTypes.artifacts
               ? config.artifactName || config.artifactId || null
@@ -524,7 +534,7 @@ export async function grantLiveQuizRewards(sessionId: string): Promise<{ granted
       let didGrant = false;
       const studentUpdates: UpdateData<DocumentData> = {};
       const userUpdates: UpdateData<DocumentData> = {};
-      const ppAmount = reward.pp ?? 0;
+      const ppAmount = scaledFlowPp(uid, reward.pp ?? 0);
       const xpAmount = reward.xp ?? 0;
       if (ppAmount > 0) {
         studentUpdates.powerPoints = increment(ppAmount);
@@ -865,6 +875,8 @@ type SubmitQuizTxResult = {
   ok: boolean;
   error?: string;
   pointsAwarded?: number;
+  basePointsAwarded?: number;
+  flowBoostApplied?: boolean;
   isCorrect?: boolean;
   gameMode?: LiveQuizGameMode;
 };
@@ -973,7 +985,14 @@ export async function submitQuizResponse(
   questionId: string,
   selectedIndices: number[],
   quizRoundIndexFromClient: number
-): Promise<{ ok: boolean; error?: string; pointsAwarded?: number; isCorrect?: boolean }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  pointsAwarded?: number;
+  basePointsAwarded?: number;
+  flowBoostApplied?: boolean;
+  isCorrect?: boolean;
+}> {
   const preSnap = await getDoc(sessionRef(sessionId));
   if (!preSnap.exists()) return { ok: false, error: 'No quiz session' };
   const preSession = preSnap.data() as LiveQuizSession;
@@ -1038,6 +1057,8 @@ export async function submitQuizResponse(
     const startedAt = session.questionStartedAt ?? now;
 
     let pointsAwarded: number;
+    let basePointsAwarded: number | undefined;
+    let flowBoostApplied = false;
     let brPatch: { battleRoyaleState: BattleRoyaleRuntimeState } | null = null;
 
     if (isBattleQuizMode(mode)) {
@@ -1060,12 +1081,32 @@ export async function submitQuizResponse(
         brPatch = { battleRoyaleState: br };
       }
     } else {
-      pointsAwarded = calculateLiveQuizPoints({
+      const basePoints = calculateLiveQuizPoints({
         isCorrect: allCorrect,
         submittedAt: now,
         questionStartedAt: startedAt,
         questionEndsAt: endsAt,
       });
+      let boosted = basePoints;
+      let flowBoostApplied = false;
+      if (allCorrect && basePoints > 0 && roomSnap.exists()) {
+        const playersRoom = (roomSnap.data()?.players || []) as Array<Record<string, unknown>>;
+        const row = playersRoom.find((p) => (p as { userId?: string }).userId === uid);
+        const flow = parseFlowStateFromPlayerRow(row);
+        boosted = applyFlowQuestionPointMultiplier(basePoints, flow);
+        flowBoostApplied = boosted > basePoints;
+      }
+      pointsAwarded = boosted;
+      if (flowBoostApplied) {
+        return {
+          ok: true,
+          pointsAwarded: boosted,
+          basePointsAwarded: basePoints,
+          flowBoostApplied: true,
+          isCorrect: allCorrect,
+          gameMode: mode,
+        } as SubmitQuizTxResult;
+      }
     }
 
     const response: LiveQuizResponse = {
@@ -1090,7 +1131,14 @@ export async function submitQuizResponse(
       pointsAwarded,
       mode,
     });
-    return { ok: true, pointsAwarded, isCorrect: allCorrect, gameMode: mode };
+    return {
+      ok: true,
+      pointsAwarded,
+      basePointsAwarded,
+      flowBoostApplied,
+      isCorrect: allCorrect,
+      gameMode: mode,
+    };
   });
 
   if (!result.ok) {
@@ -1104,6 +1152,8 @@ export async function submitQuizResponse(
   return {
     ok: true,
     pointsAwarded: result.pointsAwarded,
+    basePointsAwarded: result.basePointsAwarded,
+    flowBoostApplied: result.flowBoostApplied,
     isCorrect: result.isCorrect,
   };
 }

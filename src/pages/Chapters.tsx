@@ -82,10 +82,18 @@ const Chapters: React.FC = () => {
   const handleChapterSelect = (chapter: Chapter) => {
     // Allow Chapter 2 to be selected so players can see the "Coming Soon" message
     setSelectedChapter(chapter);
+    // Persist in the URL so remounts / Fast Refresh don't drop back to the list
+    const next = new URLSearchParams(searchParams);
+    next.set('chapter', String(chapter.id));
+    setSearchParams(next, { replace: true });
   };
 
   const handleBackToChapters = () => {
     setSelectedChapter(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete('chapter');
+    next.delete('focus');
+    setSearchParams(next, { replace: true });
   };
 
   return (

@@ -425,7 +425,121 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
         description: 'A shield of radiant light'
       }
     ]
-  }
+  },
+  {
+    id: 'ahinta-tumi',
+    name: 'Ahinta Tumi',
+    image: '/images/Ahinta Tumi Agent.png',
+    health: 320,
+    shields: 90,
+    enemyType: 'dark',
+    moves: [
+      {
+        id: 'hidden-hand-strike',
+        name: 'Hidden Hand Strike',
+        damageRange: { min: 22, max: 38 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'A precise strike from the Hidden Hand',
+      },
+      {
+        id: 'shadow-breach',
+        name: 'Shadow Breach',
+        damageRange: { min: 30, max: 48 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'Cuts through defenses with shadowed force',
+      },
+      {
+        id: 'veil-guard',
+        name: 'Veil Guard',
+        type: 'defense',
+        damageReduction: { percentage: 20 },
+        duration: 2,
+        description: 'Wraps Ahinta in a concealing veil',
+      },
+      {
+        id: 'pp-drain',
+        name: 'PP Drain',
+        baseDamage: 8,
+        type: 'attack',
+        description: 'Drains power points from the target',
+      },
+    ],
+  },
+  {
+    id: 'ahinta-tumi-elite',
+    name: 'Ahinta Tumi - Elite',
+    image: '/images/Ahinta Tumi Elite Captain.png',
+    health: 480,
+    shields: 140,
+    enemyType: 'dark',
+    awakenedModeEnabled: true,
+    awakenAtHealthPercent: 40,
+    awakenedImage: '/images/Ahinta Tumi (Hidden Hand).png',
+    awakenedHealth: 560,
+    awakenedShields: 160,
+    awakenedEnemyType: 'dark',
+    moves: [
+      {
+        id: 'captain-cut',
+        name: 'Captain Cut',
+        damageRange: { min: 32, max: 48 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'A captain-level Hidden Hand assault',
+      },
+      {
+        id: 'shadow-breach',
+        name: 'Shadow Breach',
+        damageRange: { min: 40, max: 62 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'Cuts through defenses with shadowed force',
+      },
+      {
+        id: 'veil-guard',
+        name: 'Veil Guard',
+        type: 'defense',
+        damageReduction: { percentage: 25 },
+        duration: 2,
+        description: 'Wraps Ahinta in a concealing veil',
+      },
+      {
+        id: 'energy-strike',
+        name: 'Energy Strike',
+        baseDamage: 14,
+        type: 'attack',
+        description: 'A focused energy attack',
+      },
+    ],
+    awakenedMoves: [
+      {
+        id: 'hidden-hand-judgment',
+        name: 'Hidden Hand Judgment',
+        damageRange: { min: 55, max: 80 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'Ahinta reveals the full force of the Hidden Hand',
+      },
+      {
+        id: 'shadow-breach',
+        name: 'Shadow Breach',
+        damageRange: { min: 45, max: 70 },
+        type: 'attack',
+        elementalAffinity: 'dark',
+        description: 'Cuts through defenses with shadowed force',
+      },
+      {
+        id: 'veil-guard',
+        name: 'Veil Guard',
+        type: 'defense',
+        damageReduction: { percentage: 30 },
+        duration: 2,
+        description: 'A denser veil after awakening',
+      },
+    ],
+  },
 ];
 
 const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, onClose }) => {

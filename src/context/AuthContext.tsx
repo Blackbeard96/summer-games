@@ -41,6 +41,8 @@ interface AuthContextType {
   loadingRole: boolean; // Loading state for role fetch
   testAccountData: any | null;
   activeTestAccountId: string | null; // Currently active test account ID
+  /** True while impersonation is mid-swap — listeners must not remount until this clears */
+  isSwitchingIdentity: boolean;
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -65,6 +67,7 @@ const AuthContext = createContext<AuthContextType>({
   loadingRole: true,
   testAccountData: null,
   activeTestAccountId: null,
+  isSwitchingIdentity: false,
   signup: async () => {},
   login: async () => {},
   loginWithGoogle: async () => {},
@@ -102,15 +105,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
   const [isTestMode, setIsTestMode] = useState(false); // Track if we're in test mode to prevent onAuthStateChanged from overriding
+  const [isSwitchingIdentity, setIsSwitchingIdentity] = useState(false);
   const [activeTestAccountId, setActiveTestAccountId] = useState<string | null>(() => {
     // Try to restore from localStorage on mount
     return localStorage.getItem('activeTestAccountId');
   });
 
+  /** Let React run onSnapshot cleanups before attaching a new uid (avoids Firestore ca9 / ve:-1). */
+  const settleIdentityListeners = () =>
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 200);
+    });
+
+  /** Once role has loaded for a session, avoid flipping loadingRole (that remounts Admin and wipes forms). */
+  const roleResolvedRef = React.useRef(false);
+  const lastAuthUidRef = React.useRef<string | null>(null);
+
   // Fetch user role from Firestore (userRoles collection or users.role field)
   const fetchUserRole = useCallback(async (user: User) => {
     try {
-      setLoadingRole(true);
+      // Only show the role-loading gate on cold start — not on every Auth token refresh
+      if (!roleResolvedRef.current) {
+        setLoadingRole(true);
+      }
       
       // Try userRoles collection first (existing system)
       const roleDoc = await getDoc(doc(db, 'userRoles', user.uid));
@@ -124,6 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         const finalRole: 'student' | 'admin' = hasAdminRole ? 'admin' : 'student';
         setRole(finalRole);
+        roleResolvedRef.current = true;
         setLoadingRole(false);
         return finalRole;
       }
@@ -135,6 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (userData.role === 'admin' || userData.role === 'student') {
           const finalRole = userData.role as 'student' | 'admin';
           setRole(finalRole);
+          roleResolvedRef.current = true;
           setLoadingRole(false);
           return finalRole;
         }
@@ -142,6 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       // Default to student if no role found
       setRole('student');
+      roleResolvedRef.current = true;
       setLoadingRole(false);
       
       // Log warning if role fetch fails but don't break the app
@@ -151,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('AuthContext: Error fetching user role:', error);
       // Fallback to student on error
       setRole('student');
+      roleResolvedRef.current = true;
       setLoadingRole(false);
       return 'student' as const;
     }
@@ -164,6 +185,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (userDoc.exists()) {
         const userData = userDoc.data() as UserProfile;
         setUserProfile(userData);
+
+        // Heal Auth displayName if a prior test-account Profile save polluted it
+        // (Firestore remains the canonical name shown in NavBar / battles).
+        if (
+          userData.displayName &&
+          userData.displayName.trim() !== '' &&
+          userData.displayName !== user.displayName
+        ) {
+          try {
+            await updateProfile(user, { displayName: userData.displayName });
+          } catch (syncError) {
+            console.warn('AuthContext: Failed to sync Auth displayName from Firestore:', syncError);
+          }
+        }
         
         // Update lastLoginAt
         await updateDoc(doc(db, 'users', user.uid), {
@@ -176,7 +211,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Ensure Power Level is initialized (migration for existing players)
         await ensurePlayerPowerLevel(user.uid);
       } else {
-        // Create new user profile
+        // Create new user profile — no Element assigned at signup
         const newProfile: UserProfile = {
           displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Student'),
           email: user.email || '',
@@ -190,6 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         await setDoc(doc(db, 'users', user.uid), {
           ...newProfile,
+          elementalAffinity: null,
           lastLoginAt: serverTimestamp(),
           createdAt: serverTimestamp()
         });
@@ -206,24 +242,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Keep test-mode flags in refs so the auth listener can stay mounted once.
+  // Re-subscribing whenever isTestMode/currentRole change was remounting auth
+  // state and contributing to route-tree resets (pages flashing back to defaults).
+  const isTestModeRef = React.useRef(isTestMode);
+  const currentRoleRef = React.useRef(currentRole);
+  const isSwitchingIdentityRef = React.useRef(isSwitchingIdentity);
+  useEffect(() => {
+    isTestModeRef.current = isTestMode;
+  }, [isTestMode]);
+  useEffect(() => {
+    currentRoleRef.current = currentRole;
+  }, [currentRole]);
+  useEffect(() => {
+    isSwitchingIdentityRef.current = isSwitchingIdentity;
+  }, [isSwitchingIdentity]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       // Don't override current user if we're in test mode (test account switching)
-      if (isTestMode && currentRole === 'test') {
+      if (isSwitchingIdentityRef.current) {
+        console.log('🔄 [onAuthStateChanged] Skipping update - identity switch in progress');
+        setLoading(false);
+        return;
+      }
+      if (isTestModeRef.current && currentRoleRef.current === 'test') {
         console.log('🔄 [onAuthStateChanged] Skipping update - in test mode');
         setLoading(false);
         return;
       }
       
       console.log('🔄 [onAuthStateChanged] Auth state changed:', user?.uid, user?.email);
-      setCurrentUser(user);
+      // Keep the same React user reference on token refresh so Admin forms don't remount
+      setCurrentUser((prev) => {
+        if (!user) return null;
+        if (prev?.uid === user.uid) return prev;
+        return user;
+      });
       if (user) {
-        // Fetch both profile and role in parallel
-        await Promise.all([
-          fetchUserProfile(user),
-          fetchUserRole(user)
-        ]);
+        const uidChanged = lastAuthUidRef.current !== user.uid;
+        lastAuthUidRef.current = user.uid;
+        // Token refresh re-fires this listener with the same uid. Refetching role/profile
+        // every time was flipping loadingRole and remounting Admin (wiping Mission create forms).
+        if (uidChanged || !roleResolvedRef.current) {
+          await Promise.all([
+            fetchUserProfile(user),
+            fetchUserRole(user)
+          ]);
+        }
       } else {
+        lastAuthUidRef.current = null;
+        roleResolvedRef.current = false;
         setUserProfile(null);
         setRole(null);
         setLoadingRole(false);
@@ -232,7 +301,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return unsubscribe;
-  }, [isTestMode, currentRole, fetchUserProfile, fetchUserRole]);
+  }, [fetchUserProfile, fetchUserRole]);
 
   // Helper function to validate allowed domains
   const isAllowedDomain = (email: string): boolean => {
@@ -249,23 +318,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signup = useCallback(async (email: string, password: string, displayName?: string) => {
     try {
-      // Check if domain is allowed
-      if (!isAllowedDomain(email)) {
+      const normalizedEmail = email.trim().toLowerCase();
+      if (!isAllowedDomain(normalizedEmail)) {
         throw new Error('This email domain is not currently supported. Please use a different email address or contact support.');
       }
       
-      const result = await createUserWithEmailAndPassword(auth, email, password);
+      const result = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
       if (displayName && result.user) {
         await updateProfile(result.user, { displayName });
       }
       
       // Also create a record in the 'students' collection for admin panel consistency
+      // New accounts start without an Element — affinity is chosen in Chapter 1.
       const studentData = {
         displayName: displayName || (email ? email.split('@')[0] : 'Student'),
-        email: email,
+        email: normalizedEmail,
         xp: 0,
         powerPoints: 0,
         challenges: {},
+        elementalAffinity: null,
         createdAt: new Date()
       };
       
@@ -297,7 +368,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const result = await signInWithEmailAndPassword(auth, email, password);
+    const normalizedEmail = email.trim().toLowerCase();
+    const result = await signInWithEmailAndPassword(auth, normalizedEmail, password);
     // Update last login time - use setDoc with merge to create if doesn't exist
     if (result.user) {
       await setDoc(doc(db, 'users', result.user.uid), {
@@ -318,18 +390,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetPassword = useCallback(async (email: string) => {
-    await sendPasswordResetEmail(auth, email);
+    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
   }, []);
 
   const logout = useCallback(async () => {
+    localStorage.removeItem('activeTestAccountId');
+    localStorage.removeItem('originalUserData');
+    localStorage.removeItem('originalProfileData');
+    setIsTestMode(false);
+    setIsSwitchingIdentity(false);
+    setActiveTestAccountId(null);
+    setOriginalUser(null);
+    setOriginalProfile(null);
+    setTestAccountData(null);
+    setCurrentRole('user');
     await signOut(auth);
   }, []);
 
   const updateUserProfile = useCallback(async (updates: Partial<UserProfile>) => {
     if (!currentUser) throw new Error('No user logged in');
+
+    const authUser = getAuth().currentUser;
+    const isImpersonating =
+      isTestMode ||
+      currentRole === 'test' ||
+      (!!authUser && authUser.uid !== currentUser.uid);
     
-    // Update Firebase Auth profile if displayName or photoURL changed
-    if (updates.displayName || updates.photoURL) {
+    // Update Firebase Auth profile if displayName or photoURL changed (never while impersonating)
+    if (!isImpersonating && (updates.displayName || updates.photoURL)) {
       await updateProfile(currentUser, {
         displayName: updates.displayName,
         photoURL: updates.photoURL
@@ -341,7 +429,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     // Update local state
     setUserProfile(prev => prev ? { ...prev, ...updates } : null);
-  }, [currentUser]);
+  }, [currentUser, isTestMode, currentRole]);
 
   const updateUserPassword = useCallback(async (newPassword: string) => {
     if (!currentUser) throw new Error('No user logged in');
@@ -366,13 +454,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Check if current user is admin - Only Yondaime has access
   const isAdminComputed = useMemo(() => {
     if (role === 'admin') return true;
-    
-    // Fallback: check email if role not loaded yet - Only Yondaime
-    if (!currentUser || loadingRole) return false;
-    
-    // Only Yondaime's email is allowed
+    // Email fallback must work even while role is loading so admin routes
+    // don't briefly resolve as non-admin and Navigate to /home.
+    if (!currentUser) return false;
     return currentUser.email === 'edm21179@gmail.com';
-  }, [role, currentUser, loadingRole]);
+  }, [role, currentUser]);
 
   // Switch to test account
   const switchToTestAccount = useCallback(async (testAccountId: string) => {
@@ -398,7 +484,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('originalProfileData', JSON.stringify(userProfile));
       }
 
-      // Fetch test account data
+      // Fetch test account data while admin listeners are still stable
       const testUserRef = doc(db, 'users', testAccountId);
       const testStudentRef = doc(db, 'students', testAccountId);
       
@@ -431,15 +517,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         toJSON: () => ({})
       } as unknown as User;
 
-      // Set test account as current user
-      setIsTestMode(true); // Enable test mode to prevent onAuthStateChanged from overriding
+      // Phase 1: pause uid-scoped listeners so they unsubscribe before the uid swap
+      // (prevents Firestore watch-stream INTERNAL ASSERTION ca9 / ve:-1).
+      setIsSwitchingIdentity(true);
+      setIsTestMode(true); // Prevent onAuthStateChanged from overriding mid-switch
+      await settleIdentityListeners();
+
+      // Phase 2: attach mock identity
       setCurrentUser(mockTestUser);
       setUserProfile(testUserData as UserProfile);
       setTestAccountData(testStudentData);
       setCurrentRole('test');
       setActiveTestAccountId(testAccountId);
       localStorage.setItem('activeTestAccountId', testAccountId);
+
+      // Phase 3: allow listeners to attach to the new uid after React commits
+      await settleIdentityListeners();
+      setIsSwitchingIdentity(false);
     } catch (error) {
+      setIsSwitchingIdentity(false);
       console.error('Error switching to test account:', error);
       throw error;
     }
@@ -555,19 +651,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     console.log('🔄 [switchToAdmin] Restoring user:', userToRestore.uid, userToRestore.email);
 
-    // Disable test mode first so onAuthStateChanged can work normally
-    setIsTestMode(false);
+    try {
+      // Phase 1: pause listeners while tearing down the mock test identity
+      setIsSwitchingIdentity(true);
+      await settleIdentityListeners();
 
-    // Restore original user data
-    setCurrentUser(userToRestore);
-    setUserProfile(profileToRestore);
-    setTestAccountData(null);
-    setCurrentRole('admin');
-    setActiveTestAccountId(null);
-    localStorage.removeItem('activeTestAccountId');
-    
-    // Fetch the profile from Firestore to ensure we have the latest data
-    if (userToRestore) {
+      // Phase 2: restore admin identity
+      setIsTestMode(false);
+      setCurrentUser(userToRestore);
+      setUserProfile(profileToRestore);
+      setTestAccountData(null);
+      setCurrentRole('admin');
+      setActiveTestAccountId(null);
+      localStorage.removeItem('activeTestAccountId');
+      
+      // Fetch the profile from Firestore to ensure we have the latest data
       console.log('🔄 [switchToAdmin] Fetching user profile from Firestore...');
       try {
         const userDoc = await getDoc(doc(db, 'users', userToRestore.uid));
@@ -596,13 +694,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error('Error fetching user profile:', error);
       }
+      
+      // Clear localStorage after successful restore
+      localStorage.removeItem('originalUserData');
+      localStorage.removeItem('originalProfileData');
+
+      // Phase 3: reopen listeners on the restored admin uid
+      await settleIdentityListeners();
+      setIsSwitchingIdentity(false);
+      
+      console.log('✅ [switchToAdmin] Successfully restored to admin account');
+    } catch (error) {
+      setIsSwitchingIdentity(false);
+      throw error;
     }
-    
-    // Clear localStorage after successful restore
-    localStorage.removeItem('originalUserData');
-    localStorage.removeItem('originalProfileData');
-    
-    console.log('✅ [switchToAdmin] Successfully restored to admin account');
   }, [originalUser, originalProfile]);
 
   // Get active user ID (returns test account ID if in test mode, otherwise auth.uid)
@@ -624,6 +729,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadingRole,
     testAccountData,
     activeTestAccountId,
+    isSwitchingIdentity,
     signup,
     login,
     loginWithGoogle,
@@ -646,6 +752,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadingRole,
     testAccountData,
     activeTestAccountId,
+    isSwitchingIdentity,
     signup,
     login,
     loginWithGoogle,
@@ -662,7 +769,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 } 

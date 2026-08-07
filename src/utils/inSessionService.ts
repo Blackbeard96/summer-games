@@ -51,6 +51,7 @@ export interface SessionPlayer {
   flowStateActivatedAt?: number | null;
   /** Bumps when entering Flow State; clients use for one-shot entry animation */
   flowStateNonce?: number;
+  flowState?: import('../types/liveEventFlowBoons').LiveEventFlowStateBoons;
   /** Wall-clock ms anchor for passive +1 movesEarned every 2 minutes (liveEventPassiveParticipation). */
   participationPassiveStartedAtMs?: number;
 }

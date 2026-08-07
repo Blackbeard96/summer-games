@@ -20,7 +20,12 @@ const PasswordReset = () => {
       setMessage('Password reset email sent! Check your inbox.');
       setEmail('');
     } catch (error: any) {
-      setError(error.message || 'Failed to send reset email');
+      const code = error?.code as string | undefined;
+      if (code === 'auth/user-not-found') {
+        setError('No MST account exists for this email. Sign up first or ask your teacher to confirm your school email.');
+      } else {
+        setError(error.message || 'Failed to send reset email');
+      }
     } finally {
       setLoading(false);
     }

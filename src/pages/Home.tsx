@@ -286,7 +286,8 @@ const Home: React.FC = () => {
         width: '100%',
         backgroundImage: 'url(/images/Home_BKG_V2.png)',
         backgroundSize: 'cover',
-        backgroundPosition: 'center',
+        // Prefer top of art so Sonido’s face (left, red frame) isn’t cropped by cover
+        backgroundPosition: 'center top',
         backgroundAttachment: 'fixed',
         backgroundRepeat: 'no-repeat',
         position: 'relative',

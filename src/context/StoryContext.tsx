@@ -40,7 +40,7 @@ interface StoryProviderProps {
 }
 
 export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, isSwitchingIdentity } = useAuth();
   const [storyProgress, setStoryProgress] = useState<StoryProgress>({
     currentEpisode: 'ep_01_xiotein_letter',
     completedEpisodes: [],
@@ -56,7 +56,7 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
 
   // Load story progress from Firestore
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || isSwitchingIdentity) {
       setIsLoading(false);
       return;
     }
@@ -138,7 +138,7 @@ export const StoryProvider: React.FC<StoryProviderProps> = ({ children }) => {
     );
 
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [currentUser, isSwitchingIdentity]);
 
   // Start an episode
   const startEpisode = async (episodeId: string) => {

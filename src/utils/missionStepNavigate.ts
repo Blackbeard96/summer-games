@@ -9,6 +9,7 @@ export const MISSION_STEP_NAVIGATE_OPTIONS: { path: string; label: string }[] = 
   { path: '/profile', label: 'Profile' },
   { path: '/skill-tree', label: 'Skill tree' },
   { path: '/battle', label: 'Battle' },
+  { path: '/battle#moves', label: 'Skills & Mastery (Battle Arena)' },
   { path: '/artifacts', label: 'Artifacts' },
   { path: '/marketplace', label: 'Marketplace' },
   { path: '/battle-pass', label: 'Battle pass' },

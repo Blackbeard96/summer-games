@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Chapter2AnnouncementModal from './Chapter2AnnouncementModal';
+import { ROLLOUT_ANNOUNCEMENTS } from '../utils/announcementConfig';
 
 export type AnnouncementType = 'chapter2';
 
@@ -9,6 +10,10 @@ interface AnnouncementCarouselProps {
   announcements: AnnouncementType[];
   onAnnouncementSeen: (announcementId: string) => void;
 }
+
+const ANNOUNCEMENT_IDS: Record<AnnouncementType, string> = {
+  chapter2: ROLLOUT_ANNOUNCEMENTS.CHAPTER2_PARTIAL_OPEN,
+};
 
 const AnnouncementCarousel: React.FC<AnnouncementCarouselProps> = ({
   isOpen,
@@ -24,13 +29,14 @@ const AnnouncementCarousel: React.FC<AnnouncementCarouselProps> = ({
   const hasNext = currentIndex < announcements.length - 1;
   const hasPrevious = currentIndex > 0;
 
+  const markSeen = (announcement: AnnouncementType) => {
+    const id = ANNOUNCEMENT_IDS[announcement];
+    if (id) onAnnouncementSeen(id);
+  };
+
   const handleClose = () => {
-    // Mark all remaining announcements as seen
-    announcements.slice(currentIndex).forEach((announcement) => {
-      if (announcement === 'chapter2') {
-        onAnnouncementSeen('chapter2_partial_open_2026_01_04');
-      }
-    });
+    // Mark all remaining announcements as seen so they don't auto-show again
+    announcements.slice(currentIndex).forEach(markSeen);
     onClose();
   };
 
@@ -51,9 +57,7 @@ const AnnouncementCarousel: React.FC<AnnouncementCarouselProps> = ({
   
   const handleNextClick = () => {
     // Mark current announcement as seen before moving to next
-    if (currentAnnouncement === 'chapter2') {
-      onAnnouncementSeen('chapter2_partial_open_2026_01_04');
-    }
+    markSeen(currentAnnouncement);
     handleNext();
   };
 

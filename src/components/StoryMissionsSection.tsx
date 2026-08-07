@@ -47,14 +47,15 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
           deliveryChannel: 'PLAYER_JOURNEY'
         });
 
-        // Sort by story.order
-        missions.sort((a, b) => {
-          const orderA = a.story?.order || 999;
-          const orderB = b.story?.order || 999;
+        // Sort by story.order / sortOrder; hide unpublished drafts
+        const published = missions.filter((m) => m.isPublished !== false);
+        published.sort((a, b) => {
+          const orderA = a.sortOrder ?? a.story?.order ?? 999;
+          const orderB = b.sortOrder ?? b.story?.order ?? 999;
           return orderA - orderB;
         });
 
-        setStoryMissions(missions);
+        setStoryMissions(published);
 
         // Get player missions
         const playerMissionsData = await getPlayerMissions(currentUser.uid);
@@ -62,7 +63,7 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
 
         // Get status for each mission
         const statuses: { [missionId: string]: 'available' | 'active' | 'completed' | 'locked' } = {};
-        for (const mission of missions) {
+        for (const mission of published) {
           const playerMission = playerMissionsData.find(pm => pm.missionId === mission.id);
           
           if (playerMission) {
@@ -267,8 +268,40 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'start',
-                marginBottom: '0.5rem'
+                marginBottom: '0.5rem',
+                gap: '1rem'
               }}>
+                {mission.previewImageUrl ? (
+                  <img
+                    src={mission.previewImageUrl}
+                    alt=""
+                    style={{
+                      width: 96,
+                      height: 72,
+                      objectFit: 'cover',
+                      borderRadius: 8,
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : (
+                  <div style={{
+                    width: 96,
+                    height: 72,
+                    borderRadius: 8,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px dashed rgba(156,163,175,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#9ca3af',
+                    fontSize: '0.7rem',
+                    flexShrink: 0,
+                    textAlign: 'center',
+                    padding: 4,
+                  }}>
+                    Image Preview
+                  </div>
+                )}
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                     <h3 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
@@ -288,7 +321,7 @@ const StoryMissionsSection: React.FC<StoryMissionsSectionProps> = ({
                     )}
                   </div>
                   <p style={{ color: '#d1d5db', margin: 0, fontSize: '0.9rem' }}>
-                    {mission.description}
+                    {mission.shortDescription || mission.description}
                   </p>
                 </div>
                 {getStatusBadge(status)}

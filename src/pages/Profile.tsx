@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBattle } from '../context/BattleContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -28,6 +28,12 @@ import {
 } from '../utils/examProfileHistory';
 import type { ExamProductivityLog } from '../types/examProductivity';
 import { ENERGY_TYPES, type BattleEnergyType } from '../constants/energyTypes';
+import {
+  extractElementOrNull,
+  formatElementDisplayLabel,
+  getElementDisplayColor,
+  hasElementSelected,
+} from '../utils/elementDisplay';
 import { parseWorkStatsFromDoc, workCompletionRatePct, WORK_ENERGY_ORDER } from '../utils/workStatsTracking';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, getAuth } from 'firebase/auth';
@@ -199,7 +205,7 @@ const Profile = () => {
     mode?: string;
   };
 
-  const { currentUser } = useAuth();
+  const { currentUser, activeTestAccountId, currentRole } = useAuth();
   const { syncVaultPP, vault, moves: battleMoves, refreshVaultData } = useBattle();
   const navigate = useNavigate();
   const [userData, setUserData] = useState<any>(null);
@@ -211,7 +217,7 @@ const Profile = () => {
   const [bio, setBio] = useState('');
   // Add state for manifest, style, and rarity
   const [manifest, setManifest] = useState(userData?.manifest || 'None');
-  const [style, setStyle] = useState(userData?.manifestationType || 'Fire');
+  const [style, setStyle] = useState(userData?.manifestationType || '');
   const [rarity, setRarity] = useState(userData?.rarity || 1);
   const [cardBgColor, setCardBgColor] = useState(userData?.cardBgColor || '#e0e7ff');
   const [cardFrameShape, setCardFrameShape] = useState<'circular' | 'rectangular'>('circular');
@@ -243,6 +249,18 @@ const Profile = () => {
   const [civicState, setCivicState] = useState<MstCivicPlayerState | null | undefined>(undefined);
   const [profileTaxPreview, setProfileTaxPreview] = useState<{ nextMs: number; owedPp: number } | null>(null);
   const [, setTaxCountdownTick] = useState(0);
+  const powerCardRowRef = useRef<HTMLDivElement>(null);
+  const [powerCardHeight, setPowerCardHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = powerCardRowRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => setPowerCardHeight(el.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [userData?.photoURL, userData?.powerLevel, userData?.xp, playerManifest, isSkillTreeShowing]);
 
   // Function to get manifest color
   const getManifestColor = (manifestName: string) => {
@@ -252,17 +270,7 @@ const Profile = () => {
 
   // Function to get element color
   const getElementColor = (elementName: string) => {
-    const elementColors: { [key: string]: string } = {
-      'Fire': '#EF4444',
-      'Water': '#3B82F6', 
-      'Air': '#10B981',
-      'Earth': '#F59E0B',
-      'Lightning': '#8B5CF6',
-      'Light': '#FBBF24',
-      'Shadow': '#6B7280',
-      'Metal': '#9CA3AF'
-    };
-    return elementColors[elementName] || '#6b7280'; // Default gray if not found
+    return getElementDisplayColor(elementName);
   };
 
   const fetchUserData = async () => {
@@ -361,14 +369,13 @@ const Profile = () => {
           chapters: mergedChapters
         };
         
-        // Determine element: prioritize chosen_element from artifacts (in students collection), then elementalAffinity, then manifestationType
-        // Check both students collection artifacts and the direct field
-        const chosenElement = userDataFromDB.artifacts?.chosen_element || 
-                              userDataFromDB.elementalAffinity || 
-                              userDataFromDB.manifestationType || 
-                              'Fire';
-        // Capitalize the first letter for display
-        const displayElement = chosenElement.charAt(0).toUpperCase() + chosenElement.slice(1);
+        // Determine element: prioritize chosen_element / elementalAffinity — never invent Fire
+        const chosenElement =
+          extractElementOrNull(
+            usersSnap.exists() ? usersSnap.data() : {},
+            userDataFromDB
+          );
+        const displayElement = formatElementDisplayLabel(chosenElement);
         
         setUserData(mergedUserData);
         setRRCandyMergedStatus(
@@ -751,6 +758,13 @@ const Profile = () => {
   const [searchParams] = useSearchParams();
   const skillTreeView = searchParams.get('view');
   const skillTreeModeParam = searchParams.get('mode');
+  const returnMissionId = searchParams.get('returnMission');
+  const missionPpGranted = searchParams.get('missionPp');
+  const fromMission =
+    !!returnMissionId && /^[a-zA-Z0-9_-]+$/.test(returnMissionId);
+  const safeReturnMissionPath = fromMission
+    ? `/mission/${encodeURIComponent(returnMissionId!)}/play`
+    : null;
 
   useEffect(() => {
     // If query params indicate skill tree view, show it
@@ -875,9 +889,20 @@ const Profile = () => {
       // Get fresh auth user reference to avoid stale user object issues
       const auth = getAuth();
       const authUser = auth.currentUser;
-      
-      // Update Firebase Auth profile (only if we have a valid auth user and display name)
-      if (authUser && displayName && displayName.trim() !== '') {
+      // Never write Auth displayName while impersonating a test account — Auth stays the real
+      // admin/user, while Firestore writes go to the test uid. Polluting Auth caused wrong
+      // battle names (e.g. "9th Justice") for the real account after test switches.
+      const isImpersonatingTestAccount =
+        currentRole === 'test' ||
+        !!activeTestAccountId ||
+        (!!authUser && !!currentUser && authUser.uid !== currentUser.uid);
+
+      if (
+        !isImpersonatingTestAccount &&
+        authUser &&
+        displayName &&
+        displayName.trim() !== ''
+      ) {
         try {
           await updateProfile(authUser, { displayName });
         } catch (authError) {
@@ -886,12 +911,14 @@ const Profile = () => {
         }
       }
       
-      // Prepare update data
+      // Prepare update data — do not invent an Element when none is chosen
+      const elementForSave = hasElementSelected(style) ? style : null;
       const updateData: any = {
         displayName: displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
         bio: bio || '',
         manifest: manifest || 'None',
-        manifestationType: style || 'Fire', // Save style as manifestationType to keep it consistent
+        manifestationType: elementForSave,
+        elementalAffinity: elementForSave,
         rarity: rarity || 1,
         cardBgColor: cardBgColor || '#e0e7ff',
         cardFrameShape: cardFrameShape || 'circular',
@@ -967,72 +994,27 @@ const Profile = () => {
   const handleManifestSelect = async (manifestId: string) => {
     if (!currentUser) return;
 
-    const manifest = MANIFESTS.find(m => m.id === manifestId);
-    if (!manifest) return;
-
-    // CRITICAL FIX: Preserve existing manifest data (level, xp, unlockedLevels) when changing manifest
-    // Only reset to defaults if this is the first time selecting a manifest
-    const existingManifest = playerManifest;
-    const isFirstTimeSelection = !existingManifest || !existingManifest.manifestId;
-    
-    const newPlayerManifest: PlayerManifest = {
-      manifestId,
-      // Preserve existing level and xp if manifest already exists, otherwise use defaults
-      currentLevel: existingManifest?.currentLevel || 1,
-      xp: existingManifest?.xp || 0,
-      catalyst: manifest.catalyst,
-      // Preserve existing veil if manifest exists, otherwise use default
-      veil: existingManifest?.veil || 'Fear of inadequacy',
-      signatureMove: manifest.signatureMove,
-      // Preserve existing unlocked levels if manifest exists, otherwise use default
-      unlockedLevels: existingManifest?.unlockedLevels || [1],
-      // Only update lastAscension if this is a new manifest selection
-      lastAscension: isFirstTimeSelection ? serverTimestamp() : (existingManifest?.lastAscension || serverTimestamp()),
-      // Preserve existing usage tracking
-      abilityUsage: existingManifest?.abilityUsage || {},
-      moveUsage: existingManifest?.moveUsage || {},
-      unclaimedMilestones: existingManifest?.unclaimedMilestones || {}
-    };
-
-    // Warn user if they're changing an existing manifest (not first time)
-    if (!isFirstTimeSelection && existingManifest.manifestId !== manifestId) {
-      const confirmChange = window.confirm(
-        `⚠️ Warning: You are changing your manifest from "${MANIFESTS.find(m => m.id === existingManifest.manifestId)?.name || existingManifest.manifestId}" to "${manifest.name}".\n\n` +
-        `Your current level (${existingManifest.currentLevel}), XP (${existingManifest.xp}), and unlocked levels will be preserved.\n\n` +
-        `Continue?`
-      );
-      if (!confirmChange) {
-        return;
-      }
-    }
-
     try {
-      const userRef = doc(db, 'students', currentUser.uid);
-      // Use setDoc with merge to ensure we don't accidentally overwrite other fields
-      await setDoc(userRef, { manifest: newPlayerManifest }, { merge: true });
-      
-      // Also update users collection for consistency
-      const usersRef = doc(db, 'users', currentUser.uid);
-      const usersDoc = await getDoc(usersRef);
-      if (usersDoc.exists()) {
-        await setDoc(usersRef, { manifest: newPlayerManifest }, { merge: true });
-      }
-      
+      const { savePlayerManifestSelection } = await import('../utils/playerManifestSelection');
+      const newPlayerManifest = await savePlayerManifestSelection(
+        currentUser.uid,
+        manifestId,
+        playerManifest
+      );
       setPlayerManifest(newPlayerManifest);
       setUserData((prev: any) => ({ ...prev, manifest: newPlayerManifest }));
       setShowManifestSelection(false);
-      
-      // Recalculate power level after manifest selection
       try {
-        const { recalculatePowerLevel } = await import('../services/recalculatePowerLevel');
-        await recalculatePowerLevel(currentUser.uid);
-      } catch (plError) {
-        console.error('Error recalculating power level after manifest selection:', plError);
-        // Don't throw - power level recalculation is non-critical
+        await refreshVaultData?.();
+      } catch {
+        /* optional battle context refresh */
       }
     } catch (error) {
+      if (error instanceof Error && error.message === 'Manifest change cancelled') {
+        return;
+      }
       console.error('Error setting manifest:', error);
-      alert('Failed to set manifest. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to set manifest. Please try again.');
     }
   };
 
@@ -1170,6 +1152,51 @@ const Profile = () => {
 
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
+      {safeReturnMissionPath && (
+        <div
+          style={{
+            marginBottom: '1.25rem',
+            padding: '1rem 1.25rem',
+            borderRadius: '0.75rem',
+            background: 'linear-gradient(135deg, #eff6ff 0%, #e0e7ff 100%)',
+            border: '2px solid #4f46e5',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+          }}
+        >
+          <div style={{ color: '#312e81', fontSize: '0.95rem', lineHeight: 1.45 }}>
+            <strong>Mission: Power Card</strong>
+            {missionPpGranted && Number(missionPpGranted) > 0 ? (
+              <span>
+                {' '}
+                — +{Number(missionPpGranted).toLocaleString()} PP from this step. Review your card, then return.
+              </span>
+            ) : (
+              <span> — Review your Power Card and profile, then return to continue the mission.</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(safeReturnMissionPath)}
+            style={{
+              padding: '0.65rem 1.15rem',
+              background: 'linear-gradient(135deg, #1d4ed8 0%, #4f46e5 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              fontWeight: 800,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Return to mission
+          </button>
+        </div>
+      )}
+
       {/* Header with Level and Power Level */}
       <div style={{
         display: 'flex',
@@ -1379,15 +1406,18 @@ const Profile = () => {
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1.5fr',
-          gap: '2rem',
-          marginBottom: '2rem',
+          gap: '1.5rem',
+          marginBottom: '1.5rem',
           alignItems: 'start',
         }}
       >
-        {/* Left Column - Player Card (stay top-aligned; right column may be taller) */}
-        <div style={{ alignSelf: 'start', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        {/* Left Column - Power Card (height drives Profile Settings cap) */}
+        <div
+          ref={powerCardRowRef}
+          style={{ alignSelf: 'start', display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+        >
           {/* Player Card on top */}
-          <div style={{ marginBottom: '2rem', width: '100%', maxWidth: '380px' }}>
+          <div style={{ width: '100%', maxWidth: '380px' }}>
             <PlayerCard
               key={`${userData?.photoURL}-${displayName}`} // Force re-render when avatar or name changes
               name={displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User'}
@@ -1420,541 +1450,23 @@ const Profile = () => {
               powerStats={profilePowerStats}
             />
           </div>
-          {productivityStats !== undefined && (
-            <div
-              style={{
-                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 40%, #e0f2fe 100%)',
-                borderRadius: '0.75rem',
-                padding: '1rem 1.25rem',
-                border: '1px solid #86efac',
-                boxShadow: '0 2px 8px rgba(16,185,129,0.15)',
-                width: '100%',
-                maxWidth: '380px',
-                marginTop: '2rem',
-              }}
-            >
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#065f46' }}>
-                Productivity Stats (My Stats)
-              </h3>
-              {productivityStats ? (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.65rem' }}>
-                    <span
-                      style={{
-                        background: '#059669',
-                        color: 'white',
-                        fontSize: '0.72rem',
-                        fontWeight: 800,
-                        borderRadius: '999px',
-                        padding: '0.2rem 0.6rem',
-                      }}
-                    >
-                      {productivityStats.productivityRank || 'Dormant'}
-                    </span>
-                    <span style={{ color: '#065f46', fontWeight: 700, fontSize: '0.85rem' }}>
-                      Productivity Rating: {Math.round(productivityStats.overallProductivityRating || 0)}%
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      width: '100%',
-                      height: '10px',
-                      background: 'rgba(16, 185, 129, 0.18)',
-                      borderRadius: '999px',
-                      overflow: 'hidden',
-                      marginBottom: '0.9rem',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${Math.max(0, Math.min(100, Math.round(productivityStats.overallProductivityRating || 0)))}%`,
-                        height: '100%',
-                        background: 'linear-gradient(90deg, #10b981 0%, #0ea5e9 100%)',
-                      }}
-                    />
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                      gap: '0.65rem',
-                      fontSize: '0.8125rem',
-                      color: '#064e3b',
-                    }}
-                  >
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Joined</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsJoined || 0}</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsCompleted || 0}</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint Completion Rate</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.sprintCompletionRate || 0)}%</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Quizzes Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalQuizzesCompleted || 0}</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Quiz Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageQuizScore || 0)}%</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Live Exams Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalExamsCompleted || 0}</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Exam Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageExamScore || 0)}%</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Current Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Best Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.bestStreak ?? 0} wk</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.weeklyProductivityRating || 0)}%</div></div>
-                    <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Overall Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.overallProductivityRating || 0)}%</div></div>
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: '1rem',
-                      paddingTop: '0.85rem',
-                      borderTop: '1px solid rgba(5, 150, 105, 0.25)',
-                    }}
-                  >
-                    <h4 style={{ margin: '0 0 0.6rem', fontSize: '0.92rem', fontWeight: 800, color: '#065f46' }}>
-                      Work & Energy Stats
-                    </h4>
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
-                        gap: '0.55rem',
-                      }}
-                    >
-                      {WORK_ENERGY_ORDER.map((k: BattleEnergyType) => {
-                        const w = parseWorkStatsFromDoc(productivityStats.workStats);
-                        const b = w[k];
-                        const pct = workCompletionRatePct(b.completed, b.attempted);
-                        const line1 =
-                          k === ENERGY_TYPES.PHYSICAL
-                            ? 'Physical Energy'
-                            : k === ENERGY_TYPES.MENTAL
-                              ? 'Mental Energy'
-                              : k === ENERGY_TYPES.EMOTIONAL
-                                ? 'Emotional Energy'
-                                : 'Spiritual Energy';
-                        const line2 =
-                          k === ENERGY_TYPES.PHYSICAL
-                            ? 'Discipline'
-                            : k === ENERGY_TYPES.MENTAL
-                              ? 'Measured Intelligence'
-                              : k === ENERGY_TYPES.EMOTIONAL
-                                ? 'Connection to Self'
-                                : 'Card Power Level';
-                        const barColor =
-                          k === ENERGY_TYPES.PHYSICAL
-                            ? '#059669'
-                            : k === ENERGY_TYPES.MENTAL
-                              ? '#2563eb'
-                              : k === ENERGY_TYPES.EMOTIONAL
-                                ? '#db2777'
-                                : '#7c3aed';
-                        const lastMs = tsMs(b.lastCompletedAt);
-
-                        if (k === ENERGY_TYPES.SPIRITUAL) {
-                          const plContributors = topPowerLevelContributors(powerBreakdown, 3);
-                          return (
-                            <div
-                              key={k}
-                              style={{
-                                background: 'rgba(255,255,255,0.65)',
-                                borderRadius: '0.5rem',
-                                padding: '0.5rem 0.55rem',
-                                border: '1px solid rgba(124, 58, 237, 0.35)',
-                              }}
-                            >
-                              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
-                              <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 6 }}>{line2}</div>
-                              {powerLevel != null ? (
-                                <>
-                                  <div
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: 6,
-                                      marginBottom: 8,
-                                    }}
-                                  >
-                                    <span style={{ fontSize: '1.1rem' }}>⚡</span>
-                                    <div>
-                                      <div style={{ fontSize: '0.65rem', color: '#6b7280', fontWeight: 600 }}>
-                                        Power Level
-                                      </div>
-                                      <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#5b21b6', lineHeight: 1.1 }}>
-                                        {powerLevel}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  {plContributors.length > 0 ? (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <div
-                                        style={{
-                                          fontSize: '0.65rem',
-                                          fontWeight: 800,
-                                          color: '#4c1d95',
-                                          marginBottom: 4,
-                                          letterSpacing: '0.02em',
-                                        }}
-                                      >
-                                        Top contributors
-                                      </div>
-                                      <ol
-                                        style={{
-                                          margin: 0,
-                                          paddingLeft: '1.1rem',
-                                          fontSize: '0.68rem',
-                                          color: '#374151',
-                                          lineHeight: 1.35,
-                                        }}
-                                      >
-                                        {plContributors.map((row) => (
-                                          <li key={row.label}>
-                                            <strong>{row.label}</strong>: +{row.value}
-                                          </li>
-                                        ))}
-                                      </ol>
-                                    </div>
-                                  ) : (
-                                    <div style={{ fontSize: '0.65rem', color: '#6b7280', marginBottom: 8 }}>
-                                      Open the header <strong>Power Level</strong> tile after your card syncs for a
-                                      full breakdown.
-                                    </div>
-                                  )}
-                                </>
-                              ) : (
-                                <div style={{ fontSize: '0.68rem', color: '#6b7280', marginBottom: 8 }}>
-                                  Power Level appears after your profile recalculates (equip skills & artifacts on
-                                  your card).
-                                </div>
-                              )}
-                              <div
-                                style={{
-                                  borderTop: '1px solid rgba(124, 58, 237, 0.2)',
-                                  paddingTop: 6,
-                                  marginTop: 2,
-                                }}
-                              >
-                                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#64748b', marginBottom: 4 }}>
-                                  Spiritual work (goals & live events)
-                                </div>
-                                <div style={{ fontSize: '0.72rem', color: '#374151' }}>
-                                  Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
-                                </div>
-                                <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
-                                  Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
-                                </div>
-                                <div
-                                  style={{
-                                    marginTop: 6,
-                                    height: 8,
-                                    borderRadius: 999,
-                                    background: 'rgba(16,185,129,0.15)',
-                                    overflow: 'hidden',
-                                  }}
-                                >
-                                  <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
-                                </div>
-                                <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
-                                  Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div
-                            key={k}
-                            style={{
-                              background: 'rgba(255,255,255,0.65)',
-                              borderRadius: '0.5rem',
-                              padding: '0.5rem 0.55rem',
-                              border: '1px solid rgba(5, 150, 105, 0.2)',
-                            }}
-                          >
-                            <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
-                            <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 4 }}>{line2}</div>
-                            <div style={{ fontSize: '0.72rem', color: '#374151' }}>
-                              Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
-                            </div>
-                            <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
-                              Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
-                            </div>
-                            <div
-                              style={{
-                                marginTop: 6,
-                                height: 8,
-                                borderRadius: 999,
-                                background: 'rgba(16,185,129,0.15)',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
-                            </div>
-                            <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
-                              Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: '0.9rem',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                      gap: '0.75rem',
-                    }}
-                  >
-                    <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.5rem', padding: '0.55rem' }}>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
-                        Recent Sprint Activity
-                      </div>
-                      {productivityActivityLoading ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading sprint activity…</div>
-                      ) : recentSprintActivity.length === 0 ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>No sprint activity yet.</div>
-                      ) : (
-                        <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
-                          {recentSprintActivity.slice(0, 5).map((item) => (
-                            <li key={item.id} style={{ marginBottom: '0.2rem' }}>
-                              {(item.status || 'joined').toUpperCase()} — {item.sprintTitle || 'Sprint'}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.5rem', padding: '0.55rem' }}>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
-                        Live Event CFU / quizzes (last 3)
-                      </div>
-                      {productivityActivityLoading ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading live quiz activity…</div>
-                      ) : recentLiveEventQuizActivity.length === 0 ? (
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>
-                          No live event CFU or quiz completions yet.
-                        </div>
-                      ) : (
-                        <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
-                          {recentLiveEventQuizActivity.map((item) => {
-                            const pct = Math.round(item.scorePercent ?? 0);
-                            const cq = item.correctAnswers;
-                            const tq = item.totalQuestions;
-                            const detail =
-                              typeof cq === 'number' && typeof tq === 'number' && tq > 0
-                                ? ` (${cq}/${tq} correct)`
-                                : '';
-                            const whenMs = tsMs(item.completedAt);
-                            const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
-                            return (
-                              <li key={item.id} style={{ marginBottom: '0.35rem' }}>
-                                <div style={{ fontWeight: 600 }}>{item.quizTopic || 'CFU / Live quiz'}</div>
-                                <div style={{ color: '#047857' }}>
-                                  Score: <strong>{pct}%</strong>
-                                  {detail}
-                                </div>
-                                {whenStr ? (
-                                  <div style={{ fontSize: '0.7rem', color: '#6b7280', marginTop: 2 }}>{whenStr}</div>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      marginTop: '0.85rem',
-                      padding: '0.75rem',
-                      background: 'linear-gradient(135deg, rgba(238,242,255,0.95) 0%, rgba(224,231,255,0.85) 100%)',
-                      borderRadius: '0.55rem',
-                      border: '1px solid rgba(79, 70, 229, 0.35)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#312e81' }}>Live Event Exam History</div>
-                      {examHistory.length > 5 ? (
-                        <button
-                          type="button"
-                          onClick={() => setShowAllExamHistory((v) => !v)}
-                          style={{
-                            fontSize: '0.72rem',
-                            fontWeight: 700,
-                            color: '#4f46e5',
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            textDecoration: 'underline',
-                          }}
-                        >
-                          {showAllExamHistory ? 'Show less' : `View all (${examHistory.length})`}
-                        </button>
-                      ) : null}
-                    </div>
-                    {productivityActivityLoading ? (
-                      <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>Loading exam history…</div>
-                    ) : examHistory.length === 0 ? (
-                      <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>
-                        No completed live exams yet. Finish an Exam Mode live event to see scores here.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        {(showAllExamHistory ? examHistory : examHistory.slice(0, 5)).map((exam) => {
-                          const pct = Math.round(exam.scorePercent ?? 0);
-                          const whenMs = tsMs(exam.completedAt);
-                          const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
-                          const scoreColor = pct >= 90 ? '#059669' : pct >= 70 ? '#2563eb' : pct >= 50 ? '#d97706' : '#dc2626';
-                          return (
-                            <div
-                              key={exam.id}
-                              style={{
-                                background: 'rgba(255,255,255,0.75)',
-                                borderRadius: '0.45rem',
-                                padding: '0.5rem 0.6rem',
-                                border: '1px solid rgba(99, 102, 241, 0.25)',
-                              }}
-                            >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#1e293b' }}>{exam.title}</div>
-                                <div style={{ fontWeight: 800, fontSize: '0.95rem', color: scoreColor }}>{pct}%</div>
-                              </div>
-                              <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: 4 }}>
-                                {exam.correctAnswers}/{exam.totalQuestions} correct
-                                {exam.timeTakenMs ? ` · ${formatExamDurationMs(exam.timeTakenMs)}` : ''}
-                              </div>
-                              {exam.assessmentTitle ? (
-                                <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 2 }}>
-                                  Linked assessment: {exam.assessmentTitle}
-                                </div>
-                              ) : null}
-                              {whenStr ? (
-                                <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 4 }}>{whenStr}</div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
-                  No productivity data yet. Join Class Flow sprints and complete Training Grounds quizzes to populate
-                  your My Stats section.
-                </p>
-              )}
-            </div>
-          )}
-          {currentUser && (
-            <div
-              style={{
-                marginTop: '1.5rem',
-                width: '100%',
-                maxWidth: '380px',
-                background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 45%, #f1f5f9 100%)',
-                borderRadius: '0.75rem',
-                padding: '1rem 1.25rem',
-                border: '1px solid #94a3b8',
-                boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
-              }}
-            >
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
-                Civic Status
-              </h3>
-              {civicState === undefined ? (
-                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>Loading civic status…</p>
-              ) : civicState === null ? (
-                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>
-                  No civic economy record yet. After weekly tax runs, your job, tax, and seat status appear here.
-                </p>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '0.45rem',
-                      fontSize: '0.82rem',
-                      color: '#334155',
-                    }}
-                  >
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job role: </span>
-                      {civicState.jobRole
-                        ? civicState.jobRole.replace(/_/g, ' ')
-                        : '—'}
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job pay: </span>
-                      {civicState.jobPayRatePp ?? 0} PP
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax discount: </span>
-                      {civicState.taxDiscountPercent ?? 0}%
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Weekly tax (owed): </span>
-                      {civicState.weeklyTaxOwed ?? 0} PP
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax status: </span>
-                      <strong>
-                        {civicState.taxStatus === 'paid'
-                          ? 'Paid'
-                          : civicState.taxStatus === 'due_soon'
-                            ? 'Due Soon'
-                            : civicState.taxStatus === 'unpaid'
-                              ? 'Unpaid'
-                              : civicState.taxStatus === 'defaulted'
-                                ? 'Defaulted'
-                                : civicState.taxStatus === 'shutdown'
-                                  ? 'Shut Down'
-                                  : civicState.taxStatus}
-                      </strong>
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Next tax: </span>
-                      {typeof civicState.nextTaxDate === 'number' && civicState.nextTaxDate > 0
-                        ? new Date(civicState.nextTaxDate).toLocaleString()
-                        : '—'}
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 700, color: '#64748b' }}>Seat freedom: </span>
-                      {civicState.seatFreedom === 'active' ? 'Active' : 'Restricted'}
-                    </div>
-                    {civicState.taxStatus === 'shutdown' &&
-                    civicState.shutdownEndsAt &&
-                    typeof (civicState.shutdownEndsAt as Timestamp).toMillis === 'function' ? (
-                      <div style={{ color: '#b45309', fontWeight: 700 }}>
-                        Shutdown ends:{' '}
-                        {new Date((civicState.shutdownEndsAt as Timestamp).toMillis()).toLocaleString()}
-                        {' · '}
-                        {Math.max(
-                          0,
-                          Math.ceil(
-                            ((civicState.shutdownEndsAt as Timestamp).toMillis() - Date.now()) / 60000
-                          )
-                        )}
-                        m left
-                      </div>
-                    ) : null}
-                  </div>
-                  {civicState.seatFreedom === 'restricted' &&
-                  (civicState.taxStatus === 'unpaid' || civicState.taxStatus === 'defaulted') ? (
-                    <p
-                      style={{
-                        margin: '0.75rem 0 0',
-                        fontSize: '0.8rem',
-                        fontWeight: 700,
-                        color: '#991b1b',
-                        lineHeight: 1.35,
-                      }}
-                    >
-                      Seat Choice Restricted — Admin Chooses Seat.
-                    </p>
-                  ) : null}
-                </>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Right Column - Profile Settings or Skill Tree Settings */}
-        <div>
+        <div
+          style={
+            isSkillTreeShowing
+              ? undefined
+              : {
+                  alignSelf: 'start',
+                  height: powerCardHeight ?? undefined,
+                  maxHeight: powerCardHeight ?? undefined,
+                  minHeight: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }
+          }
+        >
           {isSkillTreeShowing ? (
             /* Skill Tree Page — flex column capped to viewport so inner grid can scroll */
             <div
@@ -2112,129 +1624,13 @@ const Profile = () => {
               </div>
             </div>
           ) : (
-            /* Profile Settings */
+            /* Profile Settings — height capped to Power Card */
           <>
-          {rrProfileSkill.hasAccess && (
-            <div
-              style={{
-                marginBottom: '1rem',
-                padding: '1rem 1.25rem',
-                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
-                borderRadius: '0.75rem',
-                border: '1px solid #6ee7b7',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '0.75rem',
-                }}
-              >
-                <div>
-                  <strong style={{ color: '#065f46' }}>🌳 Skill tree</strong>
-                  <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#047857', maxWidth: '36rem' }}>
-                    Open your Universal Law skill tree here, or use the green <strong>Skill Tree</strong> button on your player card (front).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsSkillTreeShowing(true)}
-                  style={{
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.65rem 1.25rem',
-                    fontWeight: 700,
-                    fontSize: '0.9rem',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Open skill tree
-                </button>
-              </div>
-            </div>
-          )}
-          <div
-            style={{
-              marginBottom: '1rem',
-              padding: '1rem 1.25rem',
-              background: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)',
-              borderRadius: '0.75rem',
-              border: '1px solid #a78bfa',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-            }}
-          >
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <strong style={{ color: '#4c1d95' }}>Season 1 — Flow &amp; Energy</strong>
-                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#5b21b6', maxWidth: '36rem' }}>
-                  Track the four energies and evolve your manifest skill tiers (PP unlocks). Same progression data powers live events and battle pass.
-                </p>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => navigate('/energy-mastery')}
-                  style={{
-                    background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Energy Mastery
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/manifest-evolution')}
-                  style={{
-                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Manifest evolution
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/battle-pass')}
-                  style={{
-                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    padding: '0.55rem 1rem',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Battle Pass
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '2rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: '2rem' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#4f46e5' }}>
+          <div className="profile-settings" style={{ backgroundColor: 'white', borderRadius: '0.75rem', padding: '1.25rem 1.5rem', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e5e7eb', marginBottom: 0, height: '100%', boxSizing: 'border-box', overflowY: 'auto', minHeight: 0 }}>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', color: '#4f46e5' }}>
               👤 Profile Settings
             </h2>
-            <div className="profile-card" style={{ marginBottom: '2rem' }}>
+            <div className="profile-card" style={{ marginBottom: 0 }}>
               {/* User Info Section - Avatar, Name, and Bio */}
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.5rem', marginBottom: '2rem' }}>
                 {/* Avatar Section */}
@@ -2271,7 +1667,7 @@ const Profile = () => {
                 <div>
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
-                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{formatElementDisplayLabel(style)}</span></span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
@@ -2386,7 +1782,7 @@ const Profile = () => {
                   <div>
                     <div style={{ margin: '0.5rem 0' }}>
                       <span style={{ marginRight: 16 }}><b>Manifest:</b> <span style={{ color: getManifestColor(currentManifest), fontWeight: 'bold' }}>{currentManifest}</span></span>
-                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{style || 'None'}</span></span>
+                      <span style={{ marginRight: 16 }}><b>Element:</b> <span style={{ color: getElementColor(style), fontWeight: 'bold' }}>{formatElementDisplayLabel(style)}</span></span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <b>Rarity:</b> {getRarityStars(rarity)}
                       </span>
@@ -2506,6 +1902,624 @@ const Profile = () => {
                     <button onClick={() => setEditing(true)} style={{ backgroundColor: '#4f46e5', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer' }}>Edit Profile</button>
                   </div>
                 )}
+            </div>
+          </div>
+          </>
+          )}
+        </div>
+
+
+      {/* Productivity Stats — full width under Power Card + Profile Settings */}
+      {productivityStats !== undefined && (
+        <div
+          style={{
+            gridColumn: '1 / -1',
+            background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 40%, #e0f2fe 100%)',
+            borderRadius: '1rem',
+            padding: '1.75rem 2rem',
+            border: '1px solid #86efac',
+            boxShadow: '0 4px 16px rgba(16,185,129,0.18)',
+            width: '100%',
+            marginTop: '0',
+          }}
+        >
+          <h3 style={{ margin: '0 0 1rem', fontSize: '1.35rem', fontWeight: 800, color: '#065f46' }}>
+            Productivity Stats (My Stats)
+          </h3>
+          {productivityStats ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: '0.9rem', flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    background: '#059669',
+                    color: 'white',
+                    fontSize: '0.85rem',
+                    fontWeight: 800,
+                    borderRadius: '999px',
+                    padding: '0.35rem 0.85rem',
+                  }}
+                >
+                  {productivityStats.productivityRank || 'Dormant'}
+                </span>
+                <span style={{ color: '#065f46', fontWeight: 700, fontSize: '1.05rem' }}>
+                  Productivity Rating: {Math.round(productivityStats.overallProductivityRating || 0)}%
+                </span>
+              </div>
+              <div
+                style={{
+                  width: '100%',
+                  height: '14px',
+                  background: 'rgba(16, 185, 129, 0.18)',
+                  borderRadius: '999px',
+                  overflow: 'hidden',
+                  marginBottom: '1.25rem',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.max(0, Math.min(100, Math.round(productivityStats.overallProductivityRating || 0)))}%`,
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #10b981 0%, #0ea5e9 100%)',
+                  }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                  gap: '1rem 1.5rem',
+                  fontSize: '0.95rem',
+                  color: '#064e3b',
+                }}
+              >
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Joined</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsJoined || 0}</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Sprints Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalSprintsCompleted || 0}</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Sprint Completion Rate</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.sprintCompletionRate || 0)}%</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Total Quizzes Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalQuizzesCompleted || 0}</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Quiz Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageQuizScore || 0)}%</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Live Exams Completed</div><div style={{ fontWeight: 800 }}>{productivityStats.totalExamsCompleted || 0}</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Average Exam Score</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.averageExamScore || 0)}%</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Current Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.currentStreak ?? 0} wk</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Best Streak</div><div style={{ fontWeight: 800 }}>{productivityStats.bestStreak ?? 0} wk</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Weekly Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.weeklyProductivityRating || 0)}%</div></div>
+                <div><div style={{ opacity: 0.75, fontWeight: 600 }}>Overall Productivity</div><div style={{ fontWeight: 800 }}>{Math.round(productivityStats.overallProductivityRating || 0)}%</div></div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: '1.5rem',
+                  paddingTop: '1.25rem',
+                  borderTop: '1px solid rgba(5, 150, 105, 0.25)',
+                }}
+              >
+                <h4 style={{ margin: '0 0 0.85rem', fontSize: '1.15rem', fontWeight: 800, color: '#065f46' }}>
+                  Work & Energy Stats
+                </h4>
+                <div
+                  style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                        gap: '1rem',
+                      }}
+                    >
+                      {WORK_ENERGY_ORDER.map((k: BattleEnergyType) => {
+                    const w = parseWorkStatsFromDoc(productivityStats.workStats);
+                    const b = w[k];
+                    const pct = workCompletionRatePct(b.completed, b.attempted);
+                    const line1 =
+                      k === ENERGY_TYPES.PHYSICAL
+                        ? 'Physical Energy'
+                        : k === ENERGY_TYPES.MENTAL
+                          ? 'Mental Energy'
+                          : k === ENERGY_TYPES.EMOTIONAL
+                            ? 'Emotional Energy'
+                            : 'Spiritual Energy';
+                    const line2 =
+                      k === ENERGY_TYPES.PHYSICAL
+                        ? 'Discipline'
+                        : k === ENERGY_TYPES.MENTAL
+                          ? 'Measured Intelligence'
+                          : k === ENERGY_TYPES.EMOTIONAL
+                            ? 'Connection to Self'
+                            : 'Card Power Level';
+                    const barColor =
+                      k === ENERGY_TYPES.PHYSICAL
+                        ? '#059669'
+                        : k === ENERGY_TYPES.MENTAL
+                          ? '#2563eb'
+                          : k === ENERGY_TYPES.EMOTIONAL
+                            ? '#db2777'
+                            : '#7c3aed';
+                    const lastMs = tsMs(b.lastCompletedAt);
+
+                    if (k === ENERGY_TYPES.SPIRITUAL) {
+                      const plContributors = topPowerLevelContributors(powerBreakdown, 3);
+                      return (
+                        <div
+                          key={k}
+                          style={{
+                            background: 'rgba(255,255,255,0.65)',
+                            borderRadius: '0.65rem',
+                            padding: '0.85rem 1rem',
+                            border: '1px solid rgba(124, 58, 237, 0.35)',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
+                          <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 6 }}>{line2}</div>
+                          {powerLevel != null ? (
+                            <>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  marginBottom: 8,
+                                }}
+                              >
+                                <span style={{ fontSize: '1.1rem' }}>⚡</span>
+                                <div>
+                                  <div style={{ fontSize: '0.65rem', color: '#6b7280', fontWeight: 600 }}>
+                                    Power Level
+                                  </div>
+                                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#5b21b6', lineHeight: 1.1 }}>
+                                    {powerLevel}
+                                  </div>
+                                </div>
+                              </div>
+                              {plContributors.length > 0 ? (
+                                <div style={{ marginBottom: 8 }}>
+                                  <div
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      fontWeight: 800,
+                                      color: '#4c1d95',
+                                      marginBottom: 4,
+                                      letterSpacing: '0.02em',
+                                    }}
+                                  >
+                                    Top contributors
+                                  </div>
+                                  <ol
+                                    style={{
+                                      margin: 0,
+                                      paddingLeft: '1.1rem',
+                                      fontSize: '0.68rem',
+                                      color: '#374151',
+                                      lineHeight: 1.35,
+                                    }}
+                                  >
+                                    {plContributors.map((row) => (
+                                      <li key={row.label}>
+                                        <strong>{row.label}</strong>: +{row.value}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '0.65rem', color: '#6b7280', marginBottom: 8 }}>
+                                  Open the header <strong>Power Level</strong> tile after your card syncs for a
+                                  full breakdown.
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div style={{ fontSize: '0.68rem', color: '#6b7280', marginBottom: 8 }}>
+                              Power Level appears after your profile recalculates (equip skills & artifacts on
+                              your card).
+                            </div>
+                          )}
+                          <div
+                            style={{
+                              borderTop: '1px solid rgba(124, 58, 237, 0.2)',
+                              paddingTop: 6,
+                              marginTop: 2,
+                            }}
+                          >
+                            <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#64748b', marginBottom: 4 }}>
+                              Spiritual work (goals & live events)
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: '#374151' }}>
+                              Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
+                              Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
+                            </div>
+                            <div
+                              style={{
+                                marginTop: 6,
+                                height: 8,
+                                borderRadius: 999,
+                                background: 'rgba(16,185,129,0.15)',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
+                              Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={k}
+                        style={{
+                          background: 'rgba(255,255,255,0.65)',
+                          borderRadius: '0.65rem',
+                          padding: '0.85rem 1rem',
+                          border: '1px solid rgba(5, 150, 105, 0.2)',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#064e3b' }}>{line1}</div>
+                        <div style={{ fontSize: '0.68rem', color: '#047857', marginBottom: 4 }}>{line2}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#374151' }}>
+                          Done: <strong>{b.completed}</strong> · Tried: <strong>{b.attempted}</strong>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#374151', marginTop: 2 }}>
+                          Rate: <strong>{pct}%</strong> · Points: <strong>{Math.round(b.pointsEarned)}</strong>
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 6,
+                            height: 8,
+                            borderRadius: 999,
+                            background: 'rgba(16,185,129,0.15)',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div style={{ width: `${pct}%`, height: '100%', background: barColor }} />
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 4 }}>
+                          Last: {lastMs ? new Date(lastMs).toLocaleString() : '—'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: '1.35rem',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                  gap: '1rem',
+                }}
+              >
+                <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.65rem', padding: '1rem 1.15rem' }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#065f46', marginBottom: '0.5rem' }}>
+                    Recent Sprint Activity
+                  </div>
+                  {productivityActivityLoading ? (
+                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading sprint activity…</div>
+                  ) : recentSprintActivity.length === 0 ? (
+                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>No sprint activity yet.</div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
+                      {recentSprintActivity.slice(0, 5).map((item) => (
+                        <li key={item.id} style={{ marginBottom: '0.2rem' }}>
+                          {(item.status || 'joined').toUpperCase()} — {item.sprintTitle || 'Sprint'}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.55)', borderRadius: '0.65rem', padding: '1rem 1.15rem' }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#065f46', marginBottom: '0.5rem' }}>
+                    Live Event CFU / quizzes (last 3)
+                  </div>
+                  {productivityActivityLoading ? (
+                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>Loading live quiz activity…</div>
+                  ) : recentLiveEventQuizActivity.length === 0 ? (
+                    <div style={{ fontSize: '0.78rem', color: '#047857' }}>
+                      No live event CFU or quiz completions yet.
+                    </div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.76rem' }}>
+                      {recentLiveEventQuizActivity.map((item) => {
+                        const pct = Math.round(item.scorePercent ?? 0);
+                        const cq = item.correctAnswers;
+                        const tq = item.totalQuestions;
+                        const detail =
+                          typeof cq === 'number' && typeof tq === 'number' && tq > 0
+                            ? ` (${cq}/${tq} correct)`
+                            : '';
+                        const whenMs = tsMs(item.completedAt);
+                        const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
+                        return (
+                          <li key={item.id} style={{ marginBottom: '0.35rem' }}>
+                            <div style={{ fontWeight: 600 }}>{item.quizTopic || 'CFU / Live quiz'}</div>
+                            <div style={{ color: '#047857' }}>
+                              Score: <strong>{pct}%</strong>
+                              {detail}
+                            </div>
+                            {whenStr ? (
+                              <div style={{ fontSize: '0.7rem', color: '#6b7280', marginTop: 2 }}>{whenStr}</div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </div>
+              <div
+                style={{
+                  marginTop: '1.15rem',
+                  padding: '1.15rem 1.25rem',
+                  background: 'linear-gradient(135deg, rgba(238,242,255,0.95) 0%, rgba(224,231,255,0.85) 100%)',
+                  borderRadius: '0.75rem',
+                  border: '1px solid rgba(79, 70, 229, 0.35)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#312e81' }}>Live Event Exam History</div>
+                  {examHistory.length > 5 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllExamHistory((v) => !v)}
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: '#4f46e5',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                      }}
+                    >
+                      {showAllExamHistory ? 'Show less' : `View all (${examHistory.length})`}
+                    </button>
+                  ) : null}
+                </div>
+                {productivityActivityLoading ? (
+                  <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>Loading exam history…</div>
+                ) : examHistory.length === 0 ? (
+                  <div style={{ fontSize: '0.78rem', color: '#4338ca' }}>
+                    No completed live exams yet. Finish an Exam Mode live event to see scores here.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {(showAllExamHistory ? examHistory : examHistory.slice(0, 5)).map((exam) => {
+                      const pct = Math.round(exam.scorePercent ?? 0);
+                      const whenMs = tsMs(exam.completedAt);
+                      const whenStr = whenMs ? new Date(whenMs).toLocaleString() : '';
+                      const scoreColor = pct >= 90 ? '#059669' : pct >= 70 ? '#2563eb' : pct >= 50 ? '#d97706' : '#dc2626';
+                      return (
+                        <div
+                          key={exam.id}
+                          style={{
+                            background: 'rgba(255,255,255,0.75)',
+                            borderRadius: '0.45rem',
+                            padding: '0.5rem 0.6rem',
+                            border: '1px solid rgba(99, 102, 241, 0.25)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#1e293b' }}>{exam.title}</div>
+                            <div style={{ fontWeight: 800, fontSize: '0.95rem', color: scoreColor }}>{pct}%</div>
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: 4 }}>
+                            {exam.correctAnswers}/{exam.totalQuestions} correct
+                            {exam.timeTakenMs ? ` · ${formatExamDurationMs(exam.timeTakenMs)}` : ''}
+                          </div>
+                          {exam.assessmentTitle ? (
+                            <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 2 }}>
+                              Linked assessment: {exam.assessmentTitle}
+                            </div>
+                          ) : null}
+                          {whenStr ? (
+                            <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 4 }}>{whenStr}</div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <p style={{ margin: 0, fontSize: '0.875rem', color: '#047857' }}>
+              No productivity data yet. Join Class Flow sprints and complete Training Grounds quizzes to populate
+              your My Stats section.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Secondary profile panels under the top card row */}
+      <div
+        style={{
+          gridColumn: '1 / -1',
+          display: 'grid',
+          gap: '1.25rem',
+          marginTop: '0.25rem',
+        }}
+      >
+          {currentUser && (
+            <div
+              style={{
+                width: '100%',
+                maxWidth: '420px',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 45%, #f1f5f9 100%)',
+                borderRadius: '0.75rem',
+                padding: '1rem 1.25rem',
+                border: '1px solid #94a3b8',
+                boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
+              }}
+            >
+              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+                Civic Status
+              </h3>
+              {civicState === undefined ? (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>Loading civic status…</p>
+              ) : civicState === null ? (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#475569' }}>
+                  No civic economy record yet. After weekly tax runs, your job, tax, and seat status appear here.
+                </p>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '0.45rem',
+                      fontSize: '0.82rem',
+                      color: '#334155',
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job role: </span>
+                      {civicState.jobRole
+                        ? civicState.jobRole.replace(/_/g, ' ')
+                        : '—'}
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Job pay: </span>
+                      {civicState.jobPayRatePp ?? 0} PP
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax discount: </span>
+                      {civicState.taxDiscountPercent ?? 0}%
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Weekly tax (owed): </span>
+                      {civicState.weeklyTaxOwed ?? 0} PP
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Tax status: </span>
+                      <strong>
+                        {civicState.taxStatus === 'paid'
+                          ? 'Paid'
+                          : civicState.taxStatus === 'due_soon'
+                            ? 'Due Soon'
+                            : civicState.taxStatus === 'unpaid'
+                              ? 'Unpaid'
+                              : civicState.taxStatus === 'defaulted'
+                                ? 'Defaulted'
+                                : civicState.taxStatus === 'shutdown'
+                                  ? 'Shut Down'
+                                  : civicState.taxStatus}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Next tax: </span>
+                      {typeof civicState.nextTaxDate === 'number' && civicState.nextTaxDate > 0
+                        ? new Date(civicState.nextTaxDate).toLocaleString()
+                        : '—'}
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 700, color: '#64748b' }}>Seat freedom: </span>
+                      {civicState.seatFreedom === 'active' ? 'Active' : 'Restricted'}
+                    </div>
+                    {civicState.taxStatus === 'shutdown' &&
+                    civicState.shutdownEndsAt &&
+                    typeof (civicState.shutdownEndsAt as Timestamp).toMillis === 'function' ? (
+                      <div style={{ color: '#b45309', fontWeight: 700 }}>
+                        Shutdown ends:{' '}
+                        {new Date((civicState.shutdownEndsAt as Timestamp).toMillis()).toLocaleString()}
+                        {' · '}
+                        {Math.max(
+                          0,
+                          Math.ceil(
+                            ((civicState.shutdownEndsAt as Timestamp).toMillis() - Date.now()) / 60000
+                          )
+                        )}
+                        m left
+                      </div>
+                    ) : null}
+                  </div>
+                  {civicState.seatFreedom === 'restricted' &&
+                  (civicState.taxStatus === 'unpaid' || civicState.taxStatus === 'defaulted') ? (
+                    <p
+                      style={{
+                        margin: '0.75rem 0 0',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        color: '#991b1b',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      Seat Choice Restricted — Admin Chooses Seat.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          )}
+          <div
+            style={{
+              marginBottom: '1rem',
+              padding: '1rem 1.25rem',
+              background: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)',
+              borderRadius: '0.75rem',
+              border: '1px solid #a78bfa',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            }}
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <strong style={{ color: '#4c1d95' }}>Season 1 — Flow &amp; Energy</strong>
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#5b21b6', maxWidth: '36rem' }}>
+                  Track the four energies and evolve your manifest skill tiers (PP unlocks). Same progression data powers live events and battle pass.
+                </p>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => navigate('/energy-mastery')}
+                  style={{
+                    background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Energy Mastery
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/manifest-evolution')}
+                  style={{
+                    background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Manifest evolution
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/battle-pass')}
+                  style={{
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    padding: '0.55rem 1rem',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Battle Pass
+                </button>
+              </div>
+            </div>
+          </div>
+
             {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
               <div
@@ -2752,11 +2766,7 @@ const Profile = () => {
                 })}
               </div>
             </div>
-          </div>
-        </div>
-          </>
-          )}
-        </div>
+      </div>
       </div>
 
       {/* Artifacts and Manifest Progress Side by Side */}
@@ -3719,10 +3729,19 @@ const Profile = () => {
                     const getCategoryFromTemplate = (move: any) => move?.category ?? getTemplateForMove(move)?.category;
                     const getMoveElement = (move: any) => (move?.elementalAffinity ?? getTemplateForMove(move)?.elementalAffinity)?.toLowerCase?.();
                     // Only show elemental moves that match the player's chosen element
-                    const playerElement = (style || 'Fire').toString().toLowerCase();
+                    const playerElement = hasElementSelected(style)
+                      ? style.toString().toLowerCase()
+                      : '';
                     const elementalMoves = moves.filter((move: any) =>
                       getCategoryFromTemplate(move) === 'elemental' && getMoveElement(move) === playerElement
                     );
+                    if (!playerElement) {
+                      return (
+                        <p style={{ margin: 0, color: '#6b7280', fontSize: '0.95rem' }}>
+                          Element: Unawakened — elemental moves unlock after you choose your Element in Chapter 1.
+                        </p>
+                      );
+                    }
                     if (elementalMoves.length === 0) {
                       return (
                         <p style={{ margin: 0, color: '#6b7280', fontSize: '0.95rem' }}>

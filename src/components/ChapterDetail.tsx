@@ -33,6 +33,10 @@ import { awardBattlePassXpForDeployedSeason } from '../utils/awardBattlePassXp';
 import { mergeUserAndStudentForJourney } from '../utils/mergeChapterProgress';
 import { isChapter2ChallengeEffectivelyComplete } from '../utils/chapter2ProgressInference';
 import { isUidInSquad } from '../utils/squadMemberUtils';
+import { getChapterProgress } from '../utils/journeyProgress';
+import { formatMissionCompletionDate, isChallengeProgressCompleted } from '../utils/journeyMissionProgress';
+import { loadAllJourneyChallengeMedia } from '../utils/journeyChallengeMedia';
+import { resolveJourneyChallengePreviewUrl } from '../utils/journeyChallengePreviewDefaults';
 
 interface ChapterDetailProps {
   chapter: Chapter;
@@ -85,6 +89,9 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
   const [showSonidoTransmissionModal, setShowSonidoTransmissionModal] = useState(false);
   const [showImpositionTestBattle, setShowImpositionTestBattle] = useState(false);
   const [expandedChallenges, setExpandedChallenges] = useState<Set<string>>(new Set());
+  const [journeyChallengeMedia, setJourneyChallengeMedia] = useState<
+    Record<string, { previewImageUrl?: string; modalImageUrl?: string }>
+  >({});
 
   // Handle deep-linking: expand and scroll to focused challenge
   useEffect(() => {
@@ -115,6 +122,20 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       }, 300);
     }
   }, [focusChallengeId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAllJourneyChallengeMedia()
+      .then((media) => {
+        if (!cancelled) setJourneyChallengeMedia(media);
+      })
+      .catch((err) => {
+        console.warn('ChapterDetail: could not load journey challenge media', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chapter.id]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -382,15 +403,40 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
       });
     }
     
-    // Special case: For Chapter 1 and Chapter 2, if it's the first challenge, it should be available
-    // Chapter 1 is always active (available to all players)
-    // Chapter 2 is always available (per ChapterTracker logic)
-    // This check happens BEFORE the chapterProgress check so it works even if progress doesn't exist yet
+    // Resolve progress early so completed challenges never fall through to "locked"
+    const challengeProgress = chapterProgress?.challenges?.[challenge.id];
+
+    const isChallengeDone = (progress: any, challengeId: string): boolean => {
+      if (isChallengeProgressCompleted(progress)) return true;
+      // Hela battle may store victory flags without a generic isCompleted write
+      if (challengeId === 'ep1-update-profile') {
+        return progress?.iceGolemsDefeated === true || progress?.helaDefeated === true;
+      }
+      return false;
+    };
+
+    if (pendingSubmissions[challenge.id]) {
+      return 'pending';
+    }
+
+    // Completed always wins — never show Locked for a finished challenge
+    if (isChallengeDone(challengeProgress, challenge.id)) {
+      if (DEBUG_CH1) {
+        console.log(`[DEBUG_CH1] Challenge ${challenge.id} is completed`);
+      }
+      return 'completed';
+    }
+
+    // Chapter 1 & 2 first challenges are always unlockable for new players
     if ((chapter.id === 1 || chapter.id === 2) && challengeIndex === 0) {
-      if (DEBUG_CH1) console.log(`[DEBUG_CH1] Challenge ${challenge.id} is available - first challenge in Chapter ${chapter.id} (always available)`);
+      if (DEBUG_CH1) {
+        console.log(
+          `[DEBUG_CH1] Challenge ${challenge.id} is available - first challenge in Chapter ${chapter.id} (always unlockable)`
+        );
+      }
       return 'available';
     }
-    
+
     if (!chapterProgress) {
       if (DEBUG_CH1) console.log(`[DEBUG_CH1] getChallengeStatus(${challenge.id}): No chapter progress found:`, {
         userId: currentUser.uid,
@@ -398,97 +444,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         chapterKey: chapterKey,
         availableKeys: userProgress.chapters ? Object.keys(userProgress.chapters) : 'no chapters'
       });
-      // For Chapter 1, if progress doesn't exist but it's not the first challenge, still return locked
-      // (first challenge is handled above)
       return 'locked';
     }
-    
-    // Get challenge progress - check the challenges object
-    const challengeProgress = chapterProgress.challenges?.[challenge.id];
-    
-    // Always log for ch2-team-formation to debug completion issues
-    if (DEBUG_CH1 || challenge.id === 'ch2-team-formation') {
-      console.log(`[DEBUG] getChallengeStatus(${challenge.id}) - Challenge progress:`, {
-        userId: currentUser.uid,
-        challengeId: challenge.id,
-        chapterId: chapter.id,
-        chapterKey: chapterKey,
-        challengeProgress: challengeProgress,
-        chapterProgressKeys: chapterProgress ? Object.keys(chapterProgress) : [],
-        allChallenges: chapterProgress?.challenges ? Object.keys(chapterProgress.challenges) : 'no challenges',
-        status: challengeProgress?.status,
-        isCompleted: challengeProgress?.isCompleted,
-        completedAt: challengeProgress?.completedAt,
-        rawData: JSON.stringify(challengeProgress),
-        hasChapterProgress: !!chapterProgress
-      });
-    }
-    
-    // Check if challenge is pending approval first
-    if (pendingSubmissions[challenge.id]) return 'pending';
-    
-    // Check if challenge is completed
-    // For Challenge 7 (Hela Awakened), only mark as completed if it was actually completed through battle
-    // Don't mark as completed if it was auto-completed (which shouldn't happen anymore, but check anyway)
-    if (challenge.id === 'ep1-update-profile') {
-      // Challenge 7 requires actual battle completion - check for iceGolemsDefeated or helaDefeated flag
-      const wasBattleCompleted = challengeProgress?.iceGolemsDefeated === true || 
-                                 challengeProgress?.helaDefeated === true ||
-                                 (challengeProgress?.isCompleted === true && challengeProgress?.autoCompleted !== true);
-      if (wasBattleCompleted && (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted)) {
-        console.log('ChapterDetail: getChallengeStatus - Challenge completed (battle):', {
-          userId: currentUser.uid,
-          challengeId: challenge.id,
-          completedBy: challengeProgress?.completedBy
-        });
-        return 'completed';
-      }
-    } else {
-      // For other challenges, use standard completion check
-      // CRITICAL: Verify completion is for the current user
-      if (challengeProgress?.status === 'approved' || challengeProgress?.isCompleted === true) {
-        // Log completion details for debugging (always log for ch2-team-formation)
-        if (challenge.id === 'ch2-team-formation') {
-          console.log('[CH2-1] ChapterDetail: getChallengeStatus - Challenge COMPLETED:', {
-            userId: currentUser.uid,
-            challengeId: challenge.id,
-            status: challengeProgress?.status,
-            isCompleted: challengeProgress?.isCompleted,
-            completedBy: challengeProgress?.completedBy,
-            completedAt: challengeProgress?.completedAt,
-            rawProgress: challengeProgress
-          });
-        } else {
-          console.log('ChapterDetail: getChallengeStatus - Challenge completed:', {
-            userId: currentUser.uid,
-            challengeId: challenge.id,
-            completedBy: challengeProgress?.completedBy,
-            completedAt: challengeProgress?.completedAt
-          });
-        }
-        return 'completed';
-      } else if (challenge.id === 'ch2-team-formation') {
-        // Special logging for ch2-team-formation when NOT completed
-        console.log('[CH2-1] ChapterDetail: getChallengeStatus - Challenge NOT completed:', {
-          userId: currentUser.uid,
-          challengeId: challenge.id,
-          status: challengeProgress?.status,
-          isCompleted: challengeProgress?.isCompleted,
-          hasProgress: !!challengeProgress,
-          rawProgress: challengeProgress
-        });
-      }
-    }
-    
-    // Check if previous challenge is completed (sequential unlocking)
-    // This applies to ALL challenges except the first one
-    let previousChallengeCompleted = true; // First challenge has no previous challenge
+
+    // Sequential unlock: previous must be done — OR a later challenge is already done
+    // (prevents "randomly locked" gaps when completion order / data is uneven)
+    let previousChallengeCompleted = true;
     if (challengeIndex > 0) {
-      // Not the first challenge - check if previous challenge is completed
       const previousChallenge = chapter.challenges[challengeIndex - 1];
       const previousChallengeProgress = chapterProgress.challenges?.[previousChallenge.id];
-      
-      // Check if previous challenge is completed (multiple ways to verify)
+
       if (chapter.id === 2) {
         previousChallengeCompleted = isChapter2ChallengeEffectivelyComplete(
           previousChallenge.id,
@@ -497,13 +462,23 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           studentData
         );
       } else {
-        previousChallengeCompleted =
-          previousChallengeProgress?.isCompleted === true ||
-          previousChallengeProgress?.status === 'approved' ||
-          false;
+        previousChallengeCompleted = isChallengeDone(
+          previousChallengeProgress,
+          previousChallenge.id
+        );
       }
-      
-      // Debug logging (always log for Chapter 2 challenges)
+
+      if (!previousChallengeCompleted) {
+        const laterChallengeCompleted = chapter.challenges
+          .slice(challengeIndex + 1)
+          .some((later) =>
+            isChallengeDone(chapterProgress.challenges?.[later.id], later.id)
+          );
+        if (laterChallengeCompleted) {
+          previousChallengeCompleted = true;
+        }
+      }
+
       if (DEBUG_CH1 || chapter.id === 2) {
         console.log(`[DEBUG] getChallengeStatus(${challenge.id}): Previous challenge check:`, {
           chapterId: chapter.id,
@@ -512,18 +487,19 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           previousChallengeCompleted,
           previousChallengeProgress: previousChallengeProgress,
           allChallenges: Object.keys(chapterProgress.challenges || {}),
-          hasChapterProgress: !!chapterProgress,
-          chapterProgressKeys: chapterProgress ? Object.keys(chapterProgress) : []
         });
       }
-      
+
       if (!previousChallengeCompleted) {
         if (DEBUG_CH1 || chapter.id === 2) {
-          console.log(`[DEBUG] Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`, {
-            previousChallengeProgress,
-            isCompleted: previousChallengeProgress?.isCompleted,
-            status: previousChallengeProgress?.status
-          });
+          console.log(
+            `[DEBUG] Challenge ${challenge.id} is locked - previous challenge ${previousChallenge.id} not completed`,
+            {
+              previousChallengeProgress,
+              isCompleted: previousChallengeProgress?.isCompleted,
+              status: previousChallengeProgress?.status,
+            }
+          );
         }
         return 'locked';
       }
@@ -1129,33 +1105,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         if (refreshedUserDoc.exists()) {
           setRawUserProgress(refreshedUserDoc.data());
         }
-
-        // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
-        if (challenge.id === 'ep1-combat-drill') {
-          try {
-            // Get user's element from student data
-            const studentDoc = await getDoc(doc(db, 'students', currentUser.uid));
-            if (studentDoc.exists()) {
-              const studentData = studentDoc.data();
-              const userElement = studentData.elementalAffinity?.toLowerCase() || 
-                                 studentData.manifestationType?.toLowerCase() || 
-                                 'fire';
-              
-              console.log(`ChapterDetail: Unlocking elemental moves for element: ${userElement}`);
-              await unlockElementalMoves(userElement);
-              
-              // Add notification about elemental moves unlock
-              await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-                type: 'elemental_moves_unlocked',
-                message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
-                timestamp: serverTimestamp(),
-                read: false
-              });
-            }
-          } catch (error) {
-            console.error('Error unlocking elemental moves:', error);
-          }
-        }
       }
     }
   };
@@ -1365,33 +1314,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
             await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpGained));
           }
 
-          // If this is Chapter 1 Challenge 7 (ep1-combat-drill), unlock elemental moves
-          if (challengeId === 'ep1-combat-drill') {
-            try {
-              // Get user's element from student data
-              const studentDoc = await getDoc(studentRef);
-              if (studentDoc.exists()) {
-                const studentData = studentDoc.data();
-                const userElement = studentData.elementalAffinity?.toLowerCase() || 
-                                   studentData.manifestationType?.toLowerCase() || 
-                                   'fire';
-                
-                console.log(`ChapterDetail: Unlocking elemental moves for element: ${userElement}`);
-                await unlockElementalMoves(userElement);
-                
-                // Add notification about elemental moves unlock
-                await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-                  type: 'elemental_moves_unlocked',
-                  message: `⚡ Elemental moves unlocked! You can now use ${userElement} elemental moves in battle!`,
-                  timestamp: serverTimestamp(),
-                  read: false
-                });
-              }
-            } catch (error) {
-              console.error('Error unlocking elemental moves:', error);
-            }
-          }
-
           // Find challenge to get full rewards list
           const challenge = chapter.challenges.find(c => c.id === challengeId);
           if (challenge && !isReplayMode) {
@@ -1586,122 +1508,92 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     if (!currentUser) return;
 
     try {
-      // Update user's ordinary world description in both collections
       const userRef = doc(db, 'users', currentUser.uid);
       const studentRef = doc(db, 'students', currentUser.uid);
-      
-      // Update users collection
+
       await updateDoc(userRef, {
         ordinaryWorld: ordinaryWorld,
         truthMetalChoice: choice,
         lastUpdated: serverTimestamp()
       });
 
-      // Update students collection (for profile display)
       await updateDoc(studentRef, {
         ordinaryWorld: ordinaryWorld,
         truthMetalChoice: choice,
         lastUpdated: serverTimestamp()
       });
 
-      // Complete the Truth Metal Choice challenge
-      const currentData = userProgress || {};
-      
-      const updatedChapters = {
-        ...currentData.chapters,
-        [chapter.id]: {
-          ...currentData.chapters?.[chapter.id],
-          challenges: {
-            ...currentData.chapters?.[chapter.id]?.challenges,
-            ['ep1-truth-metal-choice']: {
-              isCompleted: true,
-              choice: choice,
-              ordinaryWorld: ordinaryWorld,
-              completedAt: serverTimestamp()
-            }
-          }
-        }
-      };
+      // Canonical completion + unlock next mission (idempotent)
+      const progressionResult = await updateProgressOnChallengeComplete(
+        currentUser.uid,
+        chapter.id,
+        'ep1-truth-metal-choice'
+      );
 
+      // Persist choice outcome on the challenge progress record
+      const chapterKey = String(chapter.id);
       await updateDoc(userRef, {
-        chapters: updatedChapters
+        [`chapters.${chapterKey}.challenges.ep1-truth-metal-choice.choice`]: choice,
+        [`chapters.${chapterKey}.challenges.ep1-truth-metal-choice.ordinaryWorld`]: ordinaryWorld,
+        [`chapters.${chapterKey}.challenges.ep1-truth-metal-choice.status`]: 'approved',
+        [`chapters.${chapterKey}.challenges.ep1-truth-metal-choice.isCompleted`]: true,
       });
 
-      // Update local state to reflect the completion
-      setRawUserProgress((prev: any) => ({
-        ...prev,
-        chapters: updatedChapters
-      }));
-
-      // Add to challenge submissions
-      await addDoc(collection(db, 'challengeSubmissions'), {
-        userId: currentUser.uid,
-        displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
-        email: currentUser.email || '',
-        photoURL: currentUser.photoURL || '',
-        challengeId: 'ep1-truth-metal-choice',
-        challengeName: 'The Truth Metal Choice',
-        submissionType: 'interactive',
-        timestamp: serverTimestamp(),
-        status: 'approved',
-        xpReward: 15,
-        ppReward: 8,
-        manifestationType: 'Chapter Challenge',
-        character: 'Truth Metal',
-        autoCompleted: true,
-        choice: choice,
-        ordinaryWorld: ordinaryWorld
-      });
-
-      // Create notification for challenge completion
-      await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-        type: 'challenge_completed',
-        message: `🎉 Truth Metal Choice completed! You chose to ${choice === 'touch' ? 'embrace change' : 'remain in your ordinary world'}. Your ordinary world description has been saved to your profile! You earned +15 XP and +8 PP!`,
-        challengeId: 'ep1-truth-metal-choice',
-        challengeName: 'The Truth Metal Choice',
-        xpReward: 15,
-        ppReward: 8,
-        timestamp: serverTimestamp(),
-        read: false
-      });
-      
-      // Find challenge to get rewards
       const challenge = chapter.challenges.find(c => c.id === 'ep1-truth-metal-choice');
-      const xpReward = challenge?.rewards.find(r => r.type === 'xp')?.value || 15;
-      const ppReward = challenge?.rewards.find(r => r.type === 'pp')?.value || 8;
+      let xpReward = 0;
+      let ppReward = 0;
 
-      // Apply rewards to both collections
-      const userDocRewards = await getDoc(userRef);
-      const userDataRewards = userDocRewards.exists() ? userDocRewards.data() : {};
-      await updateDoc(userRef, {
-        xp: (userDataRewards.xp || 0) + xpReward,
-        powerPoints: (userDataRewards.powerPoints || 0) + ppReward
-      });
+      if (challenge && !progressionResult.alreadyCompleted) {
+        const rewardResult = await grantChallengeRewards(
+          currentUser.uid,
+          challenge.id,
+          challenge.rewards,
+          challenge.title
+        );
+        xpReward = rewardResult.rewardsGranted.xp;
+        ppReward = rewardResult.rewardsGranted.pp;
 
-      const studentDocRewards = await getDoc(studentRef);
-      if (studentDocRewards.exists()) {
-        const studentDataRewards = studentDocRewards.data();
-        await updateDoc(studentRef, {
-          xp: (studentDataRewards.xp || 0) + xpReward,
-          powerPoints: (studentDataRewards.powerPoints || 0) + ppReward
+        await addDoc(collection(db, 'challengeSubmissions'), {
+          userId: currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+          email: currentUser.email || '',
+          photoURL: currentUser.photoURL || '',
+          challengeId: 'ep1-truth-metal-choice',
+          challengeName: 'The Truth Metal Choice',
+          submissionType: 'interactive',
+          timestamp: serverTimestamp(),
+          status: 'approved',
+          xpReward,
+          ppReward,
+          manifestationType: 'Chapter Challenge',
+          character: 'Truth Metal',
+          autoCompleted: true,
+          choice,
+          ordinaryWorld
         });
+
+        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+          type: 'challenge_completed',
+          message: `Truth Metal Choice completed! You chose to ${choice === 'touch' ? 'embrace change' : 'remain in your ordinary world'}. You earned +${xpReward} XP and +${ppReward} PP!`,
+          challengeId: 'ep1-truth-metal-choice',
+          challengeName: 'The Truth Metal Choice',
+          xpReward,
+          ppReward,
+          timestamp: serverTimestamp(),
+          read: false
+        });
+      } else if (challenge) {
+        xpReward = challenge.rewards.find(r => r.type === 'xp')?.value || 0;
+        ppReward = challenge.rewards.find(r => r.type === 'pp')?.value || 0;
       }
 
-      if (xpReward > 0) {
-        await awardBattlePassXpForDeployedSeason(currentUser.uid, Math.floor(xpReward));
-      }
-
-      // Close the modal
       setShowTruthMetalModal(false);
-      
-      // Refresh user progress
+
       const userDocRefresh = await getDoc(userRef);
       if (userDocRefresh.exists()) {
-        const userDataRefresh = userDocRefresh.data();
-        setRawUserProgress(userDataRefresh);
+        setRawUserProgress(userDocRefresh.data());
       }
 
-      // Show reward modal
       if (challenge) {
         setRewardModalData({
           challengeTitle: challenge.title,
@@ -1711,8 +1603,6 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
         });
         setShowRewardModal(true);
       }
-
-      console.log('Truth Metal Choice completed:', { choice, ordinaryWorld });
     } catch (error) {
       console.error('Error completing Truth Metal Choice:', error);
       alert('Failed to complete the Truth Metal Choice. Please try again.');
@@ -1724,128 +1614,89 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
     setShowTruthBattle(true);
   };
 
+  const truthVictoryInFlightRef = useRef(false);
+
   const handleTruthVictory = async (truthRevealed: string) => {
     if (!currentUser) return;
+    if (truthVictoryInFlightRef.current) return;
+    truthVictoryInFlightRef.current = true;
 
     try {
       if (!isReplayMode) {
-        // Complete the Touch Truth Metal challenge (only if not in replay mode)
         const userRef = doc(db, 'users', currentUser.uid);
         const studentRef = doc(db, 'students', currentUser.uid);
-        
-        const currentData = userProgress || {};
-        
-        const updatedChapters = {
-          ...currentData.chapters,
-          [chapter.id]: {
-            ...currentData.chapters?.[chapter.id],
-            challenges: {
-              ...currentData.chapters?.[chapter.id]?.challenges,
-              ['ep1-touch-truth-metal']: {
-                isCompleted: true,
-                truthRevealed: truthRevealed,
-                completedAt: serverTimestamp()
-              }
-            }
-          }
-        };
 
+        const progressionResult = await updateProgressOnChallengeComplete(
+          currentUser.uid,
+          chapter.id,
+          'ep1-touch-truth-metal'
+        );
+
+        const chapterKey = String(chapter.id);
         await updateDoc(userRef, {
-          chapters: updatedChapters
+          [`chapters.${chapterKey}.challenges.ep1-touch-truth-metal.truthRevealed`]: truthRevealed,
+          [`chapters.${chapterKey}.challenges.ep1-touch-truth-metal.status`]: 'approved',
+          [`chapters.${chapterKey}.challenges.ep1-touch-truth-metal.isCompleted`]: true,
         });
 
-        // Add to challenge submissions
-        await addDoc(collection(db, 'challengeSubmissions'), {
-          userId: currentUser.uid,
-          displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
-          email: currentUser.email || '',
-          photoURL: currentUser.photoURL || '',
-          challengeId: 'ep1-touch-truth-metal',
-          challengeName: 'Touch Truth Metal',
-          submissionType: 'battle',
-          timestamp: serverTimestamp(),
-          status: 'approved',
-          xpReward: 25,
-          ppReward: 15,
-          manifestationType: 'Chapter Challenge',
-          character: 'Truth',
-          autoCompleted: true,
-          truthRevealed: truthRevealed
-        });
-
-        // Create notification for challenge completion
-        await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
-          type: 'challenge_completed',
-          message: `🎉 Truth Metal challenge completed! You defeated Truth and discovered: "${truthRevealed}". You earned +25 XP and +15 PP!`,
-          challengeId: 'ep1-touch-truth-metal',
-          challengeName: 'Touch Truth Metal',
-          xpReward: 25,
-          ppReward: 15,
-          timestamp: serverTimestamp(),
-          read: false
-        });
-
-        // Update student data with truth revelation
         await updateDoc(studentRef, {
           truthRevelation: truthRevealed,
           lastUpdated: serverTimestamp()
         });
 
-        // Find challenge to get rewards
         const challenge = chapter.challenges.find(c => c.id === 'ep1-touch-truth-metal');
-        
+        let xpReward = 0;
+        let ppReward = 0;
+        let truthMetalReward = 0;
+
         if (challenge) {
-          // Use centralized reward granting function
           const rewardResult = await grantChallengeRewards(
             currentUser.uid,
             challenge.id,
             challenge.rewards,
             challenge.title
           );
+          xpReward = rewardResult.rewardsGranted.xp;
+          ppReward = rewardResult.rewardsGranted.pp;
+          truthMetalReward = rewardResult.rewardsGranted.truthMetal;
 
-          if (!rewardResult.success) {
-            console.error(`ChapterDetail: Failed to grant rewards for ${challenge.id}:`, rewardResult.error);
-          } else {
-            console.log(`ChapterDetail: Rewards granted successfully for ${challenge.id}:`, rewardResult.rewardsGranted);
+          if (!progressionResult.alreadyCompleted && !rewardResult.alreadyClaimed) {
+            await addDoc(collection(db, 'challengeSubmissions'), {
+              userId: currentUser.uid,
+              displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+              email: currentUser.email || '',
+              photoURL: currentUser.photoURL || '',
+              challengeId: 'ep1-touch-truth-metal',
+              challengeName: 'Touch Truth Metal',
+              submissionType: 'battle',
+              timestamp: serverTimestamp(),
+              status: 'approved',
+              xpReward,
+              ppReward,
+              manifestationType: 'Chapter Challenge',
+              character: 'Truth',
+              autoCompleted: true,
+              truthRevealed
+            });
+
+            await addDoc(collection(db, 'students', currentUser.uid, 'notifications'), {
+              type: 'challenge_completed',
+              message: `Truth Metal challenge completed! You defeated Truth and discovered: "${truthRevealed}". You earned +${xpReward} XP, +${ppReward} PP${truthMetalReward > 0 ? `, and +${truthMetalReward} Truth Metal` : ''}!`,
+              challengeId: 'ep1-touch-truth-metal',
+              challengeName: 'Touch Truth Metal',
+              xpReward,
+              ppReward,
+              truthMetalReward,
+              timestamp: serverTimestamp(),
+              read: false
+            });
           }
 
-          // Get reward values for notification and modal
-          const xpReward = rewardResult.rewardsGranted.xp;
-          const ppReward = rewardResult.rewardsGranted.pp;
-          const truthMetalReward = rewardResult.rewardsGranted.truthMetal;
-
-          // Update the notification we just created with correct rewards (including truthMetal)
-          try {
-            const notificationsQuery = query(
-              collection(db, 'students', currentUser.uid, 'notifications'),
-              where('challengeId', '==', 'ep1-touch-truth-metal'),
-              where('read', '==', false),
-              orderBy('timestamp', 'desc'),
-              limit(1)
-            );
-            const notificationsSnapshot = await getDocs(notificationsQuery);
-            if (!notificationsSnapshot.empty) {
-              const notificationDoc = notificationsSnapshot.docs[0];
-              await updateDoc(notificationDoc.ref, {
-                message: `🎉 Truth Metal challenge completed! You defeated Truth and discovered: "${truthRevealed}". You earned +${xpReward} XP, +${ppReward} PP${truthMetalReward > 0 ? `, and +${truthMetalReward} Truth Metal` : ''}!`,
-                xpReward,
-                ppReward,
-                truthMetalReward
-              });
-            }
-          } catch (notifError) {
-            // If notification update fails, it's not critical
-            console.warn('Could not update notification with truthMetal reward:', notifError);
-          }
-          
-          // Refresh user progress
           const userDocRefresh = await getDoc(userRef);
           if (userDocRefresh.exists()) {
-            const userDataRefresh = userDocRefresh.data();
-            setRawUserProgress(userDataRefresh);
+            setRawUserProgress(userDocRefresh.data());
           }
 
-          // Show reward modal
           setRewardModalData({
             challengeTitle: challenge.title,
             rewards: challenge.rewards,
@@ -1855,17 +1706,16 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
           });
           setShowRewardModal(true);
         }
-
-        console.log('Touch Truth Metal completed:', { truthRevealed });
       }
-      
+
       setTruthRevealed(truthRevealed);
       setShowTruthBattle(false);
       setShowTruthRevelation(true);
-      
     } catch (error) {
       console.error('Error completing Touch Truth Metal:', error);
       alert('Failed to complete the Truth Metal challenge. Please try again.');
+    } finally {
+      truthVictoryInFlightRef.current = false;
     }
   };
 
@@ -4095,14 +3945,13 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                     <span style={{ fontSize: '1rem' }}>✓</span>
                     <span>Completed</span>
                     {(() => {
-                      const chapterProgress = userProgress?.chapters?.[chapter.id];
+                      const chapterProgress = getChapterProgress(userProgress, chapter.id);
                       const challengeProgress = chapterProgress?.challenges?.[challenge.id];
-                      const completedAt = challengeProgress?.completedAt;
-                      if (completedAt) {
-                        const date = completedAt.toDate ? completedAt.toDate() : new Date(completedAt);
+                      const dateLabel = formatMissionCompletionDate(challengeProgress?.completedAt);
+                      if (dateLabel) {
                         return (
                           <span style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.8 }}>
-                            on {date.toLocaleDateString()}
+                            on {dateLabel}
                           </span>
                         );
                       }
@@ -4992,85 +4841,34 @@ const ChapterDetail: React.FC<ChapterDetailProps> = ({ chapter, onBack, focusCha
                       flexShrink: 0,
                       overflow: 'hidden'
                     }}>
-                      {challenge.id === 'ep1-touch-truth-metal' ? (
-                        <img 
-                          src="/images/Ch1-3_Preview.png" 
-                          alt="Touch Truth Metal Preview"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : challenge.id === 'ch2-team-formation' ? (
-                        <img 
-                          src="/images/Ch2-1 _ Preview_Timu Island.png" 
-                          alt="Timu Island Preview"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : challenge.id === 'ch2-rival-selection' ? (
-                        <img 
-                          src="/images/Ch2-2_Preview_Home.png" 
-                          alt="Find a Home Preview"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : challenge.id === 'ch2-team-trial' ? (
-                        <img 
-                          src="/images/Ch2-3_Preview_SquadUp.png" 
-                          alt="Squad Up Preview"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : challenge.id === 'ep2-its-all-a-game' ? (
-                        <img 
-                          src="/images/Ch2-4_Preview_RRCandy.png" 
-                          alt="It's All a Game Preview"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : challenge.id === 'ch2-5-imposition-test' ? (
-                        <img 
-                          src="/images/Ch2-5_Preview.png" 
-                          alt="Tests, Allies, and Enemies Preview"
-                          onError={(e) => {
-                            console.error('Failed to load Ch2-5_Preview.png - file may not exist in public/images/');
-                            (e.target as HTMLImageElement).style.display = 'none';
-                            const parent = (e.target as HTMLImageElement).parentElement;
-                            if (parent) {
-                              parent.innerHTML = '<span style="color: #9ca3af; font-size: 0.875rem;">Image not found</span>';
-                            }
-                          }}
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            borderRadius: '0.5rem'
-                          }}
-                        />
-                      ) : (
-                        <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
-                          Image Preview
-                        </span>
-                      )}
+                      {(() => {
+                        const src = resolveJourneyChallengePreviewUrl(
+                          challenge.id,
+                          journeyChallengeMedia[challenge.id]
+                        );
+                        if (src) {
+                          return (
+                            <img
+                              src={src}
+                              alt={`${challenge.title} Preview`}
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                              }}
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                objectFit: 'cover',
+                                borderRadius: '0.5rem'
+                              }}
+                            />
+                          );
+                        }
+                        return (
+                          <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
+                            Image Preview
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}

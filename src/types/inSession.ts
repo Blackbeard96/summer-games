@@ -65,6 +65,8 @@ export interface InSessionPlayer {
   flowStateActive?: boolean;
   flowStateActivatedAt?: number | null;
   flowStateNonce?: number;
+  /** Flow State boon picks + multipliers (see liveEventFlowBoons). */
+  flowState?: import('./liveEventFlowBoons').LiveEventFlowStateBoons;
   eliminated?: boolean; // Whether player is eliminated
   /** Set when eliminated by another player (BR / live combat); used in session summary. */
   eliminatedBy?: string;

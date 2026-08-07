@@ -28,7 +28,7 @@ import { shouldShowModalToday } from './utils/generatorEarnings';
 import { getActiveAnnouncements, ROLLOUT_ANNOUNCEMENTS } from './utils/announcementConfig';
 import { checkAndCreditDailyGenerator, shouldShowDailyGeneratorModal } from './utils/dailyGeneratorNotification';
 import { db } from './firebase';
-import { doc, getDoc, updateDoc, Timestamp, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, Timestamp, serverTimestamp } from 'firebase/firestore';
 
 // Context providers
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -215,21 +215,22 @@ const PageLoader = () => (
 
 // Protected Admin Route Component
 const ProtectedAdminRoute = () => {
-  const { currentUser, loading } = useAuth();
+  const { currentUser, loading, isAdmin } = useAuth();
   
-  // Show loading while auth is being checked
-  if (loading) {
+  // Check if current user is admin - Only Yondaime has access
+  const isAdminUser = isAdmin || currentUser?.email === 'edm21179@gmail.com';
+
+  // Initial auth only — never bounce away once we know this session is admin
+  // (transient null currentUser on token refresh must not remount Admin / wipe forms)
+  if (loading && !currentUser && !isAdminUser) {
     return <PageLoader />;
   }
   
-  // Check if current user is admin - Only Yondaime has access
-  const isAdmin = currentUser?.email === 'edm21179@gmail.com';
-  
-  if (!currentUser) {
+  if (!currentUser && !isAdminUser) {
     return <Navigate to="/login" replace />;
   }
   
-  if (!isAdmin) {
+  if (currentUser && !isAdminUser) {
     return (
       <div style={{
         display: 'flex',
@@ -306,6 +307,9 @@ const AppContent = () => {
   // Modal queue: ['dailyGenerator', 'announcements']
   const [modalQueue, setModalQueue] = React.useState<string[]>([]);
   const [currentModal, setCurrentModal] = React.useState<string | null>(null);
+  /** Prevents re-queuing login modals when vault / rates change after first successful check. */
+  const loginModalsCheckedForUidRef = React.useRef<string | null>(null);
+  const loginModalsInFlightRef = React.useRef(false);
   
   // Get battle context for generator rates
   const { vault, getGeneratorRates } = useBattle();
@@ -315,8 +319,15 @@ const AppContent = () => {
     if (!currentUser || loading || !vault) {
       return;
     }
+    if (loginModalsCheckedForUidRef.current === currentUser.uid) {
+      return;
+    }
+    if (loginModalsInFlightRef.current) {
+      return;
+    }
 
     const checkModals = async () => {
+      loginModalsInFlightRef.current = true;
       try {
         const queue: string[] = [];
         
@@ -389,8 +400,12 @@ const AppContent = () => {
           setModalQueue(queue);
           setCurrentModal(queue[0]);
         }
+
+        loginModalsCheckedForUidRef.current = currentUser.uid;
       } catch (error) {
         console.error('Error checking modals:', error);
+      } finally {
+        loginModalsInFlightRef.current = false;
       }
     };
 
@@ -398,6 +413,12 @@ const AppContent = () => {
     const timeoutId = setTimeout(checkModals, 1000);
     return () => clearTimeout(timeoutId);
   }, [currentUser, loading, vault, getGeneratorRates]);
+
+  // Reset login-modal gate when the signed-in user changes
+  React.useEffect(() => {
+    loginModalsCheckedForUidRef.current = null;
+    loginModalsInFlightRef.current = false;
+  }, [currentUser?.uid]);
   
   // Handle modal queue progression
   const [showSquadCheckInModal, setShowSquadCheckInModal] = React.useState(false);
@@ -445,7 +466,7 @@ const AppContent = () => {
     });
   };
   
-  // Handle announcement seen
+  // Handle announcement seen — merge so new accounts without a users doc still persist
   const handleAnnouncementSeen = async (announcementId: string) => {
     if (!currentUser) return;
     
@@ -455,12 +476,16 @@ const AppContent = () => {
       const usersData = usersDoc.exists() ? usersDoc.data() : {};
       const seenAnnouncements = usersData.seenAnnouncements || {};
       
-      await updateDoc(usersRef, {
-        seenAnnouncements: {
-          ...seenAnnouncements,
-          [announcementId]: true
-        }
-      });
+      await setDoc(
+        usersRef,
+        {
+          seenAnnouncements: {
+            ...seenAnnouncements,
+            [announcementId]: true
+          }
+        },
+        { merge: true }
+      );
     } catch (error) {
       console.error('Error marking announcement as seen:', error);
     }
@@ -508,8 +533,15 @@ const AppContent = () => {
     }
   }, [updateMetadata]);
 
-  // Show loading while checking auth
-  if (loading) {
+  // Only block the route tree on the *initial* auth check. Unmounting <Routes>
+  // whenever `loading` flips (e.g. AuthProvider remount / Fast Refresh) wiped
+  // in-page state and made the app feel like it "reset" to home/default views.
+  const [authReady, setAuthReady] = React.useState(!loading);
+  React.useEffect(() => {
+    if (!loading) setAuthReady(true);
+  }, [loading]);
+
+  if (!authReady) {
     return (
       <div className="App" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         <NavBar />
