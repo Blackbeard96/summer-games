@@ -2,8 +2,8 @@ import { db } from '../firebase';
 import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import type { Move } from '../types/battle';
 import {
-  moveCountsForDailyElementalChallenge,
-  moveCountsForDailyManifestChallenge,
+  challengeTypesForSkillUse,
+  classifyMoveForDailyChallenge,
 } from './dailyChallengeShared';
 import { updateChallengeProgressByType } from './dailyChallengeTracker';
 
@@ -153,17 +153,15 @@ export async function trackDailyChallengeProgress(
 }
 
 export function detectLiveEventSkillCategory(move: Move): TrackDailyChallengeProgressParams['skillCategory'] {
-  if (moveCountsForDailyManifestChallenge(move)) {
+  const kind = classifyMoveForDailyChallenge(move);
+  if (kind === 'manifest') {
     if (move.rrCandySkillId || move.rrCandyNodeId) return 'rr_candy';
     return 'manifest';
   }
-  if (moveCountsForDailyElementalChallenge(move)) return 'elemental';
+  if (kind === 'elemental') return 'elemental';
   return 'unknown';
 }
 
 export function challengeTypesForLiveEventSkill(move: Move): DailyChallengeType[] {
-  const out: DailyChallengeType[] = [];
-  if (moveCountsForDailyElementalChallenge(move)) out.push('use_elemental_move');
-  if (moveCountsForDailyManifestChallenge(move)) out.push('use_manifest_ability');
-  return out;
+  return challengeTypesForSkillUse(move);
 }

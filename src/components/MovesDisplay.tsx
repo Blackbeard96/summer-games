@@ -42,6 +42,13 @@ import {
   getFirstSummonEffectFromMove,
   resolveConstructStatsForSummonEffect,
 } from '../utils/summonConstructStats';
+import {
+  SKILL_MAX_MASTERY_LEVEL,
+  getSkillUpgradeCostFromLevel,
+  getSkillAscensionKind,
+  getSkillUpgradeButtonLabel,
+  isSkillAtMaxMastery,
+} from '../utils/skillUpgradeCosts';
 import { MAX_EQUIPPED_SKILLS } from '../constants/loadout';
 import { battleEnergyDisplayLabel, getResolvedMoveEnergyType } from '../constants/energyTypes';
 import {
@@ -111,7 +118,13 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
   const { vault, refreshVaultData } = useBattle();
   const [moveOverrides, setMoveOverrides] = useState<{[key: string]: any}>({});
   const [overridesLoaded, setOverridesLoaded] = useState(false);
-  const [ascendConfirm, setAscendConfirm] = useState<{moveId: string, moveName: string} | null>(null);
+  const [ascendConfirm, setAscendConfirm] = useState<{
+    moveId: string;
+    moveName: string;
+    targetLevel: number;
+    cost: number;
+    kind: 'first' | 'final';
+  } | null>(null);
   const { currentUser } = useAuth();
   const [equippedArtifacts, setEquippedArtifacts] = useState<any>(null);
   /** students.artifacts map — used to resolve Legendary skills (players cannot read adminSettings). */
@@ -610,7 +623,12 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       case 3: return 'Adept';
       case 4: return 'Master';
       case 5: return 'Grandmaster';
-      default: return 'Unknown';
+      case 6: return 'Elite';
+      case 7: return 'Champion';
+      case 8: return 'Legend';
+      case 9: return 'Mythic';
+      case 10: return 'Transcendent';
+      default: return level >= SKILL_MAX_MASTERY_LEVEL ? 'Transcendent' : 'Unknown';
     }
   };
 
@@ -621,6 +639,11 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
       case 3: return '#2563eb';
       case 4: return '#7c3aed';
       case 5: return '#dc2626';
+      case 6: return '#ea580c';
+      case 7: return '#d97706';
+      case 8: return '#ca8a04';
+      case 9: return '#a855f7';
+      case 10: return '#f59e0b';
       default: return '#6b7280';
     }
   };
@@ -774,32 +797,22 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
     
     // Check if move can be upgraded (up to level 10)
     // Manifest moves can always be upgraded if they're shown (they match the user's manifest)
-    const canUpgrade = move.masteryLevel < 10 && effectiveUnlocked && !isLevel2Manifest;
-    const canAscend = move.masteryLevel === 5 && effectiveUnlocked && !isLevel2Manifest;
-    
-    // Calculate exponential upgrade cost based on current level
-    // RR Candy moves: 1000 PP for Level 1 → Level 2
-    // Regular moves: 100 PP for Level 1 → Level 2
-    // Then multiplied by the respective multiplier for each level
-    const basePrice = isRRCandyMove ? 1000 : 100; // 1000 PP for RR Candy moves, 100 PP for regular moves
-    const getUpgradeCost = () => {
-      const nextLevel = move.masteryLevel + 1;
-      if (nextLevel === 2) return basePrice; // Level 1 → Level 2: base price
-      if (nextLevel === 3) return basePrice * 2; // Level 2 → Level 3: base * 2
-      if (nextLevel === 4) return basePrice * 4; // Level 3 → Level 4: base * 4
-      if (nextLevel === 5) return basePrice * 8; // Level 4 → Level 5: base * 8
-      if (nextLevel === 6) return basePrice * 16; // Level 5 → Level 6 (Ascend): base * 16
-      if (nextLevel === 7) return basePrice * 32; // Level 6 → Level 7: base * 32
-      if (nextLevel === 8) return basePrice * 64; // Level 7 → Level 8: base * 64
-      if (nextLevel === 9) return basePrice * 128; // Level 8 → Level 9: base * 128
-      if (nextLevel === 10) return basePrice * 256; // Level 9 → Level 10: base * 256
-      return basePrice;
-    };
-    const upgradeCost = getUpgradeCost();
+    const canUpgrade = move.masteryLevel < SKILL_MAX_MASTERY_LEVEL && effectiveUnlocked && !isLevel2Manifest;
+    const nextLevel = move.masteryLevel + 1;
+    const upgradeCost = getSkillUpgradeCostFromLevel(move.masteryLevel);
+    const ascensionKind = getSkillAscensionKind(nextLevel);
+    const isMaxMastery = isSkillAtMaxMastery(move.masteryLevel);
 
     // For RR Candy moves, calculate Truth Metal Shard requirement (nextLevel - 1 shards)
-    const nextLevel = move.masteryLevel + 1;
     const requiredShards = isRRCandyMove ? (nextLevel - 1) : 0;
+    const shardsSuffix =
+      isRRCandyMove && requiredShards > 0
+        ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}`
+        : '';
+    const upgradeButtonLabel =
+      upgradeCost != null
+        ? getSkillUpgradeButtonLabel(nextLevel, { shardsSuffix })
+        : 'Cannot Upgrade';
 
     // Get current stats from upgrade template (only relevant for levels 1-5)
     const upgradeTemplate = MOVE_UPGRADE_TEMPLATES[move.name];
@@ -1567,7 +1580,21 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
             <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Mastery Level</span>
             <span style={{ fontSize: '0.875rem', color: getMasteryColor(effectiveMasteryLevel), fontWeight: 'bold' }}>
-              {getMasteryLabel(effectiveMasteryLevel)} ({effectiveMasteryLevel}/{effectiveMasteryLevel <= 5 ? 5 : 10})
+              {getMasteryLabel(effectiveMasteryLevel)} ({effectiveMasteryLevel}/{SKILL_MAX_MASTERY_LEVEL})
+              {isMaxMastery ? (
+                <span style={{
+                  marginLeft: '0.5rem',
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                  color: 'white',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '999px',
+                  fontSize: '0.7rem',
+                  fontWeight: 800,
+                  letterSpacing: '0.04em',
+                }}>
+                  MAX
+                </span>
+              ) : null}
               {effectiveMasteryLevel > move.masteryLevel && equippedArtifacts && (() => {
                 const hit = findElementalAffinityRingForMove(move, equippedArtifacts);
                 if (!hit) return null;
@@ -1594,7 +1621,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
             overflow: 'hidden'
           }}>
               <div style={{ 
-                width: `${(effectiveMasteryLevel / (effectiveMasteryLevel <= 5 ? 5 : 10)) * 100}%`, 
+                width: `${(Math.min(effectiveMasteryLevel, SKILL_MAX_MASTERY_LEVEL) / SKILL_MAX_MASTERY_LEVEL) * 100}%`, 
                 background: getMasteryColor(effectiveMasteryLevel),
               height: '100%', 
               borderRadius: '0.5rem',
@@ -1603,8 +1630,8 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
           </div>
         </div>
 
-        {/* Upgrade Preview (if can upgrade and below level 5, or if ascended) */}
-        {canUpgrade && (move.masteryLevel < 5 ? nextLevelStats : true) && (
+        {/* Upgrade Preview */}
+        {canUpgrade && upgradeCost != null && (move.masteryLevel < 5 ? nextLevelStats : true) && (
           <div style={{ 
             background: 'rgba(34, 197, 94, 0.1)',
             border: '1px solid rgba(34, 197, 94, 0.2)',
@@ -1904,69 +1931,85 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 }
                 return null;
               })()}
+              <div style={{ marginTop: '0.5rem', fontWeight: 700 }}>
+                {upgradeButtonLabel}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Ascend Button - Show if level is exactly 5 */}
-        {canAscend && onUpgradeMove && (() => {
-          const ascendCost = isRRCandyMove ? 16000 : 1600; // 16000 PP for RR Candy moves, 1600 PP for regular moves
-          return (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                
-                console.log('🔄 Ascend button clicked!', {
-                  moveId: move.id,
-                  moveName: move.name,
-                  masteryLevel: move.masteryLevel,
-                  canAscend,
-                  onUpgradeMove: !!onUpgradeMove,
-                  timestamp: new Date().toISOString()
-                });
-                
-                // Show custom confirmation modal instead of window.confirm (works better in Firefox)
-                const moveName = move.id === 'rr-candy-on-off-shields-off' ? 'Shield OFF' : move.id === 'rr-candy-on-off-shields-on' ? 'Shield ON' : (move.id?.startsWith('rr-candy-') ? move.name : getMoveDataWithOverrides(move.name).name);
-                setAscendConfirm({ moveId: move.id, moveName });
-              }}
-              style={{
-                background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
-                color: 'white',
-                border: '3px solid #f59e0b',
-                padding: '0.75rem',
-                borderRadius: '0.75rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: 'bold',
-                width: '100%',
-                marginBottom: '0.5rem',
-                transition: 'all 0.2s',
-                backdropFilter: 'blur(10px)',
-                boxShadow: '0 0 15px rgba(245, 158, 11, 0.5)',
-                position: 'relative',
-                zIndex: 10,
-                pointerEvents: 'auto'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)';
-                e.currentTarget.style.transform = 'scale(1.02)';
-                e.currentTarget.style.boxShadow = '0 0 25px rgba(245, 158, 11, 0.8)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
-                e.currentTarget.style.transform = 'scale(1)';
-                e.currentTarget.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
-              }}
-            >
-              ⬆️ Ascend ({ascendCost} PP)
-            </button>
-          );
-        })()}
+        {/* MAX mastery status */}
+        {isMaxMastery && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+              border: '2px solid #f59e0b',
+              color: '#92400e',
+              padding: '0.85rem 1rem',
+              borderRadius: '0.75rem',
+              marginBottom: '0.5rem',
+              textAlign: 'center',
+              fontWeight: 800,
+              fontSize: '0.9rem',
+            }}
+          >
+            MAX — Final Ascension complete (Level {SKILL_MAX_MASTERY_LEVEL})
+          </div>
+        )}
 
-        {/* Upgrade Button - Show for levels 1-4 and 6-9 */}
-        {canUpgrade && move.masteryLevel !== 5 && onUpgradeMove && (
+        {/* First / Final Ascension button */}
+        {canUpgrade && ascensionKind && upgradeCost != null && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const moveName =
+                move.id === 'rr-candy-on-off-shields-off'
+                  ? 'Shield OFF'
+                  : move.id === 'rr-candy-on-off-shields-on'
+                    ? 'Shield ON'
+                    : move.id?.startsWith('rr-candy-')
+                      ? move.name
+                      : getMoveDataWithOverrides(move.name).name;
+              setAscendConfirm({
+                moveId: move.id,
+                moveName,
+                targetLevel: nextLevel,
+                cost: upgradeCost,
+                kind: ascensionKind,
+              });
+            }}
+            style={{
+              background:
+                ascensionKind === 'final'
+                  ? 'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)'
+                  : 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+              color: 'white',
+              border: ascensionKind === 'final' ? '3px solid #7c3aed' : '3px solid #f59e0b',
+              padding: '0.85rem',
+              borderRadius: '0.75rem',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 'bold',
+              width: '100%',
+              marginBottom: '0.5rem',
+              transition: 'all 0.2s',
+              boxShadow:
+                ascensionKind === 'final'
+                  ? '0 0 15px rgba(124, 58, 237, 0.45)'
+                  : '0 0 15px rgba(245, 158, 11, 0.5)',
+              position: 'relative',
+              zIndex: 10,
+              pointerEvents: 'auto',
+            }}
+          >
+            ⬆️ {upgradeButtonLabel}
+          </button>
+        )}
+
+        {/* Normal Upgrade Button — levels 1–3 and 5–8 (not Ascension milestones) */}
+        {canUpgrade && !ascensionKind && upgradeCost != null && (
           <button
             onClick={async (e) => {
               e.preventDefault();
@@ -1975,7 +2018,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 moveId: move.id,
                 moveName: move.name,
                 masteryLevel: move.masteryLevel,
-                nextLevel: move.masteryLevel + 1,
+                nextLevel,
                 upgradeCost,
                 isManifestMove,
                 isRRCandyMove,
@@ -2031,7 +2074,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               }
             }}
           >
-            {canUpgrade ? `⬆️ Upgrade to Level ${move.masteryLevel + 1} (${upgradeCost} PP${isRRCandyMove && requiredShards > 0 ? ` + ${requiredShards} Truth Metal Shard${requiredShards > 1 ? 's' : ''}` : ''})` : 'Cannot Upgrade'}
+            {canUpgrade ? `⬆️ ${upgradeButtonLabel}` : 'Cannot Upgrade'}
           </button>
         )}
 
@@ -3105,7 +3148,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               marginBottom: '1rem',
               color: '#1f2937'
             }}>
-              ⬆️ Ascend Move?
+              {ascendConfirm.kind === 'final' ? '⬆️ Final Ascension?' : '⬆️ First Ascension?'}
             </h3>
             <p style={{
               fontSize: '1rem',
@@ -3113,14 +3156,20 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
               color: '#6b7280',
               lineHeight: '1.5'
             }}>
-              Ascend <strong>{ascendConfirm.moveName}</strong> beyond Level 5?
+              {ascendConfirm.kind === 'final' ? (
+                <>Complete Final Ascension for <strong>{ascendConfirm.moveName}</strong> to Level 10?</>
+              ) : (
+                <>Ascend <strong>{ascendConfirm.moveName}</strong> to Level 5?</>
+              )}
             </p>
             <p style={{
               fontSize: '0.875rem',
               marginBottom: '1rem',
               color: '#9ca3af'
             }}>
-              This will unlock the Ascension path to Level 10!
+              {ascendConfirm.kind === 'final'
+                ? 'Level 10 is the maximum mastery for this skill.'
+                : 'This is the skill’s First Ascension. You can keep upgrading normally afterward.'}
             </p>
             <div style={{
               background: '#fef3c7',
@@ -3135,7 +3184,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                 margin: 0,
                 fontWeight: 'bold'
               }}>
-                ⚡ Cost: 1600 PP
+                ⚡ Cost: {ascendConfirm.cost.toLocaleString()} PP
               </p>
             </div>
             <div style={{
@@ -3190,7 +3239,7 @@ const MovesDisplay: React.FC<MovesDisplayProps> = ({
                   boxShadow: '0 4px 6px rgba(245, 158, 11, 0.3)'
                 }}
               >
-                ⬆️ Ascend (1600 PP)
+                ⬆️ {ascendConfirm.kind === 'final' ? 'Final Ascension' : 'First Ascension'} ({ascendConfirm.cost.toLocaleString()} PP)
               </button>
             </div>
           </div>

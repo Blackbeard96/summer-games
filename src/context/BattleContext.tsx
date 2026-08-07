@@ -22,10 +22,7 @@ import {
 import { logger } from '../utils/debugLogger';
 import { inferEnergyTypeForMove } from '../constants/energyTypes';
 import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
-import {
-  moveCountsForDailyElementalChallenge,
-  moveCountsForDailyManifestChallenge,
-} from '../utils/dailyChallengeShared';
+import { trackDailyChallengeForSkillUse } from '../utils/playerProgressionRewards';
 import { applyConsumableEffectToVault } from '../utils/consumableEffectResolver';
 import { resolveVaultBattleConsumable } from '../utils/vaultConsumablePlan';
 import { MARKETPLACE_STORE_ARTIFACTS } from '../data/marketplaceArtifactsCatalog';
@@ -79,6 +76,11 @@ import {
 import { getRRCandyStatusAsync } from '../utils/rrCandyUtils';
 import { getUserRRCandySkills } from '../utils/rrCandyService';
 import { shieldOffMaxShieldRemovePercent } from '../utils/rrCandyMoves';
+import {
+  getSkillUpgradeCost,
+  getSkillUpgradeSuccessMessage,
+  isSkillAtMaxMastery,
+} from '../utils/skillUpgradeCosts';
 import { getArtifactSkillMovesForStudentData } from '../utils/battleSkillsService';
 import { hasElementalMoveAccess } from '../utils/elementalAccess';
 import { stripUndefinedDeep } from '../utils/firestoreSanitize';
@@ -3259,56 +3261,33 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
       
-      if (move.masteryLevel >= 10) {
+      if (isSkillAtMaxMastery(move.masteryLevel)) {
         console.error('❌ upgradeMove: Move already at max level', { moveId, masteryLevel: move.masteryLevel });
         setError('Move cannot be upgraded (already at max level)');
         return;
       }
 
-      // Calculate exponential upgrade cost based on current level
-      // RR Candy moves: 1000 PP for Level 1 → Level 2
-      // Regular moves: 100 PP for Level 1 → Level 2
-      // Then multiplied by the respective multiplier for each level
-      const isRRCandyMove = moveId.startsWith('rr-candy-');
-      const basePrice = isRRCandyMove ? 1000 : 100; // 1000 PP for RR Candy moves, 100 PP for regular moves
+      // Fixed Skills & Mastery PP table (shared source of truth — never trust client-passed prices)
       const nextLevel = move.masteryLevel + 1;
-      let upgradeCost: number;
-      if (nextLevel === 2) {
-        // Level 1 → Level 2: base price
-        upgradeCost = basePrice;
-      } else if (nextLevel === 3) {
-        // Level 2 → Level 3: base * 2
-        upgradeCost = basePrice * 2;
-      } else if (nextLevel === 4) {
-        // Level 3 → Level 4: base * 4
-        upgradeCost = basePrice * 4;
-      } else if (nextLevel === 5) {
-        // Level 4 → Level 5: base * 8
-        upgradeCost = basePrice * 8;
-      } else if (nextLevel === 6) {
-        // Level 5 → Level 6 (Ascend): base * 16
-        upgradeCost = basePrice * 16;
-      } else if (nextLevel === 7) {
-        // Level 6 → Level 7: base * 32
-        upgradeCost = basePrice * 32;
-      } else if (nextLevel === 8) {
-        // Level 7 → Level 8: base * 64
-        upgradeCost = basePrice * 64;
-      } else if (nextLevel === 9) {
-        // Level 8 → Level 9: base * 128
-        upgradeCost = basePrice * 128;
-      } else if (nextLevel === 10) {
-        // Level 9 → Level 10: base * 256
-        upgradeCost = basePrice * 256;
-      } else {
-        upgradeCost = basePrice;
+      const upgradeCost = getSkillUpgradeCost(nextLevel);
+      if (upgradeCost == null) {
+        setError('Move cannot be upgraded (invalid level)');
+        return;
       }
 
-      // Check if player has enough PP
-      console.log('💰 upgradeMove: Checking PP', { upgradeCost, currentPP: vault.currentPP, hasEnough: vault.currentPP >= upgradeCost });
-      if (vault.currentPP < upgradeCost) {
-        console.error('❌ upgradeMove: Insufficient PP', { upgradeCost, currentPP: vault.currentPP });
-        setError(`Insufficient PP! Need ${upgradeCost}, have ${vault.currentPP}`);
+      const isRRCandyMove = moveId.startsWith('rr-candy-');
+
+      // Re-read vault PP so deduction is based on latest balance
+      const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const freshVaultDoc = await getDoc(vaultRef);
+      const freshPP = freshVaultDoc.exists()
+        ? Math.floor(Number(freshVaultDoc.data()?.currentPP) || 0)
+        : Math.floor(Number(vault.currentPP) || 0);
+
+      console.log('💰 upgradeMove: Checking PP', { upgradeCost, currentPP: freshPP, hasEnough: freshPP >= upgradeCost });
+      if (freshPP < upgradeCost) {
+        console.error('❌ upgradeMove: Insufficient PP', { upgradeCost, currentPP: freshPP });
+        setError(`Insufficient PP! Need ${upgradeCost}, have ${freshPP}`);
         return;
       }
       
@@ -3334,7 +3313,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Calculate random damage boost based on the new level (after upgrade)
-      const newLevel = move.masteryLevel + 1;
+      const newLevel = nextLevel;
       let damageBoostMultiplier: number;
       
       switch (newLevel) {
@@ -3495,9 +3474,8 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updatedMoves: updatedMoves.find(m => m.id === moveId)
       });
 
-      // Deduct PP from vault
-      const vaultRef = doc(db, 'vaults', currentUser.uid);
-      const newPP = vault.currentPP - upgradeCost;
+      // Deduct PP from vault (never go negative)
+      const newPP = Math.max(0, freshPP - upgradeCost);
       await updateDoc(vaultRef, { 
         currentPP: newPP
       });
@@ -3591,7 +3569,7 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const boostInfo = boostedProperties.length > 0 
         ? `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)\n\n${boostedProperties.join('\n')}`
         : `\n\nBoost: ${boostPercent}% (${damageBoostMultiplier.toFixed(2)}x multiplier)`;
-      alert(`✅ Successfully upgraded ${move.name} to Level ${newLevel}!${boostInfo}`);
+      alert(`✅ ${getSkillUpgradeSuccessMessage(move.name, newLevel)}${boostInfo}`);
       
       // Recalculate power level after move upgrade (if skill is equipped)
       try {
@@ -3728,26 +3706,12 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
-      // Calculate exponential upgrade cost based on current level
-      // Base price: 100 PP for Level 1 → Level 2
-      // Then multiplied by the respective multiplier for each level
-      const basePrice = 100;
+      // Same fixed PP table as Skills & Mastery (levels 2–5)
       const nextLevel = card.masteryLevel + 1;
-      let upgradeCost: number;
-      if (nextLevel === 2) {
-        // Level 1 → Level 2: base price
-        upgradeCost = basePrice;
-      } else if (nextLevel === 3) {
-        // Level 2 → Level 3: base * 2
-        upgradeCost = basePrice * 2;
-      } else if (nextLevel === 4) {
-        // Level 3 → Level 4: base * 4
-        upgradeCost = basePrice * 4;
-      } else if (nextLevel === 5) {
-        // Level 4 → Level 5: base * 8
-        upgradeCost = basePrice * 8;
-      } else {
-        upgradeCost = basePrice;
+      const upgradeCost = getSkillUpgradeCost(nextLevel);
+      if (upgradeCost == null) {
+        setError('Action card cannot be upgraded (invalid level)');
+        return;
       }
 
       // Check if player has enough PP
@@ -3797,18 +3761,19 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Deduct PP from vault
       const vaultRef = doc(db, 'vaults', currentUser.uid);
+      const newPP = Math.max(0, vault.currentPP - upgradeCost);
       await updateDoc(vaultRef, { 
-        currentPP: vault.currentPP - upgradeCost 
+        currentPP: newPP 
       });
 
       // Update vault state
-      setVault({ ...vault, currentPP: vault.currentPP - upgradeCost });
+      setVault({ ...vault, currentPP: newPP });
 
       const boostPercent = ((boostMultiplier - 1) * 100).toFixed(1);
       console.log(`Upgraded ${card.name} to level ${nextLevel} for ${upgradeCost} PP with ${boostPercent}% boost`);
       
       // Show success message with boost info
-      alert(`✅ Successfully upgraded ${card.name} to Level ${nextLevel}!\n\nEffect boost: ${boostPercent}% (${boostMultiplier.toFixed(2)}x multiplier)\n\nStrength: ${currentStrength} → ${newStrength}`);
+      alert(`✅ ${getSkillUpgradeSuccessMessage(card.name, nextLevel)}\n\nEffect boost: ${boostPercent}% (${boostMultiplier.toFixed(2)}x multiplier)\n\nStrength: ${currentStrength} → ${newStrength}`);
     } catch (err) {
       console.error('Error upgrading action card:', err);
       setError('Failed to upgrade action card');
@@ -5237,14 +5202,9 @@ export const BattleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           selectedMove?.name != null ? getMoveNameSync(selectedMove.name) || selectedMove.name : '';
         const moveForDaily =
           selectedMove && dailyMoveLabel ? { ...selectedMove, name: dailyMoveLabel } : selectedMove;
-        if (moveForDaily && moveCountsForDailyElementalChallenge(moveForDaily)) {
-          updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
-            console.error('❌ [Daily Challenge] Error updating use_elemental_move progress:', err)
-          );
-        }
-        if (moveForDaily && moveCountsForDailyManifestChallenge(moveForDaily)) {
-          updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
-            console.error('❌ [Daily Challenge] Error updating use_manifest_ability progress:', err)
+        if (moveForDaily) {
+          trackDailyChallengeForSkillUse(currentUser.uid, moveForDaily).catch((err) =>
+            console.error('❌ [Daily Challenge] Error updating skill-use progress:', err)
           );
         }
       }

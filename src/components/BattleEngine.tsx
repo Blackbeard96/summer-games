@@ -29,12 +29,8 @@ import BattleAnimations from './BattleAnimations';
 import { resolveSkillVfxConfig, getStoredVfxQuality } from '../skillAnimation';
 import { calculateTurnOrder, getMovePriority, getDefaultSpeed, TurnOrderParticipant } from '../utils/turnOrder';
 import { selectOptimalCPUMove, selectOptimalCPUTarget, BattleSituation } from '../utils/cpuMoveSelection';
-import { grantPlayerProfileXp, trackPlayerAction } from '../utils/playerProgressionRewards';
+import { grantPlayerProfileXp, trackDailyChallengeForSkillUse, trackPlayerAction } from '../utils/playerProgressionRewards';
 import { isSelfDirectedBattleMove } from '../utils/battleSkillTargetResolution';
-import {
-  moveCountsForDailyElementalChallenge,
-  moveCountsForDailyManifestChallenge,
-} from '../utils/dailyChallengeShared';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { formatOpponentName, getBaseOpponentName } from '../utils/opponentNameFormatter';
@@ -408,6 +404,14 @@ function collectSummonEffectsForTurnOrderMove(playerMove: Move): Array<Record<st
   return [];
 }
 
+/** Details of the hit/effect that reduced the player’s vault health to 0. */
+export interface BattleFinishingBlow {
+  attackerName: string;
+  moveName: string;
+  damage?: number;
+  cause: 'attack' | 'status' | 'time';
+}
+
 interface BattleEngineProps {
   onBattleEnd: (result: 'victory' | 'defeat' | 'escape', winnerId?: string, loserId?: string) => void;
   onMoveConsumption?: () => Promise<boolean>;
@@ -466,6 +470,13 @@ interface BattleState {
   currentTurnIndex?: number; // Current position in turn order
   // Cooldown tracking: [userId][skillId] = turns remaining
   cooldowns?: { [userId: string]: { [skillId: string]: number } };
+  /** Set when the local player loses — used by the defeat overlay. */
+  finishingBlow?: BattleFinishingBlow | null;
+  /**
+   * True when phase is 'defeat' because the player lost (not Ice Golem cutscene pause).
+   * Controls whether the defeat overlay is shown.
+   */
+  showDefeatOverlay?: boolean;
 }
 
 
@@ -571,8 +582,55 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     isAnimating: false,
     turnOrder: undefined,
     currentTurnIndex: undefined,
-    cooldowns: {} // Initialize cooldowns tracking
+    cooldowns: {}, // Initialize cooldowns tracking
+    finishingBlow: null,
+    showDefeatOverlay: false,
   });
+
+  /** Prevent double onBattleEnd (Continue button + auto-timeout, or duplicate defeat paths). */
+  const battleEndReportedRef = useRef(false);
+  const reportBattleEnd = useCallback(
+    (result: 'victory' | 'defeat' | 'escape', winnerId?: string, loserId?: string) => {
+      if (battleEndReportedRef.current) return;
+      battleEndReportedRef.current = true;
+      onBattleEnd(result, winnerId, loserId);
+    },
+    [onBattleEnd]
+  );
+
+  /** Enter defeat phase with finishing-blow details. Non-PvP waits for overlay Continue / timeout. */
+  const enterPlayerDefeat = useCallback(
+    (args: {
+      /** Full replacement log (preferred when caller already built newLog). */
+      battleLog?: string[];
+      /** Appended onto current log when battleLog is omitted. */
+      appendLog?: string[];
+      finishingBlow: BattleFinishingBlow;
+      winnerId?: string;
+      loserId?: string;
+    }) => {
+      setBattleState((prev) => {
+        const nextLog = args.battleLog ?? [...prev.battleLog, ...(args.appendLog ?? [])];
+        if (onBattleLogUpdate) {
+          onBattleLogUpdate(nextLog);
+        }
+        return {
+          ...prev,
+          phase: 'defeat',
+          battleLog: nextLog,
+          isPlayerTurn: false,
+          finishingBlow: args.finishingBlow,
+          showDefeatOverlay: true,
+          currentAnimation: null,
+          isAnimating: false,
+        };
+      });
+      if (isPvP) {
+        reportBattleEnd('defeat', args.winnerId, args.loserId);
+      }
+    },
+    [isPvP, reportBattleEnd, onBattleLogUpdate]
+  );
   const [turnActionsUsed, setTurnActionsUsed] = useState<{ player: boolean; construct: boolean }>({
     player: false,
     construct: false
@@ -619,14 +677,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               phase: 'victory',
               battleLog: [...prev.battleLog, '⏰ Time expired!']
             }));
-            onBattleEnd('victory', currentUser.uid, opponentUid);
+            reportBattleEnd('victory', currentUser.uid, opponentUid);
           } else if (endCheck.winnerUid === opponentUid) {
-            setBattleState(prev => ({
-              ...prev,
-              phase: 'defeat',
-              battleLog: [...prev.battleLog, '⏰ Time expired!']
-            }));
-            onBattleEnd('defeat', opponentUid, currentUser.uid);
+            enterPlayerDefeat({
+              appendLog: ['⏰ Time expired!'],
+              finishingBlow: {
+                attackerName: propOpponent?.name || 'your opponent',
+                moveName: 'Time Expired',
+                cause: 'time',
+              },
+              winnerId: opponentUid,
+              loserId: currentUser.uid,
+            });
           }
         }
       }
@@ -635,7 +697,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [isSpacesMode, spacesModeState, currentUser, onBattleEnd]);
+  }, [isSpacesMode, spacesModeState, currentUser, reportBattleEnd, enterPlayerDefeat, propOpponent?.name]);
 
   // Single opponent state (for single player mode)
   const [opponent, setOpponent] = useState<Opponent>(propOpponent || {
@@ -1080,20 +1142,35 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             const opponentName = opponent?.name || opponents?.[0]?.name || 'your opponent';
             newLog.push(`💀 Defeat! ${opponentName} has successfully defeated you!`);
           }
-          
-          setBattleState(prev => ({
-            ...prev,
-            phase: 'defeat',
+
+          const statusKiller = effects.find(
+            (e) =>
+              (e.type === 'burn' || e.type === 'poison') &&
+              ((e.damagePerTurn || 0) > 0 || (e.intensity || 0) > 0)
+          );
+          const statusMoveName =
+            statusKiller?.type === 'poison'
+              ? 'Poison'
+              : statusKiller?.type === 'burn'
+                ? 'Burn'
+                : 'Status Effect';
+          const attackerName =
+            (isPvP && opponent?.name) ||
+            opponent?.name ||
+            opponents?.[0]?.name ||
+            'Status Effect';
+
+          enterPlayerDefeat({
             battleLog: newLog,
-            isPlayerTurn: false
-          }));
-          
-          // End battle immediately
-          if (isPvP && opponent && currentUser) {
-            onBattleEnd('defeat', opponent.id, currentUser.uid);
-          } else {
-            onBattleEnd('defeat');
-          }
+            finishingBlow: {
+              attackerName,
+              moveName: statusMoveName,
+              damage: healthDamage > 0 ? healthDamage : totalDamage,
+              cause: 'status',
+            },
+            winnerId: isPvP && opponent ? opponent.id : undefined,
+            loserId: isPvP && currentUser ? currentUser.uid : undefined,
+          });
           return { newLog, skipTurn: true };
         }
       }
@@ -1320,7 +1397,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       }
     });
     return true;
-  }, [playerEffects, opponentEffects]);
+  }, [playerEffects, opponentEffects, enterPlayerDefeat, opponent, opponents, vault, isPvP, currentUser, playerDisplayName, isForestStageActive, updateVault, refreshVaultData, equippedArtifacts, equippableCatalogRaw, universalLawEffects]);
 
   // Fetch user level and photo
   useEffect(() => {
@@ -2054,18 +2131,19 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           
           if (updatedVaultHealth <= 0) {
             newLog.push('💀 Your vault health has been completely depleted!');
-          newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
-          setBattleState(prev => ({
-            ...prev,
-            phase: 'defeat',
-            battleLog: newLog,
-            isPlayerTurn: false
-          }));
-          
-          if (isPvP && currentUser) {
-            onBattleEnd('defeat', opponent.id, currentUser.uid);
-          }
-          return;
+            newLog.push(`💀 Defeat! ${opponent.name} won the PvP battle!`);
+            const moveName = moveData.moveName || 'Unknown Move';
+            enterPlayerDefeat({
+              battleLog: newLog,
+              finishingBlow: {
+                attackerName: opponent.name,
+                moveName,
+                cause: 'attack',
+              },
+              winnerId: opponent.id,
+              loserId: currentUser?.uid,
+            });
+            return;
           }
         }
       } catch (error) {
@@ -2102,7 +2180,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       isPlayerTurn: true,
       turnCount: prev.turnCount + 1
     }));
-  }, [vault, battleState.phase, battleState.battleLog, battleState.turnCount, opponent, isPvP, currentUser, updateVault, onBattleEnd]);
+  }, [vault, battleState.phase, battleState.battleLog, battleState.turnCount, opponent, isPvP, currentUser, updateVault, enterPlayerDefeat]);
 
   // Poll for opponent moves in PvP battles (instead of onSnapshot to avoid Firestore internal errors)
   useEffect(() => {
@@ -3973,6 +4051,15 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
         // Fallback to currentUser displayName, then to 'Player'
         const playerName = participant.name || playerDisplayName;
         console.log(`🎮 Executing player move for ${playerName} (${participant.id}): ${playerMove.name} on target ${targetId}`);
+
+        // Daily challenges: credit Manifest / Elemental once when this client's skill resolves in turn order
+        // (mission / Island Raid skip animation-path tracking to avoid double-counting).
+        if (isCurrentPlayer && currentUser?.uid) {
+          const resolvedName = getMoveNameSync(playerMove.name) || playerMove.name;
+          trackDailyChallengeForSkillUse(currentUser.uid, { ...playerMove, name: resolvedName }).catch((err) =>
+            console.error('Error updating daily challenge progress for turn-order skill use:', err)
+          );
+        }
         
         // Calculate damage using proper damage calculation system
         let elementMatchLog: string | null = null;
@@ -4302,16 +4389,53 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
               const cap =
                 playerMove.id === 'rr-candy-on-off-shields-on'
                   ? rrCandyShieldOnEffectiveMax(maxForSkills, curUnified)
-                  : Math.max(maxForSkills, Math.floor(vault.shieldStrength || 0), 1);
+                  : Math.max(maxForSkills, curUnified, 1);
+              // Use unified current shields (ally row may be more up-to-date than vault after damage)
               const curClamped =
                 playerMove.id === 'rr-candy-on-off-shields-on'
                   ? curUnified
-                  : Math.max(0, Math.min(maxForSkills, Math.floor(vault.shieldStrength || 0)));
+                  : Math.max(0, Math.min(maxForSkills, curUnified));
               const newShield = Math.min(cap, curClamped + shieldAmount);
               if (shieldAmount > 0) {
-                updateVault({ shieldStrength: newShield }).then(() => refreshVaultData()).catch(err =>
-                  console.error('Failed to apply self-directed shield boost to vault:', err)
-                );
+                console.log('🛡️ [Turn-order] Applying self shield restore:', {
+                  move: playerMove.name,
+                  shieldAmount,
+                  from: curClamped,
+                  to: newShield,
+                  cap,
+                });
+                try {
+                  await updateVault({ shieldStrength: newShield });
+                  await refreshVaultData();
+                } catch (err) {
+                  console.error('Failed to apply self-directed shield boost to vault:', err);
+                }
+                // Keep ally row in sync immediately (Island Raid reconcile previously discarded vault-only restores)
+                if (onAlliesUpdate) {
+                  setAllies((prev) => {
+                    const next = prev.map((ally) => {
+                      if (ally.id !== currentUser.uid || ally.isSummon) return ally;
+                      return {
+                        ...ally,
+                        shieldStrength: newShield,
+                        maxShieldStrength: Math.max(ally.maxShieldStrength || 0, maxForSkills),
+                      };
+                    });
+                    setTimeout(() => onAlliesUpdate(next), 0);
+                    return next;
+                  });
+                } else {
+                  setAllies((prev) =>
+                    prev.map((ally) => {
+                      if (ally.id !== currentUser.uid || ally.isSummon) return ally;
+                      return {
+                        ...ally,
+                        shieldStrength: newShield,
+                        maxShieldStrength: Math.max(ally.maxShieldStrength || 0, maxForSkills),
+                      };
+                    })
+                  );
+                }
               }
             }
           }
@@ -4651,6 +4775,25 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
           }
           
           console.log(`📝 [CPU Move] Adding to battle log: ${logMessage}`);
+
+          // Local player vault emptied — show defeat screen with finishing move
+          if (isLocalPlayer && newTargetHealth <= 0) {
+            enterPlayerDefeat({
+              appendLog: [
+                logMessage,
+                ...(cpuElementMatchLog ? [cpuElementMatchLog] : []),
+                '💀 Your vault health has been completely depleted!',
+                `💀 Defeat! ${formatOpponentName(cpuOpponent.name)} has successfully defeated you!`,
+              ],
+              finishingBlow: {
+                attackerName: formatOpponentName(cpuOpponent.name),
+                moveName,
+                damage: totalDamage > 0 ? totalDamage : undefined,
+                cause: 'attack',
+              },
+            });
+            return; // Stop remaining turn-order moves
+          }
           
           // Update battle log immediately using functional state update
           setBattleState(prev => {
@@ -4757,6 +4900,10 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     universalLawEffects,
     equippableCatalogRaw,
     userElement,
+    enterPlayerDefeat,
+    onAlliesUpdate,
+    updateVault,
+    equippedArtifacts,
   ]);
 
   // CRITICAL FIX: Ensure isPlayerTurn is true during selection phase in multiplayer
@@ -5227,19 +5374,18 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
     const moveName = getMoveNameSync(move.name) || move.name;
     console.log(`[BattleEngine] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
-    // Live Events: only credit daily challenges after Firestore accepts the move (avoids false negatives
-    // when tracking ran but `applyInSessionMove` later failed, and aligns progress with real usage).
-    if (currentUser && !isInSession) {
-      if (moveCountsForDailyElementalChallenge(move)) {
-        trackPlayerAction(currentUser.uid, 'ELEMENTAL_MOVE_USED', 1).catch(err =>
-          console.error('Error updating daily challenge progress:', err)
-        );
-      }
-      if (moveCountsForDailyManifestChallenge({ ...move, name: moveName })) {
-        trackPlayerAction(currentUser.uid, 'MANIFEST_SKILL_USED', 1).catch(err =>
-          console.error('Error updating daily challenge progress for manifest ability:', err)
-        );
-      }
+    // Live Events: credited in applyInSessionMove after Firestore accepts the move.
+    // When turn-order execution will resolve this client's skill (mission / Island Raid / true MP),
+    // credit there instead so animation + turn-order do not double-count the same use.
+    const humanPlayersForDaily = countHumanAlliesForTurnRules(allies, currentUser?.uid);
+    const isSinglePlayerWithAIForDaily =
+      isMultiplayer && humanPlayersForDaily === 1 && allies.length > 1;
+    const turnOrderWillResolvePlayerMove =
+      isMultiplayer && !isInSession && !isSinglePlayerWithAIForDaily;
+    if (currentUser && !isInSession && !turnOrderWillResolvePlayerMove) {
+      trackDailyChallengeForSkillUse(currentUser.uid, { ...move, name: moveName }).catch((err) =>
+        console.error('Error updating daily challenge progress for skill use:', err)
+      );
     }
     
     if (currentUser?.uid && !isConstructSkill) {
@@ -6377,12 +6523,16 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             }));
             onBattleEnd('victory', currentUser.uid, targetOpponent.id);
           } else if (endCheck.winnerUid === targetOpponent.id) {
-            setBattleState(prev => ({
-              ...prev,
-              phase: 'defeat',
-              battleLog: newLog
-            }));
-            onBattleEnd('defeat', targetOpponent.id, currentUser.uid);
+            enterPlayerDefeat({
+              battleLog: newLog,
+              finishingBlow: {
+                attackerName: targetOpponent.name,
+                moveName: 'Space Destruction',
+                cause: 'attack',
+              },
+              winnerId: targetOpponent.id,
+              loserId: currentUser.uid,
+            });
           }
           return;
         }
@@ -7919,19 +8069,17 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       } else {
         newLog.push(`💀 Defeat! ${opp.name} has successfully raided your vault!`);
       }
-      setBattleState(prev => ({
-        ...prev,
-        phase: 'defeat',
+      enterPlayerDefeat({
         battleLog: newLog,
-        isPlayerTurn: false
-      }));
-      
-      // For PvP, pass winner/loser IDs
-      if (isPvP && currentUser) {
-        onBattleEnd('defeat', opp.id, currentUser.uid);
-      } else {
-        onBattleEnd('defeat');
-      }
+        finishingBlow: {
+          attackerName: opp.name,
+          moveName: opponentMove.name || 'Unknown Move',
+          damage: totalDamage > 0 ? totalDamage : undefined,
+          cause: 'attack',
+        },
+        winnerId: isPvP ? opp.id : undefined,
+        loserId: isPvP && currentUser ? currentUser.uid : undefined,
+      });
       return;
     }
     }
@@ -8453,19 +8601,22 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
   useEffect(() => {
     if (!isPvP) {
       if (battleState.phase === 'victory') {
-        setTimeout(() => onBattleEnd('victory'), 3000);
-      } else if (battleState.phase === 'defeat') {
-        setTimeout(() => onBattleEnd('defeat'), 3000);
+        const t = setTimeout(() => reportBattleEnd('victory'), 3000);
+        return () => clearTimeout(t);
+      } else if (battleState.phase === 'defeat' && battleState.showDefeatOverlay) {
+        // Longer pause so players can read the finishing blow
+        const t = setTimeout(() => reportBattleEnd('defeat'), 8000);
+        return () => clearTimeout(t);
       }
     }
-  }, [battleState.phase, onBattleEnd, isPvP]);
+  }, [battleState.phase, battleState.showDefeatOverlay, reportBattleEnd, isPvP]);
 
   // Handle escape
   const handleEscape = () => {
     console.log('BattleEngine: handleEscape called');
     
     // Immediately call onBattleEnd - don't wait
-    onBattleEnd('escape');
+    reportBattleEnd('escape');
   };
 
   // Handle artifact used (e.g., Health Potion ends turn)
@@ -9296,7 +9447,7 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
       )}
 
       {/* Defeat Overlay - Show when player health reaches 0 */}
-      {battleState.phase === 'defeat' && !isPvP && (
+      {battleState.phase === 'defeat' && battleState.showDefeatOverlay && !isPvP && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -9318,37 +9469,86 @@ const BattleEngine: React.FC<BattleEngineProps> = ({
             textAlign: 'center',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
             border: '3px solid #fbbf24',
-            maxWidth: '500px',
+            maxWidth: '520px',
+            width: '90%',
             animation: 'defeatPulse 2s infinite'
           }}>
             <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💀</div>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>
               DEFEAT
             </div>
-            <div style={{ fontSize: '1.1rem', opacity: 0.95, lineHeight: '1.6', marginBottom: '1.5rem' }}>
-              {(() => {
-                // Check if this is a Hela battle (opponent name contains "Hela" or "Ice Golem")
-                const opponentName = opponent?.name?.toLowerCase() || '';
-                const hasHelaOpponent = opponentName.includes('hela');
-                const hasIceGolemOpponents = opponents?.some(opp => {
+            {(() => {
+              const blow = battleState.finishingBlow;
+              const opponentName = blow?.attackerName
+                || opponent?.name
+                || opponents?.[0]?.name
+                || 'your opponent';
+              const opponentNameLower = opponentName.toLowerCase();
+              const hasHelaOpponent = opponentNameLower.includes('hela')
+                || opponents?.some((opp) => {
                   const oppName = opp.name?.toLowerCase() || '';
                   return oppName.includes('hela') || oppName.includes('ice golem');
                 });
-                const isHelaBattle = hasHelaOpponent || hasIceGolemOpponents;
-                
-                if (isHelaBattle) {
-                  return "You were crushed by Hela's Overwhelming Might. Level up and try again.";
-                } else {
-                  // Generic defeat message for other battles
-                  const defeatedBy = opponent?.name || opponents?.[0]?.name || 'your opponent';
-                  return `You were defeated by ${defeatedBy}! Level up and try again.`;
-                }
-              })()}
-            </div>
+
+              return (
+                <>
+                  <div style={{ fontSize: '1.1rem', opacity: 0.95, lineHeight: '1.6', marginBottom: '1rem' }}>
+                    {hasHelaOpponent && !blow
+                      ? "You were crushed by Hela's Overwhelming Might. Level up and try again."
+                      : `You were defeated by ${opponentName}.`}
+                  </div>
+                  {blow && blow.cause !== 'time' && (
+                    <div
+                      style={{
+                        background: 'rgba(0, 0, 0, 0.35)',
+                        border: '1px solid rgba(251, 191, 36, 0.45)',
+                        borderRadius: '0.75rem',
+                        padding: '1rem 1.25rem',
+                        marginBottom: '1.25rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: '0.75rem',
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                          opacity: 0.75,
+                          marginBottom: '0.35rem',
+                        }}
+                      >
+                        {blow.cause === 'status' ? 'Finished by status' : 'Finishing blow'}
+                      </div>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#fbbf24' }}>
+                        {blow.moveName}
+                      </div>
+                      {typeof blow.damage === 'number' && blow.damage > 0 && (
+                        <div style={{ fontSize: '0.9rem', opacity: 0.85, marginTop: '0.35rem' }}>
+                          {blow.damage} damage
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {blow?.cause === 'time' && (
+                    <div style={{ fontSize: '1rem', opacity: 0.9, marginBottom: '1.25rem' }}>
+                      Time ran out before you could finish the fight.
+                    </div>
+                  )}
+                  {!blow && (
+                    <div style={{ fontSize: '0.95rem', opacity: 0.85, marginBottom: '1.25rem' }}>
+                      Level up and try again.
+                    </div>
+                  )}
+                  {blow && blow.cause !== 'time' && (
+                    <div style={{ fontSize: '0.95rem', opacity: 0.85, marginBottom: '0.5rem' }}>
+                      Level up and try again.
+                    </div>
+                  )}
+                </>
+              );
+            })()}
             <button
               onClick={() => {
-                // Close the modal and end the battle
-                onBattleEnd('defeat');
+                reportBattleEnd('defeat');
               }}
               style={{
                 background: 'rgba(255, 255, 255, 0.2)',

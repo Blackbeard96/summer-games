@@ -17,7 +17,7 @@ import { debug } from '../utils/debug';
 import { createLiveFeedMilestone } from '../services/liveFeed';
 import { shouldShareEvent } from '../services/liveFeedPrivacy';
 import { grantArtifactToPlayer } from '../utils/artifactCompensation';
-import { mirrorProfileXpToProgressionSystems } from '../utils/playerProgressionRewards';
+import { mirrorProfileXpToProgressionSystems, trackPlayerAction } from '../utils/playerProgressionRewards';
 import CoopBattleRosterPanel from './coop/CoopBattleRosterPanel';
 import { transactionLeaveIslandRaidBattleRoom } from '../services/coopBattleRoomService';
 
@@ -203,8 +203,15 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
 
   // Keep the local player's ally row in sync with BattleContext vault (Shield ON, heals, etc.) without
   // waiting for the next islandRaidBattleRooms snapshot (which can race with getDoc vault reads).
+  const prevVaultShieldRef = useRef<number | null>(null);
   useEffect(() => {
     if (!vault || !currentUser?.uid) return;
+    const vShSnapshot = Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
+    const prevVSh = prevVaultShieldRef.current;
+    const vaultShieldIncreased = prevVSh != null && vShSnapshot > prevVSh;
+    // Update after reading so the next vault change can detect increases (restores).
+    prevVaultShieldRef.current = vShSnapshot;
+
     setAllies((prev) => {
       if (prev.length === 0) return prev;
       const maxS = Math.max(0, Math.floor(Number(vault.maxShieldStrength) || 0));
@@ -214,13 +221,16 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
         const allyMax = Math.max(0, Math.floor(Number(a.maxShieldStrength) || 0));
         const mergedMax = Math.max(maxS, allyMax);
         const cap = mergedMax > 0 ? mergedMax : Math.max(allyMax, maxS, 1);
-        const vSh = Math.max(0, Math.floor(Number(vault.shieldStrength) || 0));
+        const vSh = vShSnapshot;
         const aSh = Math.max(0, Math.floor(Number(a.shieldStrength) || 0));
-        // Reconcile: hydrate from vault when ally row is empty; if battle row is ahead of vault (Shield ON /
-        // heals applied in-engine before BattleContext catches up), use ally up to cap; otherwise min so
-        // stale high vault cannot override local damage.
-        const nextSh =
-          aSh === 0 && vSh > 0
+
+        // Reconcile shields:
+        // - If vault just increased (Shield Restore / Construct Shield / Shield ON), trust vault.
+        // - If ally is ahead of vault (in-engine boost before BattleContext catches up), keep ally.
+        // - Otherwise use min so a stale high vault cannot undo local damage.
+        const nextSh = vaultShieldIncreased
+          ? Math.min(vSh, cap)
+          : aSh === 0 && vSh > 0
             ? Math.min(vSh, cap)
             : aSh > vSh
               ? Math.min(aSh, cap)
@@ -1937,6 +1947,15 @@ const IslandRaidBattle: React.FC<IslandRaidBattleProps> = ({ gameId, lobbyId, on
           });
           
           await Promise.all(rewardPromises);
+
+          // Daily challenge: Win 1 Battle (missions / Island Raid never hit BattleEngine's solo victory path)
+          await Promise.all(
+            players.map((playerId: string) =>
+              trackPlayerAction(playerId, 'BATTLE_WON', 1).catch((err) =>
+                console.error(`Error tracking BATTLE_WON for ${playerId}:`, err)
+              )
+            )
+          );
           
           if (currentUser) {
             const studentRef = doc(db, 'students', currentUser.uid);

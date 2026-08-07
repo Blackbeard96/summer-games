@@ -12,7 +12,9 @@
 
 import { doc, getDoc, increment, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import type { Move } from '../types/battle';
 import { awardBattlePassXpForDeployedSeason } from './awardBattlePassXp';
+import { challengeTypesForSkillUse } from './dailyChallengeShared';
 import { updateChallengeProgressByType } from './dailyChallengeTracker';
 
 /** Standardized hooks for daily challenges (Firestore). Prefer this over ad-hoc `updateChallengeProgressByType` in gameplay code. */
@@ -52,6 +54,36 @@ export async function trackPlayerAction(
       return;
     default:
       return;
+  }
+}
+
+/**
+ * Credit Manifest / Elemental daily challenges for one skill use (mutually exclusive).
+ * Prefer this over calling both MANIFEST_SKILL_USED and ELEMENTAL_MOVE_USED separately.
+ */
+export async function trackDailyChallengeForSkillUse(
+  userId: string,
+  move: Pick<
+    Move,
+    | 'category'
+    | 'manifestType'
+    | 'elementalAffinity'
+    | 'id'
+    | 'name'
+    | 'rrCandySkillId'
+    | 'rrCandyNodeId'
+    | 'effectKey'
+  >,
+  value: number = 1
+): Promise<void> {
+  if (!userId || value <= 0) return;
+  const types = challengeTypesForSkillUse(move);
+  for (const type of types) {
+    if (type === 'use_manifest_ability') {
+      await trackPlayerAction(userId, 'MANIFEST_SKILL_USED', value);
+    } else if (type === 'use_elemental_move') {
+      await trackPlayerAction(userId, 'ELEMENTAL_MOVE_USED', value);
+    }
   }
 }
 

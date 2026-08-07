@@ -544,6 +544,8 @@ export const DEFAULT_OPPONENTS: CPUOpponent[] = [
 
 const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, onClose }) => {
   const [opponents, setOpponents] = useState<CPUOpponent[]>(DEFAULT_OPPONENTS);
+  /** Default catalog ids the admin has deleted — prevents load-merge from re-adding them. */
+  const [removedOpponentIds, setRemovedOpponentIds] = useState<string[]>([]);
   const [selectedOpponent, setSelectedOpponent] = useState<string | null>(null);
   const [editingMove, setEditingMove] = useState<string | null>(null);
   const [moveEdits, setMoveEdits] = useState<{ [key: string]: Partial<CPUOpponentMove> }>({});
@@ -568,14 +570,28 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
       
       if (cpuMovesDoc.exists()) {
         const data = cpuMovesDoc.data();
+        const removedIds: string[] = Array.isArray(data.removedOpponentIds)
+          ? data.removedOpponentIds.filter((id: unknown): id is string => typeof id === 'string')
+          : [];
+        setRemovedOpponentIds(removedIds);
+        const removedSet = new Set(removedIds);
+
         if (data.opponents && Array.isArray(data.opponents)) {
-          // Merge with defaults to ensure new opponents are included
+          // Merge with defaults to ensure new opponents are included (skip intentionally deleted ones)
           const existingOpponentIds = new Set(data.opponents.map((opp: CPUOpponent) => opp.id));
-          const newOpponents = DEFAULT_OPPONENTS.filter(opp => !existingOpponentIds.has(opp.id));
+          const newOpponents = DEFAULT_OPPONENTS.filter(
+            (opp) => !existingOpponentIds.has(opp.id) && !removedSet.has(opp.id)
+          );
           
+          // Drop any opponents that were intentionally deleted (stale docs)
+          const withoutRemoved = data.opponents.filter(
+            (opp: CPUOpponent) => !removedSet.has(opp.id)
+          );
+          const droppedRemoved = withoutRemoved.length !== data.opponents.length;
+
           // Update "Zombie" to "Unpowered Zombie" if it exists
           let nameWasUpdated = false;
-          const updatedOpponents = data.opponents.map((opp: CPUOpponent) => {
+          const updatedOpponents = withoutRemoved.map((opp: CPUOpponent) => {
             if (opp.id === 'zombie' && opp.name === 'Zombie') {
               console.log('🔄 Updating "Zombie" to "Unpowered Zombie" in Firestore');
               nameWasUpdated = true;
@@ -587,26 +603,31 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
           const mergedOpponents = [...updatedOpponents, ...newOpponents];
           setOpponents(mergedOpponents);
           
-          // If name was updated or new opponents were added, save the updated list
-          if (newOpponents.length > 0 || nameWasUpdated) {
+          // If name was updated, removals applied, or new opponents were added, save the updated list
+          if (newOpponents.length > 0 || nameWasUpdated || droppedRemoved) {
             const cleanedOpponents = removeUndefined(mergedOpponents);
-            await setDoc(cpuMovesRef, { opponents: cleanedOpponents });
+            await setDoc(cpuMovesRef, {
+              opponents: cleanedOpponents,
+              removedOpponentIds: removedIds,
+            });
             if (nameWasUpdated) {
               setSaveMessage(`✅ Updated "Zombie" to "Unpowered Zombie"!`);
-            } else {
+            } else if (newOpponents.length > 0) {
               setSaveMessage(`✅ Added ${newOpponents.length} new opponent(s) to the list!`);
             }
             setTimeout(() => setSaveMessage(''), 3000);
           }
         } else {
-          // Invalid data structure, use defaults
-          await setDoc(cpuMovesRef, { opponents: DEFAULT_OPPONENTS });
-          setOpponents(DEFAULT_OPPONENTS);
+          // Invalid data structure, use defaults (respect removals)
+          const seeded = DEFAULT_OPPONENTS.filter((opp) => !removedSet.has(opp.id));
+          await setDoc(cpuMovesRef, { opponents: seeded, removedOpponentIds: removedIds });
+          setOpponents(seeded);
         }
       } else {
         // Initialize with defaults
-        await setDoc(cpuMovesRef, { opponents: DEFAULT_OPPONENTS });
+        await setDoc(cpuMovesRef, { opponents: DEFAULT_OPPONENTS, removedOpponentIds: [] });
         setOpponents(DEFAULT_OPPONENTS);
+        setRemovedOpponentIds([]);
       }
     } catch (error) {
       console.error('Error loading CPU opponent moves:', error);
@@ -643,7 +664,10 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
       const cpuMovesRef = doc(db, 'adminSettings', 'cpuOpponentMoves');
       // Remove all undefined values before saving
       const cleanedOpponents = removeUndefined(opponents);
-      await setDoc(cpuMovesRef, { opponents: cleanedOpponents });
+      await setDoc(cpuMovesRef, {
+        opponents: cleanedOpponents,
+        removedOpponentIds,
+      });
       setSaveMessage('✅ CPU opponent moves saved successfully!');
       invalidateMoveOverridesCache();
       setTimeout(() => setSaveMessage(''), 3000);
@@ -788,11 +812,23 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
   };
 
   const handleRemoveOpponent = (opponentId: string) => {
-    setOpponents(prev => prev.filter(opp => opp.id !== opponentId));
+    const remaining = opponents.filter((o) => o.id !== opponentId);
+    setOpponents(remaining);
+    // Remember catalog defaults so load-merge does not re-add them after save.
+    const isDefaultCatalogId = DEFAULT_OPPONENTS.some((d) => d.id === opponentId);
+    if (isDefaultCatalogId) {
+      setRemovedOpponentIds((prev) => (prev.includes(opponentId) ? prev : [...prev, opponentId]));
+    }
     if (selectedOpponent === opponentId) {
-      const remaining = opponents.filter(o => o.id !== opponentId);
       setSelectedOpponent(remaining.length > 0 ? remaining[0].id : null);
     }
+  };
+
+  const confirmRemoveOpponent = (opponent: CPUOpponent) => {
+    const ok = window.confirm(
+      `Delete CPU enemy "${opponent.name}"?\n\nThis removes them from the admin list. Click Save to persist the deletion.`
+    );
+    if (ok) handleRemoveOpponent(opponent.id);
   };
 
   const handleOpponentPatch = (opponentId: string, patch: Partial<CPUOpponent>) => {
@@ -1317,6 +1353,29 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                         {elementTypeEmoji(opp.enemyType)}
                       </span>
                     ) : null}
+                    <button
+                      type="button"
+                      title={`Delete ${opp.name}`}
+                      aria-label={`Delete ${opp.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        confirmRemoveOpponent(opp);
+                      }}
+                      style={{
+                        flexShrink: 0,
+                        background: selectedOpponent === opp.id ? 'rgba(255,255,255,0.2)' : '#fee2e2',
+                        color: selectedOpponent === opp.id ? 'white' : '#b91c1c',
+                        border: selectedOpponent === opp.id ? '1px solid rgba(255,255,255,0.4)' : '1px solid #fecaca',
+                        borderRadius: '0.35rem',
+                        padding: '0.2rem 0.45rem',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      Delete
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1325,7 +1384,26 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                 {selectedOpponentData ? (
                   <>
                     <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f8fafc', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
-                      <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '1rem' }}>Opponent details</h4>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                        <h4 style={{ margin: 0, fontSize: '1rem' }}>Opponent details</h4>
+                        <button
+                          type="button"
+                          onClick={() => confirmRemoveOpponent(selectedOpponentData)}
+                          style={{
+                            background: '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '0.375rem',
+                            cursor: 'pointer',
+                            fontSize: '0.875rem',
+                            fontWeight: 600,
+                            flexShrink: 0,
+                          }}
+                        >
+                          Delete enemy
+                        </button>
+                      </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
                         <div>
                           <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Name</label>
@@ -1518,24 +1596,6 @@ const CPUOpponentMovesAdmin: React.FC<CPUOpponentMovesAdminProps> = ({ isOpen, o
                               if (err) err.remove();
                             }}
                           />
-                        </div>
-                      )}
-                      {selectedOpponentData.id.startsWith('custom-') && (
-                        <div style={{ marginTop: '0.75rem' }}>
-                          <button
-                            onClick={() => { if (window.confirm('Remove this opponent?')) handleRemoveOpponent(selectedOpponentData.id); }}
-                            style={{
-                              background: '#ef4444',
-                              color: 'white',
-                              border: 'none',
-                              padding: '0.35rem 0.75rem',
-                              borderRadius: '0.375rem',
-                              cursor: 'pointer',
-                              fontSize: '0.875rem'
-                            }}
-                          >
-                            Delete opponent
-                          </button>
                         </div>
                       )}
                     </div>

@@ -12,11 +12,7 @@ import {
   findElementalAffinityRingForMove,
 } from '../utils/artifactUtils';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
-import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
-import {
-  moveCountsForDailyElementalChallenge,
-  moveCountsForDailyManifestChallenge,
-} from '../utils/dailyChallengeShared';
+import { trackDailyChallengeForSkillUse } from '../utils/playerProgressionRewards';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -134,16 +130,9 @@ const CPUChallenger: React.FC<CPUChallengerProps> = ({ isOpen, onBattleComplete,
     console.log(`[CPUChallenger] Tracking move usage - Original: "${originalMoveName}", Resolved: "${moveName}"`);
     
     if (currentUser) {
-      if (moveCountsForDailyElementalChallenge(selectedMove)) {
-        updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
-          console.error('Error updating daily challenge progress:', err)
-        );
-      }
-      if (moveCountsForDailyManifestChallenge({ ...selectedMove, name: moveName })) {
-        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
-          console.error('Error updating daily challenge progress (manifest):', err)
-        );
-      }
+      trackDailyChallengeForSkillUse(currentUser.uid, { ...selectedMove, name: moveName }).catch((err) =>
+        console.error('Error updating daily challenge progress:', err)
+      );
     }
     
     if (currentUser.uid) {

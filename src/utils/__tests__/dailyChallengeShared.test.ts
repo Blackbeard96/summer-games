@@ -1,11 +1,13 @@
 import {
+  challengeTypesForSkillUse,
+  classifyMoveForDailyChallenge,
   dailyChallengeStoredTypeMatchesEvent,
   getEffectiveDailyChallengeTarget,
   moveCountsForDailyElementalChallenge,
   moveCountsForDailyManifestChallenge,
   scaledDailyChallengeRewardPP,
 } from '../dailyChallengeShared';
-import type { Move } from '../../types/battle';
+import { MOVE_TEMPLATES, type Move } from '../../types/battle';
 
 describe('dailyChallengeShared', () => {
   test('getEffectiveDailyChallengeTarget prefers parenthetical count in title', () => {
@@ -96,5 +98,56 @@ describe('dailyChallengeShared', () => {
         name: 'Room Scan',
       } as Move)
     ).toBe(true);
+  });
+
+  test('classifyMoveForDailyChallenge is mutually exclusive', () => {
+    expect(
+      classifyMoveForDailyChallenge({
+        category: 'manifest',
+        elementalAffinity: 'fire',
+        name: 'Tool Strike',
+        id: 'move_17',
+      } as Move)
+    ).toBe('manifest');
+    expect(
+      classifyMoveForDailyChallenge({
+        category: 'elemental',
+        elementalAffinity: 'water',
+        name: 'Aqua Pulse',
+      } as Move)
+    ).toBe('elemental');
+    expect(
+      challengeTypesForSkillUse({
+        category: 'manifest',
+        elementalAffinity: 'fire',
+        name: 'Tool Strike',
+      } as Move)
+    ).toEqual(['use_manifest_ability']);
+    expect(
+      challengeTypesForSkillUse({
+        category: 'elemental',
+        elementalAffinity: 'water',
+        name: 'Aqua Pulse',
+      } as Move)
+    ).toEqual(['use_elemental_move']);
+  });
+
+  test('elemental MOVE_TEMPLATES slot counts as elemental when category stripped', () => {
+    const idx = MOVE_TEMPLATES.findIndex((t) => t.category === 'elemental');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(
+      moveCountsForDailyElementalChallenge({
+        id: `move_${idx + 1}`,
+        category: undefined as unknown as Move['category'],
+        name: MOVE_TEMPLATES[idx].name,
+      } as Move)
+    ).toBe(true);
+    expect(
+      moveCountsForDailyManifestChallenge({
+        id: `move_${idx + 1}`,
+        category: undefined as unknown as Move['category'],
+        name: MOVE_TEMPLATES[idx].name,
+      } as Move)
+    ).toBe(false);
   });
 });

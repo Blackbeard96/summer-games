@@ -21,6 +21,7 @@ import { db } from '../firebase';
 import type { ElementType } from '../types/elementTypes';
 import { elementTypeEmoji, elementTypeLabel } from '../utils/elementTypeUi';
 import { truthMetalBalanceForHud } from '../utils/truthMetalPlayerBalance';
+import { getSkillUpgradeCostFromLevel, getSkillUpgradeButtonLabel } from '../utils/skillUpgradeCosts';
 
 type BattleArenaMainTabId = 'battle' | 'vault' | 'moves' | 'cards';
 
@@ -2028,17 +2029,23 @@ const Battle: React.FC = () => {
                     )}
 
                     {/* Upgrade Button */}
-                    {card.unlocked && card.masteryLevel < 5 && (
+                    {card.unlocked && card.masteryLevel < 5 && (() => {
+                      const nextCost = getSkillUpgradeCostFromLevel(card.masteryLevel);
+                      const canAfford = !!vault && nextCost != null && vault.currentPP >= nextCost;
+                      const label = nextCost != null
+                        ? getSkillUpgradeButtonLabel(card.masteryLevel + 1)
+                        : 'Cannot Upgrade';
+                      return (
                       <button
                         onClick={() => upgradeActionCard(card.id)}
-                        disabled={!vault || vault.currentPP < card.upgradeCost}
+                        disabled={!canAfford}
                         style={{
-                          background: (!vault || vault.currentPP < card.upgradeCost) ? '#9ca3af' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          background: !canAfford ? '#9ca3af' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                           color: 'white',
                           border: 'none',
                           padding: '0.75rem',
                           borderRadius: '0.75rem',
-                          cursor: (!vault || vault.currentPP < card.upgradeCost) ? 'not-allowed' : 'pointer',
+                          cursor: !canAfford ? 'not-allowed' : 'pointer',
                           fontSize: '0.875rem',
                           fontWeight: 'bold',
                           width: '100%',
@@ -2046,7 +2053,7 @@ const Battle: React.FC = () => {
                           transition: 'all 0.2s'
                         }}
                         onMouseEnter={(e) => {
-                          if (vault && vault.currentPP >= card.upgradeCost) {
+                          if (canAfford) {
                             e.currentTarget.style.transform = 'translateY(-2px)';
                             e.currentTarget.style.boxShadow = '0 4px 8px rgba(16, 185, 129, 0.3)';
                           }
@@ -2056,9 +2063,10 @@ const Battle: React.FC = () => {
                           e.currentTarget.style.boxShadow = 'none';
                         }}
                       >
-                        ⬆️ Upgrade to Level {card.masteryLevel + 1} ({card.upgradeCost} PP)
+                        ⬆️ {label}
                       </button>
-                    )}
+                      );
+                    })()}
 
                     {/* Card Type Badge */}
                     <div style={{ 

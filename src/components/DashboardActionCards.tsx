@@ -6,6 +6,7 @@ import {
   calculateDamageRange,
   formatDamageRange 
 } from '../utils/damageCalculator';
+import { getSkillUpgradeCostFromLevel, getSkillUpgradeButtonLabel } from '../utils/skillUpgradeCosts';
 
 const DashboardActionCards: React.FC = () => {
   const { currentUser } = useAuth();
@@ -249,17 +250,23 @@ const DashboardActionCards: React.FC = () => {
               )}
 
               {/* Upgrade Button */}
-              {card.masteryLevel < 5 && (
+              {card.masteryLevel < 5 && (() => {
+                const nextCost = getSkillUpgradeCostFromLevel(card.masteryLevel);
+                const canAfford = !!vault && nextCost != null && vault.currentPP >= nextCost;
+                const label = nextCost != null
+                  ? getSkillUpgradeButtonLabel(card.masteryLevel + 1)
+                  : 'Cannot Upgrade';
+                return (
                 <button
                   onClick={() => upgradeActionCard(card.id)}
-                  disabled={!vault || vault.currentPP < card.upgradeCost}
+                  disabled={!canAfford}
                   style={{
-                    background: (!vault || vault.currentPP < card.upgradeCost) ? '#9ca3af' : 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                    background: !canAfford ? '#9ca3af' : 'linear-gradient(135deg, #059669 0%, #047857 100%)',
                     color: 'white',
                     border: 'none',
                     padding: '0.5rem',
                     borderRadius: '0.5rem',
-                    cursor: (!vault || vault.currentPP < card.upgradeCost) ? 'not-allowed' : 'pointer',
+                    cursor: !canAfford ? 'not-allowed' : 'pointer',
                     fontSize: '0.75rem',
                     fontWeight: 'bold',
                     width: '100%',
@@ -267,7 +274,7 @@ const DashboardActionCards: React.FC = () => {
                     transition: 'all 0.2s'
                   }}
                   onMouseEnter={(e) => {
-                    if (vault && vault.currentPP >= card.upgradeCost) {
+                    if (canAfford) {
                       e.currentTarget.style.transform = 'translateY(-1px)';
                       e.currentTarget.style.boxShadow = '0 2px 4px rgba(5, 150, 105, 0.3)';
                     }
@@ -277,9 +284,10 @@ const DashboardActionCards: React.FC = () => {
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 >
-                  ⬆️ Upgrade to Level {card.masteryLevel + 1} ({card.upgradeCost} PP)
+                  ⬆️ {label}
                 </button>
-              )}
+                );
+              })()}
 
               {/* Use Button */}
               <button

@@ -16,11 +16,7 @@ import {
   findElementalAffinityRingForMove,
 } from '../utils/artifactUtils';
 import { calculateDamageRange, rollDamage } from '../utils/damageCalculator';
-import { updateChallengeProgressByType } from '../utils/dailyChallengeTracker';
-import {
-  moveCountsForDailyElementalChallenge,
-  moveCountsForDailyManifestChallenge,
-} from '../utils/dailyChallengeShared';
+import { trackDailyChallengeForSkillUse } from '../utils/playerProgressionRewards';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getSkillCooldownOrCost } from '../utils/skillCooldownCost';
@@ -131,16 +127,9 @@ const StoryEpisodeBattle: React.FC = () => {
     const moveName = getMoveNameSync(move.name) || move.name;
     
     if (currentUser) {
-      if (moveCountsForDailyElementalChallenge(move)) {
-        updateChallengeProgressByType(currentUser.uid, 'use_elemental_move', 1).catch(err =>
-          console.error('Error updating daily challenge progress:', err)
-        );
-      }
-      if (moveCountsForDailyManifestChallenge({ ...move, name: moveName })) {
-        updateChallengeProgressByType(currentUser.uid, 'use_manifest_ability', 1).catch(err =>
-          console.error('Error updating daily challenge progress (manifest):', err)
-        );
-      }
+      trackDailyChallengeForSkillUse(currentUser.uid, { ...move, name: moveName }).catch((err) =>
+        console.error('Error updating daily challenge progress:', err)
+      );
     }
     
     if (currentUser.uid) {

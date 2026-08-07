@@ -39,6 +39,27 @@ export function moveMatchesKnownManifestTemplate(
   return false;
 }
 
+export function moveMatchesKnownElementalTemplate(
+  move: Pick<Move, 'id' | 'name' | 'category' | 'elementalAffinity'>
+): boolean {
+  if (move.category === 'elemental') return true;
+  const idx = templateIndexFromMoveStableId(move.id);
+  if (idx !== null) {
+    const template = MOVE_TEMPLATES[idx];
+    if (template?.category === 'elemental') return true;
+  }
+  const raw = (move.name || '').trim();
+  if (!raw) return false;
+  const resolved = (getMoveNameSync(raw) || '').trim();
+  for (const t of MOVE_TEMPLATES) {
+    if (t.category !== 'elemental') continue;
+    if (t.name === raw || t.name === resolved) return true;
+    const canon = (getMoveNameSync(t.name) || '').trim();
+    if (canon && (canon === raw || canon === resolved)) return true;
+  }
+  return false;
+}
+
 /** Applied to stored challenge rewardPP / rewardXP / rewardTruthMetal for display and grants. */
 export const DAILY_CHALLENGE_REWARD_MULTIPLIER = 10;
 
@@ -226,36 +247,83 @@ const MANIFEST_NAME_SNIPPETS = [
 export function moveCountsForDailyElementalChallenge(
   move: Pick<Move, 'category' | 'elementalAffinity' | 'manifestType' | 'id' | 'effectKey' | 'name'>
 ): boolean {
-  if (move.effectKey === 'level2_manifest') return false;
-  if (moveMatchesKnownManifestTemplate(move)) return false;
-
-  if (move.category === 'elemental') return true;
-  // Only when category is explicitly set: `undefined !== 'manifest'` was always true and mis-counted
-  // stripped manifest rows (with elementalAffinity injected) as elemental-only.
-  if (move.elementalAffinity && move.category && move.category !== 'manifest') return true;
-  return false;
+  return classifyMoveForDailyChallenge(move) === 'elemental';
 }
 
 export function moveCountsForDailyManifestChallenge(
   move: Pick<
     Move,
-    'category' | 'manifestType' | 'id' | 'name' | 'rrCandySkillId' | 'rrCandyNodeId' | 'effectKey'
+    | 'category'
+    | 'manifestType'
+    | 'id'
+    | 'name'
+    | 'rrCandySkillId'
+    | 'rrCandyNodeId'
+    | 'effectKey'
+    | 'elementalAffinity'
   >
 ): boolean {
-  if (move.category === 'manifest') return true;
-  if (move.manifestType) return true;
-  if (moveMatchesKnownManifestTemplate(move)) return true;
-  if (move.rrCandySkillId || move.rrCandyNodeId) return true;
-  const id = move.id || '';
-  if (id.startsWith('rr-candy') || id.startsWith('rrCandy')) return true;
-  if (move.effectKey === 'level2_manifest') return true;
+  return classifyMoveForDailyChallenge(move) === 'manifest';
+}
 
-  const idLower = (move.id || '').toLowerCase();
-  if (idLower.startsWith('l2-manifest::') || idLower.includes('manifest-')) return true;
+/**
+ * Mutually exclusive daily-challenge skill class.
+ * A single skill use must never credit both Manifest and Elemental challenges.
+ * Priority: explicit manifest / RR / L2 → explicit elemental category / template → affinity fallback.
+ */
+export function classifyMoveForDailyChallenge(
+  move: Pick<
+    Move,
+    | 'category'
+    | 'manifestType'
+    | 'elementalAffinity'
+    | 'id'
+    | 'name'
+    | 'rrCandySkillId'
+    | 'rrCandyNodeId'
+    | 'effectKey'
+  >
+): 'manifest' | 'elemental' | null {
+  if (move.effectKey === 'level2_manifest') return 'manifest';
+  if (move.rrCandySkillId || move.rrCandyNodeId) return 'manifest';
+  const id = move.id || '';
+  if (id.startsWith('rr-candy') || id.startsWith('rrCandy')) return 'manifest';
+  const idLower = id.toLowerCase();
+  if (idLower.startsWith('l2-manifest::') || idLower.includes('manifest-')) return 'manifest';
+
+  if (move.category === 'manifest' || move.manifestType) return 'manifest';
+  if (moveMatchesKnownManifestTemplate(move)) return 'manifest';
 
   const raw = (move.name || '').trim();
   const resolved = raw ? (getMoveNameSync(raw) || '').trim() : '';
   const combined = `${raw} ${resolved}`.toLowerCase();
-  if (combined && MANIFEST_NAME_SNIPPETS.some((p) => combined.includes(p))) return true;
-  return false;
+  if (combined && MANIFEST_NAME_SNIPPETS.some((p) => combined.includes(p))) return 'manifest';
+
+  // Elemental only after manifest is ruled out
+  if (move.category === 'elemental') return 'elemental';
+  if (moveMatchesKnownElementalTemplate(move)) return 'elemental';
+  // Affinity with an explicit non-empty category (manifest already returned above).
+  if (move.elementalAffinity && move.category) return 'elemental';
+
+  return null;
+}
+
+/** At most one challenge type for a skill use (never both manifest + elemental). */
+export function challengeTypesForSkillUse(
+  move: Pick<
+    Move,
+    | 'category'
+    | 'manifestType'
+    | 'elementalAffinity'
+    | 'id'
+    | 'name'
+    | 'rrCandySkillId'
+    | 'rrCandyNodeId'
+    | 'effectKey'
+  >
+): Array<'use_manifest_ability' | 'use_elemental_move'> {
+  const kind = classifyMoveForDailyChallenge(move);
+  if (kind === 'manifest') return ['use_manifest_ability'];
+  if (kind === 'elemental') return ['use_elemental_move'];
+  return [];
 }
